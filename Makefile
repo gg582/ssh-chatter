@@ -1,8 +1,8 @@
 CC := cc
 CFLAGS := -std=c11 -Wall -Wextra -Werror -Ilib/headers
-LDFLAGS := -lssh -lpthread
+LDFLAGS := -lpthread
 TARGET := ssh-chatter
-SRC := main.c lib/host.c
+SRC := main.c lib/host.c lib/stubs/libssh_stub.c
 OBJ := $(SRC:.c=.o)
 
 .PHONY: all clean run
