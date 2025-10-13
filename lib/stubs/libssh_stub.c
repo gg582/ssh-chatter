@@ -58,6 +58,18 @@ void ssh_message_auth_reply_success(ssh_message message, int partial) {
   (void)partial;
 }
 
+const char *ssh_message_service_service(ssh_message message) {
+  if (message == NULL) {
+    return NULL;
+  }
+  return message->service;
+}
+
+int ssh_message_service_reply_success(ssh_message message) {
+  (void)message;
+  return SSH_OK;
+}
+
 void ssh_message_free(ssh_message message) {
   free(message);
 }

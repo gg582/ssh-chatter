@@ -19,6 +19,7 @@ typedef struct ssh_message_struct {
   int type;
   int subtype;
   char user[32];
+  char service[32];
 } *ssh_message;
 
 typedef struct ssh_bind_struct {
@@ -37,6 +38,7 @@ typedef enum {
 #define SSH_REQUEST_AUTH 1
 #define SSH_REQUEST_CHANNEL 2
 #define SSH_REQUEST_CHANNEL_OPEN 3
+#define SSH_REQUEST_SERVICE 4
 
 #define SSH_CHANNEL_SESSION 1
 #define SSH_CHANNEL_REQUEST_PTY 1
@@ -54,6 +56,8 @@ int ssh_message_type(ssh_message message);
 int ssh_message_subtype(ssh_message message);
 const char *ssh_message_auth_user(ssh_message message);
 void ssh_message_auth_reply_success(ssh_message message, int partial);
+const char *ssh_message_service_service(ssh_message message);
+int ssh_message_service_reply_success(ssh_message message);
 void ssh_message_free(ssh_message message);
 void ssh_message_reply_default(ssh_message message);
 ssh_channel ssh_message_channel_request_open_reply_accept(ssh_message message);
