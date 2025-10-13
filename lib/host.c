@@ -1,8 +1,13 @@
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200112L
+#endif
+
 #include "host.h"
 
 #include <ctype.h>
 #include <errno.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
 #include <netdb.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -39,16 +44,6 @@ static void session_describe_peer(ssh_session session, char *buffer, size_t len)
     return;
   }
 
-#if defined(LIBSSH_VERSION_INT) && defined(SSH_VERSION_INT)
-#if LIBSSH_VERSION_INT >= SSH_VERSION_INT(0, 10, 0)
-  const char *client_ip = ssh_get_client_ip(session);
-  if (client_ip != NULL) {
-    snprintf(buffer, len, "%s", client_ip);
-    return;
-  }
-#endif
-#endif
-
   const int socket_fd = ssh_get_fd(session);
   if (socket_fd < 0) {
     return;
@@ -66,7 +61,8 @@ static void session_describe_peer(ssh_session session, char *buffer, size_t len)
     return;
   }
 
-  snprintf(buffer, len, "%s", host);
+  strncpy(buffer, host, len - 1U);
+  buffer[len - 1U] = '\0';
 }
 
 static void chat_room_add(chat_room_t *room, chat_user_t *user) {
@@ -684,7 +680,8 @@ int host_serve(host_t *host, const char *bind_addr, const char *port) {
     char peer_address[NI_MAXHOST];
     session_describe_peer(session, peer_address, sizeof(peer_address));
     if (peer_address[0] == '\0') {
-      snprintf(peer_address, sizeof(peer_address), "unknown");
+      strncpy(peer_address, "unknown", sizeof(peer_address) - 1U);
+      peer_address[sizeof(peer_address) - 1U] = '\0';
     }
 
     printf("[connect] accepted client from %s\n", peer_address);
