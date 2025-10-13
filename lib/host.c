@@ -133,6 +133,8 @@ static void session_handle_exit(session_ctx_t *ctx);
 static void session_handle_nick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
+static bool session_line_is_exit_command(const char *line);
+static void session_handle_username_conflict_input(session_ctx_t *ctx, const char *line);
 static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count);
 static size_t session_utf8_prev_char_len(const char *buffer, size_t length);
 static int session_utf8_char_width(const char *bytes, size_t length);
@@ -816,12 +818,62 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "Regular messages are shared with everyone.");
 }
 
+static bool session_line_is_exit_command(const char *line) {
+  if (line == NULL) {
+    return false;
+  }
+
+  if (strncmp(line, "/exit", 5) != 0) {
+    return false;
+  }
+
+  const char trailing = line[5];
+  if (trailing == '\0') {
+    return true;
+  }
+
+  if (!isspace((unsigned char)trailing)) {
+    return false;
+  }
+
+  for (size_t idx = 6U; line[idx] != '\0'; ++idx) {
+    if (!isspace((unsigned char)line[idx])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static void session_handle_username_conflict_input(session_ctx_t *ctx, const char *line) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (session_line_is_exit_command(line)) {
+    session_handle_exit(ctx);
+    return;
+  }
+
+  char reminder[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(reminder, sizeof(reminder), "The username '%s' is already in use.", ctx->user.name);
+  session_send_system_line(ctx, reminder);
+  session_send_system_line(ctx,
+                           "Reconnect with a different username by running: ssh newname@<server> (or ssh -l newname <server>)");
+  session_send_system_line(ctx, "Type /exit to quit.");
+}
+
 static void session_process_line(session_ctx_t *ctx, const char *line) {
   if (ctx == NULL || line == NULL || line[0] == '\0') {
     return;
   }
 
   printf("[%s] %s\n", ctx->user.name, line);
+
+  if (ctx->username_conflict) {
+    session_handle_username_conflict_input(ctx, line);
+    return;
+  }
 
   if (line[0] == '/') {
     session_dispatch_command(ctx, line);
@@ -1546,20 +1598,34 @@ static void *session_thread(void *arg) {
     return NULL;
   }
 
-  chat_room_add(&ctx->owner->room, ctx);
-  printf("[join] %s\n", ctx->user.name);
+  session_ctx_t *existing = chat_room_find_user(&ctx->owner->room, ctx->user.name);
+  if (existing != NULL) {
+    ctx->username_conflict = true;
+    printf("[reject] username in use: %s\n", ctx->user.name);
+    session_render_banner(ctx);
+    char in_use[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(in_use, sizeof(in_use), "The username '%s' is already in use.", ctx->user.name);
+    session_send_system_line(ctx, in_use);
+    session_send_system_line(ctx,
+                             "Reconnect with a different username by running: ssh newname@<server> (or ssh -l newname <server>).");
+    session_send_system_line(ctx, "Type /exit to quit.");
+  } else {
+    chat_room_add(&ctx->owner->room, ctx);
+    ctx->has_joined_room = true;
+    printf("[join] %s\n", ctx->user.name);
 
-  session_render_banner(ctx);
-  session_send_history(ctx);
-  if (ctx->owner->motd[0] != '\0') {
-    session_send_system_line(ctx, ctx->owner->motd);
+    session_render_banner(ctx);
+    session_send_history(ctx);
+    if (ctx->owner->motd[0] != '\0') {
+      session_send_system_line(ctx, ctx->owner->motd);
+    }
+    session_send_system_line(ctx, "Type /help to explore available commands.");
+
+    char join_message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(join_message, sizeof(join_message), "* %s has joined the chat", ctx->user.name);
+    host_history_record_system(ctx->owner, join_message);
+    chat_room_broadcast(&ctx->owner->room, join_message, NULL);
   }
-  session_send_system_line(ctx, "Type /help to explore available commands.");
-
-  char join_message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(join_message, sizeof(join_message), "* %s has joined the chat", ctx->user.name);
-  host_history_record_system(ctx->owner, join_message);
-  chat_room_broadcast(&ctx->owner->room, join_message, NULL);
 
   session_clear_input(ctx);
   session_render_prompt(ctx, true);
@@ -1632,12 +1698,14 @@ static void *session_thread(void *arg) {
     session_clear_input(ctx);
   }
 
-  printf("[part] %s\n", ctx->user.name);
-  char part_message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(part_message, sizeof(part_message), "* %s has left the chat", ctx->user.name);
-  host_history_record_system(ctx->owner, part_message);
-  chat_room_broadcast(&ctx->owner->room, part_message, NULL);
-  chat_room_remove(&ctx->owner->room, ctx);
+  if (ctx->has_joined_room) {
+    printf("[part] %s\n", ctx->user.name);
+    char part_message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(part_message, sizeof(part_message), "* %s has left the chat", ctx->user.name);
+    host_history_record_system(ctx->owner, part_message);
+    chat_room_broadcast(&ctx->owner->room, part_message, NULL);
+    chat_room_remove(&ctx->owner->room, ctx);
+  }
   session_cleanup(ctx);
 
   return NULL;
