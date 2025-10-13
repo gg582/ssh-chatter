@@ -16,6 +16,7 @@
 #define SSH_CHATTER_USERNAME_LEN 24
 
 struct host;
+struct session_ctx;
 
 typedef struct chat_user {
   char name[SSH_CHATTER_USERNAME_LEN];
@@ -24,7 +25,7 @@ typedef struct chat_user {
 
 typedef struct chat_room {
   pthread_mutex_t lock;
-  chat_user_t *members[SSH_CHATTER_MAX_USERS];
+  struct session_ctx *members[SSH_CHATTER_MAX_USERS];
   size_t member_count;
 } chat_room_t;
 

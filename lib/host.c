@@ -9,6 +9,8 @@
 
 #include "humanized/humanized.h"
 
+static void session_send_line(ssh_channel channel, const char *message);
+
 static void chat_room_init(chat_room_t *room) {
   if (room == NULL) {
     return;
@@ -20,26 +22,26 @@ static void chat_room_init(chat_room_t *room) {
   }
 }
 
-static void chat_room_add(chat_room_t *room, chat_user_t *user) {
-  if (room == NULL || user == NULL) {
+static void chat_room_add(chat_room_t *room, session_ctx_t *session) {
+  if (room == NULL || session == NULL) {
     return;
   }
 
   pthread_mutex_lock(&room->lock);
   if (room->member_count < SSH_CHATTER_MAX_USERS) {
-    room->members[room->member_count++] = user;
+    room->members[room->member_count++] = session;
   }
   pthread_mutex_unlock(&room->lock);
 }
 
-static void chat_room_remove(chat_room_t *room, const chat_user_t *user) {
-  if (room == NULL || user == NULL) {
+static void chat_room_remove(chat_room_t *room, const session_ctx_t *session) {
+  if (room == NULL || session == NULL) {
     return;
   }
 
   pthread_mutex_lock(&room->lock);
   for (size_t idx = 0; idx < room->member_count; ++idx) {
-    if (room->members[idx] == user) {
+    if (room->members[idx] == session) {
       for (size_t shift = idx; shift + 1U < room->member_count; ++shift) {
         room->members[shift] = room->members[shift + 1U];
       }
@@ -52,22 +54,42 @@ static void chat_room_remove(chat_room_t *room, const chat_user_t *user) {
 }
 
 static void chat_room_broadcast(chat_room_t *room, const char *message, const chat_user_t *from) {
-  (void)from;
   if (room == NULL || message == NULL) {
     return;
   }
 
+  session_ctx_t *targets[SSH_CHATTER_MAX_USERS];
+  size_t target_count = 0U;
+
   pthread_mutex_lock(&room->lock);
   for (size_t idx = 0; idx < room->member_count; ++idx) {
-    chat_user_t *member = room->members[idx];
-    if (member == NULL) {
+    session_ctx_t *member = room->members[idx];
+    if (member == NULL || member->channel == NULL) {
       continue;
     }
-    (void)member; /* TODO: Attach active sessions to members and deliver messages. */
+    if (target_count < SSH_CHATTER_MAX_USERS) {
+      targets[target_count++] = member;
+    }
   }
   pthread_mutex_unlock(&room->lock);
 
-  printf("[broadcast] %s\n", message);
+  char formatted[SSH_CHATTER_MESSAGE_LIMIT + SSH_CHATTER_USERNAME_LEN + 4U];
+  if (from != NULL) {
+    snprintf(formatted, sizeof(formatted), "%s: %s", from->name, message);
+  } else {
+    snprintf(formatted, sizeof(formatted), "%s", message);
+  }
+
+  for (size_t idx = 0; idx < target_count; ++idx) {
+    session_ctx_t *member = targets[idx];
+    session_send_line(member->channel, formatted);
+  }
+
+  if (from != NULL) {
+    printf("[broadcast:%s] %s\n", from->name, message);
+  } else {
+    printf("[broadcast] %s\n", message);
+  }
 }
 
 static void session_send_line(ssh_channel channel, const char *message) {
@@ -249,12 +271,16 @@ static void *session_thread(void *arg) {
     return NULL;
   }
 
-  chat_room_add(&ctx->owner->room, &ctx->user);
+  chat_room_add(&ctx->owner->room, ctx);
   printf("[join] %s\n", ctx->user.name);
 
   if (ctx->owner->motd[0] != '\0') {
     session_send_line(ctx->channel, ctx->owner->motd);
   }
+
+  char join_message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(join_message, sizeof(join_message), "* %s has joined the chat", ctx->user.name);
+  chat_room_broadcast(&ctx->owner->room, join_message, NULL);
 
   char buffer[SSH_CHATTER_MAX_INPUT_LEN];
   while (true) {
@@ -287,7 +313,10 @@ static void *session_thread(void *arg) {
   }
 
   printf("[part] %s\n", ctx->user.name);
-  chat_room_remove(&ctx->owner->room, &ctx->user);
+  char part_message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(part_message, sizeof(part_message), "* %s has left the chat", ctx->user.name);
+  chat_room_broadcast(&ctx->owner->room, part_message, NULL);
+  chat_room_remove(&ctx->owner->room, ctx);
   session_cleanup(ctx);
 
   return NULL;
