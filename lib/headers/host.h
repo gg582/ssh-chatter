@@ -15,6 +15,8 @@
 #define SSH_CHATTER_MAX_INPUT_LEN 1024
 #define SSH_CHATTER_USERNAME_LEN 24
 #define SSH_CHATTER_IP_LEN 64
+#define SSH_CHATTER_COLOR_NAME_LEN 32
+#define SSH_CHATTER_MAX_BANS 128
 
 struct host;
 struct session_ctx;
@@ -49,6 +51,19 @@ typedef struct session_ctx {
   char input_buffer[SSH_CHATTER_MAX_INPUT_LEN];
   size_t input_length;
   char client_ip[SSH_CHATTER_IP_LEN];
+  const char *user_color_code;
+  const char *user_highlight_code;
+  bool user_is_bold;
+  char user_color_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char user_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  const char *system_fg_code;
+  const char *system_bg_code;
+  const char *system_highlight_code;
+  bool system_is_bold;
+  char system_fg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_bg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  bool should_exit;
 } session_ctx_t;
 
 typedef struct host {
@@ -57,6 +72,16 @@ typedef struct host {
   auth_profile_t *auth;
   UserTheme user_theme;
   SystemTheme system_theme;
+  char default_user_color_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char default_user_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char default_system_fg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char default_system_bg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char default_system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  struct {
+    char username[SSH_CHATTER_USERNAME_LEN];
+    char ip[SSH_CHATTER_IP_LEN];
+  } bans[SSH_CHATTER_MAX_BANS];
+  size_t ban_count;
   char version[64];
   char motd[256];
   size_t connection_count;

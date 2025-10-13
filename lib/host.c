@@ -105,8 +105,26 @@ static void trim_whitespace_inplace(char *text);
 static const char *lookup_color_code(const color_entry_t *entries, size_t entry_count, const char *name);
 static bool parse_bool_token(const char *token, bool *value);
 static void session_send_line(ssh_channel channel, const char *message);
-static bool chat_room_get_user_ip(chat_room_t *room, const char *username, char *ip_buffer, size_t buffer_len);
+static void session_send_system_line(session_ctx_t *ctx, const char *message);
+static void session_render_banner(session_ctx_t *ctx);
+static void session_render_separator(session_ctx_t *ctx, const char *label);
+static void session_render_prompt(session_ctx_t *ctx, bool include_separator);
+static void session_local_echo_char(session_ctx_t *ctx, char ch);
+static void session_local_backspace(session_ctx_t *ctx);
+static void session_clear_input(session_ctx_t *ctx);
+static void session_send_user_message(session_ctx_t *target, const session_ctx_t *from, const char *message);
+static session_ctx_t *chat_room_find_user(chat_room_t *room, const char *username);
+static bool host_is_ip_banned(host_t *host, const char *ip);
+static bool host_is_username_banned(host_t *host, const char *username);
+static bool host_add_ban_entry(host_t *host, const char *username, const char *ip);
+static bool host_remove_ban_entry(host_t *host, const char *token);
+static void session_apply_theme_defaults(session_ctx_t *ctx);
 static void session_dispatch_command(session_ctx_t *ctx, const char *line);
+static void session_handle_exit(session_ctx_t *ctx);
+static void session_handle_nick(session_ctx_t *ctx, const char *arguments);
+static void session_handle_system_color(session_ctx_t *ctx, const char *arguments);
+static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
+static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count);
 
 static void chat_room_init(chat_room_t *room) {
   if (room == NULL) {
@@ -204,16 +222,13 @@ static void chat_room_broadcast(chat_room_t *room, const char *message, const se
   }
   pthread_mutex_unlock(&room->lock);
 
-  char formatted[SSH_CHATTER_MESSAGE_LIMIT + SSH_CHATTER_USERNAME_LEN + 4U];
-  if (from != NULL) {
-    snprintf(formatted, sizeof(formatted), "%s: %s", from->user.name, message);
-  } else {
-    snprintf(formatted, sizeof(formatted), "%s", message);
-  }
-
   for (size_t idx = 0; idx < target_count; ++idx) {
     session_ctx_t *member = targets[idx];
-    session_send_line(member->channel, formatted);
+    if (from != NULL) {
+      session_send_user_message(member, from, message);
+    } else {
+      session_send_system_line(member, message);
+    }
   }
 
   if (from != NULL) {
@@ -221,6 +236,28 @@ static void chat_room_broadcast(chat_room_t *room, const char *message, const se
   } else {
     printf("[broadcast] %s\n", message);
   }
+}
+
+static void session_apply_theme_defaults(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  host_t *host = ctx->owner;
+
+  ctx->user_color_code = host->user_theme.userColor;
+  ctx->user_highlight_code = host->user_theme.highlight;
+  ctx->user_is_bold = host->user_theme.isBold;
+  snprintf(ctx->user_color_name, sizeof(ctx->user_color_name), "%s", host->default_user_color_name);
+  snprintf(ctx->user_highlight_name, sizeof(ctx->user_highlight_name), "%s", host->default_user_highlight_name);
+
+  ctx->system_fg_code = host->system_theme.foregroundColor;
+  ctx->system_bg_code = host->system_theme.backgroundColor;
+  ctx->system_highlight_code = host->system_theme.highlightColor;
+  ctx->system_is_bold = host->system_theme.isBold;
+  snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", host->default_system_fg_name);
+  snprintf(ctx->system_bg_name, sizeof(ctx->system_bg_name), "%s", host->default_system_bg_name);
+  snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s", host->default_system_highlight_name);
 }
 
 static void session_send_line(ssh_channel channel, const char *message) {
@@ -235,6 +272,157 @@ static void session_send_line(ssh_channel channel, const char *message) {
 
   ssh_channel_write(channel, buffer, strlen(buffer));
   ssh_channel_write(channel, "\r\n", 2U);
+}
+
+static void session_send_system_line(session_ctx_t *ctx, const char *message) {
+  if (ctx == NULL || ctx->channel == NULL || message == NULL) {
+    return;
+  }
+
+  const char *fg = ctx->system_fg_code != NULL ? ctx->system_fg_code : "";
+  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
+  const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
+
+  char formatted[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(formatted, sizeof(formatted), "%s%s%s%s%s", bg, fg, bold, message, ANSI_RESET);
+  session_send_line(ctx->channel, formatted);
+}
+
+static void session_render_separator(session_ctx_t *ctx, const char *label) {
+  if (ctx == NULL || label == NULL) {
+    return;
+  }
+
+  const char *fg = ctx->system_fg_code != NULL ? ctx->system_fg_code : "";
+  const char *hl = ctx->system_highlight_code != NULL ? ctx->system_highlight_code : "";
+  const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
+
+  char content[128];
+  const size_t total_width = 56U;
+  char label_buffer[64];
+  snprintf(label_buffer, sizeof(label_buffer), "--- %s ", label);
+  size_t label_len = strlen(label_buffer);
+  if (label_len > total_width) {
+    label_len = total_width;
+    label_buffer[total_width] = '\0';
+  }
+  size_t remaining = total_width > label_len ? total_width - label_len : 0U;
+  memset(content, '-', remaining);
+  content[remaining] = '\0';
+
+  char line[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(line, sizeof(line), "%s%s%s%s%s%s", hl, fg, bold, label_buffer, content, ANSI_RESET);
+  session_send_line(ctx->channel, line);
+}
+
+static void session_render_banner(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  static const char *kBanner[] = {
+      "+====================================================+",
+      "|   ____  ____  _   _   _____ _           _         |",
+      "|  / ___||  _ \\| | | | |_   _| |__   __ _| |__      |",
+      "|  \\___ \\| |_) | | | |   | | | '_ \\ / _` | '_ \\     |",
+      "|   ___) |  _ <| |_| |   | | | | | | (_| | | | |    |",
+      "|  |____/|_| \\_\\___/    |_| |_| |_|\\__,_|_| |_|    |",
+      "+====================================================+",
+  };
+
+  for (size_t idx = 0; idx < sizeof(kBanner) / sizeof(kBanner[0]); ++idx) {
+    session_send_system_line(ctx, kBanner[idx]);
+  }
+
+  char welcome[SSH_CHATTER_MESSAGE_LIMIT];
+  size_t name_len = strlen(ctx->user.name);
+  int welcome_padding = 47 - (int)name_len;
+  if (welcome_padding < 0) {
+    welcome_padding = 0;
+  }
+  snprintf(welcome, sizeof(welcome), "|  Welcome, %s!%*s|", ctx->user.name, welcome_padding, "");
+  session_send_system_line(ctx, welcome);
+
+  char version_line[SSH_CHATTER_MESSAGE_LIMIT];
+  size_t version_len = strlen(ctx->owner->version);
+  int version_padding = 50 - (int)version_len;
+  if (version_padding < 0) {
+    version_padding = 0;
+  }
+  snprintf(version_line, sizeof(version_line), "|  %s%*s|", ctx->owner->version, version_padding, "");
+  session_send_system_line(ctx, version_line);
+  session_send_system_line(ctx, "+====================================================+");
+  session_render_separator(ctx, "Chatroom");
+}
+
+static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
+  if (ctx == NULL || ctx->channel == NULL) {
+    return;
+  }
+
+  if (include_separator) {
+    session_render_separator(ctx, "Input");
+  }
+
+  const char *fg = ctx->system_fg_code != NULL ? ctx->system_fg_code : "";
+  const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
+
+  char prompt[64];
+  snprintf(prompt, sizeof(prompt), "%s%s> %s", fg, bold, ANSI_RESET);
+  ssh_channel_write(ctx->channel, prompt, strlen(prompt));
+
+  if (ctx->input_length > 0U) {
+    ssh_channel_write(ctx->channel, ctx->input_buffer, ctx->input_length);
+  }
+}
+
+static void session_local_echo_char(session_ctx_t *ctx, char ch) {
+  if (ctx == NULL || ctx->channel == NULL) {
+    return;
+  }
+
+  if (ch == '\r' || ch == '\n') {
+    ssh_channel_write(ctx->channel, "\r\n", 2U);
+    return;
+  }
+
+  ssh_channel_write(ctx->channel, &ch, 1U);
+}
+
+static void session_local_backspace(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->channel == NULL || ctx->input_length == 0U) {
+    return;
+  }
+
+  if (ctx->input_length > 0U) {
+    ctx->input_length--;
+  }
+
+  const char sequence[] = "\b \b";
+  ssh_channel_write(ctx->channel, sequence, sizeof(sequence) - 1U);
+}
+
+static void session_clear_input(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  ctx->input_length = 0U;
+  memset(ctx->input_buffer, 0, sizeof(ctx->input_buffer));
+}
+
+static void session_send_user_message(session_ctx_t *target, const session_ctx_t *from, const char *message) {
+  if (target == NULL || target->channel == NULL || from == NULL || message == NULL) {
+    return;
+  }
+
+  const char *highlight = from->user_highlight_code != NULL ? from->user_highlight_code : "";
+  const char *color = from->user_color_code != NULL ? from->user_color_code : "";
+  const char *bold = from->user_is_bold ? ANSI_BOLD : "";
+
+  char line[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(line, sizeof(line), "%s%s%s[%s]%s %s", highlight, bold, color, from->user.name, ANSI_RESET, message);
+  session_send_line(target->channel, line);
 }
 
 static bool session_handle_service_request(ssh_message message) {
@@ -358,27 +546,20 @@ static int session_prepare_shell(session_ctx_t *ctx) {
 }
 
 static void session_print_help(session_ctx_t *ctx) {
-  session_send_line(ctx->channel, "/ban <username>    - ban a user (operator only)");
-  session_send_line(ctx->channel, "/poke <username>   - send a bell to a user");
-  session_send_line(ctx->channel, "/color (text;highlight[;bold]) - preview chat colors");
-  session_send_line(ctx->channel,
-                    "  ex: /color (green;grey;bold) or /color (green;grey)");
-  session_send_line(ctx->channel, "Regular messages are broadcast to everyone.");
-}
-
-static void session_echo_input(session_ctx_t *ctx, const char *line) {
-  if (ctx == NULL || ctx->channel == NULL || line == NULL) {
+  if (ctx == NULL) {
     return;
   }
 
-  char echo_buffer[SSH_CHATTER_MESSAGE_LIMIT + SSH_CHATTER_USERNAME_LEN + 4U];
-  if (line[0] == '/') {
-    snprintf(echo_buffer, sizeof(echo_buffer), "%s", line);
-  } else {
-    snprintf(echo_buffer, sizeof(echo_buffer), "%s: %s", ctx->user.name, line);
-  }
-
-  session_send_line(ctx->channel, echo_buffer);
+  session_send_system_line(ctx, "Available commands:");
+  session_send_system_line(ctx, "/help                 - show this message");
+  session_send_system_line(ctx, "/exit                 - leave the chat");
+  session_send_system_line(ctx, "/nick <name>          - change your display name");
+  session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
+  session_send_system_line(ctx, "/systemcolor (fg;background[;highlight][;bold]) - style the interface");
+  session_send_system_line(ctx, "/poke <username>      - send a bell to a user");
+  session_send_system_line(ctx, "/ban <username>       - ban a user (operator only)");
+  session_send_system_line(ctx, "/pardon <user|ip>     - remove a ban (operator only)");
+  session_send_system_line(ctx, "Regular messages are shared with everyone.");
 }
 
 static void session_process_line(session_ctx_t *ctx, const char *line) {
@@ -388,23 +569,23 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
 
   printf("[%s] %s\n", ctx->user.name, line);
 
-  session_echo_input(ctx, line);
-
   if (line[0] == '/') {
     session_dispatch_command(ctx, line);
-  } else {
-    chat_room_broadcast(&ctx->owner->room, line, ctx);
+    return;
   }
+
+  session_send_user_message(ctx, ctx, line);
+  chat_room_broadcast(&ctx->owner->room, line, ctx);
 }
 
 static void session_handle_ban(session_ctx_t *ctx, const char *arguments) {
   if (!ctx->user.is_operator) {
-    session_send_line(ctx->channel, "You are not allowed to ban users.");
+    session_send_system_line(ctx, "You are not allowed to ban users.");
     return;
   }
 
   if (arguments == NULL || *arguments == '\0') {
-    session_send_line(ctx->channel, "Usage: /ban <username>");
+    session_send_system_line(ctx, "Usage: /ban <username>");
     return;
   }
 
@@ -413,84 +594,67 @@ static void session_handle_ban(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(target_name);
 
   if (target_name[0] == '\0') {
-    session_send_line(ctx->channel, "Usage: /ban <username>");
+    session_send_system_line(ctx, "Usage: /ban <username>");
     return;
   }
 
-  char target_ip[SSH_CHATTER_IP_LEN];
-  if (!chat_room_get_user_ip(&ctx->owner->room, target_name, target_ip, sizeof(target_ip))) {
+  session_ctx_t *target = chat_room_find_user(&ctx->owner->room, target_name);
+  if (target == NULL) {
     char not_found[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(not_found, sizeof(not_found), "User '%s' is not connected.", target_name);
-    session_send_line(ctx->channel, not_found);
+    session_send_system_line(ctx, not_found);
     return;
   }
 
-  const char *ip_for_log = target_ip[0] != '\0' ? target_ip : "unknown";
+  const char *target_ip = target->client_ip[0] != '\0' ? target->client_ip : "";
+  if (!host_add_ban_entry(ctx->owner, target->user.name, target_ip)) {
+    session_send_system_line(ctx, "Unable to add ban entry (list full?).");
+    return;
+  }
 
-  printf("[ban] %s requested IP ban for %s (%s)\n", ctx->user.name, target_name, ip_for_log);
+  char notice[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(notice, sizeof(notice), "* %s has been banned by %s", target->user.name, ctx->user.name);
+  chat_room_broadcast(&ctx->owner->room, notice, NULL);
+  session_send_system_line(ctx, "Ban applied.");
+  printf("[ban] %s banned %s (%s)\n", ctx->user.name, target->user.name, target_ip[0] != '\0' ? target_ip : "unknown");
 
-  char response[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(response, sizeof(response),
-           "Ban command recorded for %s at %s (TODO: enforce IP ban).", target_name, ip_for_log);
-  session_send_line(ctx->channel, response);
+  if (target->channel != NULL) {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "You have been banned by %s.", ctx->user.name);
+    session_send_system_line(target, message);
+    target->should_exit = true;
+    ssh_channel_send_eof(target->channel);
+    ssh_channel_close(target->channel);
+  }
 }
 
 static void session_handle_poke(session_ctx_t *ctx, const char *arguments) {
   if (arguments == NULL || *arguments == '\0') {
-    session_send_line(ctx->channel, "Usage: /poke <username>");
+    session_send_system_line(ctx, "Usage: /poke <username>");
     return;
   }
 
-  printf("[poke] %s pokes %s\n", ctx->user.name, arguments);
-  session_send_line(ctx->channel, "Poke command recorded (TODO: implement).");
+  session_ctx_t *target = chat_room_find_user(&ctx->owner->room, arguments);
+  if (target == NULL) {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "User '%s' is not connected.", arguments);
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  printf("[poke] %s pokes %s\n", ctx->user.name, target->user.name);
+  ssh_channel_write(target->channel, "\a", 1U);
+  session_send_system_line(ctx, "Poke sent.");
 }
 
-static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
-  if (ctx == NULL) {
-    return;
+static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count) {
+  if (working == NULL || tokens == NULL || token_count == NULL) {
+    return false;
   }
 
-  if (arguments == NULL) {
-    session_send_line(ctx->channel, "Usage: /color (text;highlight[;bold])");
-    return;
-  }
-
-  char working[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(working, sizeof(working), "%s", arguments);
-  trim_whitespace_inplace(working);
-
-  if (working[0] == '\0') {
-    session_send_line(ctx->channel, "Usage: /color (text;highlight[;bold])");
-    return;
-  }
-
-  bool had_parentheses = false;
-  if (working[0] == '(') {
-    had_parentheses = true;
-    memmove(working, working + 1, strlen(working));
-    trim_whitespace_inplace(working);
-  }
-
-  if (had_parentheses) {
-    size_t len = strlen(working);
-    if (len == 0U || working[len - 1U] != ')') {
-      session_send_line(ctx->channel, "Usage: /color (text;highlight[;bold])");
-      return;
-    }
-    working[len - 1U] = '\0';
-    trim_whitespace_inplace(working);
-  }
-
-  if (working[0] == '\0') {
-    session_send_line(ctx->channel, "Usage: /color (text;highlight[;bold])");
-    return;
-  }
-
-  char *tokens[3] = {0};
-  size_t token_count = 0U;
+  *token_count = 0U;
   bool extra_tokens = false;
   char *cursor = working;
-
   while (cursor != NULL) {
     char *next = strchr(cursor, ';');
     if (next != NULL) {
@@ -498,14 +662,13 @@ static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
     }
 
     trim_whitespace_inplace(cursor);
-
     if (cursor[0] == '\0') {
-      session_send_line(ctx->channel, "Each color field must be provided.");
-      return;
+      return false;
     }
 
-    if (token_count < 3U) {
-      tokens[token_count++] = cursor;
+    if (*token_count < max_tokens) {
+      tokens[*token_count] = cursor;
+      ++(*token_count);
     } else if (cursor[0] != '\0') {
       extra_tokens = true;
     }
@@ -521,8 +684,54 @@ static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
     }
   }
 
-  if (extra_tokens || token_count < 2U || token_count > 3U) {
-    session_send_line(ctx->channel, "Usage: /color (text;highlight[;bold])");
+  return !extra_tokens;
+}
+
+static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, "Usage: /color (text;highlight[;bold])");
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, "Usage: /color (text;highlight[;bold])");
+    return;
+  }
+
+  bool had_parentheses = false;
+  if (working[0] == '(') {
+    had_parentheses = true;
+    memmove(working, working + 1, strlen(working));
+    trim_whitespace_inplace(working);
+  }
+
+  if (had_parentheses) {
+    size_t len = strlen(working);
+    if (len == 0U || working[len - 1U] != ')') {
+      session_send_system_line(ctx, "Usage: /color (text;highlight[;bold])");
+      return;
+    }
+    working[len - 1U] = '\0';
+    trim_whitespace_inplace(working);
+  }
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, "Usage: /color (text;highlight[;bold])");
+    return;
+  }
+
+  char *tokens[3] = {0};
+  size_t token_count = 0U;
+  if (!session_parse_color_arguments(working, tokens, 3U, &token_count) || token_count < 2U) {
+    session_send_system_line(ctx, "Usage: /color (text;highlight[;bold])");
     return;
   }
 
@@ -531,7 +740,7 @@ static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
   if (text_code == NULL) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(message, sizeof(message), "Unknown text color '%s'.", tokens[0]);
-    session_send_line(ctx->channel, message);
+    session_send_system_line(ctx, message);
     return;
   }
 
@@ -541,40 +750,228 @@ static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
   if (highlight_code == NULL) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(message, sizeof(message), "Unknown highlight color '%s'.", tokens[1]);
-    session_send_line(ctx->channel, message);
+    session_send_system_line(ctx, message);
     return;
   }
 
   bool is_bold = false;
   if (token_count == 3U) {
     if (!parse_bool_token(tokens[2], &is_bold)) {
-      session_send_line(ctx->channel, "The third value must describe bold (ex: bold, true, normal).");
+      session_send_system_line(ctx, "The third value must describe bold (ex: bold, true, normal).");
       return;
     }
   }
 
-  ctx->owner->user_theme.userColor = text_code;
-  ctx->owner->user_theme.highlight = highlight_code;
-  ctx->owner->user_theme.isBold = is_bold;
+  ctx->user_color_code = text_code;
+  ctx->user_highlight_code = highlight_code;
+  ctx->user_is_bold = is_bold;
+  snprintf(ctx->user_color_name, sizeof(ctx->user_color_name), "%s", tokens[0]);
+  snprintf(ctx->user_highlight_name, sizeof(ctx->user_highlight_name), "%s", tokens[1]);
 
   char info[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(info, sizeof(info), "Applied colors: text=%s highlight=%s bold=%s", tokens[0], tokens[1],
+  snprintf(info, sizeof(info), "Handle colors updated: text=%s highlight=%s bold=%s", tokens[0], tokens[1],
            is_bold ? "on" : "off");
-  session_send_line(ctx->channel, info);
+  session_send_system_line(ctx, info);
 
   const char *bold_code = is_bold ? ANSI_BOLD : "";
   char preview[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(preview, sizeof(preview), "%s%s%ssh-chatter color preview%s", highlight_code, bold_code, text_code,
+  snprintf(preview, sizeof(preview), "%s%s%s[%s] preview%s", highlight_code, bold_code, text_code, ctx->user.name,
            ANSI_RESET);
   session_send_line(ctx->channel, preview);
 }
 
-static bool chat_room_get_user_ip(chat_room_t *room, const char *username, char *ip_buffer, size_t buffer_len) {
-  if (room == NULL || username == NULL) {
-    return false;
+static void session_handle_system_color(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
   }
 
-  bool found = false;
+  if (arguments == NULL) {
+    session_send_system_line(ctx, "Usage: /systemcolor (fg;background[;highlight][;bold])");
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, "Usage: /systemcolor (fg;background[;highlight][;bold])");
+    return;
+  }
+
+  bool had_parentheses = false;
+  if (working[0] == '(') {
+    had_parentheses = true;
+    memmove(working, working + 1, strlen(working));
+    trim_whitespace_inplace(working);
+  }
+
+  if (had_parentheses) {
+    size_t len = strlen(working);
+    if (len == 0U || working[len - 1U] != ')') {
+      session_send_system_line(ctx, "Usage: /systemcolor (fg;background[;highlight][;bold])");
+      return;
+    }
+    working[len - 1U] = '\0';
+    trim_whitespace_inplace(working);
+  }
+
+  char *tokens[4] = {0};
+  size_t token_count = 0U;
+  if (!session_parse_color_arguments(working, tokens, 4U, &token_count) || token_count < 2U) {
+    session_send_system_line(ctx, "Usage: /systemcolor (fg;background[;highlight][;bold])");
+    return;
+  }
+
+  const char *fg_code =
+      lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]), tokens[0]);
+  if (fg_code == NULL) {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "Unknown foreground color '%s'.", tokens[0]);
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  const char *bg_code = lookup_color_code(HIGHLIGHT_COLOR_MAP,
+                                          sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), tokens[1]);
+  if (bg_code == NULL) {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "Unknown background color '%s'.", tokens[1]);
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  const char *highlight_code = ctx->system_highlight_code;
+  if (token_count >= 3U) {
+    highlight_code = lookup_color_code(HIGHLIGHT_COLOR_MAP,
+                                       sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), tokens[2]);
+    if (highlight_code == NULL) {
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(message, sizeof(message), "Unknown highlight color '%s'.", tokens[2]);
+      session_send_system_line(ctx, message);
+      return;
+    }
+  }
+
+  bool is_bold = ctx->system_is_bold;
+  if ((token_count == 3U && highlight_code == ctx->system_highlight_code) || token_count == 4U) {
+    const char *bold_token = token_count == 4U ? tokens[3] : tokens[2];
+    if (!parse_bool_token(bold_token, &is_bold)) {
+      session_send_system_line(ctx, "The last value must describe bold (ex: bold, true, normal).");
+      return;
+    }
+  }
+
+  ctx->system_fg_code = fg_code;
+  ctx->system_bg_code = bg_code;
+  ctx->system_highlight_code = highlight_code;
+  ctx->system_is_bold = is_bold;
+  snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", tokens[0]);
+  snprintf(ctx->system_bg_name, sizeof(ctx->system_bg_name), "%s", tokens[1]);
+  if (token_count >= 3U) {
+    snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s", tokens[2]);
+  }
+
+  session_send_system_line(ctx, "System colors updated.");
+  session_render_separator(ctx, "Chatroom");
+  session_render_prompt(ctx, true);
+}
+
+static void session_handle_nick(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (arguments == NULL || *arguments == '\0') {
+    session_send_system_line(ctx, "Usage: /nick <name>");
+    return;
+  }
+
+  char new_name[SSH_CHATTER_USERNAME_LEN];
+  snprintf(new_name, sizeof(new_name), "%s", arguments);
+  trim_whitespace_inplace(new_name);
+
+  if (new_name[0] == '\0') {
+    session_send_system_line(ctx, "Usage: /nick <name>");
+    return;
+  }
+
+  for (size_t idx = 0; new_name[idx] != '\0'; ++idx) {
+    const unsigned char ch = (unsigned char)new_name[idx];
+    if (!(isalnum(ch) || ch == '_' || ch == '-' || ch == '.')) {
+      session_send_system_line(ctx, "Names may only contain letters, numbers, '.', '-', or '_'.");
+      return;
+    }
+  }
+
+  if (host_is_username_banned(ctx->owner, new_name)) {
+    session_send_system_line(ctx, "That name is banned.");
+    return;
+  }
+
+  session_ctx_t *existing = chat_room_find_user(&ctx->owner->room, new_name);
+  if (existing != NULL && existing != ctx) {
+    session_send_system_line(ctx, "That name is already taken.");
+    return;
+  }
+
+  char old_name[SSH_CHATTER_USERNAME_LEN];
+  snprintf(old_name, sizeof(old_name), "%s", ctx->user.name);
+  snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", new_name);
+
+  char announcement[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(announcement, sizeof(announcement), "* %s is now known as %s", old_name, ctx->user.name);
+  chat_room_broadcast(&ctx->owner->room, announcement, NULL);
+  session_send_system_line(ctx, "Display name updated.");
+}
+
+static void session_handle_exit(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  ctx->should_exit = true;
+  session_send_system_line(ctx, "Disconnecting... bye!");
+  if (ctx->channel != NULL) {
+    ssh_channel_send_eof(ctx->channel);
+  }
+}
+
+static void session_handle_pardon(session_ctx_t *ctx, const char *arguments) {
+  if (!ctx->user.is_operator) {
+    session_send_system_line(ctx, "You are not allowed to pardon users.");
+    return;
+  }
+
+  if (arguments == NULL || *arguments == '\0') {
+    session_send_system_line(ctx, "Usage: /pardon <user|ip>");
+    return;
+  }
+
+  char token[SSH_CHATTER_IP_LEN];
+  snprintf(token, sizeof(token), "%s", arguments);
+  trim_whitespace_inplace(token);
+
+  if (token[0] == '\0') {
+    session_send_system_line(ctx, "Usage: /pardon <user|ip>");
+    return;
+  }
+
+  if (host_remove_ban_entry(ctx->owner, token)) {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "Ban lifted for '%s'.", token);
+    session_send_system_line(ctx, message);
+  } else {
+    session_send_system_line(ctx, "No matching ban found.");
+  }
+}
+
+static session_ctx_t *chat_room_find_user(chat_room_t *room, const char *username) {
+  if (room == NULL || username == NULL) {
+    return NULL;
+  }
+
+  session_ctx_t *result = NULL;
   pthread_mutex_lock(&room->lock);
   for (size_t idx = 0; idx < room->member_count; ++idx) {
     session_ctx_t *member = room->members[idx];
@@ -583,25 +980,125 @@ static bool chat_room_get_user_ip(chat_room_t *room, const char *username, char 
     }
 
     if (strncmp(member->user.name, username, SSH_CHATTER_USERNAME_LEN) == 0) {
-      if (ip_buffer != NULL && buffer_len > 0U) {
-        if (member->client_ip[0] != '\0') {
-          snprintf(ip_buffer, buffer_len, "%s", member->client_ip);
-        } else {
-          ip_buffer[0] = '\0';
-        }
-      }
-      found = true;
+      result = member;
       break;
     }
   }
   pthread_mutex_unlock(&room->lock);
 
-  return found;
+  return result;
+}
+
+static bool host_is_ip_banned(host_t *host, const char *ip) {
+  if (host == NULL || ip == NULL || ip[0] == '\0') {
+    return false;
+  }
+
+  bool banned = false;
+  pthread_mutex_lock(&host->lock);
+  for (size_t idx = 0; idx < host->ban_count; ++idx) {
+    if (strncmp(host->bans[idx].ip, ip, SSH_CHATTER_IP_LEN) == 0) {
+      banned = true;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  return banned;
+}
+
+static bool host_is_username_banned(host_t *host, const char *username) {
+  if (host == NULL || username == NULL || username[0] == '\0') {
+    return false;
+  }
+
+  bool banned = false;
+  pthread_mutex_lock(&host->lock);
+  for (size_t idx = 0; idx < host->ban_count; ++idx) {
+    if (strncmp(host->bans[idx].username, username, SSH_CHATTER_USERNAME_LEN) == 0) {
+      banned = true;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  return banned;
+}
+
+static bool host_add_ban_entry(host_t *host, const char *username, const char *ip) {
+  if (host == NULL) {
+    return false;
+  }
+
+  bool added = false;
+  pthread_mutex_lock(&host->lock);
+  if (host->ban_count >= SSH_CHATTER_MAX_BANS) {
+    pthread_mutex_unlock(&host->lock);
+    return false;
+  }
+
+  for (size_t idx = 0; idx < host->ban_count; ++idx) {
+    const bool username_match = (username != NULL && username[0] != '\0' &&
+                                 strncmp(host->bans[idx].username, username, SSH_CHATTER_USERNAME_LEN) == 0);
+    const bool ip_match = (ip != NULL && ip[0] != '\0' &&
+                           strncmp(host->bans[idx].ip, ip, SSH_CHATTER_IP_LEN) == 0);
+    if (username_match || ip_match) {
+      pthread_mutex_unlock(&host->lock);
+      return true;
+    }
+  }
+
+  strncpy(host->bans[host->ban_count].username,
+          username != NULL ? username : "", SSH_CHATTER_USERNAME_LEN - 1U);
+  host->bans[host->ban_count].username[SSH_CHATTER_USERNAME_LEN - 1U] = '\0';
+  strncpy(host->bans[host->ban_count].ip, ip != NULL ? ip : "", SSH_CHATTER_IP_LEN - 1U);
+  host->bans[host->ban_count].ip[SSH_CHATTER_IP_LEN - 1U] = '\0';
+  ++host->ban_count;
+  added = true;
+
+  pthread_mutex_unlock(&host->lock);
+  return added;
+}
+
+static bool host_remove_ban_entry(host_t *host, const char *token) {
+  if (host == NULL || token == NULL || token[0] == '\0') {
+    return false;
+  }
+
+  bool removed = false;
+  pthread_mutex_lock(&host->lock);
+  for (size_t idx = 0; idx < host->ban_count; ++idx) {
+    if (strncmp(host->bans[idx].username, token, SSH_CHATTER_USERNAME_LEN) == 0 ||
+        strncmp(host->bans[idx].ip, token, SSH_CHATTER_IP_LEN) == 0) {
+      for (size_t shift = idx; shift + 1U < host->ban_count; ++shift) {
+        host->bans[shift] = host->bans[shift + 1U];
+      }
+      memset(&host->bans[host->ban_count - 1U], 0, sizeof(host->bans[host->ban_count - 1U]));
+      --host->ban_count;
+      removed = true;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  return removed;
 }
 
 static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   if (strncmp(line, "/help", 5) == 0) {
     session_print_help(ctx);
+    return;
+  }
+  if (strncmp(line, "/exit", 5) == 0) {
+    session_handle_exit(ctx);
+    return;
+  }
+  if (strncmp(line, "/nick", 5) == 0) {
+    const char *arguments = line + 5;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_nick(ctx, arguments);
     return;
   }
   if (strncmp(line, "/ban", 4) == 0) {
@@ -610,6 +1107,14 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
       ++arguments;
     }
     session_handle_ban(ctx, arguments);
+    return;
+  }
+  if (strncmp(line, "/pardon", 7) == 0) {
+    const char *arguments = line + 7;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_pardon(ctx, arguments);
     return;
   }
   if (strncmp(line, "/poke", 5) == 0) {
@@ -628,10 +1133,16 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_color(ctx, arguments);
     return;
   }
+  if (strncmp(line, "/systemcolor", 12) == 0) {
+    const char *arguments = line + 12;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_system_color(ctx, arguments);
+    return;
+  }
 
-  char broadcast_buffer[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(broadcast_buffer, sizeof(broadcast_buffer), "%s", line);
-  chat_room_broadcast(&ctx->owner->room, broadcast_buffer, ctx);
+  session_send_system_line(ctx, "Unknown command. Type /help for help.");
 }
 
 static void trim_whitespace_inplace(char *text) {
@@ -717,6 +1228,8 @@ static void *session_thread(void *arg) {
     return NULL;
   }
 
+  session_apply_theme_defaults(ctx);
+
   if (session_authenticate(ctx) != 0) {
     humanized_log_error("session", "authentication failed", EACCES);
     session_cleanup(ctx);
@@ -735,21 +1248,30 @@ static void *session_thread(void *arg) {
     return NULL;
   }
 
+  if (host_is_ip_banned(ctx->owner, ctx->client_ip) || host_is_username_banned(ctx->owner, ctx->user.name)) {
+    session_send_system_line(ctx, "You are banned from this server.");
+    session_cleanup(ctx);
+    return NULL;
+  }
+
   chat_room_add(&ctx->owner->room, ctx);
   printf("[join] %s\n", ctx->user.name);
 
+  session_render_banner(ctx);
   if (ctx->owner->motd[0] != '\0') {
-    session_send_line(ctx->channel, ctx->owner->motd);
+    session_send_system_line(ctx, ctx->owner->motd);
   }
+  session_send_system_line(ctx, "Type /help to explore available commands.");
 
   char join_message[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(join_message, sizeof(join_message), "* %s has joined the chat", ctx->user.name);
   chat_room_broadcast(&ctx->owner->room, join_message, NULL);
 
-  ctx->input_length = 0U;
-  memset(ctx->input_buffer, 0, sizeof(ctx->input_buffer));
+  session_clear_input(ctx);
+  session_render_prompt(ctx, true);
+
   char buffer[SSH_CHATTER_MAX_INPUT_LEN];
-  while (true) {
+  while (!ctx->should_exit) {
     const int bytes_read = ssh_channel_read(ctx->channel, buffer, sizeof(buffer) - 1U, 0);
     if (bytes_read <= 0) {
       break;
@@ -759,28 +1281,61 @@ static void *session_thread(void *arg) {
       const char ch = buffer[idx];
 
       if (ch == '\r' || ch == '\n') {
+        session_local_echo_char(ctx, '\n');
         if (ctx->input_length > 0U) {
           ctx->input_buffer[ctx->input_length] = '\0';
           session_process_line(ctx, ctx->input_buffer);
-          ctx->input_length = 0U;
         }
+        session_clear_input(ctx);
+        if (ctx->should_exit) {
+          break;
+        }
+        session_render_prompt(ctx, false);
+        continue;
+      }
+
+      if (ch == '\b' || ch == 0x7f) {
+        session_local_backspace(ctx);
+        continue;
+      }
+
+      if (ch == '\t') {
+        if (ctx->input_length + 1U < sizeof(ctx->input_buffer)) {
+          ctx->input_buffer[ctx->input_length++] = ' ';
+          session_local_echo_char(ctx, ' ');
+        }
+        continue;
+      }
+
+      if (!isprint((unsigned char)ch)) {
         continue;
       }
 
       if (ctx->input_length + 1U >= sizeof(ctx->input_buffer)) {
         ctx->input_buffer[sizeof(ctx->input_buffer) - 1U] = '\0';
         session_process_line(ctx, ctx->input_buffer);
-        ctx->input_length = 0U;
+        session_clear_input(ctx);
+        if (ctx->should_exit) {
+          break;
+        }
+        session_render_prompt(ctx, false);
       }
 
-      ctx->input_buffer[ctx->input_length++] = ch;
+      if (ctx->input_length + 1U < sizeof(ctx->input_buffer)) {
+        ctx->input_buffer[ctx->input_length++] = ch;
+        session_local_echo_char(ctx, ch);
+      }
+    }
+
+    if (ctx->should_exit) {
+      break;
     }
   }
 
-  if (ctx->input_length > 0U) {
+  if (!ctx->should_exit && ctx->input_length > 0U) {
     ctx->input_buffer[ctx->input_length] = '\0';
     session_process_line(ctx, ctx->input_buffer);
-    ctx->input_length = 0U;
+    session_clear_input(ctx);
   }
 
   printf("[part] %s\n", ctx->user.name);
@@ -802,12 +1357,19 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->listener.handle = NULL;
   host->auth = auth;
   host->user_theme.userColor = ANSI_GREEN;
-  host->user_theme.highlight = "";
+  host->user_theme.highlight = ANSI_BG_DEFAULT;
   host->user_theme.isBold = false;
   host->system_theme.backgroundColor = ANSI_BLUE;
   host->system_theme.foregroundColor = ANSI_WHITE;
   host->system_theme.highlightColor = ANSI_YELLOW;
   host->system_theme.isBold = true;
+  snprintf(host->default_user_color_name, sizeof(host->default_user_color_name), "%s", "green");
+  snprintf(host->default_user_highlight_name, sizeof(host->default_user_highlight_name), "%s", "default");
+  snprintf(host->default_system_fg_name, sizeof(host->default_system_fg_name), "%s", "white");
+  snprintf(host->default_system_bg_name, sizeof(host->default_system_bg_name), "%s", "blue");
+  snprintf(host->default_system_highlight_name, sizeof(host->default_system_highlight_name), "%s", "yellow");
+  host->ban_count = 0U;
+  memset(host->bans, 0, sizeof(host->bans));
   snprintf(host->version, sizeof(host->version), "ssh-chatter (C)");
   snprintf(host->motd, sizeof(host->motd), "Welcome to ssh-chat (C edition)");
   host->connection_count = 0U;
