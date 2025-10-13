@@ -686,8 +686,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port) {
     char peer_address[NI_MAXHOST];
     session_describe_peer(session, peer_address, sizeof(peer_address));
     if (peer_address[0] == '\0') {
-      strncpy(peer_address, "unknown", sizeof(peer_address) - 1U);
-      peer_address[sizeof(peer_address) - 1U] = '\0';
+      snprintf(peer_address, sizeof(peer_address), "unknown");
     }
 
     printf("[connect] accepted client from %s\n", peer_address);
