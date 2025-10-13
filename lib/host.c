@@ -127,6 +127,7 @@ static bool session_is_private_ipv4(const unsigned char octets[4]);
 static bool session_is_lan_client(const char *ip);
 static void session_assign_lan_privileges(session_ctx_t *ctx);
 static void session_apply_theme_defaults(session_ctx_t *ctx);
+static void session_apply_system_theme_defaults(session_ctx_t *ctx);
 static void session_dispatch_command(session_ctx_t *ctx, const char *line);
 static void session_handle_exit(session_ctx_t *ctx);
 static void session_handle_nick(session_ctx_t *ctx, const char *arguments);
@@ -378,6 +379,16 @@ static void session_apply_theme_defaults(session_ctx_t *ctx) {
   ctx->user_is_bold = host->user_theme.isBold;
   snprintf(ctx->user_color_name, sizeof(ctx->user_color_name), "%s", host->default_user_color_name);
   snprintf(ctx->user_highlight_name, sizeof(ctx->user_highlight_name), "%s", host->default_user_highlight_name);
+
+  session_apply_system_theme_defaults(ctx);
+}
+
+static void session_apply_system_theme_defaults(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  host_t *host = ctx->owner;
 
   ctx->system_fg_code = host->system_theme.foregroundColor;
   ctx->system_bg_code = host->system_theme.backgroundColor;
@@ -798,7 +809,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
   session_send_system_line(ctx,
                            "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may "
-                           "be highlight or bold)");
+                           "be highlight or bold; use /systemcolor reset to restore defaults)");
   session_send_system_line(ctx, "/poke <username>      - send a bell to a user");
   session_send_system_line(ctx, "/ban <username>       - ban a user (operator only)");
   session_send_system_line(ctx, "/pardon <user|ip>     - remove a ban (operator only)");
@@ -1035,10 +1046,12 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
     return;
   }
 
+  static const char *kUsage =
+      "Usage: /systemcolor (fg;background[;highlight][;bold]) or /systemcolor reset - third value may be highlight or "
+      "bold.";
+
   if (arguments == NULL) {
-    session_send_system_line(ctx,
-                             "Usage: /systemcolor (fg;background[;highlight][;bold]) - third value may be highlight or "
-                             "bold.");
+    session_send_system_line(ctx, kUsage);
     return;
   }
 
@@ -1047,9 +1060,7 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx,
-                             "Usage: /systemcolor (fg;background[;highlight][;bold]) - third value may be highlight or "
-                             "bold.");
+    session_send_system_line(ctx, kUsage);
     return;
   }
 
@@ -1063,21 +1074,30 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   if (had_parentheses) {
     size_t len = strlen(working);
     if (len == 0U || working[len - 1U] != ')') {
-      session_send_system_line(ctx,
-                               "Usage: /systemcolor (fg;background[;highlight][;bold]) - third value may be highlight "
-                               "or bold.");
+      session_send_system_line(ctx, kUsage);
       return;
     }
     working[len - 1U] = '\0';
     trim_whitespace_inplace(working);
   }
 
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  if (strcasecmp(working, "reset") == 0) {
+    session_apply_system_theme_defaults(ctx);
+    session_send_system_line(ctx, "System colors reset to defaults.");
+    session_render_separator(ctx, "Chatroom");
+    session_render_prompt(ctx, true);
+    return;
+  }
+
   char *tokens[4] = {0};
   size_t token_count = 0U;
   if (!session_parse_color_arguments(working, tokens, 4U, &token_count) || token_count < 2U) {
-    session_send_system_line(ctx,
-                             "Usage: /systemcolor (fg;background[;highlight][;bold]) - third value may be highlight or "
-                             "bold.");
+    session_send_system_line(ctx, kUsage);
     return;
   }
 
@@ -1106,9 +1126,7 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
     bool bool_value = false;
     if (parse_bool_token(tokens[2], &bool_value)) {
       if (token_count > 3U) {
-        session_send_system_line(ctx,
-                                 "Usage: /systemcolor (fg;background[;highlight][;bold]) - third value may be "
-                                 "highlight or bold.");
+        session_send_system_line(ctx, kUsage);
         return;
       }
       is_bold = bool_value;
