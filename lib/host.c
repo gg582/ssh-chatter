@@ -127,11 +127,14 @@ static bool session_is_private_ipv4(const unsigned char octets[4]);
 static bool session_is_lan_client(const char *ip);
 static void session_assign_lan_privileges(session_ctx_t *ctx);
 static void session_apply_theme_defaults(session_ctx_t *ctx);
+static void session_apply_system_theme_defaults(session_ctx_t *ctx);
 static void session_dispatch_command(session_ctx_t *ctx, const char *line);
 static void session_handle_exit(session_ctx_t *ctx);
 static void session_handle_nick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
+static bool session_line_is_exit_command(const char *line);
+static void session_handle_username_conflict_input(session_ctx_t *ctx, const char *line);
 static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count);
 static size_t session_utf8_prev_char_len(const char *buffer, size_t length);
 static int session_utf8_char_width(const char *bytes, size_t length);
@@ -378,6 +381,16 @@ static void session_apply_theme_defaults(session_ctx_t *ctx) {
   ctx->user_is_bold = host->user_theme.isBold;
   snprintf(ctx->user_color_name, sizeof(ctx->user_color_name), "%s", host->default_user_color_name);
   snprintf(ctx->user_highlight_name, sizeof(ctx->user_highlight_name), "%s", host->default_user_highlight_name);
+
+  session_apply_system_theme_defaults(ctx);
+}
+
+static void session_apply_system_theme_defaults(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  host_t *host = ctx->owner;
 
   ctx->system_fg_code = host->system_theme.foregroundColor;
   ctx->system_bg_code = host->system_theme.backgroundColor;
@@ -796,11 +809,58 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/exit                 - leave the chat");
   session_send_system_line(ctx, "/nick <name>          - change your display name");
   session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
-  session_send_system_line(ctx, "/systemcolor (fg;background[;highlight][;bold]) - style the interface");
+  session_send_system_line(ctx,
+                           "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may "
+                           "be highlight or bold; use /systemcolor reset to restore defaults)");
   session_send_system_line(ctx, "/poke <username>      - send a bell to a user");
   session_send_system_line(ctx, "/ban <username>       - ban a user (operator only)");
   session_send_system_line(ctx, "/pardon <user|ip>     - remove a ban (operator only)");
   session_send_system_line(ctx, "Regular messages are shared with everyone.");
+}
+
+static bool session_line_is_exit_command(const char *line) {
+  if (line == NULL) {
+    return false;
+  }
+
+  if (strncmp(line, "/exit", 5) != 0) {
+    return false;
+  }
+
+  const char trailing = line[5];
+  if (trailing == '\0') {
+    return true;
+  }
+
+  if (!isspace((unsigned char)trailing)) {
+    return false;
+  }
+
+  for (size_t idx = 6U; line[idx] != '\0'; ++idx) {
+    if (!isspace((unsigned char)line[idx])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static void session_handle_username_conflict_input(session_ctx_t *ctx, const char *line) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (session_line_is_exit_command(line)) {
+    session_handle_exit(ctx);
+    return;
+  }
+
+  char reminder[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(reminder, sizeof(reminder), "The username '%s' is already in use.", ctx->user.name);
+  session_send_system_line(ctx, reminder);
+  session_send_system_line(ctx,
+                           "Reconnect with a different username by running: ssh newname@<server> (or ssh -l newname <server>)");
+  session_send_system_line(ctx, "Type /exit to quit.");
 }
 
 static void session_process_line(session_ctx_t *ctx, const char *line) {
@@ -809,6 +869,11 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
   }
 
   printf("[%s] %s\n", ctx->user.name, line);
+
+  if (ctx->username_conflict) {
+    session_handle_username_conflict_input(ctx, line);
+    return;
+  }
 
   if (line[0] == '/') {
     session_dispatch_command(ctx, line);
@@ -1033,8 +1098,12 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
     return;
   }
 
+  static const char *kUsage =
+      "Usage: /systemcolor (fg;background[;highlight][;bold]) or /systemcolor reset - third value may be highlight or "
+      "bold.";
+
   if (arguments == NULL) {
-    session_send_system_line(ctx, "Usage: /systemcolor (fg;background[;highlight][;bold])");
+    session_send_system_line(ctx, kUsage);
     return;
   }
 
@@ -1043,7 +1112,7 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, "Usage: /systemcolor (fg;background[;highlight][;bold])");
+    session_send_system_line(ctx, kUsage);
     return;
   }
 
@@ -1057,17 +1126,30 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   if (had_parentheses) {
     size_t len = strlen(working);
     if (len == 0U || working[len - 1U] != ')') {
-      session_send_system_line(ctx, "Usage: /systemcolor (fg;background[;highlight][;bold])");
+      session_send_system_line(ctx, kUsage);
       return;
     }
     working[len - 1U] = '\0';
     trim_whitespace_inplace(working);
   }
 
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  if (strcasecmp(working, "reset") == 0) {
+    session_apply_system_theme_defaults(ctx);
+    session_send_system_line(ctx, "System colors reset to defaults.");
+    session_render_separator(ctx, "Chatroom");
+    session_render_prompt(ctx, true);
+    return;
+  }
+
   char *tokens[4] = {0};
   size_t token_count = 0U;
   if (!session_parse_color_arguments(working, tokens, 4U, &token_count) || token_count < 2U) {
-    session_send_system_line(ctx, "Usage: /systemcolor (fg;background[;highlight][;bold])");
+    session_send_system_line(ctx, kUsage);
     return;
   }
 
@@ -1090,23 +1172,34 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   }
 
   const char *highlight_code = ctx->system_highlight_code;
-  if (token_count >= 3U) {
-    highlight_code = lookup_color_code(HIGHLIGHT_COLOR_MAP,
-                                       sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), tokens[2]);
-    if (highlight_code == NULL) {
-      char message[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(message, sizeof(message), "Unknown highlight color '%s'.", tokens[2]);
-      session_send_system_line(ctx, message);
-      return;
-    }
-  }
-
+  bool highlight_updated = false;
   bool is_bold = ctx->system_is_bold;
-  if ((token_count == 3U && highlight_code == ctx->system_highlight_code) || token_count == 4U) {
-    const char *bold_token = token_count == 4U ? tokens[3] : tokens[2];
-    if (!parse_bool_token(bold_token, &is_bold)) {
-      session_send_system_line(ctx, "The last value must describe bold (ex: bold, true, normal).");
-      return;
+  if (token_count >= 3U) {
+    bool bool_value = false;
+    if (parse_bool_token(tokens[2], &bool_value)) {
+      if (token_count > 3U) {
+        session_send_system_line(ctx, kUsage);
+        return;
+      }
+      is_bold = bool_value;
+    } else {
+      highlight_code = lookup_color_code(HIGHLIGHT_COLOR_MAP,
+                                         sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), tokens[2]);
+      if (highlight_code == NULL) {
+        char message[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(message, sizeof(message), "Unknown highlight color '%s'.", tokens[2]);
+        session_send_system_line(ctx, message);
+        return;
+      }
+      highlight_updated = true;
+
+      if (token_count == 4U) {
+        if (!parse_bool_token(tokens[3], &bool_value)) {
+          session_send_system_line(ctx, "The last value must describe bold (ex: bold, true, normal).");
+          return;
+        }
+        is_bold = bool_value;
+      }
     }
   }
 
@@ -1116,7 +1209,7 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   ctx->system_is_bold = is_bold;
   snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", tokens[0]);
   snprintf(ctx->system_bg_name, sizeof(ctx->system_bg_name), "%s", tokens[1]);
-  if (token_count >= 3U) {
+  if (highlight_updated) {
     snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s", tokens[2]);
   }
 
@@ -1505,20 +1598,34 @@ static void *session_thread(void *arg) {
     return NULL;
   }
 
-  chat_room_add(&ctx->owner->room, ctx);
-  printf("[join] %s\n", ctx->user.name);
+  session_ctx_t *existing = chat_room_find_user(&ctx->owner->room, ctx->user.name);
+  if (existing != NULL) {
+    ctx->username_conflict = true;
+    printf("[reject] username in use: %s\n", ctx->user.name);
+    session_render_banner(ctx);
+    char in_use[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(in_use, sizeof(in_use), "The username '%s' is already in use.", ctx->user.name);
+    session_send_system_line(ctx, in_use);
+    session_send_system_line(ctx,
+                             "Reconnect with a different username by running: ssh newname@<server> (or ssh -l newname <server>).");
+    session_send_system_line(ctx, "Type /exit to quit.");
+  } else {
+    chat_room_add(&ctx->owner->room, ctx);
+    ctx->has_joined_room = true;
+    printf("[join] %s\n", ctx->user.name);
 
-  session_render_banner(ctx);
-  session_send_history(ctx);
-  if (ctx->owner->motd[0] != '\0') {
-    session_send_system_line(ctx, ctx->owner->motd);
+    session_render_banner(ctx);
+    session_send_history(ctx);
+    if (ctx->owner->motd[0] != '\0') {
+      session_send_system_line(ctx, ctx->owner->motd);
+    }
+    session_send_system_line(ctx, "Type /help to explore available commands.");
+
+    char join_message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(join_message, sizeof(join_message), "* %s has joined the chat", ctx->user.name);
+    host_history_record_system(ctx->owner, join_message);
+    chat_room_broadcast(&ctx->owner->room, join_message, NULL);
   }
-  session_send_system_line(ctx, "Type /help to explore available commands.");
-
-  char join_message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(join_message, sizeof(join_message), "* %s has joined the chat", ctx->user.name);
-  host_history_record_system(ctx->owner, join_message);
-  chat_room_broadcast(&ctx->owner->room, join_message, NULL);
 
   session_clear_input(ctx);
   session_render_prompt(ctx, true);
@@ -1591,12 +1698,14 @@ static void *session_thread(void *arg) {
     session_clear_input(ctx);
   }
 
-  printf("[part] %s\n", ctx->user.name);
-  char part_message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(part_message, sizeof(part_message), "* %s has left the chat", ctx->user.name);
-  host_history_record_system(ctx->owner, part_message);
-  chat_room_broadcast(&ctx->owner->room, part_message, NULL);
-  chat_room_remove(&ctx->owner->room, ctx);
+  if (ctx->has_joined_room) {
+    printf("[part] %s\n", ctx->user.name);
+    char part_message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(part_message, sizeof(part_message), "* %s has left the chat", ctx->user.name);
+    host_history_record_system(ctx->owner, part_message);
+    chat_room_broadcast(&ctx->owner->room, part_message, NULL);
+    chat_room_remove(&ctx->owner->room, ctx);
+  }
   session_cleanup(ctx);
 
   return NULL;

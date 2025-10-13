@@ -75,6 +75,8 @@ typedef struct session_ctx {
   char system_bg_name[SSH_CHATTER_COLOR_NAME_LEN];
   char system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
   bool should_exit;
+  bool username_conflict;
+  bool has_joined_room;
 } session_ctx_t;
 
 typedef struct host {
