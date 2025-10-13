@@ -25,6 +25,10 @@ typedef struct ssh_bind_struct {
   int placeholder;
 } *ssh_bind;
 
+typedef struct ssh_key_struct {
+  int placeholder;
+} *ssh_key;
+
 typedef enum {
   SSH_OK = 0,
   SSH_ERROR = -1
@@ -63,6 +67,10 @@ int ssh_channel_close(ssh_channel channel);
 void ssh_channel_free(ssh_channel channel);
 
 int ssh_disconnect(ssh_session session);
+
+int ssh_pki_import_privkey_file(const char *filename, const char *passphrase,
+                                void *auth_fn, void *auth_data, ssh_key *pkey);
+void ssh_key_free(ssh_key key);
 
 #ifdef __cplusplus
 }
