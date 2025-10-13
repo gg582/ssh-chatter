@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 
@@ -22,6 +23,31 @@
 #ifndef NI_MAXHOST
 #define NI_MAXHOST 1025
 #endif
+
+typedef struct {
+  const char *name;
+  const char *code;
+} color_entry_t;
+
+static const color_entry_t USER_COLOR_MAP[] = {
+    {"red", ANSI_RED},       {"green", ANSI_GREEN},   {"yellow", ANSI_YELLOW},
+    {"blue", ANSI_BLUE},     {"magenta", ANSI_MAGENTA}, {"cyan", ANSI_CYAN},
+    {"white", ANSI_WHITE},   {"grey", ANSI_GREY},     {"default", ANSI_DEFAULT},
+};
+
+static const color_entry_t HIGHLIGHT_COLOR_MAP[] = {
+    {"black", ANSI_BG_BLACK},     {"red", ANSI_BG_RED},       {"green", ANSI_BG_GREEN},
+    {"yellow", ANSI_BG_YELLOW},   {"blue", ANSI_BG_BLUE},     {"magenta", ANSI_BG_MAGENTA},
+    {"cyan", ANSI_BG_CYAN},       {"white", ANSI_BG_WHITE},   {"grey", ANSI_BG_GREY},
+    {"default", ANSI_BG_DEFAULT},
+};
+
+static void trim_whitespace_inplace(char *text);
+static const char *lookup_color_code(const color_entry_t *entries, size_t entry_count, const char *name);
+static bool parse_bool_token(const char *token, bool *value);
+static void session_send_line(ssh_channel channel, const char *message);
+static bool chat_room_get_user_ip(chat_room_t *room, const char *username, char *ip_buffer, size_t buffer_len);
+static void session_dispatch_command(session_ctx_t *ctx, const char *line);
 
 static void chat_room_init(chat_room_t *room) {
   if (room == NULL) {
@@ -65,8 +91,8 @@ static void session_describe_peer(ssh_session session, char *buffer, size_t len)
   buffer[len - 1U] = '\0';
 }
 
-static void chat_room_add(chat_room_t *room, chat_user_t *user) {
-  if (room == NULL || user == NULL) {
+static void chat_room_add(chat_room_t *room, session_ctx_t *session) {
+  if (room == NULL || session == NULL) {
     return;
   }
 
@@ -389,7 +415,8 @@ static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  const char *text_code = lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]), tokens[0]);
+  const char *text_code =
+      lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]), tokens[0]);
   if (text_code == NULL) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(message, sizeof(message), "Unknown text color '%s'.", tokens[0]);
@@ -397,8 +424,9 @@ static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  const char *highlight_code =
-      lookup_color_code(HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), tokens[1]);
+  const char *highlight_code = lookup_color_code(HIGHLIGHT_COLOR_MAP,
+                                                sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]),
+                                                tokens[1]);
   if (highlight_code == NULL) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(message, sizeof(message), "Unknown highlight color '%s'.", tokens[1]);
@@ -493,6 +521,62 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   char broadcast_buffer[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(broadcast_buffer, sizeof(broadcast_buffer), "%s", line);
   chat_room_broadcast(&ctx->owner->room, broadcast_buffer, ctx);
+}
+
+static void trim_whitespace_inplace(char *text) {
+  if (text == NULL) {
+    return;
+  }
+
+  char *start = text;
+  while (*start != '\0' && isspace((unsigned char)*start)) {
+    ++start;
+  }
+
+  char *end = text + strlen(text);
+  while (end > start && isspace((unsigned char)*(end - 1))) {
+    --end;
+  }
+
+  const size_t length = (size_t)(end - start);
+  if (start != text && length > 0U) {
+    memmove(text, start, length);
+  }
+  text[length] = '\0';
+}
+
+static const char *lookup_color_code(const color_entry_t *entries, size_t entry_count, const char *name) {
+  if (entries == NULL || name == NULL) {
+    return NULL;
+  }
+
+  for (size_t idx = 0; idx < entry_count; ++idx) {
+    if (strcasecmp(entries[idx].name, name) == 0) {
+      return entries[idx].code;
+    }
+  }
+
+  return NULL;
+}
+
+static bool parse_bool_token(const char *token, bool *value) {
+  if (token == NULL || value == NULL) {
+    return false;
+  }
+
+  if (strcasecmp(token, "true") == 0 || strcasecmp(token, "yes") == 0 || strcasecmp(token, "on") == 0 ||
+      strcasecmp(token, "bold") == 0) {
+    *value = true;
+    return true;
+  }
+
+  if (strcasecmp(token, "false") == 0 || strcasecmp(token, "no") == 0 || strcasecmp(token, "off") == 0 ||
+      strcasecmp(token, "normal") == 0) {
+    *value = false;
+    return true;
+  }
+
+  return false;
 }
 
 static void session_cleanup(session_ctx_t *ctx) {
@@ -698,12 +782,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port) {
     ctx->channel = NULL;
     ctx->owner = host;
     ctx->auth = (auth_profile_t){0};
-    ctx->client_ip[0] = '\0';
-
-    const char *client_ip = ssh_get_client_ip(session);
-    if (client_ip != NULL) {
-      snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%s", client_ip);
-    }
+    snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
 
     pthread_mutex_lock(&host->lock);
     ++host->connection_count;
