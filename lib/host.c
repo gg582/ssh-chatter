@@ -180,12 +180,36 @@ static void session_send_line(ssh_channel channel, const char *message) {
   ssh_channel_write(channel, "\r\n", 2U);
 }
 
+static bool session_handle_service_request(ssh_message message) {
+  if (message == NULL) {
+    return false;
+  }
+
+  const char *service = ssh_message_service_service(message);
+  if (service == NULL) {
+    return false;
+  }
+
+  if (strcmp(service, "ssh-userauth") == 0 || strcmp(service, "ssh-connection") == 0) {
+    ssh_message_service_reply_success(message);
+    return true;
+  }
+
+  return false;
+}
+
 static int session_authenticate(session_ctx_t *ctx) {
   ssh_message message = NULL;
   bool authenticated = false;
 
   while (!authenticated && (message = ssh_message_get(ctx->session)) != NULL) {
-    switch (ssh_message_type(message)) {
+    const int message_type = ssh_message_type(message);
+    switch (message_type) {
+      case SSH_REQUEST_SERVICE:
+        if (!session_handle_service_request(message)) {
+          ssh_message_reply_default(message);
+        }
+        break;
       case SSH_REQUEST_AUTH:
         {
           const char *username = ssh_message_auth_user(message);
@@ -210,8 +234,16 @@ static int session_accept_channel(session_ctx_t *ctx) {
   ssh_message message = NULL;
 
   while ((message = ssh_message_get(ctx->session)) != NULL) {
-    if (ssh_message_type(message) == SSH_REQUEST_CHANNEL_OPEN &&
-        ssh_message_subtype(message) == SSH_CHANNEL_SESSION) {
+    const int message_type = ssh_message_type(message);
+    if (message_type == SSH_REQUEST_SERVICE) {
+      if (!session_handle_service_request(message)) {
+        ssh_message_reply_default(message);
+      }
+      ssh_message_free(message);
+      continue;
+    }
+
+    if (message_type == SSH_REQUEST_CHANNEL_OPEN && ssh_message_subtype(message) == SSH_CHANNEL_SESSION) {
       ctx->channel = ssh_message_channel_request_open_reply_accept(message);
       ssh_message_free(message);
       break;
