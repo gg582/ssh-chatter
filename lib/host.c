@@ -1,192 +1,407 @@
 #include "host.h"
-#include "palettes.h"
-#include "theme.h"
+
+#include <errno.h>
+#include <pthread.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "humanized/humanized.h"
 
-static void ChatRoomInit(ChatRoom *room) {
-  pthread_mutex_init(&room->lock, null);
-  room->count = 0;
-  pthread_mutex_unlock(&room->lock);
+static void chat_room_init(chat_room_t *room) {
+  if (room == NULL) {
+    return;
+  }
+  pthread_mutex_init(&room->lock, NULL);
+  room->member_count = 0U;
+  for (size_t idx = 0; idx < SSH_CHATTER_MAX_USERS; ++idx) {
+    room->members[idx] = NULL;
+  }
 }
 
-static void ChatRoomAdd(ChatRoom *room, MessageUser *user) {
-  pthread_mutex_lock(&room->lock);
-  if (room->count < MAX_USERS) room->members[room->count++] = user;
-  pthread_mutex_unlock(&room->lock);
-}
-
-static void ChatRoomRemove(ChatRoom  *room, MessageUser *user) {
-  pthread_mutex_lock(&room, user);
-  for (int i = 0; i < room->count; i++) {
-    if(room->members[i] == user) {
-      for(int j = il j < room->count - 1; j++) {
-        room->memebers[j] = room->members[j + 1];
-      }
-      r->count--;
-      break;
-    }
-  }
-  pthread_mutex_unlock(&room->lock);
-}
-
-static void ChatRoomBroadcast(ChatRoom *r, const char *msg, MessageUser *from) {
-  char sendMsg[MESSAGE_LIMIT + 1];
-  memset(sendMsg, 0, sizeof(sendMsg));
-  strncpy(sendMsg, msg, MESSAGE_LIMIT);
-  printf("[BROADCAST] %s\n", msg);
-}
-
-static Host globalHost;
-
-static void sendLine(ssh_channel chan, const char *msg) {
-  static char sendMsg[MESSAGE_LIMIT + 1]; // Pad by \0
-  memset(sendMsg, 0, sizeof(sendMsg));
-  strncpy(sendMsg, msg, MESSAGE_LIMIT);
-  sendMsg[MESSAGE_LIMIT] = '\0';
-  ssh_channel_write(chan, msg, strlen(sendMsg));
-}
-
-void *handle_session (void *arg) {
-  SessionCtx *ctx = (SessionCtx *) arg;
-  ssh_message msg;
-  int nBytes;
-  char buffer[MAX_INPUT_LEN];
-
-  /* Step 1: Authenticate with SSH Request */
-  /* This accepts all connections. */
-  while((msg = ssh_message_get(ctx->session)) != none) {
-    if(ssh_message_type(msg) == SSH_REQUEST_AUTH) {
-      ssh_message_auth_reply_success(msg, 0);
-      ssh_message_free(msg);
-      break;
-    }
-    ssh_message_reply_default(msg);
-    ssh_message_free(msg);
-  }
-  if(NOT ctx->channel) {
-    static char errMsg[256];
-    memset(errMsg, 0, sizeof(errMsg));
-    sprintf(errMsg, "%s: no channel\n", ctx->user.name);
-    exitWithError(ERROR_NO_CHANNEL, "sendLine", errMsg, none);
-  }
-  while((msg = ssh_message_get(ctx->session)) != none)) {
-    if(
-      ssh_message_type(msg) == SSH_REQUEST_CHANNELL
-      AND 
-      (ssh_message_subtype(msg) == SSH_CHANNEL_REQUEST_PTY
-        OR ssh_message_subtype(msg) == SSH_CHANNEL_REQUEST_SHELL)) {
-      ssh_message_channel_request_reply_success(msg);
-      ssh_message_free(msg);
-      if(ssh_message_subtype(msg) == SSH_CHANNEL_REQUEST_SHELL) break;
-    } else {
-      ssh_message_reply_default(msg);
-      ssh_message_free(msg);
-    }
-  }
-  ChatRoomAdd(&globalHost.room, &ctx->user);
-  printf("user [%s] joined\n", ctx->user.name);
-  
-  if(strlen(g_host.motd) > 0) {
-    sendLine(ctx->channel, g_host.motd);
-  }
-  while((nbytes = ssh_channel_read(ctx->channel, buffer, sizeof(buffer) - 1, 0)) > 0) {
-    buffer[nbytes] = '\0';
-    if(nbytes <= 1) continue;
-    printf("[%s]: %s", ctx->user.name, buf);
-  }
-  if(strncmp(buffer, "/help", 5) == 0) {
-    printf("/ban username to ban(admin)\n"); // TODO: Make Username - Context Map, attach MariaDB to implement
-    printf("/poke username to poke(sends unix bell to a single user)\n");
-  } else if(strncmp(buffer, "/ban", 5) == 0) {
-    const int len = strlen(buffer) - 6;
-    char localBuf[len];
-    strncpy(localBuf, buffer + 6, len);
-    const char *whitespace = "\t ";
-    char *token;
-    token = strtok(localBuf, whitespace);
-    while(token != none) {
-      printf("user [%s] banned.\n", token);
-      token = strtok(NULL, delim);
-    }
-  } else if(strncmp(buffer, "/poke", 5) == 0) {
-    const int len = strlen(buffer) - 6;
-    char localBuf[len];
-    strncpy(localBuf, buffer + 6, len);
-    const char *whitespace = "\t ";
-    const char *token = strtok(localBuf, whitespace);
-    printf("user %s -> %s: poke! ★ \n");
-  } else {
-    char broadcastMsg[MESSAGE_LIMIT];
-    snprintf(broadcastMsg, sizeof(broadcastMsg), "<BROADCAST> admin [%s]: %s", ctx->user.name, buf);
-    ChatRoomBroadcast(&globalHost.room, broadcastMsg, &ctx->user);
-  }
-    printf("user [%s] disconnected\n", ctx->user.name);
-    chat_room_remove(&g_host.room, &ctx->user);
-    ssh_channel_send_eof(ctx->channel);
-    ssh_channel_close(ctx->channel);
-    ssh_channel_free(ctx->channel);
-    ssh_disconnect(ctx->session);
-    ssh_free(ctx->session);
-    free(ctx);
-    return NULL;
-}
-
-
-void ListenerServe(Host* h) {
-  ssh_bind bind = ssh_bind_new();
-  ssh_bind_options_set(bind, SSH_BIND_OPTIONS_BINDADDR, "0.0.0.0");
-  ssh_bind_options_set(bind, SSH_BIND_OPTIONS_BINDPORT_STR, "2222");
-  ssh_bind_options_set(bind, SSH_BIND_OPTIONS_HOSTKEY, "ssh-rsa");
-  ssh_bind_options_set(bind, SSH_BIND_OPTIONS_RSAKEY, "ssh_host_rsa_key");
-
-  if (ssh_bind_listen(bind) < 0) {
-    fprintf(stderr, "Error listening: %s\n", ssh_get_error(bind));
+static void chat_room_add(chat_room_t *room, chat_user_t *user) {
+  if (room == NULL || user == NULL) {
     return;
   }
 
-  printf("Listening on port 2222...\n");
+  pthread_mutex_lock(&room->lock);
+  if (room->member_count < SSH_CHATTER_MAX_USERS) {
+    room->members[room->member_count++] = user;
+  }
+  pthread_mutex_unlock(&room->lock);
+}
 
-  while (1) {
+static void chat_room_remove(chat_room_t *room, const chat_user_t *user) {
+  if (room == NULL || user == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&room->lock);
+  for (size_t idx = 0; idx < room->member_count; ++idx) {
+    if (room->members[idx] == user) {
+      for (size_t shift = idx; shift + 1U < room->member_count; ++shift) {
+        room->members[shift] = room->members[shift + 1U];
+      }
+      room->members[room->member_count - 1U] = NULL;
+      room->member_count--;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&room->lock);
+}
+
+static void chat_room_broadcast(chat_room_t *room, const char *message, const chat_user_t *from) {
+  (void)from;
+  if (room == NULL || message == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&room->lock);
+  for (size_t idx = 0; idx < room->member_count; ++idx) {
+    chat_user_t *member = room->members[idx];
+    if (member == NULL) {
+      continue;
+    }
+    (void)member; /* TODO: Attach active sessions to members and deliver messages. */
+  }
+  pthread_mutex_unlock(&room->lock);
+
+  printf("[broadcast] %s\n", message);
+}
+
+static void session_send_line(ssh_channel channel, const char *message) {
+  if (channel == NULL || message == NULL) {
+    return;
+  }
+
+  char buffer[SSH_CHATTER_MESSAGE_LIMIT + 1U];
+  memset(buffer, 0, sizeof(buffer));
+  strncpy(buffer, message, SSH_CHATTER_MESSAGE_LIMIT);
+  buffer[SSH_CHATTER_MESSAGE_LIMIT] = '\0';
+
+  ssh_channel_write(channel, buffer, strlen(buffer));
+  ssh_channel_write(channel, "\r\n", 2U);
+}
+
+static int session_authenticate(session_ctx_t *ctx) {
+  ssh_message message = NULL;
+  bool authenticated = false;
+
+  while (!authenticated && (message = ssh_message_get(ctx->session)) != NULL) {
+    switch (ssh_message_type(message)) {
+      case SSH_REQUEST_AUTH:
+        ssh_message_auth_reply_success(message, 0);
+        authenticated = true;
+        break;
+      default:
+        ssh_message_reply_default(message);
+        break;
+    }
+    ssh_message_free(message);
+  }
+
+  return authenticated ? 0 : -1;
+}
+
+static int session_accept_channel(session_ctx_t *ctx) {
+  ssh_message message = NULL;
+
+  while ((message = ssh_message_get(ctx->session)) != NULL) {
+    if (ssh_message_type(message) == SSH_REQUEST_CHANNEL_OPEN &&
+        ssh_message_subtype(message) == SSH_CHANNEL_SESSION) {
+      ctx->channel = ssh_message_channel_request_open_reply_accept(message);
+      ssh_message_free(message);
+      break;
+    }
+
+    ssh_message_reply_default(message);
+    ssh_message_free(message);
+  }
+
+  return ctx->channel != NULL ? 0 : -1;
+}
+
+static int session_prepare_shell(session_ctx_t *ctx) {
+  ssh_message message = NULL;
+  bool shell_ready = false;
+
+  while (!shell_ready && (message = ssh_message_get(ctx->session)) != NULL) {
+    if (ssh_message_type(message) == SSH_REQUEST_CHANNEL) {
+      const int subtype = ssh_message_subtype(message);
+      if (subtype == SSH_CHANNEL_REQUEST_PTY || subtype == SSH_CHANNEL_REQUEST_SHELL) {
+        ssh_message_channel_request_reply_success(message);
+        if (subtype == SSH_CHANNEL_REQUEST_SHELL) {
+          shell_ready = true;
+        }
+      } else {
+        ssh_message_reply_default(message);
+      }
+    } else {
+      ssh_message_reply_default(message);
+    }
+    ssh_message_free(message);
+  }
+
+  return shell_ready ? 0 : -1;
+}
+
+static void session_print_help(session_ctx_t *ctx) {
+  session_send_line(ctx->channel, "/ban <username>    - ban a user (operator only)");
+  session_send_line(ctx->channel, "/poke <username>   - send a bell to a user");
+  session_send_line(ctx->channel, "Regular messages are broadcast to everyone.");
+}
+
+static void session_handle_ban(session_ctx_t *ctx, const char *arguments) {
+  if (!ctx->user.is_operator) {
+    session_send_line(ctx->channel, "You are not allowed to ban users.");
+    return;
+  }
+
+  if (arguments == NULL || *arguments == '\0') {
+    session_send_line(ctx->channel, "Usage: /ban <username>");
+    return;
+  }
+
+  printf("[ban] %s requested ban for %s\n", ctx->user.name, arguments);
+  session_send_line(ctx->channel, "Ban command recorded (TODO: implement).");
+}
+
+static void session_handle_poke(session_ctx_t *ctx, const char *arguments) {
+  if (arguments == NULL || *arguments == '\0') {
+    session_send_line(ctx->channel, "Usage: /poke <username>");
+    return;
+  }
+
+  printf("[poke] %s pokes %s\n", ctx->user.name, arguments);
+  session_send_line(ctx->channel, "Poke command recorded (TODO: implement).");
+}
+
+static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
+  if (strncmp(line, "/help", 5) == 0) {
+    session_print_help(ctx);
+    return;
+  }
+  if (strncmp(line, "/ban", 4) == 0) {
+    const char *arguments = line + 4;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_ban(ctx, arguments);
+    return;
+  }
+  if (strncmp(line, "/poke", 5) == 0) {
+    const char *arguments = line + 5;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_poke(ctx, arguments);
+    return;
+  }
+
+  char broadcast_buffer[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(broadcast_buffer, sizeof(broadcast_buffer), "%s", line);
+  chat_room_broadcast(&ctx->owner->room, broadcast_buffer, &ctx->user);
+}
+
+static void session_cleanup(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (ctx->channel != NULL) {
+    ssh_channel_send_eof(ctx->channel);
+    ssh_channel_close(ctx->channel);
+    ssh_channel_free(ctx->channel);
+    ctx->channel = NULL;
+  }
+
+  if (ctx->session != NULL) {
+    ssh_disconnect(ctx->session);
+    ssh_free(ctx->session);
+    ctx->session = NULL;
+  }
+
+  free(ctx);
+}
+
+static void *session_thread(void *arg) {
+  session_ctx_t *ctx = (session_ctx_t *)arg;
+  if (ctx == NULL) {
+    return NULL;
+  }
+
+  if (session_authenticate(ctx) != 0) {
+    humanized_log_error("session", "authentication failed", EACCES);
+    session_cleanup(ctx);
+    return NULL;
+  }
+
+  if (session_accept_channel(ctx) != 0) {
+    humanized_log_error("session", "failed to open channel", EIO);
+    session_cleanup(ctx);
+    return NULL;
+  }
+
+  if (session_prepare_shell(ctx) != 0) {
+    humanized_log_error("session", "shell negotiation failed", EPROTO);
+    session_cleanup(ctx);
+    return NULL;
+  }
+
+  chat_room_add(&ctx->owner->room, &ctx->user);
+  printf("[join] %s\n", ctx->user.name);
+
+  if (ctx->owner->motd[0] != '\0') {
+    session_send_line(ctx->channel, ctx->owner->motd);
+  }
+
+  char buffer[SSH_CHATTER_MAX_INPUT_LEN];
+  while (true) {
+    const int bytes_read = ssh_channel_read(ctx->channel, buffer, sizeof(buffer) - 1U, 0);
+    if (bytes_read <= 0) {
+      break;
+    }
+
+    buffer[bytes_read] = '\0';
+    char *newline = strchr(buffer, '\n');
+    if (newline != NULL) {
+      *newline = '\0';
+    }
+    newline = strchr(buffer, '\r');
+    if (newline != NULL) {
+      *newline = '\0';
+    }
+
+    if (buffer[0] == '\0') {
+      continue;
+    }
+
+    printf("[%s] %s\n", ctx->user.name, buffer);
+
+    if (buffer[0] == '/') {
+      session_dispatch_command(ctx, buffer);
+    } else {
+      chat_room_broadcast(&ctx->owner->room, buffer, &ctx->user);
+    }
+  }
+
+  printf("[part] %s\n", ctx->user.name);
+  chat_room_remove(&ctx->owner->room, &ctx->user);
+  session_cleanup(ctx);
+
+  return NULL;
+}
+
+void host_init(host_t *host, auth_profile_t *auth) {
+  if (host == NULL) {
+    return;
+  }
+
+  chat_room_init(&host->room);
+  host->listener.handle = NULL;
+  host->auth = auth;
+  host->user_theme.userColor = ANSI_GREEN;
+  host->user_theme.highlight = ANSI_BOLD;
+  host->user_theme.isBold = false;
+  host->system_theme.backgroundColor = ANSI_BLUE;
+  host->system_theme.foregroundColor = ANSI_WHITE;
+  host->system_theme.highlightColor = ANSI_YELLOW;
+  host->system_theme.isBold = true;
+  snprintf(host->version, sizeof(host->version), "ssh-chatter (C)");
+  snprintf(host->motd, sizeof(host->motd), "Welcome to ssh-chat (C edition)");
+  host->connection_count = 0U;
+  pthread_mutex_init(&host->lock, NULL);
+}
+
+void host_set_motd(host_t *host, const char *motd) {
+  if (host == NULL || motd == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  snprintf(host->motd, sizeof(host->motd), "%s", motd);
+  pthread_mutex_unlock(&host->lock);
+}
+
+int host_serve(host_t *host, const char *bind_addr, const char *port) {
+  if (host == NULL) {
+    return -1;
+  }
+
+  const char *address = bind_addr != NULL ? bind_addr : "0.0.0.0";
+  const char *bind_port = port != NULL ? port : "2222";
+
+  ssh_bind bind_handle = ssh_bind_new();
+  if (bind_handle == NULL) {
+    humanized_log_error("host", "failed to allocate ssh_bind", ENOMEM);
+    return -1;
+  }
+
+  ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDADDR, address);
+  ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDPORT_STR, bind_port);
+  ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, "ssh-rsa");
+  ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_RSAKEY, "ssh_host_rsa_key");
+
+  if (ssh_bind_listen(bind_handle) < 0) {
+    humanized_log_error("host", ssh_get_error(bind_handle), EIO);
+    ssh_bind_free(bind_handle);
+    return -1;
+  }
+
+  host->listener.handle = bind_handle;
+  printf("[listener] listening on %s:%s\n", address, bind_port);
+
+  while (true) {
     ssh_session session = ssh_new();
-    if (ssh_bind_accept(bind, session) == SSH_ERROR) {
-      fprintf(stderr, "Accept error: %s\n", ssh_get_error(bind));
+    if (session == NULL) {
+      humanized_log_error("host", "failed to allocate session", ENOMEM);
+      continue;
+    }
+
+    if (ssh_bind_accept(bind_handle, session) == SSH_ERROR) {
+      humanized_log_error("host", ssh_get_error(bind_handle), EIO);
       ssh_free(session);
       continue;
     }
 
     if (ssh_handle_key_exchange(session) != SSH_OK) {
-      fprintf(stderr, "Key exchange failed: %s\n", ssh_get_error(session));
+      humanized_log_error("host", ssh_get_error(session), EPROTO);
       ssh_disconnect(session);
       ssh_free(session);
       continue;
     }
 
-    SessionCtx* ctx = calloc(1, sizeof(SessionCtx));
-    ctx->session = session;
-    snprintf(ctx->user.name, sizeof(ctx->user.name), "Guest%d", ++h->count);
-    ctx->user.is_op = 0;
+    session_ctx_t *ctx = calloc(1U, sizeof(session_ctx_t));
+    if (ctx == NULL) {
+      humanized_log_error("host", "failed to allocate session context", ENOMEM);
+      ssh_disconnect(session);
+      ssh_free(session);
+      continue;
+    }
 
-    pthread_t tid;
-    pthread_create(&tid, NULL, handle_session, ctx);
-    pthread_detach(tid);
+    ctx->session = session;
+    ctx->channel = NULL;
+    ctx->owner = host;
+    ctx->auth = (auth_profile_t){0};
+
+    pthread_mutex_lock(&host->lock);
+    ++host->connection_count;
+    snprintf(ctx->user.name, sizeof(ctx->user.name), "Guest%zu", host->connection_count);
+    ctx->user.is_operator = false;
+    pthread_mutex_unlock(&host->lock);
+
+    pthread_t thread_id;
+    if (pthread_create(&thread_id, NULL, session_thread, ctx) != 0) {
+      humanized_log_error("host", "failed to spawn session thread", errno);
+      session_cleanup(ctx);
+      continue;
+    }
+
+    pthread_detach(thread_id);
   }
 
-  ssh_bind_free(bind);
+  ssh_bind_free(bind_handle);
+  host->listener.handle = NULL;
+  return 0;
 }
-
-
-void HostInit(Host* h, Auth* auth) {
-  ChatRoomInit(&h->room);
-  h->auth = auth;
-  snprintf(h->version, sizeof(h->version), "ssh-chat C-port!");
-  snprintf(h->motd, sizeof(h->motd), "Welcome to ssh-chat (C edition)\n~~~ C is for Cuteness!~~~\n");
-  h->count = 0;
-  pthread_mutex_init(&h->mu, NULL);
-}
-
-void HostSetMotd(Host* h, const char* motd) {
-  pthread_mutex_lock(&h->mu);
-  snprintf(h->motd, sizeof(h->motd), "%s", motd);
-  pthread_mutex_unlock(&h->mu);
-}
-

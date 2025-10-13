@@ -1,6 +1,8 @@
 #ifndef THEME_H
 #define THEME_H
 
+#include <stdbool.h>
+
 #include "palettes.h"
 
 typedef struct UserTheme {

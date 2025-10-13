@@ -10,8 +10,14 @@
 #define ANSI_MAGENTA "\033[35m"
 #define ANSI_CYAN    "\033[36m"
 #define ANSI_WHITE   "\033[37m"
-#define ANSI_256(color) { \
-  return sprintf(color, "\033[38;5;%sm", color); \
+#include <stddef.h>
+#include <stdio.h>
+
+static inline int ansi_256(char *buffer, size_t buffer_len, unsigned int color_code) {
+  if (buffer_len == 0) {
+    return 0;
+  }
+  return snprintf(buffer, buffer_len, "\033[38;5;%um", color_code);
 }
 
 #endif

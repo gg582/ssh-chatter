@@ -1,12 +1,18 @@
-#ifndef HUMANIZED_H
-#define HUMANIZED_H
-#define AND &&
-#define OR ||
-#define NOT !
-#define none NULL
+#ifndef SSH_CHATTER_HUMANIZED_H
+#define SSH_CHATTER_HUMANIZED_H
 
-#define exitWithError(errcode, section, msg, exitcode) {                       \
-    fprintf(stderr, "<%s>: %s, code: (%d)", section, msg, errcode); \
-  return exitcode; \
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+
+static inline void humanized_log_error(const char *section, const char *message, int error_code) {
+  if (section == NULL) {
+    section = "unknown";
+  }
+  if (message == NULL) {
+    message = strerror(error_code != 0 ? error_code : errno);
+  }
+  fprintf(stderr, "[%s] %s (code: %d)\n", section, message, error_code);
 }
+
 #endif

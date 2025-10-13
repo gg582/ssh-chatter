@@ -1,54 +1,65 @@
-#ifndef HOST_H
-#define HOST_H
-#define MESSAGE_LIMIT 512 // 2-byte wide char: 256 letters limit
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#ifndef SSH_CHATTER_HOST_H
+#define SSH_CHATTER_HOST_H
+
 #include <pthread.h>
-#ifdef WINDOWS_MSVC
-  #include <errno.h>
-#elif UNIX_COMPATIBLE
-  #include <error.h>
-#endif
-#include <time.h>
+#include <stdbool.h>
+#include <stddef.h>
+
 #include <libssh/libssh.h>
 #include <libssh/server.h>
+
 #include "theme.h"
-#define MAX_USERS 512
-#define MAX_INPUT_LEN 1024
-/* Include PThread to declare pthread_mutex_t in ChatRoom structure */
 
-typedef struct MessageUser {
-  chat name[24];
-  int isOp;
-} MessageUser;
+#define SSH_CHATTER_MESSAGE_LIMIT 512
+#define SSH_CHATTER_MAX_USERS 512
+#define SSH_CHATTER_MAX_INPUT_LEN 1024
+#define SSH_CHATTER_USERNAME_LEN 24
 
-typedef struct ChatRoom {
+struct host;
+
+typedef struct chat_user {
+  char name[SSH_CHATTER_USERNAME_LEN];
+  bool is_operator;
+} chat_user_t;
+
+typedef struct chat_room {
   pthread_mutex_t lock;
-  MessageUser * members[512];
-} ChatRoom;
+  chat_user_t *members[SSH_CHATTER_MAX_USERS];
+  size_t member_count;
+} chat_room_t;
 
-typedef struct Auth {
-  bool isBanned;
-  bool isOperator;
-  bool isObserver;
-} Auth;
+typedef struct auth_profile {
+  bool is_banned;
+  bool is_operator;
+  bool is_observer;
+} auth_profile_t;
 
-typedef struct SSHListener {
-  ssh_bind bind;
-  void (*HandlerFunc)(ssh_session);
-} SSHListener;
+typedef struct ssh_listener {
+  ssh_bind handle;
+} ssh_listener_t;
 
-typedef struct Host {
-  ChatRoom room;
-  SSHListener listener;
-  Auth * auth;
-  UserTheme userTheme;
-  SystemTheme sysTheme;
+typedef struct session_ctx {
+  ssh_session session;
+  ssh_channel channel;
+  chat_user_t user;
+  auth_profile_t auth;
+  struct host *owner;
+} session_ctx_t;
+
+typedef struct host {
+  chat_room_t room;
+  ssh_listener_t listener;
+  auth_profile_t *auth;
+  UserTheme user_theme;
+  SystemTheme system_theme;
   char version[64];
   char motd[256];
-  int count;
-  pthread_mutex_t mu;
-} Host;
+  size_t connection_count;
+  pthread_mutex_t lock;
+} host_t;
+
+void host_init(host_t *host, auth_profile_t *auth);
+void host_set_motd(host_t *host, const char *motd);
+int host_serve(host_t *host, const char *bind_addr, const char *port);
 
 #endif
