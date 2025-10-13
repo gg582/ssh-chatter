@@ -2,12 +2,17 @@
 #define _POSIX_C_SOURCE 200112L
 #endif
 
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
+
 #include "host.h"
 
 #include <ctype.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <limits.h>
+#include <wchar.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netdb.h>
@@ -125,6 +130,8 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
 static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count);
+static size_t session_utf8_prev_char_len(const char *buffer, size_t length);
+static int session_utf8_char_width(const char *bytes, size_t length);
 
 static void chat_room_init(chat_room_t *room) {
   if (room == NULL) {
@@ -389,17 +396,83 @@ static void session_local_echo_char(session_ctx_t *ctx, char ch) {
   ssh_channel_write(ctx->channel, &ch, 1U);
 }
 
+static size_t session_utf8_prev_char_len(const char *buffer, size_t length) {
+  if (buffer == NULL || length == 0U) {
+    return 0U;
+  }
+
+  size_t idx = length;
+  while (idx > 0U) {
+    --idx;
+    const unsigned char byte = (unsigned char)buffer[idx];
+    if ((byte & 0xC0U) != 0x80U) {
+      const size_t seq_len = length - idx;
+      size_t expected = 1U;
+      if ((byte & 0x80U) == 0U) {
+        expected = 1U;
+      } else if ((byte & 0xE0U) == 0xC0U) {
+        expected = 2U;
+      } else if ((byte & 0xF0U) == 0xE0U) {
+        expected = 3U;
+      } else if ((byte & 0xF8U) == 0xF0U) {
+        expected = 4U;
+      } else {
+        expected = 1U;
+      }
+
+      if (seq_len < expected) {
+        return seq_len;
+      }
+      return expected;
+    }
+  }
+
+  return 1U;
+}
+
+static int session_utf8_char_width(const char *bytes, size_t length) {
+  if (bytes == NULL || length == 0U) {
+    return 0;
+  }
+
+  mbstate_t state;
+  memset(&state, 0, sizeof(state));
+
+  wchar_t wc;
+  const size_t result = mbrtowc(&wc, bytes, length, &state);
+  if (result == (size_t)-1 || result == (size_t)-2) {
+    return 1;
+  }
+
+  const int width = wcwidth(wc);
+  if (width < 0) {
+    return 1;
+  }
+
+  return width;
+}
+
 static void session_local_backspace(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->channel == NULL || ctx->input_length == 0U) {
     return;
   }
 
-  if (ctx->input_length > 0U) {
-    ctx->input_length--;
+  const size_t char_len = session_utf8_prev_char_len(ctx->input_buffer, ctx->input_length);
+  if (char_len == 0U || char_len > ctx->input_length) {
+    return;
   }
 
+  const size_t char_start = ctx->input_length - char_len;
+  const int display_width = session_utf8_char_width(&ctx->input_buffer[char_start], char_len);
+
+  ctx->input_length = char_start;
+  ctx->input_buffer[ctx->input_length] = '\0';
+
+  const int width = display_width > 0 ? display_width : 1;
   const char sequence[] = "\b \b";
-  ssh_channel_write(ctx->channel, sequence, sizeof(sequence) - 1U);
+  for (int idx = 0; idx < width; ++idx) {
+    ssh_channel_write(ctx->channel, sequence, sizeof(sequence) - 1U);
+  }
 }
 
 static void session_clear_input(session_ctx_t *ctx) {
@@ -1307,7 +1380,7 @@ static void *session_thread(void *arg) {
         continue;
       }
 
-      if (!isprint((unsigned char)ch)) {
+      if ((unsigned char)ch < 0x20U) {
         continue;
       }
 

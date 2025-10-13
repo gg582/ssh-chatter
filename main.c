@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <locale.h>
 
 static void print_usage(const char *prog_name) {
   fprintf(stderr,
@@ -16,6 +17,8 @@ static void print_usage(const char *prog_name) {
 }
 
 int main(int argc, char **argv) {
+  setlocale(LC_ALL, "");
+
   const char *bind_address = NULL;
   const char *bind_port = NULL;
   const char *motd = NULL;
