@@ -723,7 +723,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
   const char *address = bind_addr != NULL ? bind_addr : "0.0.0.0";
   const char *bind_port = port != NULL ? port : "2222";
   const char *rsa_filename = "ssh_host_rsa_key";
-  const char *rsa_key_path = rsa_filename;
+  const char *rsa_key_path = NULL;
   char resolved_rsa_key[PATH_MAX];
 
   if (key_directory != NULL && key_directory[0] != '\0') {
@@ -740,6 +740,19 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       return -1;
     }
     rsa_key_path = resolved_rsa_key;
+  } else {
+    const char *candidates[] = {rsa_filename, "/etc/ssh/ssh_host_rsa_key"};
+    for (size_t idx = 0; idx < sizeof(candidates) / sizeof(candidates[0]); ++idx) {
+      if (access(candidates[idx], R_OK) == 0) {
+        rsa_key_path = candidates[idx];
+        break;
+      }
+    }
+  }
+
+  if (rsa_key_path == NULL) {
+    humanized_log_error("host", "unable to locate RSA host key", ENOENT);
+    return -1;
   }
 
   if (access(rsa_key_path, R_OK) != 0) {
@@ -757,8 +770,42 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
   ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDPORT_STR, bind_port);
   ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, "ssh-rsa");
   errno = 0;
-  if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_RSAKEY, rsa_key_path) != SSH_OK) {
-    humanized_log_error("host", ssh_get_error(bind_handle), errno != 0 ? errno : EIO);
+  bool key_loaded = false;
+  if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_RSAKEY, rsa_key_path) == SSH_OK) {
+    key_loaded = true;
+  } else {
+    const char *error_message = ssh_get_error(bind_handle);
+    const bool unsupported_option = (error_message != NULL &&
+                                     strstr(error_message, "Unknown ssh option") != NULL) ||
+                                    errno == ENOTSUP;
+    if (!unsupported_option) {
+      humanized_log_error("host", error_message, errno != 0 ? errno : EIO);
+      ssh_bind_free(bind_handle);
+      return -1;
+    }
+
+    ssh_key imported_key = NULL;
+    if (ssh_pki_import_privkey_file(rsa_key_path, NULL, NULL, NULL, &imported_key) != SSH_OK ||
+        imported_key == NULL) {
+      humanized_log_error("host", "failed to import RSA host key", EIO);
+      ssh_bind_free(bind_handle);
+      return -1;
+    }
+
+    const int import_result =
+        ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_IMPORT_KEY, imported_key);
+    ssh_key_free(imported_key);
+    if (import_result != SSH_OK) {
+      humanized_log_error("host", ssh_get_error(bind_handle), errno != 0 ? errno : EIO);
+      ssh_bind_free(bind_handle);
+      return -1;
+    }
+
+    key_loaded = true;
+  }
+
+  if (!key_loaded) {
+    humanized_log_error("host", "failed to configure host key", EIO);
     ssh_bind_free(bind_handle);
     return -1;
   }

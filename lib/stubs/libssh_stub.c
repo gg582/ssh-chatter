@@ -137,3 +137,23 @@ int ssh_bind_accept(ssh_bind bind, ssh_session session) {
   (void)session;
   return SSH_ERROR;
 }
+
+int ssh_pki_import_privkey_file(const char *filename, const char *passphrase,
+                                void *auth_fn, void *auth_data, ssh_key *pkey) {
+  (void)filename;
+  (void)passphrase;
+  (void)auth_fn;
+  (void)auth_data;
+  if (pkey == NULL) {
+    return SSH_ERROR;
+  }
+  *pkey = calloc(1, sizeof(struct ssh_key_struct));
+  if (*pkey == NULL) {
+    return SSH_ERROR;
+  }
+  return SSH_OK;
+}
+
+void ssh_key_free(ssh_key key) {
+  free(key);
+}
