@@ -73,8 +73,10 @@ void ssh_message_free(ssh_message message);
 void ssh_message_reply_default(ssh_message message);
 ssh_channel ssh_message_channel_request_open_reply_accept(ssh_message message);
 void ssh_message_channel_request_reply_success(ssh_message message);
+int ssh_message_channel_request_open_reply_accept_channel(ssh_message message,
+                                                         ssh_channel channel);
 
-ssh_channel ssh_channel_new(void);
+ssh_channel ssh_channel_new(ssh_session session);
 int ssh_channel_write(ssh_channel channel, const void *data, size_t len);
 int ssh_channel_read(ssh_channel channel, void *data, size_t len, int is_stderr);
 int ssh_channel_send_eof(ssh_channel channel);

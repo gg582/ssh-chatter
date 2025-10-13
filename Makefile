@@ -1,6 +1,6 @@
 CC := cc
 CFLAGS := -std=c11 -Wall -Wextra -Werror -Ilib/headers
-LDFLAGS := -lpthread -lssh
+LDFLAGS := -lpthread -lssh -ldl
 TARGET := ssh-chatter
 SRC := main.c lib/host.c
 OBJ := $(SRC:.c=.o)

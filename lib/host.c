@@ -5,6 +5,7 @@
 #include "host.h"
 
 #include <ctype.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <limits.h>
 #include <arpa/inet.h>
@@ -26,6 +27,10 @@
 #define NI_MAXHOST 1025
 #endif
 
+#ifndef RTLD_LOCAL
+#define RTLD_LOCAL 0
+#endif
+
 typedef struct {
   const char *name;
   const char *code;
@@ -43,6 +48,58 @@ static const color_entry_t HIGHLIGHT_COLOR_MAP[] = {
     {"cyan", ANSI_BG_CYAN},       {"white", ANSI_BG_WHITE},   {"grey", ANSI_BG_GREY},
     {"default", ANSI_BG_DEFAULT},
 };
+
+typedef int (*accept_channel_fn_t)(ssh_message, ssh_channel);
+
+#if defined(__GNUC__)
+extern int ssh_message_channel_request_open_reply_accept_channel(ssh_message message,
+                                                                 ssh_channel channel)
+    __attribute__((weak));
+#endif
+
+static void resolve_accept_channel_once(void);
+static accept_channel_fn_t g_accept_channel_fn = NULL;
+static pthread_once_t g_accept_channel_once = PTHREAD_ONCE_INIT;
+
+static accept_channel_fn_t resolve_accept_channel_fn(void) {
+  pthread_once(&g_accept_channel_once, resolve_accept_channel_once);
+  return g_accept_channel_fn;
+}
+
+static void resolve_accept_channel_once(void) {
+#if defined(__GNUC__)
+  if (ssh_message_channel_request_open_reply_accept_channel != NULL) {
+    g_accept_channel_fn = ssh_message_channel_request_open_reply_accept_channel;
+    return;
+  }
+#endif
+
+  static const char *kSymbol = "ssh_message_channel_request_open_reply_accept_channel";
+
+#if defined(RTLD_DEFAULT)
+  g_accept_channel_fn = (accept_channel_fn_t)dlsym(RTLD_DEFAULT, kSymbol);
+  if (g_accept_channel_fn != NULL) {
+    return;
+  }
+#endif
+
+  const char *candidates[] = {"libssh.so.4", "libssh.so", "libssh.dylib"};
+  for (size_t idx = 0; idx < sizeof(candidates) / sizeof(candidates[0]); ++idx) {
+    const char *name = candidates[idx];
+    void *handle = dlopen(name, RTLD_LAZY | RTLD_LOCAL);
+    if (handle == NULL) {
+      handle = dlopen(name, RTLD_LAZY);
+    }
+    if (handle == NULL) {
+      continue;
+    }
+
+    g_accept_channel_fn = (accept_channel_fn_t)dlsym(handle, kSymbol);
+    if (g_accept_channel_fn != NULL) {
+      return;
+    }
+  }
+}
 
 static void trim_whitespace_inplace(char *text);
 static const char *lookup_color_code(const color_entry_t *entries, size_t entry_count, const char *name);
@@ -244,9 +301,29 @@ static int session_accept_channel(session_ctx_t *ctx) {
     }
 
     if (message_type == SSH_REQUEST_CHANNEL_OPEN && ssh_message_subtype(message) == SSH_CHANNEL_SESSION) {
-      ctx->channel = ssh_message_channel_request_open_reply_accept(message);
+      ssh_channel channel = ssh_message_channel_request_open_reply_accept(message);
+      if (channel == NULL) {
+        accept_channel_fn_t accept_channel = resolve_accept_channel_fn();
+        if (accept_channel != NULL) {
+          channel = ssh_channel_new(ctx->session);
+          if (channel != NULL) {
+            if (accept_channel(message, channel) != SSH_OK) {
+              ssh_channel_free(channel);
+              channel = NULL;
+            }
+          }
+        }
+      }
+
+      if (channel != NULL) {
+        ctx->channel = channel;
+        ssh_message_free(message);
+        break;
+      }
+
+      ssh_message_reply_default(message);
       ssh_message_free(message);
-      break;
+      continue;
     }
 
     ssh_message_reply_default(message);

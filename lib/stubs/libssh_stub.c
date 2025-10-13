@@ -83,11 +83,18 @@ ssh_channel ssh_message_channel_request_open_reply_accept(ssh_message message) {
   return calloc(1, sizeof(struct ssh_channel_struct));
 }
 
+int ssh_message_channel_request_open_reply_accept_channel(ssh_message message,
+                                                          ssh_channel channel) {
+  (void)message;
+  return channel != NULL ? SSH_OK : SSH_ERROR;
+}
+
 void ssh_message_channel_request_reply_success(ssh_message message) {
   (void)message;
 }
 
-ssh_channel ssh_channel_new(void) {
+ssh_channel ssh_channel_new(ssh_session session) {
+  (void)session;
   return calloc(1, sizeof(struct ssh_channel_struct));
 }
 
