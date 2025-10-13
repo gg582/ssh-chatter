@@ -1,13 +1,21 @@
 #include "host.h"
 
 #include <errno.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 
 #include "humanized/humanized.h"
+
+#ifndef NI_MAXHOST
+#define NI_MAXHOST 1025
+#endif
 
 static void chat_room_init(chat_room_t *room) {
   if (room == NULL) {
@@ -18,6 +26,48 @@ static void chat_room_init(chat_room_t *room) {
   for (size_t idx = 0; idx < SSH_CHATTER_MAX_USERS; ++idx) {
     room->members[idx] = NULL;
   }
+}
+
+static void session_describe_peer(ssh_session session, char *buffer, size_t len) {
+  if (buffer == NULL || len == 0U) {
+    return;
+  }
+
+  buffer[0] = '\0';
+  if (session == NULL) {
+    return;
+  }
+
+#if defined(LIBSSH_VERSION_INT) && defined(SSH_VERSION_INT)
+#if LIBSSH_VERSION_INT >= SSH_VERSION_INT(0, 10, 0)
+  const char *client_ip = ssh_get_client_ip(session);
+  if (client_ip != NULL) {
+    strncpy(buffer, client_ip, len - 1U);
+    buffer[len - 1U] = '\0';
+    return;
+  }
+#endif
+#endif
+
+  const int socket_fd = ssh_get_fd(session);
+  if (socket_fd < 0) {
+    return;
+  }
+
+  struct sockaddr_storage addr;
+  socklen_t addr_len = sizeof(addr);
+  if (getpeername(socket_fd, (struct sockaddr *)&addr, &addr_len) != 0) {
+    return;
+  }
+
+  char host[NI_MAXHOST];
+  if (getnameinfo((struct sockaddr *)&addr, addr_len, host, sizeof(host), NULL, 0,
+                  NI_NUMERICHOST) != 0) {
+    return;
+  }
+
+  strncpy(buffer, host, len - 1U);
+  buffer[len - 1U] = '\0';
 }
 
 static void chat_room_add(chat_room_t *room, chat_user_t *user) {
@@ -371,6 +421,15 @@ int host_serve(host_t *host, const char *bind_addr, const char *port) {
       ssh_free(session);
       continue;
     }
+
+    char peer_address[NI_MAXHOST];
+    session_describe_peer(session, peer_address, sizeof(peer_address));
+    if (peer_address[0] == '\0') {
+      strncpy(peer_address, "unknown", sizeof(peer_address) - 1U);
+      peer_address[sizeof(peer_address) - 1U] = '\0';
+    }
+
+    printf("[connect] accepted client from %s\n", peer_address);
 
     session_ctx_t *ctx = calloc(1U, sizeof(session_ctx_t));
     if (ctx == NULL) {
