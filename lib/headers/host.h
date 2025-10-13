@@ -45,6 +45,8 @@ typedef struct session_ctx {
   chat_user_t user;
   auth_profile_t auth;
   struct host *owner;
+  char input_buffer[SSH_CHATTER_MAX_INPUT_LEN];
+  size_t input_length;
 } session_ctx_t;
 
 typedef struct host {

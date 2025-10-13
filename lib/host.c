@@ -10,6 +10,8 @@
 #include "humanized/humanized.h"
 
 static void session_send_line(ssh_channel channel, const char *message);
+static void session_dispatch_command(session_ctx_t *ctx, const char *line);
+static void session_process_line(session_ctx_t *ctx, const char *line);
 
 static void chat_room_init(chat_room_t *room) {
   if (room == NULL) {
@@ -174,6 +176,20 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_line(ctx->channel, "Regular messages are broadcast to everyone.");
 }
 
+static void session_process_line(session_ctx_t *ctx, const char *line) {
+  if (ctx == NULL || line == NULL || line[0] == '\0') {
+    return;
+  }
+
+  printf("[%s] %s\n", ctx->user.name, line);
+
+  if (line[0] == '/') {
+    session_dispatch_command(ctx, line);
+  } else {
+    chat_room_broadcast(&ctx->owner->room, line, &ctx->user);
+  }
+}
+
 static void session_handle_ban(session_ctx_t *ctx, const char *arguments) {
   if (!ctx->user.is_operator) {
     session_send_line(ctx->channel, "You are not allowed to ban users.");
@@ -282,6 +298,8 @@ static void *session_thread(void *arg) {
   snprintf(join_message, sizeof(join_message), "* %s has joined the chat", ctx->user.name);
   chat_room_broadcast(&ctx->owner->room, join_message, NULL);
 
+  ctx->input_length = 0U;
+  memset(ctx->input_buffer, 0, sizeof(ctx->input_buffer));
   char buffer[SSH_CHATTER_MAX_INPUT_LEN];
   while (true) {
     const int bytes_read = ssh_channel_read(ctx->channel, buffer, sizeof(buffer) - 1U, 0);
@@ -289,27 +307,32 @@ static void *session_thread(void *arg) {
       break;
     }
 
-    buffer[bytes_read] = '\0';
-    char *newline = strchr(buffer, '\n');
-    if (newline != NULL) {
-      *newline = '\0';
-    }
-    newline = strchr(buffer, '\r');
-    if (newline != NULL) {
-      *newline = '\0';
-    }
+    for (int idx = 0; idx < bytes_read; ++idx) {
+      const char ch = buffer[idx];
 
-    if (buffer[0] == '\0') {
-      continue;
-    }
+      if (ch == '\r' || ch == '\n') {
+        if (ctx->input_length > 0U) {
+          ctx->input_buffer[ctx->input_length] = '\0';
+          session_process_line(ctx, ctx->input_buffer);
+          ctx->input_length = 0U;
+        }
+        continue;
+      }
 
-    printf("[%s] %s\n", ctx->user.name, buffer);
+      if (ctx->input_length + 1U >= sizeof(ctx->input_buffer)) {
+        ctx->input_buffer[sizeof(ctx->input_buffer) - 1U] = '\0';
+        session_process_line(ctx, ctx->input_buffer);
+        ctx->input_length = 0U;
+      }
 
-    if (buffer[0] == '/') {
-      session_dispatch_command(ctx, buffer);
-    } else {
-      chat_room_broadcast(&ctx->owner->room, buffer, &ctx->user);
+      ctx->input_buffer[ctx->input_length++] = ch;
     }
+  }
+
+  if (ctx->input_length > 0U) {
+    ctx->input_buffer[ctx->input_length] = '\0';
+    session_process_line(ctx, ctx->input_buffer);
+    ctx->input_length = 0U;
   }
 
   printf("[part] %s\n", ctx->user.name);
