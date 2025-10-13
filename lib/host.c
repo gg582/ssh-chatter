@@ -43,8 +43,7 @@ static void session_describe_peer(ssh_session session, char *buffer, size_t len)
 #if LIBSSH_VERSION_INT >= SSH_VERSION_INT(0, 10, 0)
   const char *client_ip = ssh_get_client_ip(session);
   if (client_ip != NULL) {
-    strncpy(buffer, client_ip, len - 1U);
-    buffer[len - 1U] = '\0';
+    snprintf(buffer, len, "%s", client_ip);
     return;
   }
 #endif
