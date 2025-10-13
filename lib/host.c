@@ -27,6 +27,10 @@
 #define NI_MAXHOST 1025
 #endif
 
+#ifndef RTLD_LOCAL
+#define RTLD_LOCAL 0
+#endif
+
 typedef struct {
   const char *name;
   const char *code;
@@ -47,21 +51,54 @@ static const color_entry_t HIGHLIGHT_COLOR_MAP[] = {
 
 typedef int (*accept_channel_fn_t)(ssh_message, ssh_channel);
 
-static accept_channel_fn_t resolve_accept_channel_fn(void) {
-  static accept_channel_fn_t cached = NULL;
-  static bool resolved = false;
-
-  if (!resolved) {
-    resolved = true;
-#if defined(RTLD_DEFAULT)
-    cached = (accept_channel_fn_t)dlsym(RTLD_DEFAULT,
-                                        "ssh_message_channel_request_open_reply_accept_channel");
-#else
-    cached = NULL;
+#if defined(__GNUC__)
+extern int ssh_message_channel_request_open_reply_accept_channel(ssh_message message,
+                                                                 ssh_channel channel)
+    __attribute__((weak));
 #endif
-  }
 
-  return cached;
+static void resolve_accept_channel_once(void);
+static accept_channel_fn_t g_accept_channel_fn = NULL;
+static pthread_once_t g_accept_channel_once = PTHREAD_ONCE_INIT;
+
+static accept_channel_fn_t resolve_accept_channel_fn(void) {
+  pthread_once(&g_accept_channel_once, resolve_accept_channel_once);
+  return g_accept_channel_fn;
+}
+
+static void resolve_accept_channel_once(void) {
+#if defined(__GNUC__)
+  if (ssh_message_channel_request_open_reply_accept_channel != NULL) {
+    g_accept_channel_fn = ssh_message_channel_request_open_reply_accept_channel;
+    return;
+  }
+#endif
+
+  static const char *kSymbol = "ssh_message_channel_request_open_reply_accept_channel";
+
+#if defined(RTLD_DEFAULT)
+  g_accept_channel_fn = (accept_channel_fn_t)dlsym(RTLD_DEFAULT, kSymbol);
+  if (g_accept_channel_fn != NULL) {
+    return;
+  }
+#endif
+
+  const char *candidates[] = {"libssh.so.4", "libssh.so", "libssh.dylib"};
+  for (size_t idx = 0; idx < sizeof(candidates) / sizeof(candidates[0]); ++idx) {
+    const char *name = candidates[idx];
+    void *handle = dlopen(name, RTLD_LAZY | RTLD_LOCAL);
+    if (handle == NULL) {
+      handle = dlopen(name, RTLD_LAZY);
+    }
+    if (handle == NULL) {
+      continue;
+    }
+
+    g_accept_channel_fn = (accept_channel_fn_t)dlsym(handle, kSymbol);
+    if (g_accept_channel_fn != NULL) {
+      return;
+    }
+  }
 }
 
 static void trim_whitespace_inplace(char *text);
