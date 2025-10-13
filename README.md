@@ -17,3 +17,32 @@ is organised around the following building blocks:
 - Poke
 - Ban
 - Etc
+
+## Build
+
+Use the provided `Makefile` to build the server:
+
+```sh
+make
+```
+
+Run the resulting binary with:
+
+```sh
+make run
+```
+
+## Feature status
+
+### Implemented endpoints
+* SSH listener that accepts connections on the configured address and port, performing key exchange and spawning a thread per session.
+* Message of the day (MOTD) configuration via the `-m` flag and automatic delivery to new sessions.
+* `/help` command that lists the available chat commands to the connected client.
+* Logging for chat activity such as joins, parts, and command invocations for `/ban` and `/poke`.
+
+### Not yet implemented
+* Broadcasting chat messages to other connected clients – messages are only printed to the server log today.
+* Enforcement of moderation commands (`/ban`, `/poke`) beyond server-side logging.
+* Authentication and authorization integration beyond blindly accepting every connection.
+* Session attachments that would allow `chat_room_broadcast` to deliver payloads to active channels.
+
