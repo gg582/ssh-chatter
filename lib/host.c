@@ -6,6 +6,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netdb.h>
@@ -17,6 +18,7 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include "humanized/humanized.h"
 
@@ -713,13 +715,37 @@ void host_set_motd(host_t *host, const char *motd) {
   pthread_mutex_unlock(&host->lock);
 }
 
-int host_serve(host_t *host, const char *bind_addr, const char *port) {
+int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory) {
   if (host == NULL) {
     return -1;
   }
 
   const char *address = bind_addr != NULL ? bind_addr : "0.0.0.0";
   const char *bind_port = port != NULL ? port : "2222";
+  const char *rsa_filename = "ssh_host_rsa_key";
+  const char *rsa_key_path = rsa_filename;
+  char resolved_rsa_key[PATH_MAX];
+
+  if (key_directory != NULL && key_directory[0] != '\0') {
+    const size_t dir_len = strlen(key_directory);
+    if (dir_len >= sizeof(resolved_rsa_key)) {
+      humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
+      return -1;
+    }
+    const bool needs_separator = dir_len > 0 && key_directory[dir_len - 1U] != '/';
+    int written = snprintf(resolved_rsa_key, sizeof(resolved_rsa_key), "%s%s%s", key_directory,
+                           needs_separator ? "/" : "", rsa_filename);
+    if (written < 0 || (size_t)written >= sizeof(resolved_rsa_key)) {
+      humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
+      return -1;
+    }
+    rsa_key_path = resolved_rsa_key;
+  }
+
+  if (access(rsa_key_path, R_OK) != 0) {
+    humanized_log_error("host", "unable to access RSA host key", errno);
+    return -1;
+  }
 
   ssh_bind bind_handle = ssh_bind_new();
   if (bind_handle == NULL) {
@@ -730,7 +756,12 @@ int host_serve(host_t *host, const char *bind_addr, const char *port) {
   ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDADDR, address);
   ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDPORT_STR, bind_port);
   ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, "ssh-rsa");
-  ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_RSAKEY, "ssh_host_rsa_key");
+  errno = 0;
+  if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_RSAKEY, rsa_key_path) != SSH_OK) {
+    humanized_log_error("host", ssh_get_error(bind_handle), errno != 0 ? errno : EIO);
+    ssh_bind_free(bind_handle);
+    return -1;
+  }
 
   if (ssh_bind_listen(bind_handle) < 0) {
     humanized_log_error("host", ssh_get_error(bind_handle), EIO);

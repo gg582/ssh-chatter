@@ -32,6 +32,10 @@ Run the resulting binary with:
 make run
 ```
 
+By default the server looks for `ssh_host_rsa_key` in the current working
+directory. Supply `-k <directory>` to point the server at a folder containing
+the RSA host key if you keep certificates elsewhere.
+
 ## Feature status
 
 ### Implemented endpoints

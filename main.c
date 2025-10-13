@@ -9,7 +9,7 @@
 
 static void print_usage(const char *prog_name) {
   fprintf(stderr,
-          "Usage: %s [-a address] [-p port] [-m motd]\n"
+          "Usage: %s [-a address] [-p port] [-m motd] [-k host_key_dir]\n"
           "       %s [-h]\n"
           "       %s [-V]\n",
           prog_name, prog_name, prog_name);
@@ -19,9 +19,10 @@ int main(int argc, char **argv) {
   const char *bind_address = NULL;
   const char *bind_port = NULL;
   const char *motd = NULL;
+  const char *host_key_dir = NULL;
 
   int opt = 0;
-  while ((opt = getopt(argc, argv, "a:p:m:hV")) != -1) {
+  while ((opt = getopt(argc, argv, "a:p:m:k:hV")) != -1) {
     switch (opt) {
       case 'a':
         bind_address = optarg;
@@ -31,6 +32,9 @@ int main(int argc, char **argv) {
         break;
       case 'm':
         motd = optarg;
+        break;
+      case 'k':
+        host_key_dir = optarg;
         break;
       case 'h':
         print_usage(argv[0]);
@@ -55,7 +59,7 @@ int main(int argc, char **argv) {
   printf("Starting ssh-chatter on %s:%s\n", bind_address != NULL ? bind_address : "0.0.0.0",
          bind_port != NULL ? bind_port : "2222");
 
-  const int serve_result = host_serve(&host, bind_address, bind_port);
+  const int serve_result = host_serve(&host, bind_address, bind_port, host_key_dir);
   if (serve_result != 0) {
     fprintf(stderr, "Failed to start ssh-chatter: %s\n", strerror(errno));
     return EXIT_FAILURE;
