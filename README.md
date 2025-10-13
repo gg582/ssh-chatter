@@ -1,47 +1,139 @@
-## SSH-Chatter : ssh-chat written in C, 100% compatible with Go SSH-Chat.
+# SSH-Chatter
 
-The C implementation mirrors the behaviour of the Go `ssh-chat` reference while
-focusing on clear separation of concerns and modern C conventions. The codebase
-is organised around the following building blocks:
+SSH-Chatter is a C reimplementation of the Go [`ssh-chat`](https://github.com/shazow/ssh-chat) server.  It mirrors the original behaviour while using modern C patterns and a small, testable core.  The server listens for SSH connections and places every authenticated user into a shared chat room that exposes the same command surface as the Go reference implementation.
 
-* **`host.c` / `host.h`** – the main server entry point. It exposes
-  `host_init`, `host_set_motd`, and `host_serve`, which mirror the lifecycle of
-  the Go implementation.
-* **Chat room primitives** – encapsulated inside `host.c` for now, providing a
-  thread-safe member registry prepared for future session attachments.
-* **Session context (`session_ctx_t`)** – carries SSH state, user metadata, and
-  authorisation flags so that the per-connection thread can implement commands
-  such as `/ban` and `/poke` while remaining compatible with the reference.
+## Repository layout
 
-## Build
+The codebase is intentionally compact so new contributors can navigate it quickly:
 
-Use the provided `Makefile` to build the server:
+| Path | Description |
+|------|-------------|
+| `main.c` | Command-line parsing and process bootstrap (bind address, port, MOTD, host key directory). |
+| `lib/host.c`, `lib/headers/host.h` | Chat host implementation – session lifecycle, MOTD handling, and hooks for future message broadcast logic. |
+| `lib/headers/contexts` | Definitions for `session_ctx_t` and related structures that encapsulate per-connection state. |
+| `scripts/install_chatter_service.sh` | Convenience installer that builds the binary, installs it under `/usr/local/bin`, and wires up a `systemd` unit (`chatter.service`). |
 
-```sh
+## Prerequisites
+
+Building the project requires a POSIX environment with:
+
+- A C11 compatible compiler (e.g. `gcc` or `clang`)
+- `make`
+- `libssh` development headers and library (`libssh-dev` on Debian/Ubuntu)
+- POSIX threads (usually supplied by the system `libpthread`)
+
+On Debian/Ubuntu the dependencies can be installed with:
+
+```bash
+sudo apt-get update
+sudo apt-get install build-essential libssh-dev
+```
+
+## Building from source
+
+Clone the repository and use the provided `Makefile`:
+
+```bash
 make
 ```
 
-Run the resulting binary with:
+This produces an `ssh-chatter` binary in the repository root.  Clean intermediate artifacts with `make clean`.
 
-```sh
-make run
+## Running the server manually
+
+The server defaults to listening on `0.0.0.0:2222`.  You can adjust runtime parameters with the available flags:
+
+```
+Usage: ./ssh-chatter [-a address] [-p port] [-m motd] [-k host_key_dir]
+       ./ssh-chatter [-h]
+       ./ssh-chatter [-V]
 ```
 
-By default the server looks for `ssh_host_rsa_key` in the current working
-directory. Supply `-k <directory>` to point the server at a folder containing
-the RSA host key if you keep certificates elsewhere.
+Common examples:
+
+```bash
+# Start the chat server on port 2022, loading host keys from /etc/ssh
+./ssh-chatter -p 2022 -k /etc/ssh
+
+# Serve a custom MOTD and bind to localhost
+./ssh-chatter -a 127.0.0.1 -m /etc/ssh-chatter/motd
+```
+
+The host key directory must contain an `ssh_host_rsa_key` file (and optional `.pub`).  Generate one with `ssh-keygen -t rsa -b 4096 -f /path/to/dir/ssh_host_rsa_key` if you do not want to reuse your system SSH host keys.
+
+### Connecting as a client
+
+Once running, connect with any SSH client:
+
+```bash
+ssh -p 2222 user@server-address
+```
+
+Usernames provided at the SSH prompt are used as your chat nickname.
+
+## Installing as a systemd service
+
+A helper script is provided to automate installation on systems that use `systemd`:
+
+```bash
+sudo ./scripts/install_chatter_service.sh
+```
+
+What the script does:
+
+1. Compiles the project (`make`).
+2. Installs the resulting binary to `/usr/local/bin/ssh-chatter`.
+3. Creates a dedicated `ssh-chatter` system user and group (if they do not already exist).
+4. Creates `/var/lib/ssh-chatter` for runtime state (including the SSH host key) and `/etc/ssh-chatter` for configuration files.
+5. Generates a default RSA host key under `/var/lib/ssh-chatter/ssh_host_rsa_key` when missing.
+6. Creates a default MOTD at `/etc/ssh-chatter/motd` and an override file `/etc/ssh-chatter/chatter.env` for environment-based tuning.
+7. Writes `/etc/systemd/system/chatter.service`, reloads `systemd`, enables the service, and starts it immediately.
+
+The resulting `chatter.service` unit starts the server with sensible defaults and grants the `CAP_NET_BIND_SERVICE` capability so the non-root service account can bind to privileged ports if required.
+
+### Customising the service
+
+You can adjust defaults by editing `/etc/ssh-chatter/chatter.env` and restarting the service:
+
+```bash
+sudo systemctl edit chatter.service   # or edit the environment file directly
+sudo systemctl restart chatter.service
+```
+
+Supported environment variables include:
+
+- `CHATTER_BIND_ADDRESS` – IP address to bind (default `0.0.0.0`).
+- `CHATTER_PORT` – TCP port exposed to clients (default `2222`).
+- `CHATTER_MOTD_FILE` – Path to the message-of-the-day file (default `/etc/ssh-chatter/motd`).
+- `CHATTER_HOST_KEY_DIR` – Directory containing `ssh_host_rsa_key` (default `/var/lib/ssh-chatter`).
+- `CHATTER_EXTRA_ARGS` – Additional arguments appended to the `ssh-chatter` invocation.
+
+If you prefer to install without immediately starting the service, run the script with `SKIP_START=1`.
+
+Service management commands:
+
+```bash
+sudo systemctl status chatter.service
+sudo systemctl restart chatter.service
+sudo systemctl disable --now chatter.service
+```
 
 ## Feature status
 
-### Implemented endpoints
-* SSH listener that accepts connections on the configured address and port, performing key exchange and spawning a thread per session.
-* Message of the day (MOTD) configuration via the `-m` flag and automatic delivery to new sessions.
-* `/help` command that lists the available chat commands to the connected client.
-* Logging for chat activity such as joins, parts, and command invocations for `/ban` and `/poke`.
+### Implemented
 
-### Not yet implemented
-* Broadcasting chat messages to other connected clients – messages are only printed to the server log today.
-* Enforcement of moderation commands (`/ban`, `/poke`) beyond server-side logging.
-* Authentication and authorization integration beyond blindly accepting every connection.
-* Session attachments that would allow `chat_room_broadcast` to deliver payloads to active channels.
+- SSH listener that negotiates connections and spawns a thread per session.
+- MOTD delivery through the `-m` flag or service-managed configuration file.
+- `/help` command for connected clients.
+- Server-side logging of joins, parts, and administrative command attempts (`/ban`, `/poke`).
 
+### In progress / planned
+
+- Broadcasting chat messages to all connected participants.
+- Enforcing moderation commands beyond logging.
+- Authentication and authorisation controls.
+- Session attachment support so broadcasts reach all active channels.
+
+## Contributing
+
+Issues and pull requests are welcome.  Please include reproduction steps for bugs and ensure `make` succeeds before submitting changes.
