@@ -1,4 +1,4 @@
-## SSH-Chatter should be 100% compatible with Go SSH-Chat.
+## SSH-Chatter : ssh-chat written in C, 100% compatible with Go SSH-Chat.
 
 The C implementation mirrors the behaviour of the Go `ssh-chat` reference while
 focusing on clear separation of concerns and modern C conventions. The codebase
@@ -12,11 +12,6 @@ is organised around the following building blocks:
 * **Session context (`session_ctx_t`)** – carries SSH state, user metadata, and
   authorisation flags so that the per-connection thread can implement commands
   such as `/ban` and `/poke` while remaining compatible with the reference.
-
-## Additional Functions should be kept if possible
-- Poke
-- Ban
-- Etc
 
 ## Build
 
