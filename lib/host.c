@@ -2,97 +2,21 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 
 #include "humanized/humanized.h"
 
-static void session_send_line(ssh_channel channel, const char *message);
-static void session_dispatch_command(session_ctx_t *ctx, const char *line);
-static void session_process_line(session_ctx_t *ctx, const char *line);
-static void session_echo_input(session_ctx_t *ctx, const char *line);
-static void session_handle_color(session_ctx_t *ctx, const char *arguments);
-static bool chat_room_get_user_ip(chat_room_t *room, const char *username, char *ip_buffer, size_t buffer_len);
-
-typedef struct color_mapping {
-  const char *name;
-  const char *code;
-} color_mapping_t;
-
-static const color_mapping_t USER_COLOR_MAP[] = {
-    {"default", ANSI_DEFAULT}, {"red", ANSI_RED},   {"green", ANSI_GREEN},
-    {"yellow", ANSI_YELLOW},   {"blue", ANSI_BLUE}, {"magenta", ANSI_MAGENTA},
-    {"cyan", ANSI_CYAN},       {"white", ANSI_WHITE}, {"grey", ANSI_GREY},
-    {"gray", ANSI_GREY}};
-
-static const color_mapping_t HIGHLIGHT_COLOR_MAP[] = {
-    {"none", ""},         {"default", ANSI_BG_DEFAULT}, {"black", ANSI_BG_BLACK},
-    {"red", ANSI_BG_RED},  {"green", ANSI_BG_GREEN},     {"yellow", ANSI_BG_YELLOW},
-    {"blue", ANSI_BG_BLUE}, {"magenta", ANSI_BG_MAGENTA}, {"cyan", ANSI_BG_CYAN},
-    {"white", ANSI_BG_WHITE}, {"grey", ANSI_BG_GREY},     {"gray", ANSI_BG_GREY}};
-
-static const char *lookup_color_code(const color_mapping_t *table, size_t table_len,
-                                     const char *name) {
-  if (table == NULL || name == NULL) {
-    return NULL;
-  }
-
-  for (size_t idx = 0; idx < table_len; ++idx) {
-    if (table[idx].name != NULL && strcasecmp(table[idx].name, name) == 0) {
-      return table[idx].code;
-    }
-  }
-
-  return NULL;
-}
-
-static void trim_whitespace_inplace(char *value) {
-  if (value == NULL) {
-    return;
-  }
-
-  char *start = value;
-  while (*start != '\0' && isspace((unsigned char)*start)) {
-    ++start;
-  }
-
-  char *end = start + strlen(start);
-  while (end > start && isspace((unsigned char)*(end - 1))) {
-    --end;
-  }
-
-  *end = '\0';
-
-  if (start != value) {
-    memmove(value, start, (size_t)(end - start) + 1U);
-  }
-}
-
-static bool parse_bool_token(const char *token, bool *result) {
-  if (token == NULL || result == NULL) {
-    return false;
-  }
-
-  if (strcasecmp(token, "bold") == 0 || strcasecmp(token, "true") == 0 ||
-      strcasecmp(token, "yes") == 0 || strcasecmp(token, "on") == 0 ||
-      strcasecmp(token, "1") == 0) {
-    *result = true;
-    return true;
-  }
-
-  if (strcasecmp(token, "normal") == 0 || strcasecmp(token, "false") == 0 ||
-      strcasecmp(token, "no") == 0 || strcasecmp(token, "off") == 0 ||
-      strcasecmp(token, "0") == 0) {
-    *result = false;
-    return true;
-  }
-
-  return false;
-}
+#ifndef NI_MAXHOST
+#define NI_MAXHOST 1025
+#endif
 
 static void chat_room_init(chat_room_t *room) {
   if (room == NULL) {
@@ -105,8 +29,48 @@ static void chat_room_init(chat_room_t *room) {
   }
 }
 
-static void chat_room_add(chat_room_t *room, session_ctx_t *session) {
-  if (room == NULL || session == NULL) {
+static void session_describe_peer(ssh_session session, char *buffer, size_t len) {
+  if (buffer == NULL || len == 0U) {
+    return;
+  }
+
+  buffer[0] = '\0';
+  if (session == NULL) {
+    return;
+  }
+
+#if defined(LIBSSH_VERSION_INT) && defined(SSH_VERSION_INT)
+#if LIBSSH_VERSION_INT >= SSH_VERSION_INT(0, 10, 0)
+  const char *client_ip = ssh_get_client_ip(session);
+  if (client_ip != NULL) {
+    snprintf(buffer, len, "%s", client_ip);
+    return;
+  }
+#endif
+#endif
+
+  const int socket_fd = ssh_get_fd(session);
+  if (socket_fd < 0) {
+    return;
+  }
+
+  struct sockaddr_storage addr;
+  socklen_t addr_len = sizeof(addr);
+  if (getpeername(socket_fd, (struct sockaddr *)&addr, &addr_len) != 0) {
+    return;
+  }
+
+  char host[NI_MAXHOST];
+  if (getnameinfo((struct sockaddr *)&addr, addr_len, host, sizeof(host), NULL, 0,
+                  NI_NUMERICHOST) != 0) {
+    return;
+  }
+
+  snprintf(buffer, len, "%s", host);
+}
+
+static void chat_room_add(chat_room_t *room, chat_user_t *user) {
+  if (room == NULL || user == NULL) {
     return;
   }
 
@@ -716,6 +680,14 @@ int host_serve(host_t *host, const char *bind_addr, const char *port) {
       ssh_free(session);
       continue;
     }
+
+    char peer_address[NI_MAXHOST];
+    session_describe_peer(session, peer_address, sizeof(peer_address));
+    if (peer_address[0] == '\0') {
+      snprintf(peer_address, sizeof(peer_address), "unknown");
+    }
+
+    printf("[connect] accepted client from %s\n", peer_address);
 
     session_ctx_t *ctx = calloc(1U, sizeof(session_ctx_t));
     if (ctx == NULL) {
