@@ -796,7 +796,9 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/exit                 - leave the chat");
   session_send_system_line(ctx, "/nick <name>          - change your display name");
   session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
-  session_send_system_line(ctx, "/systemcolor (fg;background[;highlight][;bold]) - style the interface");
+  session_send_system_line(ctx,
+                           "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may "
+                           "be highlight or bold)");
   session_send_system_line(ctx, "/poke <username>      - send a bell to a user");
   session_send_system_line(ctx, "/ban <username>       - ban a user (operator only)");
   session_send_system_line(ctx, "/pardon <user|ip>     - remove a ban (operator only)");
@@ -1034,7 +1036,9 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   }
 
   if (arguments == NULL) {
-    session_send_system_line(ctx, "Usage: /systemcolor (fg;background[;highlight][;bold])");
+    session_send_system_line(ctx,
+                             "Usage: /systemcolor (fg;background[;highlight][;bold]) - third value may be highlight or "
+                             "bold.");
     return;
   }
 
@@ -1043,7 +1047,9 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, "Usage: /systemcolor (fg;background[;highlight][;bold])");
+    session_send_system_line(ctx,
+                             "Usage: /systemcolor (fg;background[;highlight][;bold]) - third value may be highlight or "
+                             "bold.");
     return;
   }
 
@@ -1057,7 +1063,9 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   if (had_parentheses) {
     size_t len = strlen(working);
     if (len == 0U || working[len - 1U] != ')') {
-      session_send_system_line(ctx, "Usage: /systemcolor (fg;background[;highlight][;bold])");
+      session_send_system_line(ctx,
+                               "Usage: /systemcolor (fg;background[;highlight][;bold]) - third value may be highlight "
+                               "or bold.");
       return;
     }
     working[len - 1U] = '\0';
@@ -1067,7 +1075,9 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   char *tokens[4] = {0};
   size_t token_count = 0U;
   if (!session_parse_color_arguments(working, tokens, 4U, &token_count) || token_count < 2U) {
-    session_send_system_line(ctx, "Usage: /systemcolor (fg;background[;highlight][;bold])");
+    session_send_system_line(ctx,
+                             "Usage: /systemcolor (fg;background[;highlight][;bold]) - third value may be highlight or "
+                             "bold.");
     return;
   }
 
@@ -1090,23 +1100,36 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   }
 
   const char *highlight_code = ctx->system_highlight_code;
-  if (token_count >= 3U) {
-    highlight_code = lookup_color_code(HIGHLIGHT_COLOR_MAP,
-                                       sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), tokens[2]);
-    if (highlight_code == NULL) {
-      char message[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(message, sizeof(message), "Unknown highlight color '%s'.", tokens[2]);
-      session_send_system_line(ctx, message);
-      return;
-    }
-  }
-
+  bool highlight_updated = false;
   bool is_bold = ctx->system_is_bold;
-  if ((token_count == 3U && highlight_code == ctx->system_highlight_code) || token_count == 4U) {
-    const char *bold_token = token_count == 4U ? tokens[3] : tokens[2];
-    if (!parse_bool_token(bold_token, &is_bold)) {
-      session_send_system_line(ctx, "The last value must describe bold (ex: bold, true, normal).");
-      return;
+  if (token_count >= 3U) {
+    bool bool_value = false;
+    if (parse_bool_token(tokens[2], &bool_value)) {
+      if (token_count > 3U) {
+        session_send_system_line(ctx,
+                                 "Usage: /systemcolor (fg;background[;highlight][;bold]) - third value may be "
+                                 "highlight or bold.");
+        return;
+      }
+      is_bold = bool_value;
+    } else {
+      highlight_code = lookup_color_code(HIGHLIGHT_COLOR_MAP,
+                                         sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), tokens[2]);
+      if (highlight_code == NULL) {
+        char message[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(message, sizeof(message), "Unknown highlight color '%s'.", tokens[2]);
+        session_send_system_line(ctx, message);
+        return;
+      }
+      highlight_updated = true;
+
+      if (token_count == 4U) {
+        if (!parse_bool_token(tokens[3], &bool_value)) {
+          session_send_system_line(ctx, "The last value must describe bold (ex: bold, true, normal).");
+          return;
+        }
+        is_bold = bool_value;
+      }
     }
   }
 
@@ -1116,7 +1139,7 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   ctx->system_is_bold = is_bold;
   snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", tokens[0]);
   snprintf(ctx->system_bg_name, sizeof(ctx->system_bg_name), "%s", tokens[1]);
-  if (token_count >= 3U) {
+  if (highlight_updated) {
     snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s", tokens[2]);
   }
 
