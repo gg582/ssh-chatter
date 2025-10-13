@@ -66,8 +66,7 @@ static void session_describe_peer(ssh_session session, char *buffer, size_t len)
     return;
   }
 
-  strncpy(buffer, host, len - 1U);
-  buffer[len - 1U] = '\0';
+  snprintf(buffer, len, "%s", host);
 }
 
 static void chat_room_add(chat_room_t *room, chat_user_t *user) {
