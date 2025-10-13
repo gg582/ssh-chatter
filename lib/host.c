@@ -123,6 +123,9 @@ static bool host_is_ip_banned(host_t *host, const char *ip);
 static bool host_is_username_banned(host_t *host, const char *username);
 static bool host_add_ban_entry(host_t *host, const char *username, const char *ip);
 static bool host_remove_ban_entry(host_t *host, const char *token);
+static bool session_is_private_ipv4(const unsigned char octets[4]);
+static bool session_is_lan_client(const char *ip);
+static void session_assign_lan_privileges(session_ctx_t *ctx);
 static void session_apply_theme_defaults(session_ctx_t *ctx);
 static void session_dispatch_command(session_ctx_t *ctx, const char *line);
 static void session_handle_exit(session_ctx_t *ctx);
@@ -132,6 +135,10 @@ static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
 static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count);
 static size_t session_utf8_prev_char_len(const char *buffer, size_t length);
 static int session_utf8_char_width(const char *bytes, size_t length);
+static void host_history_record_user(host_t *host, const session_ctx_t *from, const char *message);
+static void host_history_record_system(host_t *host, const char *message);
+static void session_send_history(session_ctx_t *ctx);
+static void host_history_append(host_t *host, const chat_history_entry_t *entry);
 
 static void chat_room_init(chat_room_t *room) {
   if (room == NULL) {
@@ -173,6 +180,71 @@ static void session_describe_peer(ssh_session session, char *buffer, size_t len)
 
   strncpy(buffer, host, len - 1U);
   buffer[len - 1U] = '\0';
+}
+
+static bool session_is_private_ipv4(const unsigned char octets[4]) {
+  if (octets == NULL) {
+    return false;
+  }
+
+  if (octets[0] == 10U || octets[0] == 127U) {
+    return true;
+  }
+
+  if (octets[0] == 172U && octets[1] >= 16U && octets[1] <= 31U) {
+    return true;
+  }
+
+  if ((octets[0] == 192U && octets[1] == 168U) || (octets[0] == 169U && octets[1] == 254U)) {
+    return true;
+  }
+
+  return false;
+}
+
+static bool session_is_lan_client(const char *ip) {
+  if (ip == NULL || ip[0] == '\0') {
+    return false;
+  }
+
+  struct in_addr addr4;
+  if (inet_pton(AF_INET, ip, &addr4) == 1) {
+    unsigned char octets[4];
+    memcpy(octets, &addr4.s_addr, sizeof(octets));
+    return session_is_private_ipv4(octets);
+  }
+
+  struct in6_addr addr6;
+  if (inet_pton(AF_INET6, ip, &addr6) != 1) {
+    return false;
+  }
+
+  if (IN6_IS_ADDR_LOOPBACK(&addr6) || IN6_IS_ADDR_LINKLOCAL(&addr6)) {
+    return true;
+  }
+
+  if (IN6_IS_ADDR_V4MAPPED(&addr6)) {
+    return session_is_private_ipv4(&addr6.s6_addr[12]);
+  }
+
+  const unsigned char first_byte = addr6.s6_addr[0];
+  if ((first_byte & 0xfeU) == 0xfcU) { // fc00::/7 unique local
+    return true;
+  }
+
+  return false;
+}
+
+static void session_assign_lan_privileges(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (session_is_lan_client(ctx->client_ip)) {
+    ctx->user.is_operator = true;
+    ctx->user.is_lan_operator = true;
+    ctx->auth.is_operator = true;
+  }
 }
 
 static void chat_room_add(chat_room_t *room, session_ctx_t *session) {
@@ -243,6 +315,55 @@ static void chat_room_broadcast(chat_room_t *room, const char *message, const se
   } else {
     printf("[broadcast] %s\n", message);
   }
+}
+
+static void host_history_append(host_t *host, const chat_history_entry_t *entry) {
+  if (host == NULL || entry == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+
+  size_t insert_index = 0U;
+  if (host->history_count < SSH_CHATTER_HISTORY_LIMIT) {
+    insert_index = (host->history_start + host->history_count) % SSH_CHATTER_HISTORY_LIMIT;
+    host->history_count++;
+  } else {
+    insert_index = host->history_start;
+    host->history_start = (host->history_start + 1U) % SSH_CHATTER_HISTORY_LIMIT;
+  }
+
+  host->history[insert_index] = *entry;
+
+  pthread_mutex_unlock(&host->lock);
+}
+
+static void host_history_record_user(host_t *host, const session_ctx_t *from, const char *message) {
+  if (host == NULL || from == NULL || message == NULL || message[0] == '\0') {
+    return;
+  }
+
+  chat_history_entry_t entry = {0};
+  entry.is_user_message = true;
+  snprintf(entry.username, sizeof(entry.username), "%s", from->user.name);
+  snprintf(entry.message, sizeof(entry.message), "%s", message);
+  entry.user_color_code = from->user_color_code;
+  entry.user_highlight_code = from->user_highlight_code;
+  entry.user_is_bold = from->user_is_bold;
+
+  host_history_append(host, &entry);
+}
+
+static void host_history_record_system(host_t *host, const char *message) {
+  if (host == NULL || message == NULL || message[0] == '\0') {
+    return;
+  }
+
+  chat_history_entry_t entry = {0};
+  entry.is_user_message = false;
+  snprintf(entry.message, sizeof(entry.message), "%s", message);
+
+  host_history_append(host, &entry);
 }
 
 static void session_apply_theme_defaults(session_ctx_t *ctx) {
@@ -498,6 +619,50 @@ static void session_send_user_message(session_ctx_t *target, const session_ctx_t
   session_send_line(target->channel, line);
 }
 
+static void session_send_history(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL || ctx->channel == NULL) {
+    return;
+  }
+
+  chat_history_entry_t snapshot[SSH_CHATTER_HISTORY_LIMIT];
+  size_t count = 0U;
+
+  pthread_mutex_lock(&ctx->owner->lock);
+  count = ctx->owner->history_count;
+  for (size_t idx = 0; idx < count; ++idx) {
+    size_t history_index = (ctx->owner->history_start + idx) % SSH_CHATTER_HISTORY_LIMIT;
+    snapshot[idx] = ctx->owner->history[history_index];
+  }
+  pthread_mutex_unlock(&ctx->owner->lock);
+
+  if (count == 0U) {
+    return;
+  }
+
+  char header[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(header, sizeof(header), "Recent activity (last %zu message%s):", count, count == 1U ? "" : "s");
+  session_render_separator(ctx, "Recent activity");
+  session_send_system_line(ctx, header);
+
+  for (size_t idx = 0; idx < count; ++idx) {
+    const chat_history_entry_t *entry = &snapshot[idx];
+    if (entry->is_user_message) {
+      const char *highlight = entry->user_highlight_code != NULL ? entry->user_highlight_code : "";
+      const char *color = entry->user_color_code != NULL ? entry->user_color_code : "";
+      const char *bold = entry->user_is_bold ? ANSI_BOLD : "";
+
+      char line[SSH_CHATTER_MESSAGE_LIMIT + 64];
+      snprintf(line, sizeof(line), "%s%s%s[%s]%s %s", highlight, bold, color, entry->username, ANSI_RESET,
+               entry->message);
+      session_send_line(ctx->channel, line);
+    } else {
+      session_send_system_line(ctx, entry->message);
+    }
+  }
+
+  session_render_separator(ctx, "Chatroom");
+}
+
 static bool session_handle_service_request(ssh_message message) {
   if (message == NULL) {
     return false;
@@ -648,6 +813,7 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
   }
 
   session_send_user_message(ctx, ctx, line);
+  host_history_record_user(ctx->owner, ctx, line);
   chat_room_broadcast(&ctx->owner->room, line, ctx);
 }
 
@@ -679,6 +845,11 @@ static void session_handle_ban(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  if (target->user.is_lan_operator) {
+    session_send_system_line(ctx, "LAN operators cannot be banned.");
+    return;
+  }
+
   const char *target_ip = target->client_ip[0] != '\0' ? target->client_ip : "";
   if (!host_add_ban_entry(ctx->owner, target->user.name, target_ip)) {
     session_send_system_line(ctx, "Unable to add ban entry (list full?).");
@@ -687,6 +858,7 @@ static void session_handle_ban(session_ctx_t *ctx, const char *arguments) {
 
   char notice[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(notice, sizeof(notice), "* %s has been banned by %s", target->user.name, ctx->user.name);
+  host_history_record_system(ctx->owner, notice);
   chat_room_broadcast(&ctx->owner->room, notice, NULL);
   session_send_system_line(ctx, "Ban applied.");
   printf("[ban] %s banned %s (%s)\n", ctx->user.name, target->user.name, target_ip[0] != '\0' ? target_ip : "unknown");
@@ -994,6 +1166,7 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments) {
 
   char announcement[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(announcement, sizeof(announcement), "* %s is now known as %s", old_name, ctx->user.name);
+  host_history_record_system(ctx->owner, announcement);
   chat_room_broadcast(&ctx->owner->room, announcement, NULL);
   session_send_system_line(ctx, "Display name updated.");
 }
@@ -1321,6 +1494,8 @@ static void *session_thread(void *arg) {
     return NULL;
   }
 
+  session_assign_lan_privileges(ctx);
+
   if (host_is_ip_banned(ctx->owner, ctx->client_ip) || host_is_username_banned(ctx->owner, ctx->user.name)) {
     session_send_system_line(ctx, "You are banned from this server.");
     session_cleanup(ctx);
@@ -1331,6 +1506,7 @@ static void *session_thread(void *arg) {
   printf("[join] %s\n", ctx->user.name);
 
   session_render_banner(ctx);
+  session_send_history(ctx);
   if (ctx->owner->motd[0] != '\0') {
     session_send_system_line(ctx, ctx->owner->motd);
   }
@@ -1338,6 +1514,7 @@ static void *session_thread(void *arg) {
 
   char join_message[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(join_message, sizeof(join_message), "* %s has joined the chat", ctx->user.name);
+  host_history_record_system(ctx->owner, join_message);
   chat_room_broadcast(&ctx->owner->room, join_message, NULL);
 
   session_clear_input(ctx);
@@ -1414,6 +1591,7 @@ static void *session_thread(void *arg) {
   printf("[part] %s\n", ctx->user.name);
   char part_message[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(part_message, sizeof(part_message), "* %s has left the chat", ctx->user.name);
+  host_history_record_system(ctx->owner, part_message);
   chat_room_broadcast(&ctx->owner->room, part_message, NULL);
   chat_room_remove(&ctx->owner->room, ctx);
   session_cleanup(ctx);
@@ -1446,6 +1624,9 @@ void host_init(host_t *host, auth_profile_t *auth) {
   snprintf(host->version, sizeof(host->version), "ssh-chatter (C)");
   snprintf(host->motd, sizeof(host->motd), "Welcome to ssh-chat (C edition)");
   host->connection_count = 0U;
+  host->history_start = 0U;
+  host->history_count = 0U;
+  memset(host->history, 0, sizeof(host->history));
   pthread_mutex_init(&host->lock, NULL);
 }
 
@@ -1610,6 +1791,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     ++host->connection_count;
     snprintf(ctx->user.name, sizeof(ctx->user.name), "Guest%zu", host->connection_count);
     ctx->user.is_operator = false;
+    ctx->user.is_lan_operator = false;
     pthread_mutex_unlock(&host->lock);
 
     pthread_t thread_id;

@@ -17,6 +17,7 @@
 #define SSH_CHATTER_IP_LEN 64
 #define SSH_CHATTER_COLOR_NAME_LEN 32
 #define SSH_CHATTER_MAX_BANS 128
+#define SSH_CHATTER_HISTORY_LIMIT 32
 
 struct host;
 struct session_ctx;
@@ -24,6 +25,7 @@ struct session_ctx;
 typedef struct chat_user {
   char name[SSH_CHATTER_USERNAME_LEN];
   bool is_operator;
+  bool is_lan_operator;
 } chat_user_t;
 
 typedef struct chat_room {
@@ -31,6 +33,15 @@ typedef struct chat_room {
   struct session_ctx *members[SSH_CHATTER_MAX_USERS];
   size_t member_count;
 } chat_room_t;
+
+typedef struct chat_history_entry {
+  bool is_user_message;
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  char username[SSH_CHATTER_USERNAME_LEN];
+  const char *user_color_code;
+  const char *user_highlight_code;
+  bool user_is_bold;
+} chat_history_entry_t;
 
 typedef struct auth_profile {
   bool is_banned;
@@ -85,6 +96,9 @@ typedef struct host {
   char version[64];
   char motd[256];
   size_t connection_count;
+  chat_history_entry_t history[SSH_CHATTER_HISTORY_LIMIT];
+  size_t history_start;
+  size_t history_count;
   pthread_mutex_t lock;
 } host_t;
 
