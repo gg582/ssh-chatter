@@ -5,6 +5,8 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <time.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -15,6 +17,7 @@
 
 #include "theme.h"
 
+#define SSH_CHATTER_SOUND_URL_LEN 1024
 #define SSH_CHATTER_MESSAGE_LIMIT 1024
 #define SSH_CHATTER_MAX_USERS 1024
 #define SSH_CHATTER_MAX_INPUT_LEN 1024
@@ -23,7 +26,13 @@
 #define SSH_CHATTER_COLOR_NAME_LEN 32
 #define SSH_CHATTER_MAX_BANS 128
 #define SSH_CHATTER_HISTORY_LIMIT 64
+#define SSH_CHATTER_INPUT_HISTORY_LIMIT 64
+#define SSH_CHATTER_SCROLLBACK_CHUNK 32
 #define SSH_CHATTER_MAX_PREFERENCES 1024
+#define SSH_CHATTER_ATTACHMENT_TARGET_LEN 256
+#define SSH_CHATTER_ATTACHMENT_CAPTION_LEN 256
+#define SSH_CHATTER_REACTION_KIND_COUNT 7
+#define SSH_CHATTER_OS_NAME_LEN 16
 
 struct host;
 struct session_ctx;
@@ -40,6 +49,14 @@ typedef struct chat_room {
   size_t member_count;
 } chat_room_t;
 
+typedef enum chat_attachment_type {
+  CHAT_ATTACHMENT_NONE = 0,
+  CHAT_ATTACHMENT_IMAGE,
+  CHAT_ATTACHMENT_VIDEO,
+  CHAT_ATTACHMENT_AUDIO,
+  CHAT_ATTACHMENT_FILE,
+} chat_attachment_type_t;
+
 typedef struct chat_history_entry {
   bool is_user_message;
   char message[SSH_CHATTER_MESSAGE_LIMIT];
@@ -49,6 +66,11 @@ typedef struct chat_history_entry {
   bool user_is_bold;
   char user_color_name[SSH_CHATTER_COLOR_NAME_LEN];
   char user_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  uint64_t message_id;
+  chat_attachment_type_t attachment_type;
+  char attachment_target[SSH_CHATTER_ATTACHMENT_TARGET_LEN];
+  char attachment_caption[SSH_CHATTER_ATTACHMENT_CAPTION_LEN];
+  uint32_t reaction_counts[SSH_CHATTER_REACTION_KIND_COUNT];
 } chat_history_entry_t;
 
 typedef struct auth_profile {
@@ -69,6 +91,12 @@ typedef struct session_ctx {
   struct host *owner;
   char input_buffer[SSH_CHATTER_MAX_INPUT_LEN];
   size_t input_length;
+  char input_history[SSH_CHATTER_INPUT_HISTORY_LIMIT][SSH_CHATTER_MAX_INPUT_LEN];
+  size_t input_history_count;
+  int input_history_position;
+  bool input_escape_active;
+  char input_escape_buffer[8];
+  size_t input_escape_length;
   char client_ip[SSH_CHATTER_IP_LEN];
   const char *user_color_code;
   const char *user_highlight_code;
@@ -85,6 +113,13 @@ typedef struct session_ctx {
   bool should_exit;
   bool username_conflict;
   bool has_joined_room;
+  size_t history_scroll_position;
+  struct timespec last_message_time;
+  bool has_last_message_time;
+  char os_name[SSH_CHATTER_OS_NAME_LEN];
+  int daily_year;
+  int daily_yday;
+  char daily_function[64];
 } session_ctx_t;
 
 typedef struct user_preference {
@@ -99,6 +134,12 @@ typedef struct user_preference {
   char system_bg_name[SSH_CHATTER_COLOR_NAME_LEN];
   char system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
   bool system_is_bold;
+  char os_name[SSH_CHATTER_OS_NAME_LEN];
+  int daily_year;
+  int daily_yday;
+  char daily_function[64];
+  uint64_t last_poll_id;
+  int last_poll_choice;
 } user_preference_t;
 
 typedef struct host {
@@ -123,10 +164,22 @@ typedef struct host {
   chat_history_entry_t history[SSH_CHATTER_HISTORY_LIMIT];
   size_t history_start;
   size_t history_count;
+  uint64_t next_message_id;
   user_preference_t preferences[SSH_CHATTER_MAX_PREFERENCES];
   size_t preference_count;
   pthread_mutex_t lock;
   char state_file_path[PATH_MAX];
+  struct {
+    bool active;
+    uint64_t id;
+    char question[SSH_CHATTER_MESSAGE_LIMIT];
+    size_t option_count;
+    struct {
+      char text[SSH_CHATTER_MESSAGE_LIMIT];
+      uint32_t votes;
+    } options[5];
+  } poll;
+  bool random_seeded;
 } host_t;
 
 void host_init(host_t *host, auth_profile_t *auth);
