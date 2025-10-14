@@ -10,7 +10,7 @@
 
 static void print_usage(const char *prog_name) {
   fprintf(stderr,
-          "Usage: %s [-a address] [-p port] [-m motd] [-k host_key_dir]\n"
+          "Usage: %s [-a address] [-p port] [-m motd_file] [-k host_key_dir]\n"
           "       %s [-h]\n"
           "       %s [-V]\n",
           prog_name, prog_name, prog_name);
