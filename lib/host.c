@@ -371,6 +371,10 @@ static void chat_room_broadcast(chat_room_t *room, const char *message, const se
     } else {
       session_send_system_line(member, message);
     }
+
+    if (member->history_scroll_position == 0U) {
+      session_refresh_input_line(member);
+    }
   }
 
   if (from != NULL) {
@@ -1181,6 +1185,8 @@ static void session_history_navigate(session_ctx_t *ctx, int direction) {
     return;
   }
 
+  ctx->history_scroll_position = 0U;
+
   if (ctx->input_history_count == 0U) {
     ctx->input_history_position = (int)ctx->input_history_count;
     session_set_input_text(ctx, "");
@@ -1332,13 +1338,28 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
 
   if (length == 3U && sequence[1] == '[') {
     if (sequence[2] == 'A') {
-      session_history_navigate(ctx, -1);
+      session_scrollback_navigate(ctx, 1);
       ctx->input_escape_active = false;
       ctx->input_escape_length = 0U;
       return true;
     }
     if (sequence[2] == 'B') {
-      session_history_navigate(ctx, 1);
+      session_scrollback_navigate(ctx, -1);
+      ctx->input_escape_active = false;
+      ctx->input_escape_length = 0U;
+      return true;
+    }
+  }
+
+  if (length == 3U && sequence[1] == 'O') {
+    if (sequence[2] == 'A') {
+      session_scrollback_navigate(ctx, 1);
+      ctx->input_escape_active = false;
+      ctx->input_escape_length = 0U;
+      return true;
+    }
+    if (sequence[2] == 'B') {
+      session_scrollback_navigate(ctx, -1);
       ctx->input_escape_active = false;
       ctx->input_escape_length = 0U;
       return true;
@@ -1396,6 +1417,10 @@ static void session_send_private_message_line(session_ctx_t *ctx, const session_
   char line[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(line, sizeof(line), "%s%s%s[%s]%s %s", highlight, bold, color, label, ANSI_RESET, message);
   session_send_line(ctx->channel, line);
+
+  if (ctx != color_source && ctx->history_scroll_position == 0U) {
+    session_refresh_input_line(ctx);
+  }
 }
 
 static void session_send_history_entry(session_ctx_t *ctx, const chat_history_entry_t *entry) {
@@ -1428,16 +1453,27 @@ static void session_send_history(session_ctx_t *ctx) {
     return;
   }
 
+  size_t visible = count;
+  if (visible > SSH_CHATTER_SCROLLBACK_CHUNK) {
+    visible = SSH_CHATTER_SCROLLBACK_CHUNK;
+  }
+
+  const size_t start = (count > visible) ? (count - visible) : 0U;
+
   char header[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(header, sizeof(header), "Recent activity (last %zu message%s):", count, count == 1U ? "" : "s");
+  if (count > visible) {
+    snprintf(header, sizeof(header), "Recent activity (last %zu of %zu messages):", visible, count);
+  } else {
+    snprintf(header, sizeof(header), "Recent activity (last %zu message%s):", visible, visible == 1U ? "" : "s");
+  }
   session_render_separator(ctx, "Recent activity");
   session_send_system_line(ctx, header);
 
-  for (size_t idx = 0; idx < count; ++idx) {
+  for (size_t idx = start; idx < count; ++idx) {
     session_send_history_entry(ctx, &snapshot[idx]);
   }
 
-  session_send_system_line(ctx, "Use PageUp/PageDown to browse stored chat history.");
+  session_send_system_line(ctx, "Use the Up/Down arrow keys to browse stored chat history.");
   session_render_separator(ctx, "Chatroom");
   ctx->history_scroll_position = 0U;
 }
@@ -1575,7 +1611,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/motd                - view the message of the day");
   session_send_system_line(ctx, "/users               - announce the number of connected users");
   session_send_system_line(ctx, "/search <text>       - search for users whose name matches text");
-  session_send_system_line(ctx, "PageUp/PageDown          - scroll recent chat history");
+  session_send_system_line(ctx, "Up/Down arrows           - scroll recent chat history");
   session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
   session_send_system_line(ctx,
                            "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may "
@@ -2731,6 +2767,7 @@ static void *session_thread(void *arg) {
 
       if (ch == '\b' || ch == 0x7f) {
         ctx->input_history_position = -1;
+        ctx->history_scroll_position = 0U;
         session_local_backspace(ctx);
         continue;
       }
@@ -2738,6 +2775,7 @@ static void *session_thread(void *arg) {
       if (ch == '\t') {
         if (ctx->input_length + 1U < sizeof(ctx->input_buffer)) {
           ctx->input_history_position = -1;
+          ctx->history_scroll_position = 0U;
           ctx->input_buffer[ctx->input_length++] = ' ';
           session_local_echo_char(ctx, ' ');
         }
@@ -2761,6 +2799,7 @@ static void *session_thread(void *arg) {
 
       if (ctx->input_length + 1U < sizeof(ctx->input_buffer)) {
         ctx->input_history_position = -1;
+        ctx->history_scroll_position = 0U;
         ctx->input_buffer[ctx->input_length++] = ch;
         session_local_echo_char(ctx, ch);
       }
