@@ -10,15 +10,15 @@
 
 #include "theme.h"
 
-#define SSH_CHATTER_MESSAGE_LIMIT 512
-#define SSH_CHATTER_MAX_USERS 512
+#define SSH_CHATTER_MESSAGE_LIMIT 1024
+#define SSH_CHATTER_MAX_USERS 1024
 #define SSH_CHATTER_MAX_INPUT_LEN 1024
 #define SSH_CHATTER_USERNAME_LEN 24
 #define SSH_CHATTER_IP_LEN 64
 #define SSH_CHATTER_COLOR_NAME_LEN 32
 #define SSH_CHATTER_MAX_BANS 128
-#define SSH_CHATTER_HISTORY_LIMIT 32
-#define SSH_CHATTER_MAX_PREFERENCES 512
+#define SSH_CHATTER_HISTORY_LIMIT 64
+#define SSH_CHATTER_MAX_PREFERENCES 1024
 
 struct host;
 struct session_ctx;
@@ -111,7 +111,7 @@ typedef struct host {
   } bans[SSH_CHATTER_MAX_BANS];
   size_t ban_count;
   char version[64];
-  char motd[256];
+  char motd[1024];
   size_t connection_count;
   chat_history_entry_t history[SSH_CHATTER_HISTORY_LIMIT];
   size_t history_start;

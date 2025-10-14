@@ -983,7 +983,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx,
                            "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may "
                            "be highlight or bold; use /systemcolor reset to restore defaults)");
-  session_send_system_line(ctx, "/poke <username>      - send a bell to a user");
+  session_send_system_line(ctx, "/poke <username>      - send a bell to call a user");
   session_send_system_line(ctx, "/ban <username>       - ban a user (operator only)");
   session_send_system_line(ctx, "/pardon <user|ip>     - remove a ban (operator only)");
   session_send_system_line(ctx, "Regular messages are shared with everyone.");
@@ -2024,8 +2024,21 @@ void host_init(host_t *host, auth_profile_t *auth) {
   snprintf(host->default_system_highlight_name, sizeof(host->default_system_highlight_name), "%s", "yellow");
   host->ban_count = 0U;
   memset(host->bans, 0, sizeof(host->bans));
-  snprintf(host->version, sizeof(host->version), "ssh-chatter (C)");
-  snprintf(host->motd, sizeof(host->motd), "Welcome to ssh-chat (C edition)");
+  snprintf(host->version, sizeof(host->version), "ssh-chatter (C, rolling release)");
+  snprintf(host->motd, sizeof(host->motd),
+  "Welcome to ssh-chat!\n"
+  "\033[1G- Be polite to each other\n"
+  "\033[1G- fun fact: this server is written in pure c.\n"
+  "\033[1G============================================\n"
+  "\033[1G _      ____  ____  _____ ____  _        ____  _ \n"
+  "\033[1G/ \\__/|/  _ \\/  _ \\/  __//  __\\/ \\  /|  /   _\\/ \\\n"
+  "\033[1G| |\\/||| / \\|| | \\||  \\  |  \\/|| |\\ ||  |  /  | |\n"
+  "\033[1G| |  ||| \\_/|| |_/||  /_ |    /| | \\||  |  \\__\\_/\n"
+  "\033[1G\\_/  \\|\\____/\\____/\\____\\\\_/\\_\\\\_/  \\|  \\____/(_)\n"
+  "\033[1G                                                 \n"
+  "\033[1G============================================\n");
+
+
   host->connection_count = 0U;
   host->history_start = 0U;
   host->history_count = 0U;
