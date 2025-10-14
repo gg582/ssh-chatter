@@ -4197,36 +4197,46 @@ static bool host_remove_ban_entry(host_t *host, const char *token) {
   return removed;
 }
 
+static bool session_parse_command(const char *line, const char *command, const char **arguments) {
+  size_t command_len = strlen(command);
+
+  if (strncmp(line, command, command_len) == 0) {
+    const char *args = line + command_len;
+
+    while (*args == ' ' || *args == '\t') {
+      ++args;
+    }
+
+    *arguments = args;
+    return true;
+  }
+  return false;
+}
+
 static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
+  const char *arguments = NULL;
+
   if (strncmp(line, "/help", 5) == 0) {
     session_print_help(ctx);
     return;
   }
+
   if (strncmp(line, "/exit", 5) == 0) {
     session_handle_exit(ctx);
     return;
   }
-  if (strncmp(line, "/nick", 5) == 0) {
-    const char *arguments = line + 5;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/nick", &arguments)) {
     session_handle_nick(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/pm", 3) == 0) {
-    const char *arguments = line + 3;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/pm", &arguments)) {
     session_handle_pm(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/motd", 5) == 0) {
-    const char *arguments = line + 5;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/motd", &arguments)) {
     if (*arguments != '\0') {
       session_send_system_line(ctx, "Usage: /motd");
     } else {
@@ -4234,11 +4244,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  if (strncmp(line, "/users", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/users", &arguments)) {
     if (*arguments != '\0') {
       session_send_system_line(ctx, "Usage: /users");
     } else {
@@ -4246,83 +4253,53 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  if (strncmp(line, "/search", 7) == 0) {
-    const char *arguments = line + 7;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/search", &arguments)) {
     session_handle_search(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/image", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/image", &arguments)) {
     session_handle_image(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/video", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/video", &arguments)) {
     session_handle_video(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/audio", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/audio", &arguments)) {
     session_handle_audio(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/files", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/files", &arguments)) {
     session_handle_files(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/ban", 4) == 0) {
-    const char *arguments = line + 4;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/ban", &arguments)) {
     session_handle_ban(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/pardon", 7) == 0) {
-    const char *arguments = line + 7;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/pardon", &arguments)) {
     session_handle_pardon(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/poke", 5) == 0) {
-    const char *arguments = line + 5;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/poke", &arguments)) {
     session_handle_poke(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/color", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/color", &arguments)) {
     session_handle_color(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/systemcolor", 12) == 0) {
-    const char *arguments = line + 12;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/systemcolor", &arguments)) {
     session_handle_system_color(ctx, arguments);
     return;
   }
@@ -4407,6 +4384,63 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
+    session_handle_poll(ctx, arguments);
+    return;
+  }
+
+  if (session_parse_command(line, "/palette", &arguments)) {
+    session_handle_palette(ctx, arguments);
+    return;
+  }
+
+  if (session_parse_command(line, "/image-to-ascii", &arguments)) {
+    session_handle_image_to_ascii(ctx, arguments);
+    return;
+  }
+
+  if (session_parse_command(line, "/today", &arguments)) {
+    if (*arguments != '\0') {
+      session_send_system_line(ctx, "Usage: /today");
+    } else {
+      session_handle_today(ctx);
+    }
+    return;
+  }
+
+  if (session_parse_command(line, "/date", &arguments)) {
+    session_handle_date(ctx, arguments);
+    return;
+  }
+
+  if (session_parse_command(line, "/os", &arguments)) {
+    session_handle_os(ctx, arguments);
+    return;
+  }
+
+  if (session_parse_command(line, "/getos", &arguments)) {
+    session_handle_getos(ctx, arguments);
+    return;
+  }
+
+  if (session_parse_command(line, "/pair", &arguments)) {
+    if (*arguments != '\0') {
+      session_send_system_line(ctx, "Usage: /pair");
+    } else {
+      session_handle_pair(ctx);
+    }
+    return;
+  }
+
+  if (session_parse_command(line, "/connected", &arguments)) {
+    if (*arguments != '\0') {
+      session_send_system_line(ctx, "Usage: /connected");
+    } else {
+      session_handle_connected(ctx);
+    }
+    return;
+  }
+
+  if (session_parse_command(line, "/poll", &arguments)) {
     session_handle_poll(ctx, arguments);
     return;
   }
@@ -5060,6 +5094,8 @@ static bool host_try_load_motd_from_path(host_t *host, const char *path) {
 
   char motd_buffer[sizeof(host->motd)];
   size_t total_read = 0U;
+  // TODO: Extract a shared helper (e.g. host_read_text_file) so these buffered
+  // reads share the same error handling path as other file loaders.
   while (total_read < sizeof(motd_buffer) - 1U) {
     const size_t bytes_to_read = sizeof(motd_buffer) - 1U - total_read;
     const size_t chunk = fread(motd_buffer + total_read, 1U, bytes_to_read, motd_file);
