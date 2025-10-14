@@ -31,20 +31,6 @@ typedef struct ssh_key_struct {
 } *ssh_key;
 
 typedef enum {
-  SSH_KEYTYPE_UNKNOWN = 0,
-  SSH_KEYTYPE_DSS,
-  SSH_KEYTYPE_RSA,
-  SSH_KEYTYPE_RSA1,
-  SSH_KEYTYPE_ECDSA,
-  SSH_KEYTYPE_ED25519,
-  SSH_KEYTYPE_ECDSA_P256,
-  SSH_KEYTYPE_ECDSA_P384,
-  SSH_KEYTYPE_ECDSA_P521,
-  SSH_KEYTYPE_SK_ECDSA,
-  SSH_KEYTYPE_SK_ED25519
-} ssh_keytypes_e;
-
-typedef enum {
   SSH_OK = 0,
   SSH_ERROR = -1
 } ssh_status_t;
@@ -102,7 +88,6 @@ int ssh_disconnect(ssh_session session);
 int ssh_pki_import_privkey_file(const char *filename, const char *passphrase,
                                 void *auth_fn, void *auth_data, ssh_key *pkey);
 void ssh_key_free(ssh_key key);
-ssh_keytypes_e ssh_key_type(ssh_key key);
 
 #ifdef __cplusplus
 }
