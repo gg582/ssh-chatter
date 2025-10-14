@@ -30,6 +30,10 @@
 
 #include "humanized/humanized.h"
 
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
 #ifndef NI_MAXHOST
 #define NI_MAXHOST 1025
 #endif
@@ -288,6 +292,9 @@ static void host_state_resolve_path(host_t *host);
 static void host_state_load(host_t *host);
 static void host_state_save_locked(host_t *host);
 static bool host_try_load_motd_from_path(host_t *host, const char *path);
+static bool string_contains_case_insensitive(const char *haystack, const char *needle);
+static void session_send_pre_handshake_notice(ssh_session session, const char *message);
+static bool host_error_indicates_hostkey_mismatch(const char *error_message);
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
 static const uint32_t HOST_STATE_VERSION = 1U;
@@ -361,6 +368,69 @@ static void session_describe_peer(ssh_session session, char *buffer, size_t len)
 
   strncpy(buffer, host, len - 1U);
   buffer[len - 1U] = '\0';
+}
+
+static bool string_contains_case_insensitive(const char *haystack, const char *needle) {
+  if (haystack == NULL || needle == NULL) {
+    return false;
+  }
+
+  const size_t needle_len = strlen(needle);
+  if (needle_len == 0U) {
+    return false;
+  }
+
+  for (const char *cursor = haystack; *cursor != '\0'; ++cursor) {
+    size_t matched = 0U;
+    while (cursor[matched] != '\0' && matched < needle_len) {
+      const unsigned char hay = (unsigned char)cursor[matched];
+      const unsigned char need = (unsigned char)needle[matched];
+      if (tolower(hay) != tolower(need)) {
+        break;
+      }
+      ++matched;
+    }
+    if (matched == needle_len) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void session_send_pre_handshake_notice(ssh_session session, const char *message) {
+  if (session == NULL || message == NULL) {
+    return;
+  }
+
+  const size_t length = strlen(message);
+  if (length == 0U) {
+    return;
+  }
+
+  const int socket_fd = ssh_get_fd(session);
+  if (socket_fd < 0) {
+    return;
+  }
+
+  ssize_t ignored = send(socket_fd, message, length, MSG_NOSIGNAL);
+  (void)ignored;
+}
+
+static bool host_error_indicates_hostkey_mismatch(const char *error_message) {
+  if (error_message == NULL || error_message[0] == '\0') {
+    return false;
+  }
+
+  const char *const patterns[] = {"host key type", "hostkey type", "hostkey algorithms",
+                                  "no match for method hostkey", "no matching host key type"};
+  for (size_t idx = 0U; idx < sizeof(patterns) / sizeof(patterns[0]); ++idx) {
+    if (string_contains_case_insensitive(error_message, patterns[idx])) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 static bool session_is_private_ipv4(const unsigned char octets[4]) {
@@ -2611,6 +2681,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 
   const char *address = bind_addr != NULL ? bind_addr : "0.0.0.0";
   const char *bind_port = port != NULL ? port : "2222";
+  const char *const host_key_type = "ssh-rsa";
   const char *rsa_filename = "ssh_host_rsa_key";
   const char *rsa_key_path = NULL;
   char resolved_rsa_key[PATH_MAX];
@@ -2636,20 +2707,6 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         rsa_key_path = candidates[idx];
         break;
       }
-
-      const int candidate_error = errno != 0 ? errno : ENOENT;
-      if (candidate_error == ENOENT && idx == 0) {
-        if (host_generate_host_key_at_path(candidates[idx])) {
-          host_key_path = candidates[idx];
-          host_key_was_generated = true;
-          break;
-        }
-
-        const int generate_error = errno != 0 ? errno : candidate_error;
-        char error_message[PATH_MAX + 64];
-        snprintf(error_message, sizeof(error_message), "failed to generate host key at %s", candidates[idx]);
-        humanized_log_error("host", error_message, generate_error);
-      }
     }
   }
 
@@ -2663,11 +2720,6 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     return -1;
   }
 
-  if (host_key_was_generated) {
-    printf("[host] generated RSA host key at %s\n", host_key_path);
-    fflush(stdout);
-  }
-
   ssh_bind bind_handle = ssh_bind_new();
   if (bind_handle == NULL) {
     humanized_log_error("host", "failed to allocate ssh_bind", ENOMEM);
@@ -2676,7 +2728,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 
   ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDADDR, address);
   ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDPORT_STR, bind_port);
-  ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, "ssh-rsa");
+  ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, host_key_type);
   errno = 0;
   bool key_loaded = false;
   if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_RSAKEY, rsa_key_path) == SSH_OK) {
@@ -2741,7 +2793,14 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     }
 
     if (ssh_handle_key_exchange(session) != SSH_OK) {
-      humanized_log_error("host", ssh_get_error(session), EPROTO);
+      const char *error_message = ssh_get_error(session);
+      if (host_error_indicates_hostkey_mismatch(error_message)) {
+        static const char *kRsaNotice =
+            "RSA host keys are required; please regenerate your personal RSA key and reconnect.\r\n";
+        session_send_pre_handshake_notice(session, kRsaNotice);
+      }
+
+      humanized_log_error("host", error_message != NULL ? error_message : "key exchange failed", EPROTO);
       ssh_disconnect(session);
       ssh_free(session);
       continue;
