@@ -9,6 +9,7 @@
 #include "host.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -62,6 +63,26 @@ static const color_entry_t HIGHLIGHT_COLOR_MAP[] = {
     {"yellow", ANSI_BG_YELLOW},   {"blue", ANSI_BG_BLUE},     {"magenta", ANSI_BG_MAGENTA},
     {"cyan", ANSI_BG_CYAN},       {"white", ANSI_BG_WHITE},   {"grey", ANSI_BG_GREY},
     {"default", ANSI_BG_DEFAULT},
+};
+
+typedef struct palette_descriptor {
+  const char *name;
+  const char *description;
+  const char *user_color_name;
+  const char *user_highlight_name;
+  bool user_is_bold;
+  const char *system_fg_name;
+  const char *system_bg_name;
+  const char *system_highlight_name;
+  bool system_is_bold;
+} palette_descriptor_t;
+
+static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
+    {"moe", "Soft magenta accents with playful highlights", "magenta", "white", true, "white", "magenta", "cyan", true},
+    {"clean", "Balanced neutral palette with subtle cyan focus", "default", "default", false, "default", "default", "cyan", false},
+    {"adwaita", "Bright background inspired by GNOME Adwaita", "blue", "default", false, "blue", "white", "grey", false},
+    {"win10", "High contrast palette reminiscent of Windows 10", "cyan", "blue", true, "white", "blue", "yellow", true},
+    {"korea", "Taegeuk-inspired white base with red and blue accents", "blue", "white", true, "blue", "white", "red", true},
 };
 
 typedef int (*accept_channel_fn_t)(ssh_message, ssh_channel);
@@ -161,6 +182,7 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pm(session_ctx_t *ctx, const char *arguments);
 static void session_handle_motd(session_ctx_t *ctx);
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments);
+static void session_handle_palette(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
 static void session_handle_usercount(session_ctx_t *ctx);
 static void session_handle_search(session_ctx_t *ctx, const char *arguments);
@@ -171,6 +193,7 @@ static void session_handle_files(session_ctx_t *ctx, const char *arguments);
 static void session_handle_reaction(session_ctx_t *ctx, size_t reaction_index, const char *arguments);
 static void session_handle_image_to_ascii(session_ctx_t *ctx, const char *arguments);
 static void session_handle_today(session_ctx_t *ctx);
+static void session_handle_date(session_ctx_t *ctx, const char *arguments);
 static void session_handle_os(session_ctx_t *ctx, const char *arguments);
 static void session_handle_getos(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pair(session_ctx_t *ctx);
@@ -205,6 +228,11 @@ static size_t session_build_image_preview(const char *seed,
                                          char lines[][SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN],
                                          size_t max_lines);
 static void session_normalize_newlines(char *text);
+static bool timezone_sanitize_identifier(const char *input, char *output, size_t length);
+static bool timezone_resolve_identifier(const char *input, char *resolved, size_t length);
+static const palette_descriptor_t *palette_find_descriptor(const char *name);
+static bool palette_apply_to_session(session_ctx_t *ctx, const palette_descriptor_t *descriptor);
+static void host_apply_palette_descriptor(host_t *host, const palette_descriptor_t *descriptor);
 static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, chat_history_entry_t *out_entry);
 static bool host_lookup_user_os(host_t *host, const char *username, char *buffer, size_t length);
 static void session_send_poll_summary(session_ctx_t *ctx);
@@ -2365,7 +2393,9 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx,
                            "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may "
                            "be highlight or bold; use /systemcolor reset to restore defaults)");
+  session_send_system_line(ctx, "/palette <name>        - apply a predefined interface palette (/palette list)");
   session_send_system_line(ctx, "/today               - discover today's function (once per day)");
+  session_send_system_line(ctx, "/date <timezone>     - view the server time in another timezone");
   session_send_system_line(ctx, "/os <name>           - record the operating system you use");
   session_send_system_line(ctx, "/getos <username>    - look up someone else's recorded operating system");
   session_send_system_line(ctx, "/pair                - list users sharing your recorded OS");
@@ -2439,6 +2469,9 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
   }
 
   printf("[%s] %s\n", ctx->user.name, normalized);
+
+  const struct timespec tiny_delay = {.tv_sec = 0, .tv_nsec = 5000000L};
+  nanosleep(&tiny_delay, NULL);
 
   if (ctx->username_conflict) {
     session_handle_username_conflict_input(ctx, normalized);
@@ -3218,6 +3251,103 @@ static void session_handle_today(session_ctx_t *ctx) {
   session_send_system_line(ctx, message);
 }
 
+static void session_handle_date(session_ctx_t *ctx, const char *arguments) {
+  static const char *kUsage = "Usage: /date <Area/Location>";
+
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char sanitized[PATH_MAX];
+  if (!timezone_sanitize_identifier(working, sanitized, sizeof(sanitized))) {
+    session_send_system_line(ctx, "Timezone names may only include letters, numbers, '/', '_', '-', '+', or '.'.");
+    return;
+  }
+
+  char resolved[PATH_MAX];
+  if (!timezone_resolve_identifier(sanitized, resolved, sizeof(resolved))) {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "Unknown timezone '%.128s'.", working);
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  const char *previous_tz = getenv("TZ");
+  char previous_copy[PATH_MAX];
+  bool had_previous = false;
+  if (previous_tz != NULL) {
+    int prev_written = snprintf(previous_copy, sizeof(previous_copy), "%s", previous_tz);
+    if (prev_written >= 0 && (size_t)prev_written < sizeof(previous_copy)) {
+      had_previous = true;
+    }
+  }
+
+  bool tz_applied = false;
+
+  if (setenv("TZ", resolved, 1) != 0) {
+    session_send_system_line(ctx, "Unable to adjust timezone right now.");
+    return;
+  }
+
+  tzset();
+  tz_applied = true;
+
+  time_t now = time(NULL);
+  if (now == (time_t)-1) {
+    session_send_system_line(ctx, "Unable to determine current time.");
+    goto cleanup;
+  }
+
+  struct tm tm_now;
+#if defined(_POSIX_THREAD_SAFE_FUNCTIONS)
+  if (localtime_r(&now, &tm_now) == NULL) {
+    session_send_system_line(ctx, "Unable to compute the requested local time.");
+    goto cleanup;
+  }
+#else
+  struct tm *tmp = localtime(&now);
+  if (tmp == NULL) {
+    session_send_system_line(ctx, "Unable to compute the requested local time.");
+    goto cleanup;
+  }
+  tm_now = *tmp;
+#endif
+
+  char formatted[128];
+  if (strftime(formatted, sizeof(formatted), "%Y-%m-%d %H:%M:%S %Z (UTC%z)", &tm_now) == 0) {
+    session_send_system_line(ctx, "Unable to format the requested time.");
+    goto cleanup;
+  }
+
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(message, sizeof(message), "%.128s -> %s", resolved, formatted);
+  session_send_system_line(ctx, message);
+
+cleanup:
+  if (tz_applied) {
+    if (had_previous) {
+      setenv("TZ", previous_copy, 1);
+    } else {
+      unsetenv("TZ");
+    }
+    tzset();
+  }
+}
+
 static void session_handle_os(session_ctx_t *ctx, const char *arguments) {
   static const char *kUsage =
       "Usage: /os <windows|macos|linux|freebsd|ios|android|watchos|solaris|openbsd|netbsd|dragonflybsd|reactos|tyzen>";
@@ -3806,6 +3936,57 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   }
 }
 
+static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, "Usage: /palette <name> (try /palette list)");
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0' || strcasecmp(working, "list") == 0) {
+    session_send_system_line(ctx, "Available palettes:");
+    for (size_t idx = 0U; idx < sizeof(PALETTE_DEFINITIONS) / sizeof(PALETTE_DEFINITIONS[0]); ++idx) {
+      const palette_descriptor_t *descriptor = &PALETTE_DEFINITIONS[idx];
+      char line[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(line, sizeof(line), "  %s - %s", descriptor->name, descriptor->description);
+      session_send_system_line(ctx, line);
+    }
+    session_send_system_line(ctx, "Apply a palette with /palette <name>.");
+    return;
+  }
+
+  const palette_descriptor_t *descriptor = palette_find_descriptor(working);
+  if (descriptor == NULL) {
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(line, sizeof(line), "Unknown palette '%.32s'. Use /palette list to see options.", working);
+    session_send_system_line(ctx, line);
+    return;
+  }
+
+  if (!palette_apply_to_session(ctx, descriptor)) {
+    session_send_system_line(ctx, "Unable to apply that palette right now.");
+    return;
+  }
+
+  char info[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(info, sizeof(info), "Palette '%s' applied - %s", descriptor->name, descriptor->description);
+  session_send_system_line(ctx, info);
+  session_render_separator(ctx, "Chatroom");
+  session_render_prompt(ctx, true);
+
+  if (ctx->owner != NULL) {
+    host_store_user_theme(ctx->owner, ctx);
+    host_store_system_theme(ctx->owner, ctx);
+  }
+}
+
 static void session_handle_nick(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL) {
     return;
@@ -4144,6 +4325,14 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_system_color(ctx, arguments);
     return;
   }
+  if (strncmp(line, "/palette", 8) == 0) {
+    const char *arguments = line + 8;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_palette(ctx, arguments);
+    return;
+  }
   if (strncmp(line, "/image-to-ascii", 15) == 0) {
     const char *arguments = line + 15;
     while (*arguments == ' ' || *arguments == '\t') {
@@ -4162,6 +4351,14 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     } else {
       session_handle_today(ctx);
     }
+    return;
+  }
+  if (strncmp(line, "/date", 5) == 0) {
+    const char *arguments = line + 5;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_date(ctx, arguments);
     return;
   }
   if (strncmp(line, "/os", 3) == 0) {
@@ -4295,6 +4492,163 @@ static void session_normalize_newlines(char *text) {
   text[write_idx] = '\0';
 }
 
+static bool timezone_sanitize_identifier(const char *input, char *output, size_t length) {
+  if (input == NULL || output == NULL || length == 0U) {
+    return false;
+  }
+
+  size_t out_idx = 0U;
+  bool last_was_slash = true;
+
+  for (size_t idx = 0U; input[idx] != '\0'; ++idx) {
+    unsigned char ch = (unsigned char)input[idx];
+    if (isspace(ch)) {
+      return false;
+    }
+
+    if (ch == '/') {
+      if (last_was_slash) {
+        return false;
+      }
+      if (out_idx + 1U >= length) {
+        return false;
+      }
+      output[out_idx++] = '/';
+      last_was_slash = true;
+      continue;
+    }
+
+    if (!(isalnum(ch) || ch == '_' || ch == '-' || ch == '+' || ch == '.')) {
+      return false;
+    }
+
+    if (out_idx + 1U >= length) {
+      return false;
+    }
+    output[out_idx++] = (char)ch;
+    last_was_slash = false;
+  }
+
+  if (out_idx == 0U || last_was_slash) {
+    return false;
+  }
+
+  output[out_idx] = '\0';
+
+  if (output[0] == '/' || strstr(output, "..") != NULL) {
+    return false;
+  }
+
+  return true;
+}
+
+static bool timezone_resolve_identifier(const char *input, char *resolved, size_t length) {
+  if (input == NULL || input[0] == '\0' || resolved == NULL || length == 0U) {
+    return false;
+  }
+
+  static const char kTimezoneDir[] = "/usr/share/zoneinfo";
+
+  char full_path[PATH_MAX];
+  int full_written = snprintf(full_path, sizeof(full_path), "%s/%s", kTimezoneDir, input);
+  if (full_written >= 0 && (size_t)full_written < sizeof(full_path) && access(full_path, R_OK) == 0) {
+    int copy_written = snprintf(resolved, length, "%s", input);
+    return copy_written >= 0 && (size_t)copy_written < length;
+  }
+
+  char working[PATH_MAX];
+  int working_written = snprintf(working, sizeof(working), "%s", input);
+  if (working_written < 0 || (size_t)working_written >= sizeof(working)) {
+    return false;
+  }
+
+  char accumulated[PATH_MAX];
+  accumulated[0] = '\0';
+  size_t accumulated_len = 0U;
+  char current_dir[PATH_MAX];
+  int dir_written = snprintf(current_dir, sizeof(current_dir), "%s", kTimezoneDir);
+  if (dir_written < 0 || (size_t)dir_written >= sizeof(current_dir)) {
+    return false;
+  }
+
+  char *saveptr = NULL;
+  char *segment = strtok_r(working, "/", &saveptr);
+  if (segment == NULL) {
+    return false;
+  }
+
+  while (segment != NULL) {
+    DIR *dir = opendir(current_dir);
+    if (dir == NULL) {
+      return false;
+    }
+
+    bool found = false;
+    char matched[NAME_MAX + 1];
+    matched[0] = '\0';
+    struct dirent *entry = NULL;
+    while ((entry = readdir(dir)) != NULL) {
+      if (entry->d_name[0] == '.') {
+        if (entry->d_name[1] == '\0') {
+          continue;
+        }
+        if (entry->d_name[1] == '.' && entry->d_name[2] == '\0') {
+          continue;
+        }
+      }
+
+      if (strcasecmp(entry->d_name, segment) == 0) {
+        found = true;
+        snprintf(matched, sizeof(matched), "%s", entry->d_name);
+        break;
+      }
+    }
+    closedir(dir);
+
+    if (!found) {
+      return false;
+    }
+
+    if (accumulated_len > 0U) {
+      if (accumulated_len + 1U >= sizeof(accumulated)) {
+        return false;
+      }
+      accumulated[accumulated_len++] = '/';
+    }
+
+    size_t match_len = strlen(matched);
+    if (accumulated_len + match_len >= sizeof(accumulated)) {
+      return false;
+    }
+    memcpy(accumulated + accumulated_len, matched, match_len);
+    accumulated_len += match_len;
+    accumulated[accumulated_len] = '\0';
+
+    dir_written = snprintf(current_dir, sizeof(current_dir), "%s/%s", kTimezoneDir, accumulated);
+    if (dir_written < 0 || (size_t)dir_written >= sizeof(current_dir)) {
+      return false;
+    }
+
+    segment = strtok_r(NULL, "/", &saveptr);
+  }
+
+  if (accumulated_len == 0U) {
+    return false;
+  }
+
+  full_written = snprintf(full_path, sizeof(full_path), "%s/%s", kTimezoneDir, accumulated);
+  if (full_written < 0 || (size_t)full_written >= sizeof(full_path)) {
+    return false;
+  }
+
+  if (access(full_path, R_OK) != 0) {
+    return false;
+  }
+
+  int copy_written = snprintf(resolved, length, "%s", accumulated);
+  return copy_written >= 0 && (size_t)copy_written < length;
+}
+
 static const os_descriptor_t *session_lookup_os_descriptor(const char *name) {
   if (name == NULL || name[0] == '\0') {
     return NULL;
@@ -4321,6 +4675,107 @@ static const char *lookup_color_code(const color_entry_t *entries, size_t entry_
   }
 
   return NULL;
+}
+
+static const palette_descriptor_t *palette_find_descriptor(const char *name) {
+  if (name == NULL || name[0] == '\0') {
+    return NULL;
+  }
+
+  for (size_t idx = 0U; idx < sizeof(PALETTE_DEFINITIONS) / sizeof(PALETTE_DEFINITIONS[0]); ++idx) {
+    if (strcasecmp(PALETTE_DEFINITIONS[idx].name, name) == 0) {
+      return &PALETTE_DEFINITIONS[idx];
+    }
+  }
+
+  return NULL;
+}
+
+static bool palette_apply_to_session(session_ctx_t *ctx, const palette_descriptor_t *descriptor) {
+  if (ctx == NULL || descriptor == NULL) {
+    return false;
+  }
+
+  const char *user_color_code =
+      lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]), descriptor->user_color_name);
+  const char *user_highlight_code = lookup_color_code(
+      HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), descriptor->user_highlight_name);
+  const char *system_fg_code =
+      lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]), descriptor->system_fg_name);
+  const char *system_bg_code = lookup_color_code(
+      HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), descriptor->system_bg_name);
+  const char *system_highlight_code = lookup_color_code(
+      HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), descriptor->system_highlight_name);
+
+  if (user_color_code == NULL || user_highlight_code == NULL || system_fg_code == NULL || system_bg_code == NULL ||
+      system_highlight_code == NULL) {
+    return false;
+  }
+
+  ctx->user_color_code = user_color_code;
+  ctx->user_highlight_code = user_highlight_code;
+  ctx->user_is_bold = descriptor->user_is_bold;
+  snprintf(ctx->user_color_name, sizeof(ctx->user_color_name), "%s", descriptor->user_color_name);
+  snprintf(ctx->user_highlight_name, sizeof(ctx->user_highlight_name), "%s", descriptor->user_highlight_name);
+
+  ctx->system_fg_code = system_fg_code;
+  ctx->system_bg_code = system_bg_code;
+  ctx->system_highlight_code = system_highlight_code;
+  ctx->system_is_bold = descriptor->system_is_bold;
+  snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", descriptor->system_fg_name);
+  snprintf(ctx->system_bg_name, sizeof(ctx->system_bg_name), "%s", descriptor->system_bg_name);
+  snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s", descriptor->system_highlight_name);
+
+  return true;
+}
+
+static void host_apply_palette_descriptor(host_t *host, const palette_descriptor_t *descriptor) {
+  if (host == NULL || descriptor == NULL) {
+    return;
+  }
+
+  const char *user_color_code =
+      lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]), descriptor->user_color_name);
+  const char *user_highlight_code = lookup_color_code(
+      HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), descriptor->user_highlight_name);
+  const char *system_fg_code =
+      lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]), descriptor->system_fg_name);
+  const char *system_bg_code = lookup_color_code(
+      HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), descriptor->system_bg_name);
+  const char *system_highlight_code = lookup_color_code(
+      HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), descriptor->system_highlight_name);
+
+  if (user_color_code == NULL) {
+    user_color_code = ANSI_GREEN;
+  }
+  if (user_highlight_code == NULL) {
+    user_highlight_code = ANSI_BG_DEFAULT;
+  }
+  if (system_fg_code == NULL) {
+    system_fg_code = ANSI_WHITE;
+  }
+  if (system_bg_code == NULL) {
+    system_bg_code = ANSI_BG_BLUE;
+  }
+  if (system_highlight_code == NULL) {
+    system_highlight_code = ANSI_BG_YELLOW;
+  }
+
+  host->user_theme.userColor = user_color_code;
+  host->user_theme.highlight = user_highlight_code;
+  host->user_theme.isBold = descriptor->user_is_bold;
+  host->system_theme.foregroundColor = system_fg_code;
+  host->system_theme.backgroundColor = system_bg_code;
+  host->system_theme.highlightColor = system_highlight_code;
+  host->system_theme.isBold = descriptor->system_is_bold;
+
+  snprintf(host->default_user_color_name, sizeof(host->default_user_color_name), "%s", descriptor->user_color_name);
+  snprintf(host->default_user_highlight_name, sizeof(host->default_user_highlight_name), "%s",
+           descriptor->user_highlight_name);
+  snprintf(host->default_system_fg_name, sizeof(host->default_system_fg_name), "%s", descriptor->system_fg_name);
+  snprintf(host->default_system_bg_name, sizeof(host->default_system_bg_name), "%s", descriptor->system_bg_name);
+  snprintf(host->default_system_highlight_name, sizeof(host->default_system_highlight_name), "%s",
+           descriptor->system_highlight_name);
 }
 
 static bool parse_bool_token(const char *token, bool *value) {
@@ -4533,18 +4988,23 @@ void host_init(host_t *host, auth_profile_t *auth) {
   chat_room_init(&host->room);
   host->listener.handle = NULL;
   host->auth = auth;
-  host->user_theme.userColor = ANSI_GREEN;
-  host->user_theme.highlight = ANSI_BG_DEFAULT;
-  host->user_theme.isBold = false;
-  host->system_theme.backgroundColor = ANSI_BLUE;
-  host->system_theme.foregroundColor = ANSI_WHITE;
-  host->system_theme.highlightColor = ANSI_YELLOW;
-  host->system_theme.isBold = true;
-  snprintf(host->default_user_color_name, sizeof(host->default_user_color_name), "%s", "green");
-  snprintf(host->default_user_highlight_name, sizeof(host->default_user_highlight_name), "%s", "default");
-  snprintf(host->default_system_fg_name, sizeof(host->default_system_fg_name), "%s", "white");
-  snprintf(host->default_system_bg_name, sizeof(host->default_system_bg_name), "%s", "blue");
-  snprintf(host->default_system_highlight_name, sizeof(host->default_system_highlight_name), "%s", "yellow");
+  const palette_descriptor_t *default_palette = palette_find_descriptor("clean");
+  if (default_palette != NULL) {
+    host_apply_palette_descriptor(host, default_palette);
+  } else {
+    host->user_theme.userColor = ANSI_GREEN;
+    host->user_theme.highlight = ANSI_BG_DEFAULT;
+    host->user_theme.isBold = false;
+    host->system_theme.backgroundColor = ANSI_BG_BLUE;
+    host->system_theme.foregroundColor = ANSI_WHITE;
+    host->system_theme.highlightColor = ANSI_BG_YELLOW;
+    host->system_theme.isBold = true;
+    snprintf(host->default_user_color_name, sizeof(host->default_user_color_name), "%s", "green");
+    snprintf(host->default_user_highlight_name, sizeof(host->default_user_highlight_name), "%s", "default");
+    snprintf(host->default_system_fg_name, sizeof(host->default_system_fg_name), "%s", "white");
+    snprintf(host->default_system_bg_name, sizeof(host->default_system_bg_name), "%s", "blue");
+    snprintf(host->default_system_highlight_name, sizeof(host->default_system_highlight_name), "%s", "yellow");
+  }
   host->ban_count = 0U;
   memset(host->bans, 0, sizeof(host->bans));
   snprintf(host->version, sizeof(host->version), "ssh-chatter (C, rolling release)");
