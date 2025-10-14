@@ -24,6 +24,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -2612,6 +2613,7 @@ void host_set_motd(host_t *host, const char *motd) {
 
 int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory) {
   if (host == NULL) {
+    errno = EINVAL;
     return -1;
   }
 
@@ -2622,42 +2624,68 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
   char resolved_host_key[PATH_MAX];
 
   if (key_directory != NULL && key_directory[0] != '\0') {
-    const size_t dir_len = strlen(key_directory);
-    if (dir_len >= sizeof(resolved_host_key)) {
+    struct stat key_path_info;
+    const bool stat_ok = stat(key_directory, &key_path_info) == 0;
+    if (stat_ok && !S_ISDIR(key_path_info.st_mode)) {
+      host_key_path = key_directory;
+    } else {
+      const size_t dir_len = strlen(key_directory);
+      const bool needs_separator = dir_len > 0U && key_directory[dir_len - 1U] != '/';
+      int written =
+          snprintf(resolved_host_key, sizeof(resolved_host_key), "%s%s%s", key_directory,
+                   needs_separator ? "/" : "", default_key_filename);
+      if (written < 0 || (size_t)written >= sizeof(resolved_host_key)) {
+        humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
+        errno = ENAMETOOLONG;
+        return -1;
+      }
+      host_key_path = resolved_host_key;
+    }
+
+    if (host_key_path == NULL) {
       humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
+      errno = ENAMETOOLONG;
       return -1;
     }
-    const bool needs_separator = dir_len > 0 && key_directory[dir_len - 1U] != '/';
-    int written = snprintf(resolved_host_key, sizeof(resolved_host_key), "%s%s%s", key_directory,
-                           needs_separator ? "/" : "", default_key_filename);
-    if (written < 0 || (size_t)written >= sizeof(resolved_host_key)) {
-      humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
+
+    if (access(host_key_path, R_OK) != 0) {
+      const int access_error = errno != 0 ? errno : ENOENT;
+      char error_message[PATH_MAX + 64];
+      snprintf(error_message, sizeof(error_message), "host key not accessible at %s", host_key_path);
+      humanized_log_error("host", error_message, access_error);
+      errno = access_error;
       return -1;
     }
-    host_key_path = resolved_host_key;
   } else {
-    const char *candidates[] = {default_key_filename, "/etc/ssh/ssh_host_rsa_key"};
+    const char *candidates[] = {default_key_filename, "/var/lib/ssh-chatter/ssh_host_rsa_key",
+                                "/etc/ssh-chatter/ssh_host_rsa_key", "/etc/ssh/ssh_host_rsa_key"};
     for (size_t idx = 0; idx < sizeof(candidates) / sizeof(candidates[0]); ++idx) {
       if (access(candidates[idx], R_OK) == 0) {
         host_key_path = candidates[idx];
         break;
       }
     }
-  }
 
-  if (host_key_path == NULL) {
-    humanized_log_error("host", "unable to locate host key", ENOENT);
-    return -1;
+    if (host_key_path == NULL) {
+      humanized_log_error("host", "unable to locate host key", ENOENT);
+      errno = ENOENT;
+      return -1;
+    }
   }
 
   if (access(host_key_path, R_OK) != 0) {
-    humanized_log_error("host", "unable to access host key", errno);
+    const int access_error = errno != 0 ? errno : ENOENT;
+    char error_message[PATH_MAX + 64];
+    snprintf(error_message, sizeof(error_message), "unable to access host key at %s", host_key_path);
+    humanized_log_error("host", error_message, access_error);
+    errno = access_error;
     return -1;
   }
 
   ssh_bind bind_handle = ssh_bind_new();
   if (bind_handle == NULL) {
     humanized_log_error("host", "failed to allocate ssh_bind", ENOMEM);
+    errno = ENOMEM;
     return -1;
   }
 
@@ -2667,8 +2695,10 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
   ssh_key imported_key = NULL;
   if (ssh_pki_import_privkey_file(host_key_path, NULL, NULL, NULL, &imported_key) != SSH_OK ||
       imported_key == NULL) {
-    humanized_log_error("host", "failed to import host key", EIO);
+    const int import_error = errno != 0 ? errno : EIO;
+    humanized_log_error("host", "failed to import host key", import_error);
     ssh_bind_free(bind_handle);
+    errno = import_error;
     return -1;
   }
 
@@ -2678,6 +2708,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     ssh_key_free(imported_key);
     humanized_log_error("host", "unsupported host key type", ENOTSUP);
     ssh_bind_free(bind_handle);
+    errno = ENOTSUP;
     return -1;
   }
 
@@ -2692,10 +2723,12 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     if (!unsupported_option ||
         !host_configure_legacy_host_key(bind_handle, key_type, host_key_path)) {
       ssh_key_free(imported_key);
+      const int effective_error = option_error != 0 ? option_error : EIO;
       humanized_log_error("host",
                           (error_message != NULL && error_message[0] != '\0') ? error_message : NULL,
-                          option_error != 0 ? option_error : EIO);
+                          effective_error);
       ssh_bind_free(bind_handle);
+      errno = effective_error;
       return -1;
     }
 
@@ -2712,10 +2745,12 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       if (!unsupported_option ||
           !host_configure_legacy_host_key(bind_handle, key_type, host_key_path)) {
         ssh_key_free(imported_key);
+        const int effective_error = option_error != 0 ? option_error : EIO;
         humanized_log_error("host",
                             (error_message != NULL && error_message[0] != '\0') ? error_message : NULL,
-                            option_error != 0 ? option_error : EIO);
+                            effective_error);
         ssh_bind_free(bind_handle);
+        errno = effective_error;
         return -1;
       }
 
@@ -2728,6 +2763,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
   if (ssh_bind_listen(bind_handle) < 0) {
     humanized_log_error("host", ssh_get_error(bind_handle), EIO);
     ssh_bind_free(bind_handle);
+    errno = EIO;
     return -1;
   }
 
