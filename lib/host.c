@@ -45,6 +45,8 @@ typedef struct {
 static const char *host_key_type_to_name(ssh_keytypes_e key_type);
 static bool host_configure_legacy_host_key(ssh_bind handle, ssh_keytypes_e key_type,
                                           const char *path);
+static bool host_option_is_unsupported(const char *error_message, int error_code,
+                                       const char *key_path);
 
 static const color_entry_t USER_COLOR_MAP[] = {
     {"red", ANSI_RED},       {"green", ANSI_GREEN},   {"yellow", ANSI_YELLOW},
@@ -303,6 +305,28 @@ static bool host_configure_legacy_host_key(ssh_bind handle, ssh_keytypes_e key_t
 #endif
     default:
       break;
+  }
+
+  return false;
+}
+
+static bool host_option_is_unsupported(const char *error_message, int error_code,
+                                       const char *key_path) {
+  if (error_code == ENOTSUP) {
+    return true;
+  }
+
+  if (error_message != NULL) {
+    if (strstr(error_message, "Unknown ssh option") != NULL ||
+        strstr(error_message, "Function not supported") != NULL ||
+        strstr(error_message, "unsupported option") != NULL) {
+      return true;
+    }
+
+    if (error_message[0] == '\0' && error_code == ENOENT && key_path != NULL &&
+        access(key_path, R_OK) == 0) {
+      return true;
+    }
   }
 
   return false;
@@ -2657,27 +2681,45 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     return -1;
   }
 
-  errno = 0;
-  if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, host_key_type) != SSH_OK) {
-    const char *error_message = ssh_get_error(bind_handle);
-    ssh_key_free(imported_key);
-    humanized_log_error("host", error_message, errno != 0 ? errno : EIO);
-    ssh_bind_free(bind_handle);
-    return -1;
-  }
+  bool using_legacy_key = false;
 
   errno = 0;
-  if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_IMPORT_KEY, imported_key) != SSH_OK) {
+  if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, host_key_type) != SSH_OK) {
+    const int option_error = errno;
     const char *error_message = ssh_get_error(bind_handle);
-    const bool unsupported_option = (error_message != NULL &&
-                                     strstr(error_message, "Unknown ssh option") != NULL) ||
-                                    errno == ENOTSUP;
+    const bool unsupported_option =
+        host_option_is_unsupported(error_message, option_error, host_key_path);
     if (!unsupported_option ||
         !host_configure_legacy_host_key(bind_handle, key_type, host_key_path)) {
       ssh_key_free(imported_key);
-      humanized_log_error("host", error_message, errno != 0 ? errno : EIO);
+      humanized_log_error("host",
+                          (error_message != NULL && error_message[0] != '\0') ? error_message : NULL,
+                          option_error != 0 ? option_error : EIO);
       ssh_bind_free(bind_handle);
       return -1;
+    }
+
+    using_legacy_key = true;
+  }
+
+  if (!using_legacy_key) {
+    errno = 0;
+    if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_IMPORT_KEY, imported_key) != SSH_OK) {
+      const int option_error = errno;
+      const char *error_message = ssh_get_error(bind_handle);
+      const bool unsupported_option =
+          host_option_is_unsupported(error_message, option_error, host_key_path);
+      if (!unsupported_option ||
+          !host_configure_legacy_host_key(bind_handle, key_type, host_key_path)) {
+        ssh_key_free(imported_key);
+        humanized_log_error("host",
+                            (error_message != NULL && error_message[0] != '\0') ? error_message : NULL,
+                            option_error != 0 ? option_error : EIO);
+        ssh_bind_free(bind_handle);
+        return -1;
+      }
+
+      using_legacy_key = true;
     }
   }
 
