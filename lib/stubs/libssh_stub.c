@@ -173,11 +173,6 @@ int ssh_pki_import_privkey_file(const char *filename, const char *passphrase,
   return SSH_OK;
 }
 
-ssh_keytypes_e ssh_key_type(ssh_key key) {
-  (void)key;
-  return SSH_KEYTYPE_RSA;
-}
-
 void ssh_key_free(ssh_key key) {
   free(key);
 }

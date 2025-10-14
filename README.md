@@ -59,9 +59,12 @@ Common examples:
 
 # Serve a custom MOTD from a file and bind to localhost
 ./ssh-chatter -a 127.0.0.1 -m /etc/ssh-chatter/motd
+ 
+# Start with no existing state or host keys; ssh-chatter will create what it needs
+./ssh-chatter
 ```
 
-The host key directory must contain an `ssh_host_rsa_key` file (and optional `.pub`).  Generate one with `ssh-keygen -t rsa -b 4096 -f /path/to/dir/ssh_host_rsa_key` if you do not want to reuse your system SSH host keys.
+The host key directory must contain an `ssh_host_rsa_key` file (and optional `.pub`).  When missing, the server now attempts to generate one automatically using `ssh-keygen` as long as it has write access to the target directory.  Whenever a key is generated, ssh-chatter prints its location to standard output so supervisors such as `systemd` record the event.  You can still generate a key manually with `ssh-keygen -t rsa -b 4096 -f /path/to/dir/ssh_host_rsa_key` if you prefer to manage keys yourself.
 
 ### Connecting as a client
 
@@ -118,6 +121,7 @@ Service management commands:
 sudo systemctl status chatter.service
 sudo systemctl restart chatter.service
 sudo systemctl disable --now chatter.service
+sudo journalctl -u chatter.service -f
 ```
 
 ## Feature status
