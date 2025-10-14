@@ -105,7 +105,7 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
     {"dharma-ochre", "Ochre robes of enlightenment and vitality", "yellow", "black", true, "red", "black", "yellow", true},
     {"yin-yang", "Balance of Black and White with Jade accent", "white", "black", false, "cyan", "black", "white", false},
     {"soviet-cold", "Cold blue/white terminal for scientific systems", "white", "blue", false, "white", "blue", "cyan", false},
-    {"hi-tel", "1990s Korean BBS blue background and text style", "white", "blue", true, "cyan", "blue", "yellow", true},
+    {"hi-tel", "1990s Korean BBS blue background and text style", "white", "blue", true, "bright-white", "blue", "magenta", true},
     {"amiga-cli", "AmigaOS style with cyan/blue on dark background", "cyan", "black", true, "cyan", "black", "white", true},
     {"jpn-pc98", "NEC PC-9801 subtle, earthy low-res tones", "yellow", "black", false, "red", "black", "yellow", false},
     {"deep-blue", "IBM Supercomputer monitoring interface style", "white", "blue", true, "cyan", "blue", "white", true},
