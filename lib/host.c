@@ -59,6 +59,22 @@ static const color_entry_t HIGHLIGHT_COLOR_MAP[] = {
     {"default", ANSI_BG_DEFAULT},
 };
 
+static const char *kDefaultMotdText =
+    "Welcome to ssh-chat!\n"
+    "\033[1G- Be polite to each other\n"
+    "\033[1G- fun fact: this server is written in pure c.\n";
+
+static const char *const kModernCAsciiArt[] = {
+    "\033[1G============================================",
+    "\033[1G _      ____  ____  _____ ____  _        ____  _ ",
+    "\033[1G/ \\__/|/  _ \\/  _ \\/  __//  __\\/ \\  /|  /   _\\/ \\",
+    "\033[1G| |\\/||| / \\|| | \\||  \\  |  \\/|| |\\ ||  |  /  | |",
+    "\033[1G| |  ||| \\_/|| |_/||  /_ |    /| | \\||  |  \\__\\_/",
+    "\033[1G\\_/  \\|\\____/\\____/\\____\\\\_/\\_\\\\_/  \\|  \\____/(_)",
+    "\033[1G                                                 ",
+    "\033[1G============================================",
+};
+
 typedef int (*accept_channel_fn_t)(ssh_message, ssh_channel);
 
 #if defined(__GNUC__)
@@ -116,6 +132,10 @@ static const char *lookup_color_code(const color_entry_t *entries, size_t entry_
 static bool parse_bool_token(const char *token, bool *value);
 static void session_send_line(ssh_channel channel, const char *message);
 static void session_send_system_line(session_ctx_t *ctx, const char *message);
+static void session_send_multiline_system_text(session_ctx_t *ctx, const char *text);
+static void session_send_modern_c_ascii_art(session_ctx_t *ctx);
+static void session_render_motd(session_ctx_t *ctx, const char *motd);
+static bool session_fetch_motd(session_ctx_t *ctx, char *motd, size_t motd_len);
 static void session_render_banner(session_ctx_t *ctx);
 static void session_render_separator(session_ctx_t *ctx, const char *label);
 static void session_render_prompt(session_ctx_t *ctx, bool include_separator);
@@ -978,6 +998,77 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
   session_send_line(ctx->channel, formatted);
 }
 
+static void session_send_multiline_system_text(session_ctx_t *ctx, const char *text) {
+  if (ctx == NULL || text == NULL || text[0] == '\0') {
+    return;
+  }
+
+  const char *line_start = text;
+  while (*line_start != '\0') {
+    const char *line_end = strchr(line_start, '\n');
+    size_t line_len = line_end != NULL ? (size_t)(line_end - line_start) : strlen(line_start);
+
+    while (line_len > 0U && line_start[line_len - 1U] == '\r') {
+      --line_len;
+    }
+
+    char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
+    if (line_len >= sizeof(line_buffer)) {
+      line_len = sizeof(line_buffer) - 1U;
+    }
+
+    memcpy(line_buffer, line_start, line_len);
+    line_buffer[line_len] = '\0';
+
+    session_send_system_line(ctx, line_buffer);
+
+    if (line_end == NULL) {
+      break;
+    }
+    line_start = line_end + 1;
+  }
+}
+
+static void session_send_modern_c_ascii_art(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  for (size_t idx = 0; idx < sizeof(kModernCAsciiArt) / sizeof(kModernCAsciiArt[0]); ++idx) {
+    session_send_system_line(ctx, kModernCAsciiArt[idx]);
+  }
+}
+
+static void session_render_motd(session_ctx_t *ctx, const char *motd) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (motd != NULL && motd[0] != '\0') {
+    session_send_multiline_system_text(ctx, motd);
+  }
+
+  session_send_modern_c_ascii_art(ctx);
+}
+
+static bool session_fetch_motd(session_ctx_t *ctx, char *motd, size_t motd_len) {
+  if (motd == NULL || motd_len == 0U) {
+    return false;
+  }
+
+  motd[0] = '\0';
+
+  if (ctx == NULL || ctx->owner == NULL) {
+    return false;
+  }
+
+  pthread_mutex_lock(&ctx->owner->lock);
+  snprintf(motd, motd_len, "%s", ctx->owner->motd);
+  pthread_mutex_unlock(&ctx->owner->lock);
+
+  return motd[0] != '\0';
+}
+
 static void session_render_separator(session_ctx_t *ctx, const char *label) {
   if (ctx == NULL || label == NULL) {
     return;
@@ -1738,17 +1829,12 @@ static void session_handle_motd(session_ctx_t *ctx) {
   }
 
   char motd[sizeof(ctx->owner->motd)];
-
-  pthread_mutex_lock(&ctx->owner->lock);
-  snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
-  pthread_mutex_unlock(&ctx->owner->lock);
-
-  if (motd[0] == '\0') {
+  if (!session_fetch_motd(ctx, motd, sizeof(motd))) {
     session_send_system_line(ctx, "No message of the day is configured.");
     return;
   }
 
-  session_send_system_line(ctx, motd);
+  session_render_motd(ctx, motd);
 }
 
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments) {
@@ -2302,8 +2388,9 @@ static void *session_thread(void *arg) {
 
     session_render_banner(ctx);
     session_send_history(ctx);
-    if (ctx->owner->motd[0] != '\0') {
-      session_send_system_line(ctx, ctx->owner->motd);
+    char motd[sizeof(ctx->owner->motd)];
+    if (session_fetch_motd(ctx, motd, sizeof(motd))) {
+      session_render_motd(ctx, motd);
     }
     session_send_system_line(ctx, "Type /help to explore available commands.");
 
@@ -2420,18 +2507,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->ban_count = 0U;
   memset(host->bans, 0, sizeof(host->bans));
   snprintf(host->version, sizeof(host->version), "ssh-chatter (C, rolling release)");
-  snprintf(host->motd, sizeof(host->motd),
-  "Welcome to ssh-chat!\n"
-  "\033[1G- Be polite to each other\n"
-  "\033[1G- fun fact: this server is written in pure c.\n"
-  "\033[1G============================================\n"
-  "\033[1G _      ____  ____  _____ ____  _        ____  _ \n"
-  "\033[1G/ \\__/|/  _ \\/  _ \\/  __//  __\\/ \\  /|  /   _\\/ \\\n"
-  "\033[1G| |\\/||| / \\|| | \\||  \\  |  \\/|| |\\ ||  |  /  | |\n"
-  "\033[1G| |  ||| \\_/|| |_/||  /_ |    /| | \\||  |  \\__\\_/\n"
-  "\033[1G\\_/  \\|\\____/\\____/\\____\\\\_/\\_\\\\_/  \\|  \\____/(_)\n"
-  "\033[1G                                                 \n"
-  "\033[1G============================================\n");
+  snprintf(host->motd, sizeof(host->motd), "%s", kDefaultMotdText);
 
 
   host->connection_count = 0U;
