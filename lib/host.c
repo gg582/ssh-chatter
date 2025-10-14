@@ -118,6 +118,8 @@ static void session_local_echo_char(session_ctx_t *ctx, char ch);
 static void session_local_backspace(session_ctx_t *ctx);
 static void session_clear_input(session_ctx_t *ctx);
 static void session_send_user_message(session_ctx_t *target, const session_ctx_t *from, const char *message);
+static void session_send_private_message_line(session_ctx_t *ctx, const session_ctx_t *color_source,
+                                              const char *label, const char *message);
 static session_ctx_t *chat_room_find_user(chat_room_t *room, const char *username);
 static bool host_is_ip_banned(host_t *host, const char *ip);
 static bool host_is_username_banned(host_t *host, const char *username);
@@ -128,9 +130,12 @@ static bool session_is_lan_client(const char *ip);
 static void session_assign_lan_privileges(session_ctx_t *ctx);
 static void session_apply_theme_defaults(session_ctx_t *ctx);
 static void session_apply_system_theme_defaults(session_ctx_t *ctx);
+static void session_apply_saved_preferences(session_ctx_t *ctx);
 static void session_dispatch_command(session_ctx_t *ctx, const char *line);
 static void session_handle_exit(session_ctx_t *ctx);
 static void session_handle_nick(session_ctx_t *ctx, const char *arguments);
+static void session_handle_pm(session_ctx_t *ctx, const char *arguments);
+static void session_handle_motd(session_ctx_t *ctx);
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
 static bool session_line_is_exit_command(const char *line);
@@ -142,6 +147,10 @@ static void host_history_record_user(host_t *host, const session_ctx_t *from, co
 static void host_history_record_system(host_t *host, const char *message);
 static void session_send_history(session_ctx_t *ctx);
 static void host_history_append(host_t *host, const chat_history_entry_t *entry);
+static user_preference_t *host_find_preference_locked(host_t *host, const char *username);
+static user_preference_t *host_ensure_preference_locked(host_t *host, const char *username);
+static void host_store_user_theme(host_t *host, const session_ctx_t *ctx);
+static void host_store_system_theme(host_t *host, const session_ctx_t *ctx);
 
 static void chat_room_init(chat_room_t *room) {
   if (room == NULL) {
@@ -401,6 +410,151 @@ static void session_apply_system_theme_defaults(session_ctx_t *ctx) {
   snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s", host->default_system_highlight_name);
 }
 
+static user_preference_t *host_find_preference_locked(host_t *host, const char *username) {
+  if (host == NULL || username == NULL || username[0] == '\0') {
+    return NULL;
+  }
+
+  for (size_t idx = 0; idx < SSH_CHATTER_MAX_PREFERENCES; ++idx) {
+    user_preference_t *pref = &host->preferences[idx];
+    if (!pref->in_use) {
+      continue;
+    }
+
+    if (strncmp(pref->username, username, SSH_CHATTER_USERNAME_LEN) == 0) {
+      return pref;
+    }
+  }
+
+  return NULL;
+}
+
+static user_preference_t *host_ensure_preference_locked(host_t *host, const char *username) {
+  if (host == NULL || username == NULL || username[0] == '\0') {
+    return NULL;
+  }
+
+  user_preference_t *existing = host_find_preference_locked(host, username);
+  if (existing != NULL) {
+    return existing;
+  }
+
+  for (size_t idx = 0; idx < SSH_CHATTER_MAX_PREFERENCES; ++idx) {
+    user_preference_t *pref = &host->preferences[idx];
+    if (pref->in_use) {
+      continue;
+    }
+
+    memset(pref, 0, sizeof(*pref));
+    pref->in_use = true;
+    snprintf(pref->username, sizeof(pref->username), "%s", username);
+    if (host->preference_count < SSH_CHATTER_MAX_PREFERENCES) {
+      ++host->preference_count;
+    }
+    return pref;
+  }
+
+  return NULL;
+}
+
+static void host_store_user_theme(host_t *host, const session_ctx_t *ctx) {
+  if (host == NULL || ctx == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  user_preference_t *pref = host_ensure_preference_locked(host, ctx->user.name);
+  if (pref != NULL) {
+    pref->has_user_theme = true;
+    snprintf(pref->user_color_name, sizeof(pref->user_color_name), "%s", ctx->user_color_name);
+    snprintf(pref->user_highlight_name, sizeof(pref->user_highlight_name), "%s", ctx->user_highlight_name);
+    pref->user_is_bold = ctx->user_is_bold;
+  }
+  pthread_mutex_unlock(&host->lock);
+}
+
+static void host_store_system_theme(host_t *host, const session_ctx_t *ctx) {
+  if (host == NULL || ctx == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  user_preference_t *pref = host_ensure_preference_locked(host, ctx->user.name);
+  if (pref != NULL) {
+    pref->has_system_theme = true;
+    snprintf(pref->system_fg_name, sizeof(pref->system_fg_name), "%s", ctx->system_fg_name);
+    snprintf(pref->system_bg_name, sizeof(pref->system_bg_name), "%s", ctx->system_bg_name);
+    snprintf(pref->system_highlight_name, sizeof(pref->system_highlight_name), "%s", ctx->system_highlight_name);
+    pref->system_is_bold = ctx->system_is_bold;
+  }
+  pthread_mutex_unlock(&host->lock);
+}
+
+static void session_apply_saved_preferences(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  host_t *host = ctx->owner;
+  user_preference_t snapshot = {0};
+  bool has_snapshot = false;
+
+  pthread_mutex_lock(&host->lock);
+  user_preference_t *pref = host_find_preference_locked(host, ctx->user.name);
+  if (pref != NULL) {
+    snapshot = *pref;
+    has_snapshot = true;
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (!has_snapshot) {
+    return;
+  }
+
+  if (snapshot.has_user_theme) {
+    const char *color_code = lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]),
+                                               snapshot.user_color_name);
+    const char *highlight_code = lookup_color_code(
+        HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), snapshot.user_highlight_name);
+    if (color_code != NULL && highlight_code != NULL) {
+      ctx->user_color_code = color_code;
+      ctx->user_highlight_code = highlight_code;
+      ctx->user_is_bold = snapshot.user_is_bold;
+      snprintf(ctx->user_color_name, sizeof(ctx->user_color_name), "%s", snapshot.user_color_name);
+      snprintf(ctx->user_highlight_name, sizeof(ctx->user_highlight_name), "%s", snapshot.user_highlight_name);
+    }
+  }
+
+  if (snapshot.has_system_theme) {
+    const char *fg_code = lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]),
+                                            snapshot.system_fg_name);
+    const char *bg_code = lookup_color_code(
+        HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), snapshot.system_bg_name);
+    if (fg_code != NULL && bg_code != NULL) {
+      const char *highlight_code = ctx->system_highlight_code;
+      if (snapshot.system_highlight_name[0] != '\0') {
+        const char *candidate = lookup_color_code(HIGHLIGHT_COLOR_MAP,
+                                                 sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]),
+                                                 snapshot.system_highlight_name);
+        if (candidate != NULL) {
+          highlight_code = candidate;
+        }
+      }
+
+      ctx->system_fg_code = fg_code;
+      ctx->system_bg_code = bg_code;
+      ctx->system_highlight_code = highlight_code;
+      ctx->system_is_bold = snapshot.system_is_bold;
+      snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", snapshot.system_fg_name);
+      snprintf(ctx->system_bg_name, sizeof(ctx->system_bg_name), "%s", snapshot.system_bg_name);
+      if (snapshot.system_highlight_name[0] != '\0') {
+        snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s",
+                 snapshot.system_highlight_name);
+      }
+    }
+  }
+}
+
 static void session_send_line(ssh_channel channel, const char *message) {
   if (channel == NULL || message == NULL) {
     return;
@@ -635,6 +789,21 @@ static void session_send_user_message(session_ctx_t *target, const session_ctx_t
   session_send_line(target->channel, line);
 }
 
+static void session_send_private_message_line(session_ctx_t *ctx, const session_ctx_t *color_source, const char *label,
+                                              const char *message) {
+  if (ctx == NULL || ctx->channel == NULL || color_source == NULL || label == NULL || message == NULL) {
+    return;
+  }
+
+  const char *highlight = color_source->user_highlight_code != NULL ? color_source->user_highlight_code : "";
+  const char *color = color_source->user_color_code != NULL ? color_source->user_color_code : "";
+  const char *bold = color_source->user_is_bold ? ANSI_BOLD : "";
+
+  char line[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(line, sizeof(line), "%s%s%s[%s]%s %s", highlight, bold, color, label, ANSI_RESET, message);
+  session_send_line(ctx->channel, line);
+}
+
 static void session_send_history(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->owner == NULL || ctx->channel == NULL) {
     return;
@@ -808,6 +977,8 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/help                 - show this message");
   session_send_system_line(ctx, "/exit                 - leave the chat");
   session_send_system_line(ctx, "/nick <name>          - change your display name");
+  session_send_system_line(ctx, "/pm <username> <message> - send a private message");
+  session_send_system_line(ctx, "/motd                - view the message of the day");
   session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
   session_send_system_line(ctx,
                            "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may "
@@ -960,6 +1131,75 @@ static void session_handle_poke(session_ctx_t *ctx, const char *arguments) {
   session_send_system_line(ctx, "Poke sent.");
 }
 
+static void session_handle_pm(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  static const char *kUsage = "Usage: /pm <username> <message>";
+
+  if (ctx->owner == NULL) {
+    session_send_system_line(ctx, "Private messages are unavailable right now.");
+    return;
+  }
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char *cursor = working;
+  while (*cursor != '\0' && !isspace((unsigned char)*cursor)) {
+    ++cursor;
+  }
+
+  if (*cursor == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  *cursor = '\0';
+  char *message = cursor + 1;
+  while (*message != '\0' && isspace((unsigned char)*message)) {
+    ++message;
+  }
+
+  if (*message == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char target_name[SSH_CHATTER_USERNAME_LEN];
+  snprintf(target_name, sizeof(target_name), "%.*s", (int)sizeof(target_name) - 1, working);
+
+  session_ctx_t *target = chat_room_find_user(&ctx->owner->room, target_name);
+  if (target == NULL) {
+    char not_found[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(not_found, sizeof(not_found), "User '%s' is not connected.", target_name);
+    session_send_system_line(ctx, not_found);
+    return;
+  }
+
+  printf("[pm] %s -> %s: %s\n", ctx->user.name, target->user.name, message);
+
+  char to_target_label[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(to_target_label, sizeof(to_target_label), "%s -> you", ctx->user.name);
+  session_send_private_message_line(target, ctx, to_target_label, message);
+
+  char to_sender_label[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(to_sender_label, sizeof(to_sender_label), "you -> %s", target->user.name);
+  session_send_private_message_line(ctx, ctx, to_sender_label, message);
+}
+
 static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count) {
   if (working == NULL || tokens == NULL || token_count == NULL) {
     return false;
@@ -1091,6 +1331,29 @@ static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
   snprintf(preview, sizeof(preview), "%s%s%s[%s] preview%s", highlight_code, bold_code, text_code, ctx->user.name,
            ANSI_RESET);
   session_send_line(ctx->channel, preview);
+
+  if (ctx->owner != NULL) {
+    host_store_user_theme(ctx->owner, ctx);
+  }
+}
+
+static void session_handle_motd(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  char motd[sizeof(ctx->owner->motd)];
+
+  pthread_mutex_lock(&ctx->owner->lock);
+  snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
+  pthread_mutex_unlock(&ctx->owner->lock);
+
+  if (motd[0] == '\0') {
+    session_send_system_line(ctx, "No message of the day is configured.");
+    return;
+  }
+
+  session_send_system_line(ctx, motd);
 }
 
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments) {
@@ -1143,6 +1406,9 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
     session_send_system_line(ctx, "System colors reset to defaults.");
     session_render_separator(ctx, "Chatroom");
     session_render_prompt(ctx, true);
+    if (ctx->owner != NULL) {
+      host_store_system_theme(ctx->owner, ctx);
+    }
     return;
   }
 
@@ -1216,6 +1482,9 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   session_send_system_line(ctx, "System colors updated.");
   session_render_separator(ctx, "Chatroom");
   session_render_prompt(ctx, true);
+  if (ctx->owner != NULL) {
+    host_store_system_theme(ctx->owner, ctx);
+  }
 }
 
 static void session_handle_nick(session_ctx_t *ctx, const char *arguments) {
@@ -1264,6 +1533,7 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments) {
   snprintf(announcement, sizeof(announcement), "* %s is now known as %s", old_name, ctx->user.name);
   host_history_record_system(ctx->owner, announcement);
   chat_room_broadcast(&ctx->owner->room, announcement, NULL);
+  session_apply_saved_preferences(ctx);
   session_send_system_line(ctx, "Display name updated.");
 }
 
@@ -1443,6 +1713,26 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_nick(ctx, arguments);
     return;
   }
+  if (strncmp(line, "/pm", 3) == 0) {
+    const char *arguments = line + 3;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_pm(ctx, arguments);
+    return;
+  }
+  if (strncmp(line, "/motd", 5) == 0) {
+    const char *arguments = line + 5;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    if (*arguments != '\0') {
+      session_send_system_line(ctx, "Usage: /motd");
+    } else {
+      session_handle_motd(ctx);
+    }
+    return;
+  }
   if (strncmp(line, "/ban", 4) == 0) {
     const char *arguments = line + 4;
     while (*arguments == ' ' || *arguments == '\t') {
@@ -1591,6 +1881,7 @@ static void *session_thread(void *arg) {
   }
 
   session_assign_lan_privileges(ctx);
+  session_apply_saved_preferences(ctx);
 
   if (host_is_ip_banned(ctx->owner, ctx->client_ip) || host_is_username_banned(ctx->owner, ctx->user.name)) {
     session_send_system_line(ctx, "You are banned from this server.");
@@ -1739,6 +2030,8 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->history_start = 0U;
   host->history_count = 0U;
   memset(host->history, 0, sizeof(host->history));
+  memset(host->preferences, 0, sizeof(host->preferences));
+  host->preference_count = 0U;
   pthread_mutex_init(&host->lock, NULL);
 }
 
