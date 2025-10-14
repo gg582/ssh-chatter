@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -26,6 +27,12 @@
 #define SSH_CHATTER_INPUT_HISTORY_LIMIT 64
 #define SSH_CHATTER_SCROLLBACK_CHUNK 32
 #define SSH_CHATTER_MAX_PREFERENCES 1024
+#define SSH_CHATTER_ATTACHMENT_TARGET_LEN 256
+#define SSH_CHATTER_ATTACHMENT_CAPTION_LEN 256
+#define SSH_CHATTER_SOUND_ALIAS_LEN 32
+#define SSH_CHATTER_SOUND_PATH_LEN 256
+#define SSH_CHATTER_MAX_SOUNDS 64
+#define SSH_CHATTER_REACTION_KIND_COUNT 7
 
 struct host;
 struct session_ctx;
@@ -42,6 +49,20 @@ typedef struct chat_room {
   size_t member_count;
 } chat_room_t;
 
+typedef enum chat_attachment_type {
+  CHAT_ATTACHMENT_NONE = 0,
+  CHAT_ATTACHMENT_IMAGE,
+  CHAT_ATTACHMENT_VIDEO,
+  CHAT_ATTACHMENT_SOUND,
+} chat_attachment_type_t;
+
+typedef struct host_sound_entry {
+  bool in_use;
+  char alias[SSH_CHATTER_SOUND_ALIAS_LEN];
+  char filename[SSH_CHATTER_SOUND_PATH_LEN];
+  char owner[SSH_CHATTER_USERNAME_LEN];
+} host_sound_entry_t;
+
 typedef struct chat_history_entry {
   bool is_user_message;
   char message[SSH_CHATTER_MESSAGE_LIMIT];
@@ -51,6 +72,12 @@ typedef struct chat_history_entry {
   bool user_is_bold;
   char user_color_name[SSH_CHATTER_COLOR_NAME_LEN];
   char user_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  uint64_t message_id;
+  chat_attachment_type_t attachment_type;
+  char attachment_target[SSH_CHATTER_ATTACHMENT_TARGET_LEN];
+  char attachment_caption[SSH_CHATTER_ATTACHMENT_CAPTION_LEN];
+  char sound_alias[SSH_CHATTER_SOUND_ALIAS_LEN];
+  uint32_t reaction_counts[SSH_CHATTER_REACTION_KIND_COUNT];
 } chat_history_entry_t;
 
 typedef struct auth_profile {
@@ -132,6 +159,9 @@ typedef struct host {
   chat_history_entry_t history[SSH_CHATTER_HISTORY_LIMIT];
   size_t history_start;
   size_t history_count;
+  uint64_t next_message_id;
+  host_sound_entry_t sounds[SSH_CHATTER_MAX_SOUNDS];
+  size_t sound_count;
   user_preference_t preferences[SSH_CHATTER_MAX_PREFERENCES];
   size_t preference_count;
   pthread_mutex_t lock;
