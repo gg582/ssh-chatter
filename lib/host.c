@@ -64,6 +64,32 @@ static const color_entry_t HIGHLIGHT_COLOR_MAP[] = {
     {"default", ANSI_BG_DEFAULT},
 };
 
+static bool host_sound_has_supported_extension(const char *filename) {
+  if (filename == NULL || filename[0] == '\0') {
+    return false;
+  }
+
+  char sanitized[SSH_CHATTER_SOUND_PATH_LEN];
+  size_t length = strcspn(filename, "?#");
+  if (length >= sizeof(sanitized)) {
+    length = sizeof(sanitized) - 1U;
+  }
+  memcpy(sanitized, filename, length);
+  sanitized[length] = '\0';
+
+  const char *dot = strrchr(sanitized, '.');
+  if (dot == NULL || dot[1] == '\0') {
+    return false;
+  }
+
+  ++dot;
+  if (strcasecmp(dot, "mp3") == 0 || strcasecmp(dot, "ogg") == 0 || strcasecmp(dot, "wav") == 0) {
+    return true;
+  }
+
+  return false;
+}
+
 typedef int (*accept_channel_fn_t)(ssh_message, ssh_channel);
 
 #if defined(__GNUC__)
@@ -840,6 +866,13 @@ static bool host_store_sound_alias(host_t *host, const session_ctx_t *ctx, const
     return false;
   }
 
+  if (!host_sound_has_supported_extension(filename)) {
+    if (error != NULL && error_length > 0U) {
+      snprintf(error, error_length, "Sound clips must be MP3, OGG, or WAV files.");
+    }
+    return false;
+  }
+
   for (const char *cursor = alias; *cursor != '\0'; ++cursor) {
     if (!(isalnum((unsigned char)*cursor) || *cursor == '-' || *cursor == '_' || *cursor == '.')) {
       if (error != NULL && error_length > 0U) {
@@ -1247,6 +1280,10 @@ static void host_state_load(host_t *host) {
       if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
         success = false;
         break;
+      }
+
+      if (!host_sound_has_supported_extension(serialized.filename)) {
+        continue;
       }
 
       if (host->sound_count >= SSH_CHATTER_MAX_SOUNDS) {
@@ -2946,7 +2983,7 @@ static void session_handle_video(session_ctx_t *ctx, const char *arguments) {
 }
 
 static void session_handle_sound(session_ctx_t *ctx, const char *arguments) {
-  static const char *kUsage = "Usage: /sound <file> <alias>";
+  static const char *kUsage = "Usage: /sound <file> <alias> (mp3/ogg/wav)";
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
