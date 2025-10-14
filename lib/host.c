@@ -14,8 +14,8 @@
 #include <limits.h>
 #include <wchar.h>
 #include <arpa/inet.h>
-#include <netinet/in.h>
 #include <netdb.h>
+#include <netinet/in.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -25,6 +25,7 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "humanized/humanized.h"
@@ -125,6 +126,116 @@ static void resolve_accept_channel_once(void) {
       return;
     }
   }
+}
+
+static bool host_directory_ensure_exists(const char *path) {
+  if (path == NULL || path[0] == '\0') {
+    errno = EINVAL;
+    return false;
+  }
+
+  struct stat info;
+  if (stat(path, &info) == 0) {
+    if (!S_ISDIR(info.st_mode)) {
+      errno = ENOTDIR;
+      return false;
+    }
+    return true;
+  }
+
+  if (errno != ENOENT) {
+    return false;
+  }
+
+  if (mkdir(path, 0750) != 0) {
+    if (errno == EEXIST) {
+      if (stat(path, &info) == 0 && S_ISDIR(info.st_mode)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  return true;
+}
+
+static bool host_ensure_parent_directory(const char *path) {
+  if (path == NULL || path[0] == '\0') {
+    errno = EINVAL;
+    return false;
+  }
+
+  const char *last_separator = strrchr(path, '/');
+  if (last_separator == NULL || last_separator == path) {
+    return true;
+  }
+
+  char parent[PATH_MAX];
+  const size_t parent_len = (size_t)(last_separator - path);
+  if (parent_len >= sizeof(parent)) {
+    errno = ENAMETOOLONG;
+    return false;
+  }
+
+  memcpy(parent, path, parent_len);
+  parent[parent_len] = '\0';
+  return host_directory_ensure_exists(parent);
+}
+
+static bool host_generate_host_key_at_path(const char *path) {
+  if (path == NULL || path[0] == '\0') {
+    errno = EINVAL;
+    return false;
+  }
+
+  if (!host_ensure_parent_directory(path)) {
+    return false;
+  }
+
+  pid_t child = fork();
+  if (child < 0) {
+    return false;
+  }
+
+  if (child == 0) {
+    execlp("ssh-keygen", "ssh-keygen", "-q", "-t", "rsa", "-b", "4096", "-N", "", "-f", path, (char *)NULL);
+    _exit(EXIT_FAILURE);
+  }
+
+  int status = 0;
+  while (true) {
+    pid_t result = waitpid(child, &status, 0);
+    if (result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      const int wait_error = errno != 0 ? errno : EIO;
+      errno = wait_error;
+      return false;
+    }
+    break;
+  }
+
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != EXIT_SUCCESS) {
+    errno = EIO;
+    unlink(path);
+    return false;
+  }
+
+  if (chmod(path, S_IRUSR | S_IWUSR) != 0) {
+    const int chmod_error = errno != 0 ? errno : EIO;
+    unlink(path);
+    errno = chmod_error;
+    return false;
+  }
+
+  char pub_path[PATH_MAX];
+  const int written = snprintf(pub_path, sizeof(pub_path), "%s.pub", path);
+  if (written > 0 && (size_t)written < sizeof(pub_path)) {
+    (void)chmod(pub_path, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  }
+
+  return true;
 }
 
 static void trim_whitespace_inplace(char *text);
@@ -685,6 +796,11 @@ static void host_state_save_locked(host_t *host) {
   }
 
   if (host->state_file_path[0] == '\0') {
+    return;
+  }
+
+  if (!host_ensure_parent_directory(host->state_file_path)) {
+    humanized_log_error("host", "failed to prepare state file directory", errno);
     return;
   }
 
