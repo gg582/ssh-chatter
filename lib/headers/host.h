@@ -18,6 +18,7 @@
 #define SSH_CHATTER_COLOR_NAME_LEN 32
 #define SSH_CHATTER_MAX_BANS 128
 #define SSH_CHATTER_HISTORY_LIMIT 32
+#define SSH_CHATTER_MAX_PREFERENCES 512
 
 struct host;
 struct session_ctx;
@@ -79,6 +80,20 @@ typedef struct session_ctx {
   bool has_joined_room;
 } session_ctx_t;
 
+typedef struct user_preference {
+  bool in_use;
+  bool has_user_theme;
+  bool has_system_theme;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  char user_color_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char user_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  bool user_is_bold;
+  char system_fg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_bg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  bool system_is_bold;
+} user_preference_t;
+
 typedef struct host {
   chat_room_t room;
   ssh_listener_t listener;
@@ -101,6 +116,8 @@ typedef struct host {
   chat_history_entry_t history[SSH_CHATTER_HISTORY_LIMIT];
   size_t history_start;
   size_t history_count;
+  user_preference_t preferences[SSH_CHATTER_MAX_PREFERENCES];
+  size_t preference_count;
   pthread_mutex_t lock;
 } host_t;
 
