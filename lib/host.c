@@ -1,7 +1,3 @@
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 200112L
-#endif
-
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE 700
 #endif
@@ -223,7 +219,6 @@ static void session_handle_video(session_ctx_t *ctx, const char *arguments);
 static void session_handle_audio(session_ctx_t *ctx, const char *arguments);
 static void session_handle_files(session_ctx_t *ctx, const char *arguments);
 static void session_handle_reaction(session_ctx_t *ctx, size_t reaction_index, const char *arguments);
-static void session_handle_image_to_ascii(session_ctx_t *ctx, const char *arguments);
 static void session_handle_today(session_ctx_t *ctx);
 static void session_handle_date(session_ctx_t *ctx, const char *arguments);
 static void session_handle_os(session_ctx_t *ctx, const char *arguments);
@@ -259,13 +254,8 @@ static void host_state_save_locked(host_t *host);
 static bool host_try_load_motd_from_path(host_t *host, const char *path);
 static bool username_contains(const char *username, const char *needle);
 static size_t host_history_snapshot(host_t *host, chat_history_entry_t *snapshot, size_t capacity);
-static uint64_t session_preview_hash(const char *text);
-static uint64_t session_preview_next(uint64_t *state);
-static size_t session_build_image_preview(const char *seed,
-                                         char lines[][SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN],
-                                         size_t max_lines);
+static size_t host_history_snapshot(host_t *host, chat_history_entry_t *snapshot, size_t capacity);
 static void host_apply_palette_descriptor(host_t *host, const palette_descriptor_t *descriptor);
-static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, chat_history_entry_t *out_entry);
 static bool host_lookup_user_os(host_t *host, const char *username, char *buffer, size_t length);
 static void session_send_poll_summary(session_ctx_t *ctx);
 
@@ -785,35 +775,6 @@ static bool host_history_apply_reaction(host_t *host, uint64_t message_id, size_
   pthread_mutex_unlock(&host->lock);
 
   return applied;
-}
-
-static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, chat_history_entry_t *out_entry) {
-  if (host == NULL || message_id == 0U) {
-    return false;
-  }
-
-  bool found = false;
-
-  pthread_mutex_lock(&host->lock);
-  for (size_t idx = 0U; idx < host->history_count; ++idx) {
-    size_t history_index = (host->history_start + idx) % SSH_CHATTER_HISTORY_LIMIT;
-    const chat_history_entry_t *entry = &host->history[history_index];
-    if (!entry->is_user_message) {
-      continue;
-    }
-    if (entry->message_id != message_id) {
-      continue;
-    }
-
-    if (out_entry != NULL) {
-      *out_entry = *entry;
-    }
-    found = true;
-    break;
-  }
-  pthread_mutex_unlock(&host->lock);
-
-  return found;
 }
 
 static void session_apply_theme_defaults(session_ctx_t *ctx) {
@@ -2007,85 +1968,6 @@ static void session_send_private_message_line(session_ctx_t *ctx, const session_
   }
 }
 
-static uint64_t session_preview_hash(const char *text) {
-  if (text == NULL) {
-    return 0ULL;
-  }
-
-  uint64_t hash = 1469598103934665603ULL; /* FNV-1a offset basis */
-  const unsigned char *bytes = (const unsigned char *)text;
-  while (*bytes != '\0') {
-    hash ^= (uint64_t)(*bytes++);
-    hash *= 1099511628211ULL;
-  }
-  return hash;
-}
-
-static uint64_t session_preview_next(uint64_t *state) {
-  if (state == NULL) {
-    return 0ULL;
-  }
-
-  uint64_t value = *state;
-  if (value == 0ULL) {
-    value = 0x2545F4914F6CDD1DULL;
-  }
-
-  value ^= value >> 12;
-  value ^= value << 25;
-  value ^= value >> 27;
-  *state = value;
-  return value * 2685821657736338717ULL;
-}
-
-static size_t session_build_image_preview(const char *seed,
-                                         char lines[][SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN],
-                                         size_t max_lines) {
-  if (seed == NULL || lines == NULL || max_lines == 0U) {
-    return 0U;
-  }
-
-  const size_t rows = SSH_CHATTER_IMAGE_PREVIEW_HEIGHT < max_lines ? SSH_CHATTER_IMAGE_PREVIEW_HEIGHT : max_lines;
-  const size_t columns = SSH_CHATTER_IMAGE_PREVIEW_WIDTH;
-  static const char *kBlocks[] = {"█", "▓", "▒", "░", "·", " "};
-
-  uint64_t state = session_preview_hash(seed);
-  if (state == 0ULL) {
-    state = 0xA0761D6478BD642FULL;
-  }
-
-  for (size_t row = 0U; row < rows; ++row) {
-    char *target = lines[row];
-    if (target == NULL) {
-      continue;
-    }
-
-    int written = snprintf(target, SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN, "    ");
-    size_t offset = 0U;
-    if (written > 0) {
-      offset = (size_t)written;
-      if (offset >= SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN) {
-        offset = SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN - 1U;
-      }
-    }
-
-    for (size_t column = 0U; column < columns; ++column) {
-      uint64_t value = session_preview_next(&state);
-      const char *emoji = kBlocks[value % (sizeof(kBlocks) / sizeof(kBlocks[0]))];
-      size_t emoji_len = strlen(emoji);
-      if (offset + emoji_len >= SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN) {
-        break;
-      }
-      memcpy(target + offset, emoji, emoji_len);
-      offset += emoji_len;
-    }
-
-    target[offset] = '\0';
-  }
-
-  return rows;
-}
-
 static void session_send_history_entry(session_ctx_t *ctx, const chat_history_entry_t *entry) {
   if (ctx == NULL || ctx->channel == NULL || entry == NULL) {
     return;
@@ -2138,7 +2020,6 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
 
     if (entry->attachment_type == CHAT_ATTACHMENT_IMAGE && entry->message_id > 0U) {
       char hint[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(hint, sizeof(hint), "    ↳ hint: /image-to-ascii %" PRIu64 " for a preview", entry->message_id);
       session_send_plain_line(ctx, hint);
     }
   } else {
@@ -2419,7 +2300,6 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/video <url> [caption] - share a video link");
   session_send_system_line(ctx, "/audio <url> [caption] - share an audio clip");
   session_send_system_line(ctx, "/files <url> [caption] - share a downloadable file");
-  session_send_system_line(ctx, "/image-to-ascii <id> - render a 48x48 ASCII preview of an image message");
   session_send_system_line(ctx, "Up/Down arrows           - scroll recent chat history");
   session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
   session_send_system_line(ctx,
@@ -3150,63 +3030,6 @@ static void session_handle_usercount(session_ctx_t *ctx) {
 
   host_history_record_system(ctx->owner, message);
   chat_room_broadcast(&ctx->owner->room, message, NULL);
-}
-
-static void session_handle_image_to_ascii(session_ctx_t *ctx, const char *arguments) {
-  static const char *kUsage = "Usage: /image-to-ascii <message-id>";
-  if (ctx == NULL || ctx->owner == NULL) {
-    return;
-  }
-
-  if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
-    return;
-  }
-
-  char working[64];
-  snprintf(working, sizeof(working), "%s", arguments);
-  trim_whitespace_inplace(working);
-  if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
-    return;
-  }
-
-  errno = 0;
-  char *endptr = NULL;
-  unsigned long long parsed = strtoull(working, &endptr, 10);
-  if (errno != 0 || parsed == 0ULL || (endptr != NULL && *endptr != '\0')) {
-    session_send_system_line(ctx, kUsage);
-    return;
-  }
-
-  uint64_t message_id = (uint64_t)parsed;
-  session_send_system_line(ctx, "trying to render...");
-
-  chat_history_entry_t entry = {0};
-  if (!host_history_find_entry_by_id(ctx->owner, message_id, &entry)) {
-    char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "Message #%" PRIu64 " was not found.", message_id);
-    session_send_system_line(ctx, message);
-    return;
-  }
-
-  if (entry.attachment_type != CHAT_ATTACHMENT_IMAGE || entry.attachment_target[0] == '\0') {
-    session_send_system_line(ctx, "That message does not include an image attachment.");
-    return;
-  }
-
-  char preview_lines[SSH_CHATTER_IMAGE_PREVIEW_HEIGHT][SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN];
-  size_t preview_count =
-      session_build_image_preview(entry.attachment_target, preview_lines, SSH_CHATTER_IMAGE_PREVIEW_HEIGHT);
-  if (preview_count == 0U) {
-    session_send_system_line(ctx, "Unable to build an ASCII preview right now.");
-    return;
-  }
-
-  session_send_plain_line(ctx, "ASCII preview:");
-  for (size_t idx = 0U; idx < preview_count; ++idx) {
-    session_send_plain_line(ctx, preview_lines[idx]);
-  }
 }
 
 static void session_handle_today(session_ctx_t *ctx) {
@@ -4342,14 +4165,6 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_palette(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/image-to-ascii", 15) == 0) {
-    const char *arguments = line + 15;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
-    session_handle_image_to_ascii(ctx, arguments);
-    return;
-  }
   if (strncmp(line, "/today", 6) == 0) {
     const char *arguments = line + 6;
     while (*arguments == ' ' || *arguments == '\t') {
@@ -4421,11 +4236,6 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
 
   if (session_parse_command(line, "/palette", &arguments)) {
     session_handle_palette(ctx, arguments);
-    return;
-  }
-
-  if (session_parse_command(line, "/image-to-ascii", &arguments)) {
-    session_handle_image_to_ascii(ctx, arguments);
     return;
   }
 

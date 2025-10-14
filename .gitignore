@@ -1,0 +1,5 @@
+./main.o
+./ssh-chatter
+./lib/host.o
+./ssh_host_rsa_key
+./ssh_host_rsa_key.pub
