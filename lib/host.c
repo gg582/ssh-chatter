@@ -54,16 +54,29 @@ typedef struct {
 } color_entry_t;
 
 static const color_entry_t USER_COLOR_MAP[] = {
-    {"red", ANSI_RED},       {"green", ANSI_GREEN},   {"yellow", ANSI_YELLOW},
-    {"blue", ANSI_BLUE},     {"magenta", ANSI_MAGENTA}, {"cyan", ANSI_CYAN},
-    {"white", ANSI_WHITE},   {"grey", ANSI_GREY},     {"default", ANSI_DEFAULT},
+  {"black", ANSI_BLACK},          {"red", ANSI_RED},
+  {"green", ANSI_GREEN},          {"yellow", ANSI_YELLOW},
+  {"blue", ANSI_BLUE},           {"magenta", ANSI_MAGENTA},
+  {"cyan", ANSI_CYAN},           {"white", ANSI_WHITE},
+  {"default", ANSI_DEFAULT},
+
+  {"bright-black", ANSI_BRIGHT_BLACK},   {"bright-red", ANSI_BRIGHT_RED},
+  {"bright-green", ANSI_BRIGHT_GREEN}, {"bright-yellow", ANSI_BRIGHT_YELLOW},
+  {"bright-blue", ANSI_BRIGHT_BLUE},   {"bright-magenta", ANSI_BRIGHT_MAGENTA},
+  {"bright-cyan", ANSI_BRIGHT_CYAN},   {"bright-white", ANSI_BRIGHT_WHITE},
 };
 
 static const color_entry_t HIGHLIGHT_COLOR_MAP[] = {
-    {"black", ANSI_BG_BLACK},     {"red", ANSI_BG_RED},       {"green", ANSI_BG_GREEN},
-    {"yellow", ANSI_BG_YELLOW},   {"blue", ANSI_BG_BLUE},     {"magenta", ANSI_BG_MAGENTA},
-    {"cyan", ANSI_BG_CYAN},       {"white", ANSI_BG_WHITE},   {"grey", ANSI_BG_GREY},
-    {"default", ANSI_BG_DEFAULT},
+  {"black", ANSI_BG_BLACK},       {"red", ANSI_BG_RED},
+  {"green", ANSI_BG_GREEN},       {"yellow", ANSI_BG_YELLOW},
+  {"blue", ANSI_BG_BLUE},        {"magenta", ANSI_BG_MAGENTA},
+  {"cyan", ANSI_BG_CYAN},        {"white", ANSI_BG_WHITE},
+  {"default", ANSI_BG_DEFAULT},
+
+  {"bright-black", ANSI_BG_BRIGHT_BLACK}, {"bright-red", ANSI_BG_BRIGHT_RED},
+  {"bright-green", ANSI_BG_BRIGHT_GREEN}, {"bright-yellow", ANSI_BG_BRIGHT_YELLOW},
+  {"bright-blue", ANSI_BG_BRIGHT_BLUE},  {"bright-magenta", ANSI_BG_BRIGHT_MAGENTA},
+  {"bright-cyan", ANSI_BG_BRIGHT_CYAN},  {"bright-white", ANSI_BG_BRIGHT_WHITE},
 };
 
 typedef struct palette_descriptor {
@@ -79,11 +92,29 @@ typedef struct palette_descriptor {
 } palette_descriptor_t;
 
 static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
-    {"moe", "Soft magenta accents with playful highlights", "magenta", "white", true, "white", "magenta", "cyan", true},
-    {"clean", "Balanced neutral palette with subtle cyan focus", "default", "default", false, "default", "default", "cyan", false},
-    {"adwaita", "Bright background inspired by GNOME Adwaita", "blue", "default", false, "blue", "white", "grey", false},
+    {"moe", "Soft magenta accents with playful highlights", "bright-magenta", "white", true, "white", "bright-magenta", "cyan", true},
+    {"clean", "Balanced neutral palette", "default", "default", false, "default", "default", "default", false},
+    {"adwaita", "Bright background inspired by GNOME Adwaita", "blue", "default", false, "blue", "bright-white", "grey", true},
+    {"80shacker", "Bright monochrome green inspired by old CRT", "bright-green", "default", true, "bright-green", "default", "default", true},
+    {"plato", "Bright monochrome yellow inspired by old Amber CRT", "yellow", "default", true, "yellow", "default", "default", true},
+    {"atarist", "Sharp paper-white monochrome for high-res work", "bright-white", "black", false, "white", "black", "black", false},
+    {"win95bsod", "High-contrast blue screen of death style", "bright-white", "blue", true, "bright-white", "blue", "cyan", true},
+    {"chn-hanzi", "Bright cyan high-clarity Chinese text terminal", "bright-cyan", "black", true, "white", "black", "cyan", true},
+    {"usa-flag", "Flag blue base with red/white highlights", "white", "blue", true, "red", "blue", "white", true},
+    {"jpn-flag", "Minimalist white with rising sun red accent", "black", "bright-white", false, "red", "bright-white", "black", true},
+    {"chn-flag", "Star-red background with lucky yellow text", "bright-yellow", "red", true, "white", "red", "yellow", true},
+    {"rus-flag", "Tricolor base with strong red emphasis", "bright-white", "blue", true, "red", "blue", "bright-white", true},
+    {"holy-light", "Christian sacred light on pure white/blue base", "black", "bright-white", false, "blue", "bright-white", "yellow", true},
+    {"islam", "Iconic color of muslim, white/green base", "black", "bright-white", false, "green", "bright-white", "bright-white", true},
+    {"dharma-ochre", "Ochre robes of enlightenment and vitality", "yellow", "black", true, "red", "black", "yellow", true},
+    {"yin-yang", "Balance of Black and White with Jade accent", "white", "black", false, "cyan", "black", "white", false},
+    {"soviet-cold", "Cold blue/white terminal for scientific systems", "white", "blue", false, "white", "blue", "cyan", false},
+    {"hi-tel", "1990s Korean BBS blue background and text style", "white", "blue", true, "cyan", "blue", "yellow", true},
+    {"amiga-cli", "AmigaOS style with cyan/blue on dark background", "cyan", "black", true, "cyan", "black", "white", true},
+    {"jpn-pc98", "NEC PC-9801 subtle, earthy low-res tones", "yellow", "black", false, "red", "black", "yellow", false},
+    {"deep-blue", "IBM Supercomputer monitoring interface style", "white", "blue", true, "cyan", "blue", "white", true},
     {"win10", "High contrast palette reminiscent of Windows 10", "cyan", "blue", true, "white", "blue", "yellow", true},
-    {"korea", "Taegeuk-inspired white base with red and blue accents", "blue", "white", true, "blue", "white", "red", true},
+    {"korea", "Taegeuk-gi inspired white base with red and blue accents", "blue", "bright-white", true, "blue", "bright-white", "red", true},
 };
 
 typedef int (*accept_channel_fn_t)(ssh_message, ssh_channel);
