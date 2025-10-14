@@ -156,6 +156,7 @@ static void host_history_normalize_entry(host_t *host, chat_history_entry_t *ent
 static void host_state_resolve_path(host_t *host);
 static void host_state_load(host_t *host);
 static void host_state_save_locked(host_t *host);
+static bool host_try_load_motd_from_path(host_t *host, const char *path);
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
 static const uint32_t HOST_STATE_VERSION = 1U;
@@ -2345,11 +2346,64 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_state_resolve_path(host);
   pthread_mutex_init(&host->lock, NULL);
 
+  (void)host_try_load_motd_from_path(host, "/etc/ssh-chatter/motd");
+
   host_state_load(host);
+}
+
+static bool host_try_load_motd_from_path(host_t *host, const char *path) {
+  if (host == NULL || path == NULL || path[0] == '\0') {
+    return false;
+  }
+
+  FILE *motd_file = fopen(path, "r");
+  if (motd_file == NULL) {
+    return false;
+  }
+
+  char motd_buffer[sizeof(host->motd)];
+  size_t total_read = 0U;
+  while (total_read < sizeof(motd_buffer) - 1U) {
+    const size_t bytes_to_read = sizeof(motd_buffer) - 1U - total_read;
+    const size_t chunk = fread(motd_buffer + total_read, 1U, bytes_to_read, motd_file);
+    if (chunk == 0U) {
+      if (ferror(motd_file)) {
+        const int read_error = errno;
+        const int close_result = fclose(motd_file);
+        if (close_result != 0) {
+          const int close_error = errno;
+          humanized_log_error("host", "failed to close motd file", close_error);
+        }
+        humanized_log_error("host", "failed to read motd file", read_error);
+        return false;
+      }
+      break;
+    }
+    total_read += chunk;
+    if (feof(motd_file)) {
+      break;
+    }
+  }
+
+  motd_buffer[total_read] = '\0';
+
+  if (fclose(motd_file) != 0) {
+    const int close_error = errno;
+    humanized_log_error("host", "failed to close motd file", close_error);
+  }
+
+  pthread_mutex_lock(&host->lock);
+  snprintf(host->motd, sizeof(host->motd), "%s", motd_buffer);
+  pthread_mutex_unlock(&host->lock);
+  return true;
 }
 
 void host_set_motd(host_t *host, const char *motd) {
   if (host == NULL || motd == NULL) {
+    return;
+  }
+
+  if (host_try_load_motd_from_path(host, motd)) {
     return;
   }
 

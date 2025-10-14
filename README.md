@@ -44,10 +44,12 @@ This produces an `ssh-chatter` binary in the repository root.  Clean intermediat
 The server defaults to listening on `0.0.0.0:2222`.  You can adjust runtime parameters with the available flags:
 
 ```
-Usage: ./ssh-chatter [-a address] [-p port] [-m motd] [-k host_key_dir]
+Usage: ./ssh-chatter [-a address] [-p port] [-m motd_file] [-k host_key_dir]
        ./ssh-chatter [-h]
        ./ssh-chatter [-V]
 ```
+
+When provided, `-m` reads the message of the day from the specified file path.
 
 Common examples:
 
@@ -55,7 +57,7 @@ Common examples:
 # Start the chat server on port 2022, loading host keys from /etc/ssh
 ./ssh-chatter -p 2022 -k /etc/ssh
 
-# Serve a custom MOTD and bind to localhost
+# Serve a custom MOTD from a file and bind to localhost
 ./ssh-chatter -a 127.0.0.1 -m /etc/ssh-chatter/motd
 ```
 
