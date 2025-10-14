@@ -19,8 +19,8 @@
 #include "stb_image.h"
 
 static const ascii_palette_t kAsciiPalettes[] = {
-    {.name = "color", .characters = " .:-=+*#%@", .use_color = true},
     {.name = "mono", .characters = " .:-=+*#%@", .use_color = false},
+    {.name = "color", .characters = " .:-=+*#%@", .use_color = true},
 };
 
 static size_t palette_count(void) {
@@ -65,8 +65,9 @@ void ascii_palette_list(char *buffer, size_t buffer_len) {
 
   for (size_t idx = 0; idx < palette_count(); ++idx) {
     const ascii_palette_t *palette = &kAsciiPalettes[idx];
-    result = snprintf(buffer + written, buffer_len - written, "%s%s", idx == 0 ? "" : ", ",
-                      palette->name);
+    bool is_default = (palette == ascii_palette_default());
+    result = snprintf(buffer + written, buffer_len - written, "%s%s%s", idx == 0 ? "" : ", ",
+                      palette->name, is_default ? " (default)" : "");
     if (result < 0) {
       buffer[0] = '\0';
       return;
