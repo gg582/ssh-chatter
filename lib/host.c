@@ -31,6 +31,7 @@
 #include <unistd.h>
 
 #include "humanized/humanized.h"
+#include "image_ascii.h"
 
 #ifndef NI_MAXHOST
 #define NI_MAXHOST 1025
@@ -66,24 +67,20 @@ static const color_entry_t HIGHLIGHT_COLOR_MAP[] = {
     {"default", ANSI_BG_DEFAULT},
 };
 
-typedef struct palette_descriptor {
-  const char *name;
-  const char *description;
-  const char *user_color_name;
-  const char *user_highlight_name;
-  bool user_is_bold;
-  const char *system_fg_name;
-  const char *system_bg_name;
-  const char *system_highlight_name;
-  bool system_is_bold;
-} palette_descriptor_t;
+static const char *kDefaultMotdText =
+    "Welcome to ssh-chat!\n"
+    "\033[1G- Be polite to each other\n"
+    "\033[1G- fun fact: this server is written in pure c.\n";
 
-static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
-    {"moe", "Soft magenta accents with playful highlights", "magenta", "white", true, "white", "magenta", "cyan", true},
-    {"clean", "Balanced neutral palette with subtle cyan focus", "default", "default", false, "default", "default", "cyan", false},
-    {"adwaita", "Bright background inspired by GNOME Adwaita", "blue", "default", false, "blue", "white", "grey", false},
-    {"win10", "High contrast palette reminiscent of Windows 10", "cyan", "blue", true, "white", "blue", "yellow", true},
-    {"korea", "Taegeuk-inspired white base with red and blue accents", "blue", "white", true, "blue", "white", "red", true},
+static const char *const kModernCAsciiArt[] = {
+    "\033[1G============================================",
+    "\033[1G _      ____  ____  _____ ____  _        ____  _ ",
+    "\033[1G/ \\__/|/  _ \\/  _ \\/  __//  __\\/ \\  /|  /   _\\/ \\",
+    "\033[1G| |\\/||| / \\|| | \\||  \\  |  \\/|| |\\ ||  |  /  | |",
+    "\033[1G| |  ||| \\_/|| |_/||  /_ |    /| | \\||  |  \\__\\_/",
+    "\033[1G\\_/  \\|\\____/\\____/\\____\\\\_/\\_\\\\_/  \\|  \\____/(_)",
+    "\033[1G                                                 ",
+    "\033[1G============================================",
 };
 
 typedef int (*accept_channel_fn_t)(ssh_message, ssh_channel);
@@ -144,7 +141,10 @@ static bool parse_bool_token(const char *token, bool *value);
 static void session_send_line(ssh_channel channel, const char *message);
 static void session_send_plain_line(session_ctx_t *ctx, const char *message);
 static void session_send_system_line(session_ctx_t *ctx, const char *message);
-static void session_send_raw_text(session_ctx_t *ctx, const char *text);
+static void session_send_multiline_system_text(session_ctx_t *ctx, const char *text);
+static void session_send_modern_c_ascii_art(session_ctx_t *ctx);
+static void session_render_motd(session_ctx_t *ctx, const char *motd);
+static bool session_fetch_motd(session_ctx_t *ctx, char *motd, size_t motd_len);
 static void session_render_banner(session_ctx_t *ctx);
 static void session_render_separator(session_ctx_t *ctx, const char *label);
 static void session_render_prompt(session_ctx_t *ctx, bool include_separator);
@@ -182,6 +182,7 @@ static void session_handle_exit(session_ctx_t *ctx);
 static void session_handle_nick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pm(session_ctx_t *ctx, const char *arguments);
 static void session_handle_motd(session_ctx_t *ctx);
+static void session_handle_image_to_ascii(session_ctx_t *ctx, const char *arguments);
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments);
 static void session_handle_palette(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
@@ -1442,8 +1443,79 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
   session_send_line(ctx->channel, formatted);
 }
 
-static void session_send_raw_text(session_ctx_t *ctx, const char *text) {
-  if (ctx == NULL || ctx->channel == NULL || text == NULL) {
+static void session_send_multiline_system_text(session_ctx_t *ctx, const char *text) {
+  if (ctx == NULL || text == NULL || text[0] == '\0') {
+    return;
+  }
+
+  const char *line_start = text;
+  while (*line_start != '\0') {
+    const char *line_end = strchr(line_start, '\n');
+    size_t line_len = line_end != NULL ? (size_t)(line_end - line_start) : strlen(line_start);
+
+    while (line_len > 0U && line_start[line_len - 1U] == '\r') {
+      --line_len;
+    }
+
+    char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
+    if (line_len >= sizeof(line_buffer)) {
+      line_len = sizeof(line_buffer) - 1U;
+    }
+
+    memcpy(line_buffer, line_start, line_len);
+    line_buffer[line_len] = '\0';
+
+    session_send_system_line(ctx, line_buffer);
+
+    if (line_end == NULL) {
+      break;
+    }
+    line_start = line_end + 1;
+  }
+}
+
+static void session_send_modern_c_ascii_art(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  for (size_t idx = 0; idx < sizeof(kModernCAsciiArt) / sizeof(kModernCAsciiArt[0]); ++idx) {
+    session_send_system_line(ctx, kModernCAsciiArt[idx]);
+  }
+}
+
+static void session_render_motd(session_ctx_t *ctx, const char *motd) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (motd != NULL && motd[0] != '\0') {
+    session_send_multiline_system_text(ctx, motd);
+  }
+
+  session_send_modern_c_ascii_art(ctx);
+}
+
+static bool session_fetch_motd(session_ctx_t *ctx, char *motd, size_t motd_len) {
+  if (motd == NULL || motd_len == 0U) {
+    return false;
+  }
+
+  motd[0] = '\0';
+
+  if (ctx == NULL || ctx->owner == NULL) {
+    return false;
+  }
+
+  pthread_mutex_lock(&ctx->owner->lock);
+  snprintf(motd, motd_len, "%s", ctx->owner->motd);
+  pthread_mutex_unlock(&ctx->owner->lock);
+
+  return motd[0] != '\0';
+}
+
+static void session_render_separator(session_ctx_t *ctx, const char *label) {
+  if (ctx == NULL || label == NULL) {
     return;
   }
 
@@ -2382,14 +2454,8 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/nick <name>          - change your display name");
   session_send_system_line(ctx, "/pm <username> <message> - send a private message");
   session_send_system_line(ctx, "/motd                - view the message of the day");
-  session_send_system_line(ctx, "/users               - announce the number of connected users");
-  session_send_system_line(ctx, "/search <text>       - search for users whose name matches text");
-  session_send_system_line(ctx, "/image <url> [caption] - share an image link");
-  session_send_system_line(ctx, "/video <url> [caption] - share a video link");
-  session_send_system_line(ctx, "/audio <url> [caption] - share an audio clip");
-  session_send_system_line(ctx, "/files <url> [caption] - share a downloadable file");
-  session_send_system_line(ctx, "/image-to-ascii <id> - render a 48x48 ASCII preview of an image message");
-  session_send_system_line(ctx, "Up/Down arrows           - scroll recent chat history");
+  session_send_system_line(ctx,
+                           "/image-to-ascii <file> [palette] - render an image preview");
   session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
   session_send_system_line(ctx,
                            "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may "
@@ -3793,17 +3859,89 @@ static void session_handle_motd(session_ctx_t *ctx) {
   }
 
   char motd[sizeof(ctx->owner->motd)];
-
-  pthread_mutex_lock(&ctx->owner->lock);
-  snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
-  pthread_mutex_unlock(&ctx->owner->lock);
-
-  if (motd[0] == '\0') {
+  if (!session_fetch_motd(ctx, motd, sizeof(motd))) {
     session_send_system_line(ctx, "No message of the day is configured.");
+  }
+
+  session_render_motd(ctx, motd);
+}
+
+static void session_handle_image_to_ascii(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
     return;
   }
 
-  session_send_raw_text(ctx, motd);
+  static const char *kUsage = "Usage: /image-to-ascii <file_path> [palette]";
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, kUsage);
+    char palette_info[SSH_CHATTER_MESSAGE_LIMIT];
+    ascii_palette_list(palette_info, sizeof(palette_info));
+    session_send_system_line(ctx, palette_info);
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    char palette_info[SSH_CHATTER_MESSAGE_LIMIT];
+    ascii_palette_list(palette_info, sizeof(palette_info));
+    session_send_system_line(ctx, palette_info);
+    return;
+  }
+
+  char *palette_name = NULL;
+  char *cursor = working;
+  while (*cursor != '\0' && !isspace((unsigned char)*cursor)) {
+    ++cursor;
+  }
+
+  if (*cursor != '\0') {
+    *cursor = '\0';
+    palette_name = cursor + 1;
+    trim_whitespace_inplace(palette_name);
+    if (palette_name[0] == '\0') {
+      palette_name = NULL;
+    }
+  }
+
+  const char *path = working;
+  const ascii_palette_t *palette = ascii_palette_default();
+  if (palette_name != NULL) {
+    const ascii_palette_t *candidate = ascii_palette_find(palette_name);
+    if (candidate == NULL) {
+      char unknown[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(unknown, sizeof(unknown), "Unknown palette '%s'.", palette_name);
+      session_send_system_line(ctx, unknown);
+      char palette_info[SSH_CHATTER_MESSAGE_LIMIT];
+      ascii_palette_list(palette_info, sizeof(palette_info));
+      session_send_system_line(ctx, palette_info);
+      return;
+    }
+    palette = candidate;
+  }
+
+  ascii_art_t art;
+  if (!image_to_ascii(path, palette, &art)) {
+    session_send_system_line(ctx,
+                             "Unable to render the image. Make sure the file exists and is a supported PNG, BMP, or JPG.");
+    return;
+  }
+
+  for (size_t idx = 0; idx < art.line_count; ++idx) {
+    if (art.lines[idx] != NULL) {
+      session_send_line(ctx->channel, art.lines[idx]);
+    }
+  }
+  ascii_art_free(&art);
+
+  char palette_message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(palette_message, sizeof(palette_message), "Rendered using the '%s' palette.",
+           palette->name);
+  session_send_system_line(ctx, palette_message);
 }
 
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments) {
@@ -4331,8 +4469,16 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  if (strncmp(line, "/date", 5) == 0) {
-    const char *arguments = line + 5;
+  if (strncmp(line, "/image-to-ascii", 15) == 0) {
+    const char *arguments = line + 15;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_image_to_ascii(ctx, arguments);
+    return;
+  }
+  if (strncmp(line, "/ban", 4) == 0) {
+    const char *arguments = line + 4;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
@@ -4907,9 +5053,9 @@ static void *session_thread(void *arg) {
 
     session_render_banner(ctx);
     session_send_history(ctx);
-    if (ctx->owner->motd[0] != '\0') {
-      session_send_system_line(ctx, ctx->owner->motd);
-    }
+    char motd[sizeof(ctx->owner->motd)];
+    session_fetch_motd(ctx, motd, sizeof(motd));
+    session_render_motd(ctx, motd);
     session_send_system_line(ctx, "Type /help to explore available commands.");
 
     char join_message[SSH_CHATTER_MESSAGE_LIMIT];
@@ -5043,18 +5189,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->ban_count = 0U;
   memset(host->bans, 0, sizeof(host->bans));
   snprintf(host->version, sizeof(host->version), "ssh-chatter (C, rolling release)");
-  snprintf(host->motd, sizeof(host->motd),
-  "Welcome to ssh-chat!\n"
-  "\033[1G- Be polite to each other\n"
-  "\033[1G- fun fact: this server is written in pure c.\n"
-  "\033[1G============================================\n"
-  "\033[1G _      ____  ____  _____ ____  _        ____  _ \n"
-  "\033[1G/ \\__/|/  _ \\/  _ \\/  __//  __\\/ \\  /|  /   _\\/ \\\n"
-  "\033[1G| |\\/||| / \\|| | \\||  \\  |  \\/|| |\\ ||  |  /  | |\n"
-  "\033[1G| |  ||| \\_/|| |_/||  /_ |    /| | \\||  |  \\__\\_/\n"
-  "\033[1G\\_/  \\|\\____/\\____/\\____\\\\_/\\_\\\\_/  \\|  \\____/(_)\n"
-  "\033[1G                                                 \n"
-  "\033[1G============================================\n");
+  snprintf(host->motd, sizeof(host->motd), "%s", kDefaultMotdText);
 
 
   host->connection_count = 0U;
