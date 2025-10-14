@@ -27,6 +27,7 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "humanized/humanized.h"
@@ -198,6 +199,11 @@ static void session_handle_os(session_ctx_t *ctx, const char *arguments);
 static void session_handle_getos(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pair(session_ctx_t *ctx);
 static void session_handle_connected(session_ctx_t *ctx);
+static void session_normalize_newlines(char *text);
+static bool timezone_sanitize_identifier(const char *input, char *output, size_t length);
+static bool timezone_resolve_identifier(const char *input, char *resolved, size_t length);
+static const palette_descriptor_t *palette_find_descriptor(const char *name);
+static bool palette_apply_to_session(session_ctx_t *ctx, const palette_descriptor_t *descriptor);
 static void session_handle_poll(session_ctx_t *ctx, const char *arguments);
 static void session_handle_vote(session_ctx_t *ctx, size_t option_index);
 static bool session_line_is_exit_command(const char *line);
@@ -220,6 +226,17 @@ static void host_state_resolve_path(host_t *host);
 static void host_state_load(host_t *host);
 static void host_state_save_locked(host_t *host);
 static bool host_try_load_motd_from_path(host_t *host, const char *path);
+static bool username_contains(const char *username, const char *needle);
+static size_t host_history_snapshot(host_t *host, chat_history_entry_t *snapshot, size_t capacity);
+static uint64_t session_preview_hash(const char *text);
+static uint64_t session_preview_next(uint64_t *state);
+static size_t session_build_image_preview(const char *seed,
+                                         char lines[][SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN],
+                                         size_t max_lines);
+static void host_apply_palette_descriptor(host_t *host, const palette_descriptor_t *descriptor);
+static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, chat_history_entry_t *out_entry);
+static bool host_lookup_user_os(host_t *host, const char *username, char *buffer, size_t length);
+static void session_send_poll_summary(session_ctx_t *ctx);
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
 static const uint32_t HOST_STATE_VERSION = 4U;
@@ -1478,39 +1495,14 @@ static void session_render_separator(session_ctx_t *ctx, const char *label) {
   }
   size_t remaining = total_width > label_len ? total_width - label_len : 0U;
   size_t offset = 0U;
-
-  const char *full_dash = "─";
-  const size_t full_dash_len = 3U;
-  const size_t full_dash_width = 2U;
-  
-  const char *half_dash = "-";
-  const size_t half_dash_len = 1U;
-  const size_t half_dash_width = 1U;
-  
-  size_t filled_width = 0U;
-  
-  while (filled_width < remaining) {
-    size_t width_left = remaining - filled_width;
-  
-    if (width_left >= full_dash_width) {
-      if (offset + full_dash_len >= sizeof(content)) {
-        break;
-      }
-  
-      memcpy(content + offset, full_dash, full_dash_len);
-      offset += full_dash_len;
-      filled_width += full_dash_width;
-    } else if (width_left == half_dash_width) {
-      if (offset + half_dash_len >= sizeof(content)) {
-        break;
-      }
-  
-      memcpy(content + offset, half_dash, half_dash_len);
-      offset += half_dash_len;
-      filled_width += half_dash_width;
-    } else {
+  for (size_t idx = 0U; idx < remaining; ++idx) {
+    const char *dash = "─";
+    size_t dash_len = strlen(dash);
+    if (offset + dash_len >= sizeof(content)) {
       break;
     }
+    memcpy(content + offset, dash, dash_len);
+    offset += dash_len;
   }
   content[offset] = '\0';
 
@@ -2504,8 +2496,9 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
     long nsec_delta = now.tv_nsec - ctx->last_message_time.tv_nsec;
     if (nsec_delta < 0L) {
       --sec_delta;
+      nsec_delta += 1000000000L;
     }
-    if (sec_delta < 1) {
+    if (sec_delta < 0 || (sec_delta == 0 && nsec_delta < 1000000000L)) {
       allow_message = false;
     }
   }
@@ -3219,8 +3212,8 @@ static void session_handle_today(session_ctx_t *ctx) {
   }
 
   if (!host->random_seeded) {
-    unsigned seed = (unsigned int)(time(NULL) ^ getpid() ^ (unsigned int)pthread_self());
-    rand_r(&seed);
+    unsigned seed = (unsigned)(now ^ (time_t)getpid());
+    srand(seed);
     host->random_seeded = true;
   }
 
@@ -3471,6 +3464,7 @@ static void session_handle_pair(session_ctx_t *ctx) {
     matches[offset] = '\0';
     ++match_count;
   }
+  pthread_mutex_unlock(&ctx->owner->room.lock);
 
   const os_descriptor_t *descriptor = session_lookup_os_descriptor(ctx->os_name);
   const char *display = descriptor != NULL ? descriptor->display : ctx->os_name;
@@ -3479,7 +3473,6 @@ static void session_handle_pair(session_ctx_t *ctx) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(message, sizeof(message), "No connected users currently share your %s setup.", display);
     session_send_system_line(ctx, message);
-    pthread_mutex_unlock(&ctx->owner->room.lock);
     return;
   }
 
@@ -3487,7 +3480,6 @@ static void session_handle_pair(session_ctx_t *ctx) {
   snprintf(header, sizeof(header), "Users sharing your %s setup:", display);
   session_send_system_line(ctx, header);
   session_send_system_line(ctx, matches);
-  pthread_mutex_unlock(&ctx->owner->room.lock);
 }
 
 static void session_handle_connected(session_ctx_t *ctx) {
@@ -4311,6 +4303,90 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_system_color(ctx, arguments);
     return;
   }
+  if (strncmp(line, "/palette", 8) == 0) {
+    const char *arguments = line + 8;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_palette(ctx, arguments);
+    return;
+  }
+  if (strncmp(line, "/image-to-ascii", 15) == 0) {
+    const char *arguments = line + 15;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_image_to_ascii(ctx, arguments);
+    return;
+  }
+  if (strncmp(line, "/today", 6) == 0) {
+    const char *arguments = line + 6;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    if (*arguments != '\0') {
+      session_send_system_line(ctx, "Usage: /today");
+    } else {
+      session_handle_today(ctx);
+    }
+    return;
+  }
+  if (strncmp(line, "/date", 5) == 0) {
+    const char *arguments = line + 5;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_date(ctx, arguments);
+    return;
+  }
+  if (strncmp(line, "/os", 3) == 0) {
+    const char *arguments = line + 3;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_os(ctx, arguments);
+    return;
+  }
+  if (strncmp(line, "/getos", 6) == 0) {
+    const char *arguments = line + 6;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_getos(ctx, arguments);
+    return;
+  }
+  if (strncmp(line, "/pair", 5) == 0) {
+    const char *arguments = line + 5;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    if (*arguments != '\0') {
+      session_send_system_line(ctx, "Usage: /pair");
+    } else {
+      session_handle_pair(ctx);
+    }
+    return;
+  }
+  if (strncmp(line, "/connected", 10) == 0) {
+    const char *arguments = line + 10;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    if (*arguments != '\0') {
+      session_send_system_line(ctx, "Usage: /connected");
+    } else {
+      session_handle_connected(ctx);
+    }
+    return;
+  }
+  if (strncmp(line, "/poll", 5) == 0) {
+    const char *arguments = line + 5;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_poll(ctx, arguments);
+    return;
+  }
 
   if (session_parse_command(line, "/palette", &arguments)) {
     session_handle_palette(ctx, arguments);
@@ -5003,8 +5079,6 @@ void host_init(host_t *host, auth_profile_t *auth) {
 
   (void)host_try_load_motd_from_path(host, "/etc/chatter/motd");
 
-  (void)host_try_load_motd_from_path(host, "/etc/ssh-chatter/motd");
-
   host_state_load(host);
 }
 
@@ -5013,7 +5087,7 @@ static bool host_try_load_motd_from_path(host_t *host, const char *path) {
     return false;
   }
 
-  FILE *motd_file = fopen(path, "r");
+  FILE *motd_file = fopen(path, "rb");
   if (motd_file == NULL) {
     return false;
   }
@@ -5051,6 +5125,8 @@ static bool host_try_load_motd_from_path(host_t *host, const char *path) {
     humanized_log_error("host", "failed to close motd file", close_error);
   }
 
+  session_normalize_newlines(motd_buffer);
+
   pthread_mutex_lock(&host->lock);
   snprintf(host->motd, sizeof(host->motd), "%s", motd_buffer);
   pthread_mutex_unlock(&host->lock);
@@ -5065,6 +5141,10 @@ void host_set_motd(host_t *host, const char *motd) {
   if (host_try_load_motd_from_path(host, motd)) {
     return;
   }
+
+  char normalized[sizeof(host->motd)];
+  snprintf(normalized, sizeof(normalized), "%s", motd);
+  session_normalize_newlines(normalized);
 
   pthread_mutex_lock(&host->lock);
   snprintf(host->motd, sizeof(host->motd), "%s", normalized);
