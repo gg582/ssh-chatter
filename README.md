@@ -2,6 +2,10 @@
 
 SSH-Chatter is a C reimplementation of the Go [`ssh-chat`](https://github.com/shazow/ssh-chat) server.  It mirrors the original behaviour while using modern C patterns and a small, testable core.  The server listens for SSH connections and places every authenticated user into a shared chat room that exposes the same command surface as the Go reference implementation.
 
+# Preview
+
+![Preview](./preview.png)
+
 ## Repository layout
 
 The codebase is intentionally compact so new contributors can navigate it quickly:
