@@ -37,6 +37,8 @@
 #define RTLD_LOCAL 0
 #endif
 
+#define ANSI_CLEAR_LINE "\033[2K"
+
 typedef struct {
   const char *name;
   const char *code;
@@ -115,9 +117,14 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message);
 static void session_render_banner(session_ctx_t *ctx);
 static void session_render_separator(session_ctx_t *ctx, const char *label);
 static void session_render_prompt(session_ctx_t *ctx, bool include_separator);
+static void session_refresh_input_line(session_ctx_t *ctx);
+static void session_set_input_text(session_ctx_t *ctx, const char *text);
 static void session_local_echo_char(session_ctx_t *ctx, char ch);
 static void session_local_backspace(session_ctx_t *ctx);
 static void session_clear_input(session_ctx_t *ctx);
+static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch);
+static void session_history_record(session_ctx_t *ctx, const char *line);
+static void session_history_navigate(session_ctx_t *ctx, int direction);
 static void session_send_user_message(session_ctx_t *target, const session_ctx_t *from, const char *message);
 static void session_send_private_message_line(session_ctx_t *ctx, const session_ctx_t *color_source,
                                               const char *label, const char *message);
@@ -139,6 +146,8 @@ static void session_handle_pm(session_ctx_t *ctx, const char *arguments);
 static void session_handle_motd(session_ctx_t *ctx);
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
+static void session_handle_usercount(session_ctx_t *ctx);
+static void session_handle_search(session_ctx_t *ctx, const char *arguments);
 static bool session_line_is_exit_command(const char *line);
 static void session_handle_username_conflict_input(session_ctx_t *ctx, const char *line);
 static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count);
@@ -157,6 +166,7 @@ static void host_state_resolve_path(host_t *host);
 static void host_state_load(host_t *host);
 static void host_state_save_locked(host_t *host);
 static bool host_try_load_motd_from_path(host_t *host, const char *path);
+static bool username_contains(const char *username, const char *needle);
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
 static const uint32_t HOST_STATE_VERSION = 1U;
@@ -971,6 +981,34 @@ static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
   }
 }
 
+static void session_refresh_input_line(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->channel == NULL) {
+    return;
+  }
+
+  static const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
+  ssh_channel_write(ctx->channel, clear_sequence, sizeof(clear_sequence) - 1U);
+  session_render_prompt(ctx, false);
+}
+
+static void session_set_input_text(session_ctx_t *ctx, const char *text) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  ctx->input_length = 0U;
+  memset(ctx->input_buffer, 0, sizeof(ctx->input_buffer));
+
+  if (text != NULL && text[0] != '\0') {
+    const size_t len = strnlen(text, sizeof(ctx->input_buffer) - 1U);
+    memcpy(ctx->input_buffer, text, len);
+    ctx->input_buffer[len] = '\0';
+    ctx->input_length = len;
+  }
+
+  session_refresh_input_line(ctx);
+}
+
 static void session_local_echo_char(session_ctx_t *ctx, char ch) {
   if (ctx == NULL || ctx->channel == NULL) {
     return;
@@ -1070,6 +1108,150 @@ static void session_clear_input(session_ctx_t *ctx) {
 
   ctx->input_length = 0U;
   memset(ctx->input_buffer, 0, sizeof(ctx->input_buffer));
+  ctx->input_history_position = -1;
+  ctx->input_escape_active = false;
+  ctx->input_escape_length = 0U;
+}
+
+static void session_history_record(session_ctx_t *ctx, const char *line) {
+  if (ctx == NULL || line == NULL) {
+    return;
+  }
+
+  bool has_visible = false;
+  for (const char *cursor = line; *cursor != '\0'; ++cursor) {
+    if (!isspace((unsigned char)*cursor)) {
+      has_visible = true;
+      break;
+    }
+  }
+
+  if (!has_visible) {
+    ctx->input_history_position = -1;
+    return;
+  }
+
+  if (ctx->input_history_count > 0U) {
+    const size_t last_index = ctx->input_history_count - 1U;
+    if (strncmp(ctx->input_history[last_index], line, sizeof(ctx->input_history[last_index])) == 0) {
+      ctx->input_history_position = -1;
+      return;
+    }
+  }
+
+  if (ctx->input_history_count < SSH_CHATTER_INPUT_HISTORY_LIMIT) {
+    snprintf(ctx->input_history[ctx->input_history_count], sizeof(ctx->input_history[0]), "%s", line);
+    ++ctx->input_history_count;
+  } else {
+    memmove(ctx->input_history, ctx->input_history + 1,
+            sizeof(ctx->input_history) - sizeof(ctx->input_history[0]));
+    snprintf(ctx->input_history[SSH_CHATTER_INPUT_HISTORY_LIMIT - 1U], sizeof(ctx->input_history[0]), "%s", line);
+  }
+
+  ctx->input_history_position = -1;
+}
+
+static void session_history_navigate(session_ctx_t *ctx, int direction) {
+  if (ctx == NULL || direction == 0) {
+    return;
+  }
+
+  if (ctx->input_history_count == 0U) {
+    ctx->input_history_position = (int)ctx->input_history_count;
+    session_set_input_text(ctx, "");
+    return;
+  }
+
+  int position = ctx->input_history_position;
+  if (position < 0 || position > (int)ctx->input_history_count) {
+    position = (int)ctx->input_history_count;
+  }
+
+  position += direction;
+  if (position < 0) {
+    position = 0;
+  }
+  if (position > (int)ctx->input_history_count) {
+    position = (int)ctx->input_history_count;
+  }
+
+  ctx->input_history_position = position;
+
+  if (position == (int)ctx->input_history_count) {
+    session_set_input_text(ctx, "");
+  } else {
+    session_set_input_text(ctx, ctx->input_history[position]);
+  }
+}
+
+static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  if (!ctx->input_escape_active) {
+    if (ch == 0x1b) {
+      ctx->input_escape_active = true;
+      ctx->input_escape_length = 0U;
+      if (ctx->input_escape_length < sizeof(ctx->input_escape_buffer)) {
+        ctx->input_escape_buffer[ctx->input_escape_length++] = ch;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  if (ctx->input_escape_length < sizeof(ctx->input_escape_buffer)) {
+    ctx->input_escape_buffer[ctx->input_escape_length++] = ch;
+  }
+
+  const char *sequence = ctx->input_escape_buffer;
+  const size_t length = ctx->input_escape_length;
+
+  if (length == 1U) {
+    return true;
+  }
+
+  if (length == 2U) {
+    if (sequence[1] == '[') {
+      return true;
+    }
+    if (sequence[1] == 'k') {
+      session_history_navigate(ctx, -1);
+      ctx->input_escape_active = false;
+      ctx->input_escape_length = 0U;
+      return true;
+    }
+    if (sequence[1] == 'j') {
+      session_history_navigate(ctx, 1);
+      ctx->input_escape_active = false;
+      ctx->input_escape_length = 0U;
+      return true;
+    }
+  }
+
+  if (length == 3U && sequence[1] == '[') {
+    if (sequence[2] == 'A') {
+      session_history_navigate(ctx, -1);
+      ctx->input_escape_active = false;
+      ctx->input_escape_length = 0U;
+      return true;
+    }
+    if (sequence[2] == 'B') {
+      session_history_navigate(ctx, 1);
+      ctx->input_escape_active = false;
+      ctx->input_escape_length = 0U;
+      return true;
+    }
+  }
+
+  const bool bracket_sequence = (length >= 2U && sequence[1] == '[');
+  ctx->input_escape_active = false;
+  ctx->input_escape_length = 0U;
+  if (bracket_sequence) {
+    return true;
+  }
+  return ch == 0x1b;
 }
 
 static void session_send_user_message(session_ctx_t *target, const session_ctx_t *from, const char *message) {
@@ -1276,6 +1458,8 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/nick <name>          - change your display name");
   session_send_system_line(ctx, "/pm <username> <message> - send a private message");
   session_send_system_line(ctx, "/motd                - view the message of the day");
+  session_send_system_line(ctx, "/users               - announce the number of connected users");
+  session_send_system_line(ctx, "/search <text>       - search for users whose name matches text");
   session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
   session_send_system_line(ctx,
                            "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may "
@@ -1495,6 +1679,168 @@ static void session_handle_pm(session_ctx_t *ctx, const char *arguments) {
   char to_sender_label[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(to_sender_label, sizeof(to_sender_label), "you -> %s", target->user.name);
   session_send_private_message_line(ctx, ctx, to_sender_label, message);
+}
+
+static bool username_contains(const char *username, const char *needle) {
+  if (username == NULL || needle == NULL) {
+    return false;
+  }
+
+  const size_t needle_len = strlen(needle);
+  if (needle_len == 0U) {
+    return false;
+  }
+
+  const size_t name_len = strlen(username);
+  if (needle_len > name_len) {
+    return false;
+  }
+
+  for (size_t offset = 0U; offset + needle_len <= name_len; ++offset) {
+    bool match = true;
+    for (size_t idx = 0U; idx < needle_len; ++idx) {
+      const unsigned char user_ch = (unsigned char)username[offset + idx];
+      const unsigned char needle_ch = (unsigned char)needle[idx];
+      if (tolower(user_ch) != tolower(needle_ch)) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void session_handle_search(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (ctx->owner == NULL) {
+    session_send_system_line(ctx, "Search is unavailable at the moment.");
+    return;
+  }
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, "Usage: /search <text>");
+    return;
+  }
+
+  char query[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(query, sizeof(query), "%s", arguments);
+  trim_whitespace_inplace(query);
+
+  if (query[0] == '\0') {
+    session_send_system_line(ctx, "Usage: /search <text>");
+    return;
+  }
+
+  char matches[SSH_CHATTER_MAX_USERS][SSH_CHATTER_USERNAME_LEN];
+  size_t match_count = 0U;
+
+  pthread_mutex_lock(&ctx->owner->room.lock);
+  for (size_t idx = 0U; idx < ctx->owner->room.member_count; ++idx) {
+    session_ctx_t *member = ctx->owner->room.members[idx];
+    if (member == NULL) {
+      continue;
+    }
+    if (username_contains(member->user.name, query)) {
+      if (match_count < SSH_CHATTER_MAX_USERS) {
+        snprintf(matches[match_count], sizeof(matches[match_count]), "%s", member->user.name);
+        ++match_count;
+      }
+    }
+  }
+  pthread_mutex_unlock(&ctx->owner->room.lock);
+
+  if (match_count == 0U) {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    char display_query[64];
+    size_t copy_len = strnlen(query, sizeof(display_query) - 1U);
+    memcpy(display_query, query, copy_len);
+    display_query[copy_len] = '\0';
+    snprintf(message, sizeof(message), "No users matching '%s'.", display_query);
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  char header[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(header, sizeof(header), "Matching users (%zu):", match_count);
+  session_send_system_line(ctx, header);
+
+  char line[SSH_CHATTER_MESSAGE_LIMIT];
+  line[0] = '\0';
+  size_t offset = 0U;
+
+  for (size_t idx = 0U; idx < match_count; ++idx) {
+    const char *name = matches[idx];
+    const size_t name_len = strnlen(name, sizeof(matches[idx]));
+    const size_t prefix_len = (offset == 0U) ? 0U : 2U;
+
+    if (offset + prefix_len + name_len >= sizeof(line)) {
+      if (offset > 0U) {
+        session_send_system_line(ctx, line);
+        line[0] = '\0';
+        offset = 0U;
+      }
+    }
+
+    if (offset == 0U) {
+      int written = snprintf(line, sizeof(line), "%s", name);
+      if (written < 0) {
+        line[0] = '\0';
+        offset = 0U;
+      } else if ((size_t)written >= sizeof(line)) {
+        offset = sizeof(line) - 1U;
+      } else {
+        offset = (size_t)written;
+      }
+    } else {
+      int written = snprintf(line + offset, sizeof(line) - offset, ", %s", name);
+      if (written < 0) {
+        continue;
+      }
+      if ((size_t)written >= sizeof(line) - offset) {
+        session_send_system_line(ctx, line);
+        int restart = snprintf(line, sizeof(line), "%s", name);
+        if (restart < 0) {
+          line[0] = '\0';
+          offset = 0U;
+        } else if ((size_t)restart >= sizeof(line)) {
+          offset = sizeof(line) - 1U;
+        } else {
+          offset = (size_t)restart;
+        }
+      } else {
+        offset += (size_t)written;
+      }
+    }
+  }
+
+  if (offset > 0U) {
+    session_send_system_line(ctx, line);
+  }
+}
+
+static void session_handle_usercount(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  size_t count = 0U;
+  pthread_mutex_lock(&ctx->owner->room.lock);
+  count = ctx->owner->room.member_count;
+  pthread_mutex_unlock(&ctx->owner->room.lock);
+
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(message, sizeof(message), "There %s currently %zu user%s connected.",
+           count == 1U ? "is" : "are", count, count == 1U ? "" : "s");
+
+  host_history_record_system(ctx->owner, message);
+  chat_room_broadcast(&ctx->owner->room, message, NULL);
 }
 
 static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count) {
@@ -2030,6 +2376,26 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
+  if (strncmp(line, "/users", 6) == 0) {
+    const char *arguments = line + 6;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    if (*arguments != '\0') {
+      session_send_system_line(ctx, "Usage: /users");
+    } else {
+      session_handle_usercount(ctx);
+    }
+    return;
+  }
+  if (strncmp(line, "/search", 7) == 0) {
+    const char *arguments = line + 7;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_search(ctx, arguments);
+    return;
+  }
   if (strncmp(line, "/ban", 4) == 0) {
     const char *arguments = line + 4;
     while (*arguments == ' ' || *arguments == '\t') {
@@ -2228,10 +2594,15 @@ static void *session_thread(void *arg) {
     for (int idx = 0; idx < bytes_read; ++idx) {
       const char ch = buffer[idx];
 
+      if (session_consume_escape_sequence(ctx, ch)) {
+        continue;
+      }
+
       if (ch == '\r' || ch == '\n') {
         session_local_echo_char(ctx, '\n');
         if (ctx->input_length > 0U) {
           ctx->input_buffer[ctx->input_length] = '\0';
+          session_history_record(ctx, ctx->input_buffer);
           session_process_line(ctx, ctx->input_buffer);
         }
         session_clear_input(ctx);
@@ -2243,12 +2614,14 @@ static void *session_thread(void *arg) {
       }
 
       if (ch == '\b' || ch == 0x7f) {
+        ctx->input_history_position = -1;
         session_local_backspace(ctx);
         continue;
       }
 
       if (ch == '\t') {
         if (ctx->input_length + 1U < sizeof(ctx->input_buffer)) {
+          ctx->input_history_position = -1;
           ctx->input_buffer[ctx->input_length++] = ' ';
           session_local_echo_char(ctx, ' ');
         }
@@ -2261,6 +2634,7 @@ static void *session_thread(void *arg) {
 
       if (ctx->input_length + 1U >= sizeof(ctx->input_buffer)) {
         ctx->input_buffer[sizeof(ctx->input_buffer) - 1U] = '\0';
+        session_history_record(ctx, ctx->input_buffer);
         session_process_line(ctx, ctx->input_buffer);
         session_clear_input(ctx);
         if (ctx->should_exit) {
@@ -2270,6 +2644,7 @@ static void *session_thread(void *arg) {
       }
 
       if (ctx->input_length + 1U < sizeof(ctx->input_buffer)) {
+        ctx->input_history_position = -1;
         ctx->input_buffer[ctx->input_length++] = ch;
         session_local_echo_char(ctx, ch);
       }
@@ -2282,6 +2657,7 @@ static void *session_thread(void *arg) {
 
   if (!ctx->should_exit && ctx->input_length > 0U) {
     ctx->input_buffer[ctx->input_length] = '\0';
+    session_history_record(ctx, ctx->input_buffer);
     session_process_line(ctx, ctx->input_buffer);
     session_clear_input(ctx);
   }

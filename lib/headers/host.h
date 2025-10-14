@@ -23,6 +23,7 @@
 #define SSH_CHATTER_COLOR_NAME_LEN 32
 #define SSH_CHATTER_MAX_BANS 128
 #define SSH_CHATTER_HISTORY_LIMIT 64
+#define SSH_CHATTER_INPUT_HISTORY_LIMIT 64
 #define SSH_CHATTER_MAX_PREFERENCES 1024
 
 struct host;
@@ -69,6 +70,12 @@ typedef struct session_ctx {
   struct host *owner;
   char input_buffer[SSH_CHATTER_MAX_INPUT_LEN];
   size_t input_length;
+  char input_history[SSH_CHATTER_INPUT_HISTORY_LIMIT][SSH_CHATTER_MAX_INPUT_LEN];
+  size_t input_history_count;
+  int input_history_position;
+  bool input_escape_active;
+  char input_escape_buffer[8];
+  size_t input_escape_length;
   char client_ip[SSH_CHATTER_IP_LEN];
   const char *user_color_code;
   const char *user_highlight_code;
