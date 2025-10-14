@@ -125,6 +125,7 @@ static void session_clear_input(session_ctx_t *ctx);
 static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch);
 static void session_history_record(session_ctx_t *ctx, const char *line);
 static void session_history_navigate(session_ctx_t *ctx, int direction);
+static void session_scrollback_navigate(session_ctx_t *ctx, int direction);
 static void session_send_user_message(session_ctx_t *target, const session_ctx_t *from, const char *message);
 static void session_send_private_message_line(session_ctx_t *ctx, const session_ctx_t *color_source,
                                               const char *label, const char *message);
@@ -156,6 +157,7 @@ static int session_utf8_char_width(const char *bytes, size_t length);
 static void host_history_record_user(host_t *host, const session_ctx_t *from, const char *message);
 static void host_history_record_system(host_t *host, const char *message);
 static void session_send_history(session_ctx_t *ctx);
+static void session_send_history_entry(session_ctx_t *ctx, const chat_history_entry_t *entry);
 static void host_history_append(host_t *host, const chat_history_entry_t *entry);
 static user_preference_t *host_find_preference_locked(host_t *host, const char *username);
 static user_preference_t *host_ensure_preference_locked(host_t *host, const char *username);
@@ -167,6 +169,7 @@ static void host_state_load(host_t *host);
 static void host_state_save_locked(host_t *host);
 static bool host_try_load_motd_from_path(host_t *host, const char *path);
 static bool username_contains(const char *username, const char *needle);
+static size_t host_history_snapshot(host_t *host, chat_history_entry_t *snapshot, size_t capacity);
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
 static const uint32_t HOST_STATE_VERSION = 1U;
@@ -375,6 +378,27 @@ static void chat_room_broadcast(chat_room_t *room, const char *message, const se
   } else {
     printf("[broadcast] %s\n", message);
   }
+}
+
+static size_t host_history_snapshot(host_t *host, chat_history_entry_t *snapshot, size_t capacity) {
+  if (host == NULL || snapshot == NULL || capacity == 0U) {
+    return 0U;
+  }
+
+  size_t count = 0U;
+
+  pthread_mutex_lock(&host->lock);
+  count = host->history_count;
+  if (count > capacity) {
+    count = capacity;
+  }
+  for (size_t idx = 0U; idx < count; ++idx) {
+    size_t history_index = (host->history_start + idx) % SSH_CHATTER_HISTORY_LIMIT;
+    snapshot[idx] = host->history[history_index];
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  return count;
 }
 
 static void host_history_append(host_t *host, const chat_history_entry_t *entry) {
@@ -1149,6 +1173,7 @@ static void session_history_record(session_ctx_t *ctx, const char *line) {
   }
 
   ctx->input_history_position = -1;
+  ctx->history_scroll_position = 0U;
 }
 
 static void session_history_navigate(session_ctx_t *ctx, int direction) {
@@ -1182,6 +1207,81 @@ static void session_history_navigate(session_ctx_t *ctx, int direction) {
   } else {
     session_set_input_text(ctx, ctx->input_history[position]);
   }
+}
+
+static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
+  if (ctx == NULL || ctx->owner == NULL || ctx->channel == NULL || direction == 0) {
+    return;
+  }
+
+  chat_history_entry_t snapshot[SSH_CHATTER_HISTORY_LIMIT];
+  size_t count = host_history_snapshot(ctx->owner, snapshot, SSH_CHATTER_HISTORY_LIMIT);
+  if (count == 0U) {
+    session_send_system_line(ctx, "No chat history available yet.");
+    return;
+  }
+
+  const size_t step = SSH_CHATTER_SCROLLBACK_CHUNK > 0 ? SSH_CHATTER_SCROLLBACK_CHUNK : 1U;
+  size_t position = ctx->history_scroll_position;
+  size_t new_position = position;
+
+  const size_t max_position = count > 0U ? count - 1U : 0U;
+
+  if (direction > 0) {
+    if (new_position < max_position) {
+      size_t advance = step;
+      if (advance > max_position - new_position) {
+        advance = max_position - new_position;
+      }
+      new_position += advance;
+    }
+  } else if (direction < 0) {
+    if (new_position > 0U) {
+      size_t retreat = step;
+      if (retreat > new_position) {
+        retreat = new_position;
+      }
+      new_position -= retreat;
+    }
+  }
+
+  bool at_boundary = (new_position == position);
+  ctx->history_scroll_position = new_position;
+
+  const size_t newest_visible = count - 1U - new_position;
+  size_t chunk = step;
+  if (chunk > newest_visible + 1U) {
+    chunk = newest_visible + 1U;
+  }
+  if (chunk == 0U) {
+    chunk = 1U;
+  }
+
+  const size_t oldest_visible = (newest_visible + 1U > chunk) ? (newest_visible + 1U - chunk) : 0U;
+
+  const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
+  ssh_channel_write(ctx->channel, clear_sequence, sizeof(clear_sequence) - 1U);
+  ssh_channel_write(ctx->channel, "\r\n", 2U);
+
+  if (direction > 0 && at_boundary && new_position == max_position) {
+    session_send_system_line(ctx, "Reached the oldest stored message.");
+  } else if (direction < 0 && at_boundary && new_position == 0U) {
+    session_send_system_line(ctx, "Already at the latest messages.");
+  }
+
+  char header[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(header, sizeof(header), "Scrollback (%zu-%zu of %zu)", oldest_visible + 1U, newest_visible + 1U, count);
+  session_send_system_line(ctx, header);
+
+  for (size_t idx = oldest_visible; idx <= newest_visible; ++idx) {
+    session_send_history_entry(ctx, &snapshot[idx]);
+  }
+
+  if (new_position == 0U) {
+    session_send_system_line(ctx, "End of scrollback.");
+  }
+
+  session_render_prompt(ctx, false);
 }
 
 static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
@@ -1245,6 +1345,21 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
     }
   }
 
+  if (length == 4U && sequence[1] == '[' && sequence[3] == '~') {
+    if (sequence[2] == '5') {
+      session_scrollback_navigate(ctx, 1);
+      ctx->input_escape_active = false;
+      ctx->input_escape_length = 0U;
+      return true;
+    }
+    if (sequence[2] == '6') {
+      session_scrollback_navigate(ctx, -1);
+      ctx->input_escape_active = false;
+      ctx->input_escape_length = 0U;
+      return true;
+    }
+  }
+
   const bool bracket_sequence = (length >= 2U && sequence[1] == '[');
   ctx->input_escape_active = false;
   ctx->input_escape_length = 0U;
@@ -1283,22 +1398,32 @@ static void session_send_private_message_line(session_ctx_t *ctx, const session_
   session_send_line(ctx->channel, line);
 }
 
+static void session_send_history_entry(session_ctx_t *ctx, const chat_history_entry_t *entry) {
+  if (ctx == NULL || ctx->channel == NULL || entry == NULL) {
+    return;
+  }
+
+  if (entry->is_user_message) {
+    const char *highlight = entry->user_highlight_code != NULL ? entry->user_highlight_code : "";
+    const char *color = entry->user_color_code != NULL ? entry->user_color_code : "";
+    const char *bold = entry->user_is_bold ? ANSI_BOLD : "";
+
+    char line[SSH_CHATTER_MESSAGE_LIMIT + 64];
+    snprintf(line, sizeof(line), "%s%s%s[%s]%s %s", highlight, bold, color, entry->username, ANSI_RESET,
+             entry->message);
+    session_send_line(ctx->channel, line);
+  } else {
+    session_send_system_line(ctx, entry->message);
+  }
+}
+
 static void session_send_history(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->owner == NULL || ctx->channel == NULL) {
     return;
   }
 
   chat_history_entry_t snapshot[SSH_CHATTER_HISTORY_LIMIT];
-  size_t count = 0U;
-
-  pthread_mutex_lock(&ctx->owner->lock);
-  count = ctx->owner->history_count;
-  for (size_t idx = 0; idx < count; ++idx) {
-    size_t history_index = (ctx->owner->history_start + idx) % SSH_CHATTER_HISTORY_LIMIT;
-    snapshot[idx] = ctx->owner->history[history_index];
-  }
-  pthread_mutex_unlock(&ctx->owner->lock);
-
+  size_t count = host_history_snapshot(ctx->owner, snapshot, SSH_CHATTER_HISTORY_LIMIT);
   if (count == 0U) {
     return;
   }
@@ -1309,22 +1434,12 @@ static void session_send_history(session_ctx_t *ctx) {
   session_send_system_line(ctx, header);
 
   for (size_t idx = 0; idx < count; ++idx) {
-    const chat_history_entry_t *entry = &snapshot[idx];
-    if (entry->is_user_message) {
-      const char *highlight = entry->user_highlight_code != NULL ? entry->user_highlight_code : "";
-      const char *color = entry->user_color_code != NULL ? entry->user_color_code : "";
-      const char *bold = entry->user_is_bold ? ANSI_BOLD : "";
-
-      char line[SSH_CHATTER_MESSAGE_LIMIT + 64];
-      snprintf(line, sizeof(line), "%s%s%s[%s]%s %s", highlight, bold, color, entry->username, ANSI_RESET,
-               entry->message);
-      session_send_line(ctx->channel, line);
-    } else {
-      session_send_system_line(ctx, entry->message);
-    }
+    session_send_history_entry(ctx, &snapshot[idx]);
   }
 
+  session_send_system_line(ctx, "Use PageUp/PageDown to browse stored chat history.");
   session_render_separator(ctx, "Chatroom");
+  ctx->history_scroll_position = 0U;
 }
 
 static bool session_handle_service_request(ssh_message message) {
@@ -1460,6 +1575,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/motd                - view the message of the day");
   session_send_system_line(ctx, "/users               - announce the number of connected users");
   session_send_system_line(ctx, "/search <text>       - search for users whose name matches text");
+  session_send_system_line(ctx, "PageUp/PageDown          - scroll recent chat history");
   session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
   session_send_system_line(ctx,
                            "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may "

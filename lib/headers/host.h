@@ -24,6 +24,7 @@
 #define SSH_CHATTER_MAX_BANS 128
 #define SSH_CHATTER_HISTORY_LIMIT 64
 #define SSH_CHATTER_INPUT_HISTORY_LIMIT 64
+#define SSH_CHATTER_SCROLLBACK_CHUNK 10
 #define SSH_CHATTER_MAX_PREFERENCES 1024
 
 struct host;
@@ -92,6 +93,7 @@ typedef struct session_ctx {
   bool should_exit;
   bool username_conflict;
   bool has_joined_room;
+  size_t history_scroll_position;
 } session_ctx_t;
 
 typedef struct user_preference {
