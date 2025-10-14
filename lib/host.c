@@ -34,6 +34,10 @@
 #define NI_MAXHOST 1025
 #endif
 
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
 #ifndef RTLD_LOCAL
 #define RTLD_LOCAL 0
 #endif
@@ -48,6 +52,8 @@ static bool host_configure_legacy_host_key(ssh_bind handle, ssh_keytypes_e key_t
                                           const char *path);
 static bool host_option_is_unsupported(const char *error_message, int error_code,
                                        const char *key_path);
+static void session_send_pre_handshake_notice(ssh_session session, const char *message);
+static bool host_error_indicates_hostkey_mismatch(const char *error_message);
 
 static const color_entry_t USER_COLOR_MAP[] = {
     {"red", ANSI_RED},       {"green", ANSI_GREEN},   {"yellow", ANSI_YELLOW},
@@ -184,6 +190,7 @@ static void host_state_resolve_path(host_t *host);
 static void host_state_load(host_t *host);
 static void host_state_save_locked(host_t *host);
 static bool host_try_load_motd_from_path(host_t *host, const char *path);
+static bool string_contains_case_insensitive(const char *haystack, const char *needle);
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
 static const uint32_t HOST_STATE_VERSION = 1U;
@@ -2611,6 +2618,63 @@ void host_set_motd(host_t *host, const char *motd) {
   pthread_mutex_unlock(&host->lock);
 }
 
+static bool string_contains_case_insensitive(const char *haystack, const char *needle) {
+  if (haystack == NULL || needle == NULL || needle[0] == '\0') {
+    return false;
+  }
+
+  const size_t needle_len = strlen(needle);
+  for (const char *cursor = haystack; *cursor != '\0'; ++cursor) {
+    if (strncasecmp(cursor, needle, needle_len) == 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void session_send_pre_handshake_notice(ssh_session session, const char *message) {
+  if (session == NULL || message == NULL || message[0] == '\0') {
+    return;
+  }
+
+  const size_t length = strlen(message);
+  if (length == 0U) {
+    return;
+  }
+
+  const int fd = ssh_get_fd(session);
+  if (fd < 0) {
+    return;
+  }
+
+#if defined(MSG_NOSIGNAL)
+  (void)send(fd, message, length, MSG_NOSIGNAL);
+#else
+  (void)send(fd, message, length, 0);
+#endif
+}
+
+static bool host_error_indicates_hostkey_mismatch(const char *error_message) {
+  if (error_message == NULL || error_message[0] == '\0') {
+    return false;
+  }
+
+  static const char *const kNeedles[] = {
+      "no match for method",
+      "host key",
+      "hostkey",
+  };
+
+  for (size_t idx = 0; idx < sizeof(kNeedles) / sizeof(kNeedles[0]); ++idx) {
+    if (string_contains_case_insensitive(error_message, kNeedles[idx])) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory) {
   if (host == NULL) {
     errno = EINVAL;
@@ -2784,7 +2848,14 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     }
 
     if (ssh_handle_key_exchange(session) != SSH_OK) {
-      humanized_log_error("host", ssh_get_error(session), EPROTO);
+      const char *error_message = ssh_get_error(session);
+      if (host_error_indicates_hostkey_mismatch(error_message)) {
+        static const char *kRsaNotice =
+            "RSA host keys are required; please regenerate your personal RSA key and reconnect.\r\n";
+        session_send_pre_handshake_notice(session, kRsaNotice);
+      }
+
+      humanized_log_error("host", error_message != NULL ? error_message : "key exchange failed", EPROTO);
       ssh_disconnect(session);
       ssh_free(session);
       continue;
