@@ -855,6 +855,11 @@ static void host_state_save_locked(host_t *host) {
     return;
   }
 
+  if (!host_ensure_parent_directory(host->state_file_path)) {
+    humanized_log_error("host", "failed to prepare state file directory", errno);
+    return;
+  }
+
   char temp_path[PATH_MAX];
   int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp", host->state_file_path);
   if (written < 0 || (size_t)written >= sizeof(temp_path)) {
@@ -2736,6 +2741,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
   const char *default_key_filename = "ssh_host_rsa_key";
   const char *host_key_path = NULL;
   char resolved_host_key[PATH_MAX];
+  bool host_key_was_generated = false;
 
   if (key_directory != NULL && key_directory[0] != '\0') {
     struct stat key_path_info;
@@ -2758,13 +2764,35 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         return -1;
       }
 
-      treat_as_directory = true;
-      if (!host_directory_ensure_exists(key_directory)) {
-        const int dir_error = errno != 0 ? errno : ENOENT;
+      const size_t dir_len = strlen(key_directory);
+      const bool ends_with_separator = dir_len > 0U && key_directory[dir_len - 1U] == '/';
+      const char *last_separator = strrchr(key_directory, '/');
+      const char *basename =
+          ends_with_separator ? "" : (last_separator != NULL ? last_separator + 1 : key_directory);
+      const bool looks_like_host_key = basename[0] != '\0' && strncmp(basename, "ssh_host_", 9) == 0;
+      const bool has_extension = basename[0] != '\0' && strchr(basename, '.') != NULL;
+
+      if (!ends_with_separator && (looks_like_host_key || has_extension)) {
+        host_key_path = key_directory;
+      } else {
+        treat_as_directory = true;
+      }
+
+      if (treat_as_directory) {
+        if (!host_directory_ensure_exists(key_directory)) {
+          const int dir_error = errno != 0 ? errno : ENOENT;
+          char error_message[PATH_MAX + 64];
+          snprintf(error_message, sizeof(error_message), "failed to prepare host key directory %s", key_directory);
+          humanized_log_error("host", error_message, dir_error);
+          errno = dir_error;
+          return -1;
+        }
+      } else if (!host_ensure_parent_directory(host_key_path)) {
+        const int parent_error = errno != 0 ? errno : ENOENT;
         char error_message[PATH_MAX + 64];
-        snprintf(error_message, sizeof(error_message), "failed to prepare host key directory %s", key_directory);
-        humanized_log_error("host", error_message, dir_error);
-        errno = dir_error;
+        snprintf(error_message, sizeof(error_message), "failed to prepare host key parent directory for %s", host_key_path);
+        humanized_log_error("host", error_message, parent_error);
+        errno = parent_error;
         return -1;
       }
     }
@@ -2799,6 +2827,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
           errno = generate_error;
           return -1;
         }
+        host_key_was_generated = true;
       } else {
         char error_message[PATH_MAX + 64];
         snprintf(error_message, sizeof(error_message), "host key not accessible at %s", host_key_path);
@@ -2829,6 +2858,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       if (candidate_error == ENOENT && idx == 0) {
         if (host_generate_host_key_at_path(candidates[idx])) {
           host_key_path = candidates[idx];
+          host_key_was_generated = true;
           break;
         }
 
@@ -2853,6 +2883,11 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     humanized_log_error("host", error_message, access_error);
     errno = access_error;
     return -1;
+  }
+
+  if (host_key_was_generated) {
+    printf("[host] generated RSA host key at %s\n", host_key_path);
+    fflush(stdout);
   }
 
   ssh_bind bind_handle = ssh_bind_new();

@@ -90,6 +90,8 @@ Environment=CHATTER_MOTD_FILE=$CONFIG_DIR/motd
 Environment=CHATTER_HOST_KEY_DIR=$STATE_DIR
 Environment=CHATTER_EXTRA_ARGS=
 EnvironmentFile=-$CONFIG_DIR/chatter.env
+StandardOutput=journal
+StandardError=journal
 Restart=on-failure
 RestartSec=2s
 AmbientCapabilities=CAP_NET_BIND_SERVICE
