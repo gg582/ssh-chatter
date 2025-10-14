@@ -1494,14 +1494,39 @@ static void session_render_separator(session_ctx_t *ctx, const char *label) {
   }
   size_t remaining = total_width > label_len ? total_width - label_len : 0U;
   size_t offset = 0U;
-  for (size_t idx = 0U; idx < remaining; ++idx) {
-    const char *dash = "─";
-    size_t dash_len = strlen(dash);
-    if (offset + dash_len >= sizeof(content)) {
+
+  const char *full_dash = "─";
+  const size_t full_dash_len = 3U;
+  const size_t full_dash_width = 2U;
+  
+  const char *half_dash = "-";
+  const size_t half_dash_len = 1U;
+  const size_t half_dash_width = 1U;
+  
+  size_t filled_width = 0U;
+  
+  while (filled_width < remaining) {
+    size_t width_left = remaining - filled_width;
+  
+    if (width_left >= full_dash_width) {
+      if (offset + full_dash_len >= sizeof(content)) {
+        break;
+      }
+  
+      memcpy(content + offset, full_dash, full_dash_len);
+      offset += full_dash_len;
+      filled_width += full_dash_width;
+    } else if (width_left == half_dash_width) {
+      if (offset + half_dash_len >= sizeof(content)) {
+        break;
+      }
+  
+      memcpy(content + offset, half_dash, half_dash_len);
+      offset += half_dash_len;
+      filled_width += half_dash_width;
+    } else {
       break;
     }
-    memcpy(content + offset, dash, dash_len);
-    offset += dash_len;
   }
   content[offset] = '\0';
 
@@ -2495,9 +2520,8 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
     long nsec_delta = now.tv_nsec - ctx->last_message_time.tv_nsec;
     if (nsec_delta < 0L) {
       --sec_delta;
-      nsec_delta += 1000000000L;
     }
-    if (sec_delta < 0 || (sec_delta == 0 && nsec_delta < 1000000000L)) {
+    if (sec_delta < 1) {
       allow_message = false;
     }
   }
@@ -3211,8 +3235,8 @@ static void session_handle_today(session_ctx_t *ctx) {
   }
 
   if (!host->random_seeded) {
-    unsigned seed = (unsigned)(now ^ (time_t)getpid());
-    srand(seed);
+    unsigned seed = (unsigned int)(time(NULL) ^ getpid() ^ (unsigned int)pthread_self());
+    rand_r(&seed);
     host->random_seeded = true;
   }
 
@@ -3463,7 +3487,6 @@ static void session_handle_pair(session_ctx_t *ctx) {
     matches[offset] = '\0';
     ++match_count;
   }
-  pthread_mutex_unlock(&ctx->owner->room.lock);
 
   const os_descriptor_t *descriptor = session_lookup_os_descriptor(ctx->os_name);
   const char *display = descriptor != NULL ? descriptor->display : ctx->os_name;
@@ -3472,6 +3495,7 @@ static void session_handle_pair(session_ctx_t *ctx) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(message, sizeof(message), "No connected users currently share your %s setup.", display);
     session_send_system_line(ctx, message);
+    pthread_mutex_unlock(&ctx->owner->room.lock);
     return;
   }
 
@@ -3479,6 +3503,7 @@ static void session_handle_pair(session_ctx_t *ctx) {
   snprintf(header, sizeof(header), "Users sharing your %s setup:", display);
   session_send_system_line(ctx, header);
   session_send_system_line(ctx, matches);
+  pthread_mutex_unlock(&ctx->owner->room.lock);
 }
 
 static void session_handle_connected(session_ctx_t *ctx) {
@@ -4196,36 +4221,46 @@ static bool host_remove_ban_entry(host_t *host, const char *token) {
   return removed;
 }
 
+static bool session_parse_command(const char *line, const char *command, const char **arguments) {
+  size_t command_len = strlen(command);
+
+  if (strncmp(line, command, command_len) == 0) {
+    const char *args = line + command_len;
+
+    while (*args == ' ' || *args == '\t') {
+      ++args;
+    }
+
+    *arguments = args;
+    return true;
+  }
+  return false;
+}
+
 static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
+  const char *arguments = NULL;
+
   if (strncmp(line, "/help", 5) == 0) {
     session_print_help(ctx);
     return;
   }
+
   if (strncmp(line, "/exit", 5) == 0) {
     session_handle_exit(ctx);
     return;
   }
-  if (strncmp(line, "/nick", 5) == 0) {
-    const char *arguments = line + 5;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/nick", &arguments)) {
     session_handle_nick(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/pm", 3) == 0) {
-    const char *arguments = line + 3;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/pm", &arguments)) {
     session_handle_pm(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/motd", 5) == 0) {
-    const char *arguments = line + 5;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/motd", &arguments)) {
     if (*arguments != '\0') {
       session_send_system_line(ctx, "Usage: /motd");
     } else {
@@ -4233,11 +4268,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  if (strncmp(line, "/users", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/users", &arguments)) {
     if (*arguments != '\0') {
       session_send_system_line(ctx, "Usage: /users");
     } else {
@@ -4245,107 +4277,68 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  if (strncmp(line, "/search", 7) == 0) {
-    const char *arguments = line + 7;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/search", &arguments)) {
     session_handle_search(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/image", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/image", &arguments)) {
     session_handle_image(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/video", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/video", &arguments)) {
     session_handle_video(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/audio", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/audio", &arguments)) {
     session_handle_audio(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/files", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/files", &arguments)) {
     session_handle_files(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/ban", 4) == 0) {
-    const char *arguments = line + 4;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/ban", &arguments)) {
     session_handle_ban(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/pardon", 7) == 0) {
-    const char *arguments = line + 7;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/pardon", &arguments)) {
     session_handle_pardon(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/poke", 5) == 0) {
-    const char *arguments = line + 5;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/poke", &arguments)) {
     session_handle_poke(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/color", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/color", &arguments)) {
     session_handle_color(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/systemcolor", 12) == 0) {
-    const char *arguments = line + 12;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/systemcolor", &arguments)) {
     session_handle_system_color(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/palette", 8) == 0) {
-    const char *arguments = line + 8;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/palette", &arguments)) {
     session_handle_palette(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/image-to-ascii", 15) == 0) {
-    const char *arguments = line + 15;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/image-to-ascii", &arguments)) {
     session_handle_image_to_ascii(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/today", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/today", &arguments)) {
     if (*arguments != '\0') {
       session_send_system_line(ctx, "Usage: /today");
     } else {
@@ -4353,35 +4346,23 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  if (strncmp(line, "/date", 5) == 0) {
-    const char *arguments = line + 5;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/date", &arguments)) {
     session_handle_date(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/os", 3) == 0) {
-    const char *arguments = line + 3;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/os", &arguments)) {
     session_handle_os(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/getos", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/getos", &arguments)) {
     session_handle_getos(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/pair", 5) == 0) {
-    const char *arguments = line + 5;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/pair", &arguments)) {
     if (*arguments != '\0') {
       session_send_system_line(ctx, "Usage: /pair");
     } else {
@@ -4389,11 +4370,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  if (strncmp(line, "/connected", 10) == 0) {
-    const char *arguments = line + 10;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/connected", &arguments)) {
     if (*arguments != '\0') {
       session_send_system_line(ctx, "Usage: /connected");
     } else {
@@ -4401,11 +4379,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  if (strncmp(line, "/poll", 5) == 0) {
-    const char *arguments = line + 5;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
+
+  if (session_parse_command(line, "/poll", &arguments)) {
     session_handle_poll(ctx, arguments);
     return;
   }
