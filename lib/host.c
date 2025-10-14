@@ -64,6 +64,32 @@ static const color_entry_t HIGHLIGHT_COLOR_MAP[] = {
     {"default", ANSI_BG_DEFAULT},
 };
 
+static bool host_sound_has_supported_extension(const char *filename) {
+  if (filename == NULL || filename[0] == '\0') {
+    return false;
+  }
+
+  char sanitized[SSH_CHATTER_SOUND_PATH_LEN];
+  size_t length = strcspn(filename, "?#");
+  if (length >= sizeof(sanitized)) {
+    length = sizeof(sanitized) - 1U;
+  }
+  memcpy(sanitized, filename, length);
+  sanitized[length] = '\0';
+
+  const char *dot = strrchr(sanitized, '.');
+  if (dot == NULL || dot[1] == '\0') {
+    return false;
+  }
+
+  ++dot;
+  if (strcasecmp(dot, "mp3") == 0 || strcasecmp(dot, "ogg") == 0 || strcasecmp(dot, "wav") == 0) {
+    return true;
+  }
+
+  return false;
+}
+
 typedef int (*accept_channel_fn_t)(ssh_message, ssh_channel);
 
 #if defined(__GNUC__)
