@@ -190,8 +190,8 @@ static void session_handle_usercount(session_ctx_t *ctx);
 static void session_handle_search(session_ctx_t *ctx, const char *arguments);
 static void session_handle_image(session_ctx_t *ctx, const char *arguments);
 static void session_handle_video(session_ctx_t *ctx, const char *arguments);
-static void session_handle_sound(session_ctx_t *ctx, const char *arguments);
-static void session_handle_play(session_ctx_t *ctx, const char *arguments);
+static void session_handle_audio(session_ctx_t *ctx, const char *arguments);
+static void session_handle_files(session_ctx_t *ctx, const char *arguments);
 static void session_handle_reaction(session_ctx_t *ctx, size_t reaction_index, const char *arguments);
 static bool session_line_is_exit_command(const char *line);
 static void session_handle_username_conflict_input(session_ctx_t *ctx, const char *line);
@@ -207,9 +207,6 @@ static user_preference_t *host_ensure_preference_locked(host_t *host, const char
 static void host_store_user_theme(host_t *host, const session_ctx_t *ctx);
 static void host_store_system_theme(host_t *host, const session_ctx_t *ctx);
 static void host_history_normalize_entry(host_t *host, chat_history_entry_t *entry);
-static bool host_store_sound_alias(host_t *host, const session_ctx_t *ctx, const char *filename, const char *alias,
-                                  char *error, size_t error_length);
-static bool host_lookup_sound_alias(host_t *host, const char *alias, host_sound_entry_t *out_entry);
 static const char *chat_attachment_type_label(chat_attachment_type_t type);
 static void host_state_resolve_path(host_t *host);
 static void host_state_load(host_t *host);
@@ -226,7 +223,9 @@ static size_t session_build_image_preview(const char *seed,
                                          size_t max_lines);
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
-static const uint32_t HOST_STATE_VERSION = 2U;
+static const uint32_t HOST_STATE_VERSION = 3U;
+
+#define HOST_STATE_SOUND_ALIAS_LEN 32U
 
 typedef struct host_state_header_v1 {
   uint32_t magic;
@@ -237,7 +236,7 @@ typedef struct host_state_header_v1 {
 
 typedef struct host_state_header {
   host_state_header_v1_t base;
-  uint32_t sound_count;
+  uint32_t legacy_sound_count;
   uint32_t reserved;
   uint64_t next_message_id;
 } host_state_header_t;
@@ -251,15 +250,25 @@ typedef struct host_state_history_entry_v1 {
   char user_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
 } host_state_history_entry_v1_t;
 
-typedef struct host_state_history_entry {
+typedef struct host_state_history_entry_v2 {
   host_state_history_entry_v1_t base;
   uint64_t message_id;
   uint8_t attachment_type;
   char attachment_target[SSH_CHATTER_ATTACHMENT_TARGET_LEN];
   char attachment_caption[SSH_CHATTER_ATTACHMENT_CAPTION_LEN];
-  char sound_alias[SSH_CHATTER_SOUND_ALIAS_LEN];
+  char sound_alias[HOST_STATE_SOUND_ALIAS_LEN];
   uint32_t reaction_counts[SSH_CHATTER_REACTION_KIND_COUNT];
-} host_state_history_entry_t;
+} host_state_history_entry_v2_t;
+
+typedef struct host_state_history_entry_v3 {
+  host_state_history_entry_v1_t base;
+  uint64_t message_id;
+  uint8_t attachment_type;
+  uint8_t reserved[7];
+  char attachment_target[SSH_CHATTER_ATTACHMENT_TARGET_LEN];
+  char attachment_caption[SSH_CHATTER_ATTACHMENT_CAPTION_LEN];
+  uint32_t reaction_counts[SSH_CHATTER_REACTION_KIND_COUNT];
+} host_state_history_entry_v3_t;
 
 typedef struct host_state_preference_entry {
   uint8_t has_user_theme;
@@ -274,11 +283,6 @@ typedef struct host_state_preference_entry {
   char system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
 } host_state_preference_entry_t;
 
-typedef struct host_state_sound_entry {
-  char alias[SSH_CHATTER_SOUND_ALIAS_LEN];
-  char filename[SSH_CHATTER_SOUND_PATH_LEN];
-  char owner[SSH_CHATTER_USERNAME_LEN];
-} host_state_sound_entry_t;
 
 typedef struct reaction_descriptor {
   const char *command;
@@ -522,12 +526,8 @@ static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entr
 
     printf("[broadcast:%s#%" PRIu64 "] %s\n", entry->username, entry->message_id, message_text);
     if (entry->attachment_type != CHAT_ATTACHMENT_NONE && entry->attachment_target[0] != '\0') {
-      if (entry->attachment_type == CHAT_ATTACHMENT_SOUND && entry->sound_alias[0] != '\0') {
-        printf("           %s [%s]: %s\n", chat_attachment_type_label(entry->attachment_type), entry->sound_alias,
-               entry->attachment_target);
-      } else {
-        printf("           %s: %s\n", chat_attachment_type_label(entry->attachment_type), entry->attachment_target);
-      }
+      const char *label = chat_attachment_type_label(entry->attachment_type);
+      printf("           %s: %s\n", label, entry->attachment_target);
     }
   }
 }
@@ -850,125 +850,6 @@ static void host_history_normalize_entry(host_t *host, chat_history_entry_t *ent
   entry->user_highlight_code = highlight_code;
 }
 
-static bool host_store_sound_alias(host_t *host, const session_ctx_t *ctx, const char *filename, const char *alias,
-                                  char *error, size_t error_length) {
-  if (host == NULL || filename == NULL || alias == NULL) {
-    if (error != NULL && error_length > 0U) {
-      snprintf(error, error_length, "Invalid sound alias request.");
-    }
-    return false;
-  }
-
-  if (alias[0] == '\0' || filename[0] == '\0') {
-    if (error != NULL && error_length > 0U) {
-      snprintf(error, error_length, "Alias and filename must be provided.");
-    }
-    return false;
-  }
-
-  if (!host_sound_has_supported_extension(filename)) {
-    if (error != NULL && error_length > 0U) {
-      snprintf(error, error_length, "Sound clips must be MP3, OGG, or WAV files.");
-    }
-    return false;
-  }
-
-  for (const char *cursor = alias; *cursor != '\0'; ++cursor) {
-    if (!(isalnum((unsigned char)*cursor) || *cursor == '-' || *cursor == '_' || *cursor == '.')) {
-      if (error != NULL && error_length > 0U) {
-        snprintf(error, error_length, "Alias may only use letters, numbers, '.', '-' or '_'.");
-      }
-      return false;
-    }
-  }
-
-  pthread_mutex_lock(&host->lock);
-
-  host_sound_entry_t *slot = NULL;
-  host_sound_entry_t *existing = NULL;
-  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_SOUNDS; ++idx) {
-    host_sound_entry_t *entry = &host->sounds[idx];
-    if (!entry->in_use) {
-      if (slot == NULL) {
-        slot = entry;
-      }
-      continue;
-    }
-
-    if (strncmp(entry->alias, alias, sizeof(entry->alias)) == 0) {
-      existing = entry;
-      break;
-    }
-  }
-
-  if (existing != NULL) {
-    if (ctx != NULL && existing->owner[0] != '\0' &&
-        strncmp(existing->owner, ctx->user.name, sizeof(existing->owner)) != 0) {
-      pthread_mutex_unlock(&host->lock);
-      if (error != NULL && error_length > 0U) {
-        snprintf(error, error_length, "Alias already registered by another user.");
-      }
-      return false;
-    }
-    slot = existing;
-  } else if (slot == NULL) {
-    pthread_mutex_unlock(&host->lock);
-    if (error != NULL && error_length > 0U) {
-      snprintf(error, error_length, "Sound library is full.");
-    }
-    return false;
-  }
-
-  slot->in_use = true;
-  snprintf(slot->alias, sizeof(slot->alias), "%s", alias);
-  snprintf(slot->filename, sizeof(slot->filename), "%s", filename);
-  if (ctx != NULL) {
-    snprintf(slot->owner, sizeof(slot->owner), "%s", ctx->user.name);
-  } else {
-    slot->owner[0] = '\0';
-  }
-
-  size_t active = 0U;
-  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_SOUNDS; ++idx) {
-    if (host->sounds[idx].in_use) {
-      ++active;
-    }
-  }
-  host->sound_count = active;
-
-  host_state_save_locked(host);
-  pthread_mutex_unlock(&host->lock);
-
-  return true;
-}
-
-static bool host_lookup_sound_alias(host_t *host, const char *alias, host_sound_entry_t *out_entry) {
-  if (host == NULL || alias == NULL || alias[0] == '\0') {
-    return false;
-  }
-
-  bool found = false;
-
-  pthread_mutex_lock(&host->lock);
-  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_SOUNDS; ++idx) {
-    const host_sound_entry_t *entry = &host->sounds[idx];
-    if (!entry->in_use) {
-      continue;
-    }
-    if (strncmp(entry->alias, alias, sizeof(entry->alias)) != 0) {
-      continue;
-    }
-    if (out_entry != NULL) {
-      *out_entry = *entry;
-    }
-    found = true;
-    break;
-  }
-  pthread_mutex_unlock(&host->lock);
-
-  return found;
-}
-
 static void host_state_resolve_path(host_t *host) {
   if (host == NULL) {
     return;
@@ -1015,19 +896,12 @@ static void host_state_save_locked(host_t *host) {
     }
   }
 
-  size_t sound_count = 0U;
-  for (size_t idx = 0; idx < SSH_CHATTER_MAX_SOUNDS; ++idx) {
-    if (host->sounds[idx].in_use) {
-      ++sound_count;
-    }
-  }
-
   host_state_header_t header = {0};
   header.base.magic = HOST_STATE_MAGIC;
   header.base.version = HOST_STATE_VERSION;
   header.base.history_count = (uint32_t)host->history_count;
   header.base.preference_count = (uint32_t)preference_count;
-  header.sound_count = (uint32_t)sound_count;
+  header.legacy_sound_count = 0U;
   header.reserved = 0U;
   header.next_message_id = host->next_message_id;
 
@@ -1037,7 +911,7 @@ static void host_state_save_locked(host_t *host) {
     size_t history_index = (host->history_start + idx) % SSH_CHATTER_HISTORY_LIMIT;
     const chat_history_entry_t *entry = &host->history[history_index];
 
-    host_state_history_entry_t serialized = {0};
+    host_state_history_entry_v3_t serialized = {0};
     serialized.base.is_user_message = entry->is_user_message ? 1U : 0U;
     serialized.base.user_is_bold = entry->user_is_bold ? 1U : 0U;
     snprintf(serialized.base.username, sizeof(serialized.base.username), "%s", entry->username);
@@ -1047,9 +921,9 @@ static void host_state_save_locked(host_t *host) {
              entry->user_highlight_name);
     serialized.message_id = entry->message_id;
     serialized.attachment_type = (uint8_t)entry->attachment_type;
+    memset(serialized.reserved, 0, sizeof(serialized.reserved));
     snprintf(serialized.attachment_target, sizeof(serialized.attachment_target), "%s", entry->attachment_target);
     snprintf(serialized.attachment_caption, sizeof(serialized.attachment_caption), "%s", entry->attachment_caption);
-    snprintf(serialized.sound_alias, sizeof(serialized.sound_alias), "%s", entry->sound_alias);
     memcpy(serialized.reaction_counts, entry->reaction_counts, sizeof(serialized.reaction_counts));
 
     if (fwrite(&serialized, sizeof(serialized), 1U, fp) != 1U) {
@@ -1075,23 +949,6 @@ static void host_state_save_locked(host_t *host) {
     snprintf(serialized.system_bg_name, sizeof(serialized.system_bg_name), "%s", pref->system_bg_name);
     snprintf(serialized.system_highlight_name, sizeof(serialized.system_highlight_name), "%s",
              pref->system_highlight_name);
-
-    if (fwrite(&serialized, sizeof(serialized), 1U, fp) != 1U) {
-      success = false;
-      break;
-    }
-  }
-
-  for (size_t idx = 0; success && idx < SSH_CHATTER_MAX_SOUNDS; ++idx) {
-    const host_sound_entry_t *sound = &host->sounds[idx];
-    if (!sound->in_use) {
-      continue;
-    }
-
-    host_state_sound_entry_t serialized = {0};
-    snprintf(serialized.alias, sizeof(serialized.alias), "%s", sound->alias);
-    snprintf(serialized.filename, sizeof(serialized.filename), "%s", sound->filename);
-    snprintf(serialized.owner, sizeof(serialized.owner), "%s", sound->owner);
 
     if (fwrite(&serialized, sizeof(serialized), 1U, fp) != 1U) {
       success = false;
@@ -1159,7 +1016,6 @@ static void host_state_load(host_t *host) {
 
   uint32_t history_count = base_header.history_count;
   uint32_t preference_count = base_header.preference_count;
-  uint32_t sound_count = 0U;
   uint64_t next_message_id = 1U;
 
   if (version >= 2U) {
@@ -1172,7 +1028,6 @@ static void host_state_load(host_t *host) {
       fclose(fp);
       return;
     }
-    sound_count = sound_count_raw;
     next_message_id = next_id_raw;
   }
 
@@ -1195,8 +1050,8 @@ static void host_state_load(host_t *host) {
     chat_history_entry_t *entry = &host->history[idx % SSH_CHATTER_HISTORY_LIMIT];
     memset(entry, 0, sizeof(*entry));
 
-    if (version >= 2U) {
-      host_state_history_entry_t serialized = {0};
+    if (version >= 3U) {
+      host_state_history_entry_v3_t serialized = {0};
       if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
         success = false;
         break;
@@ -1210,15 +1065,40 @@ static void host_state_load(host_t *host) {
       snprintf(entry->user_highlight_name, sizeof(entry->user_highlight_name), "%s",
                serialized.base.user_highlight_name);
       entry->message_id = serialized.message_id;
-      if (serialized.attachment_type > CHAT_ATTACHMENT_SOUND) {
+      if (serialized.attachment_type > CHAT_ATTACHMENT_FILE) {
         entry->attachment_type = CHAT_ATTACHMENT_NONE;
       } else {
         entry->attachment_type = (chat_attachment_type_t)serialized.attachment_type;
       }
       snprintf(entry->attachment_target, sizeof(entry->attachment_target), "%s", serialized.attachment_target);
       snprintf(entry->attachment_caption, sizeof(entry->attachment_caption), "%s", serialized.attachment_caption);
-      snprintf(entry->sound_alias, sizeof(entry->sound_alias), "%s", serialized.sound_alias);
       memcpy(entry->reaction_counts, serialized.reaction_counts, sizeof(entry->reaction_counts));
+    } else if (version == 2U) {
+      host_state_history_entry_v2_t serialized = {0};
+      if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+        success = false;
+        break;
+      }
+
+      entry->is_user_message = serialized.base.is_user_message != 0U;
+      entry->user_is_bold = serialized.base.user_is_bold != 0U;
+      snprintf(entry->username, sizeof(entry->username), "%s", serialized.base.username);
+      snprintf(entry->message, sizeof(entry->message), "%s", serialized.base.message);
+      snprintf(entry->user_color_name, sizeof(entry->user_color_name), "%s", serialized.base.user_color_name);
+      snprintf(entry->user_highlight_name, sizeof(entry->user_highlight_name), "%s",
+               serialized.base.user_highlight_name);
+      entry->message_id = serialized.message_id;
+      if (serialized.attachment_type > CHAT_ATTACHMENT_AUDIO) {
+        entry->attachment_type = CHAT_ATTACHMENT_NONE;
+      } else {
+        entry->attachment_type = (chat_attachment_type_t)serialized.attachment_type;
+      }
+      snprintf(entry->attachment_target, sizeof(entry->attachment_target), "%s", serialized.attachment_target);
+      snprintf(entry->attachment_caption, sizeof(entry->attachment_caption), "%s", serialized.attachment_caption);
+      memcpy(entry->reaction_counts, serialized.reaction_counts, sizeof(entry->reaction_counts));
+      if (serialized.sound_alias[0] != '\0' && entry->attachment_caption[0] == '\0') {
+        snprintf(entry->attachment_caption, sizeof(entry->attachment_caption), "%s", serialized.sound_alias);
+      }
     } else {
       host_state_history_entry_v1_t serialized = {0};
       if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
@@ -1271,42 +1151,11 @@ static void host_state_load(host_t *host) {
     ++host->preference_count;
   }
 
-  memset(host->sounds, 0, sizeof(host->sounds));
-  host->sound_count = 0U;
-
-  if (success && version >= 2U) {
-    for (uint32_t idx = 0; idx < sound_count; ++idx) {
-      host_state_sound_entry_t serialized = {0};
-      if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
-        success = false;
-        break;
-      }
-
-      if (!host_sound_has_supported_extension(serialized.filename)) {
-        continue;
-      }
-
-      if (host->sound_count >= SSH_CHATTER_MAX_SOUNDS) {
-        continue;
-      }
-
-      host_sound_entry_t *sound = &host->sounds[host->sound_count];
-      memset(sound, 0, sizeof(*sound));
-      sound->in_use = true;
-      snprintf(sound->alias, sizeof(sound->alias), "%s", serialized.alias);
-      snprintf(sound->filename, sizeof(sound->filename), "%s", serialized.filename);
-      snprintf(sound->owner, sizeof(sound->owner), "%s", serialized.owner);
-      ++host->sound_count;
-    }
-  }
-
   if (!success) {
     host->history_count = 0U;
     host->preference_count = 0U;
-    host->sound_count = 0U;
     memset(host->history, 0, sizeof(host->history));
     memset(host->preferences, 0, sizeof(host->preferences));
-    memset(host->sounds, 0, sizeof(host->sounds));
   }
 
   if (next_message_id == 0U) {
@@ -2206,12 +2055,7 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
     bool include_attachment = false;
     if (entry->attachment_type != CHAT_ATTACHMENT_NONE && entry->attachment_target[0] != '\0') {
       const char *label = chat_attachment_type_label(entry->attachment_type);
-      if (entry->attachment_type == CHAT_ATTACHMENT_SOUND && entry->sound_alias[0] != '\0') {
-        snprintf(attachment_line, sizeof(attachment_line), "    ↳ %s [%s]: %s", label, entry->sound_alias,
-                 entry->attachment_target);
-      } else {
-        snprintf(attachment_line, sizeof(attachment_line), "    ↳ %s: %s", label, entry->attachment_target);
-      }
+      snprintf(attachment_line, sizeof(attachment_line), "    ↳ %s: %s", label, entry->attachment_target);
       include_attachment = true;
     }
 
@@ -2305,8 +2149,10 @@ static const char *chat_attachment_type_label(chat_attachment_type_t type) {
     return "image";
   case CHAT_ATTACHMENT_VIDEO:
     return "video";
-  case CHAT_ATTACHMENT_SOUND:
-    return "sound";
+  case CHAT_ATTACHMENT_AUDIO:
+    return "audio";
+  case CHAT_ATTACHMENT_FILE:
+    return "file";
   case CHAT_ATTACHMENT_NONE:
   default:
     return "attachment";
@@ -2484,8 +2330,8 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/search <text>       - search for users whose name matches text");
   session_send_system_line(ctx, "/image <url> [caption] - share an image link");
   session_send_system_line(ctx, "/video <url> [caption] - share a video link");
-  session_send_system_line(ctx, "/sound <file> <alias> - remember a sound for /play");
-  session_send_system_line(ctx, "/play <alias>        - announce a saved sound clip");
+  session_send_system_line(ctx, "/audio <url> [caption] - share an audio clip");
+  session_send_system_line(ctx, "/files <url> [caption] - share a downloadable file");
   session_send_system_line(ctx, "Up/Down arrows           - scroll recent chat history");
   session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
   session_send_system_line(ctx,
@@ -2982,8 +2828,8 @@ static void session_handle_video(session_ctx_t *ctx, const char *arguments) {
   chat_room_broadcast_entry(&ctx->owner->room, &stored, ctx);
 }
 
-static void session_handle_sound(session_ctx_t *ctx, const char *arguments) {
-  static const char *kUsage = "Usage: /sound <file> <alias> (mp3/ogg/wav)";
+static void session_handle_audio(session_ctx_t *ctx, const char *arguments) {
+  static const char *kUsage = "Usage: /audio <url> [caption]";
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
@@ -3003,42 +2849,49 @@ static void session_handle_sound(session_ctx_t *ctx, const char *arguments) {
   }
 
   char *saveptr = NULL;
-  char *file = strtok_r(working, " \t", &saveptr);
-  char *alias = strtok_r(NULL, " \t", &saveptr);
-
-  if (file == NULL || alias == NULL) {
+  char *url = strtok_r(working, " \t", &saveptr);
+  if (url == NULL) {
     session_send_system_line(ctx, kUsage);
     return;
   }
 
-  char filename_copy[SSH_CHATTER_SOUND_PATH_LEN];
-  int file_written = snprintf(filename_copy, sizeof(filename_copy), "%s", file);
-  if (file_written < 0 || (size_t)file_written >= sizeof(filename_copy)) {
-    session_send_system_line(ctx, "Sound filename is too long.");
+  char *caption = NULL;
+  if (saveptr != NULL) {
+    caption = saveptr;
+    while (*caption == ' ' || *caption == '\t') {
+      ++caption;
+    }
+    if (*caption == '\0') {
+      caption = NULL;
+    }
+  }
+
+  if (strnlen(url, SSH_CHATTER_ATTACHMENT_TARGET_LEN) >= SSH_CHATTER_ATTACHMENT_TARGET_LEN) {
+    session_send_system_line(ctx, "Audio link is too long.");
     return;
   }
 
-  char alias_copy[SSH_CHATTER_SOUND_ALIAS_LEN];
-  int alias_written = snprintf(alias_copy, sizeof(alias_copy), "%s", alias);
-  if (alias_written < 0 || (size_t)alias_written >= sizeof(alias_copy)) {
-    session_send_system_line(ctx, "Sound alias is too long.");
+  chat_history_entry_t entry;
+  chat_history_entry_prepare_user(&entry, ctx, "shared an audio clip");
+  entry.attachment_type = CHAT_ATTACHMENT_AUDIO;
+  snprintf(entry.attachment_target, sizeof(entry.attachment_target), "%s", url);
+  if (caption != NULL) {
+    trim_whitespace_inplace(caption);
+    snprintf(entry.attachment_caption, sizeof(entry.attachment_caption), "%s", caption);
+  }
+
+  chat_history_entry_t stored = {0};
+  if (!host_history_commit_entry(ctx->owner, &entry, &stored)) {
+    session_send_system_line(ctx, "Unable to record audio message.");
     return;
   }
 
-  char error[128];
-  if (!host_store_sound_alias(ctx->owner, ctx, filename_copy, alias_copy, error, sizeof(error))) {
-    session_send_system_line(ctx, error);
-    return;
-  }
-
-  char message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(message, sizeof(message), "Sound alias '%s' saved for '%s'. Use /play %s to share it.", alias_copy, filename_copy,
-           alias_copy);
-  session_send_system_line(ctx, message);
+  session_send_history_entry(ctx, &stored);
+  chat_room_broadcast_entry(&ctx->owner->room, &stored, ctx);
 }
 
-static void session_handle_play(session_ctx_t *ctx, const char *arguments) {
-  static const char *kUsage = "Usage: /play <alias>";
+static void session_handle_files(session_ctx_t *ctx, const char *arguments) {
+  static const char *kUsage = "Usage: /files <url> [caption]";
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
@@ -3048,34 +2901,50 @@ static void session_handle_play(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  char alias[SSH_CHATTER_SOUND_ALIAS_LEN];
-  snprintf(alias, sizeof(alias), "%s", arguments);
-  trim_whitespace_inplace(alias);
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
 
-  if (alias[0] == '\0') {
+  if (working[0] == '\0') {
     session_send_system_line(ctx, kUsage);
     return;
   }
 
-  host_sound_entry_t sound = {0};
-  if (!host_lookup_sound_alias(ctx->owner, alias, &sound)) {
-    char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "No sound alias named '%s'.", alias);
-    session_send_system_line(ctx, message);
+  char *saveptr = NULL;
+  char *url = strtok_r(working, " \t", &saveptr);
+  if (url == NULL) {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char *caption = NULL;
+  if (saveptr != NULL) {
+    caption = saveptr;
+    while (*caption == ' ' || *caption == '\t') {
+      ++caption;
+    }
+    if (*caption == '\0') {
+      caption = NULL;
+    }
+  }
+
+  if (strnlen(url, SSH_CHATTER_ATTACHMENT_TARGET_LEN) >= SSH_CHATTER_ATTACHMENT_TARGET_LEN) {
+    session_send_system_line(ctx, "File link is too long.");
     return;
   }
 
   chat_history_entry_t entry;
-  char status[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(status, sizeof(status), "is playing sound '%s'", sound.alias);
-  chat_history_entry_prepare_user(&entry, ctx, status);
-  entry.attachment_type = CHAT_ATTACHMENT_SOUND;
-  snprintf(entry.sound_alias, sizeof(entry.sound_alias), "%s", sound.alias);
-  snprintf(entry.attachment_target, sizeof(entry.attachment_target), "%s", sound.filename);
+  chat_history_entry_prepare_user(&entry, ctx, "shared a file");
+  entry.attachment_type = CHAT_ATTACHMENT_FILE;
+  snprintf(entry.attachment_target, sizeof(entry.attachment_target), "%s", url);
+  if (caption != NULL) {
+    trim_whitespace_inplace(caption);
+    snprintf(entry.attachment_caption, sizeof(entry.attachment_caption), "%s", caption);
+  }
 
   chat_history_entry_t stored = {0};
   if (!host_history_commit_entry(ctx->owner, &entry, &stored)) {
-    session_send_system_line(ctx, "Unable to share sound clip.");
+    session_send_system_line(ctx, "Unable to record file message.");
     return;
   }
 
@@ -3717,20 +3586,20 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_video(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/sound", 6) == 0) {
+  if (strncmp(line, "/audio", 6) == 0) {
     const char *arguments = line + 6;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
-    session_handle_sound(ctx, arguments);
+    session_handle_audio(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/play", 5) == 0) {
-    const char *arguments = line + 5;
+  if (strncmp(line, "/files", 6) == 0) {
+    const char *arguments = line + 6;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
-    session_handle_play(ctx, arguments);
+    session_handle_files(ctx, arguments);
     return;
   }
   if (strncmp(line, "/ban", 4) == 0) {
@@ -4078,8 +3947,6 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->history_count = 0U;
   memset(host->history, 0, sizeof(host->history));
   host->next_message_id = 1U;
-  memset(host->sounds, 0, sizeof(host->sounds));
-  host->sound_count = 0U;
   memset(host->preferences, 0, sizeof(host->preferences));
   host->preference_count = 0U;
   host->state_file_path[0] = '\0';
