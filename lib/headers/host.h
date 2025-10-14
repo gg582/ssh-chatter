@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -31,6 +32,7 @@
 #define SSH_CHATTER_ATTACHMENT_TARGET_LEN 256
 #define SSH_CHATTER_ATTACHMENT_CAPTION_LEN 256
 #define SSH_CHATTER_REACTION_KIND_COUNT 7
+#define SSH_CHATTER_OS_NAME_LEN 16
 
 struct host;
 struct session_ctx;
@@ -112,6 +114,12 @@ typedef struct session_ctx {
   bool username_conflict;
   bool has_joined_room;
   size_t history_scroll_position;
+  struct timespec last_message_time;
+  bool has_last_message_time;
+  char os_name[SSH_CHATTER_OS_NAME_LEN];
+  int daily_year;
+  int daily_yday;
+  char daily_function[64];
 } session_ctx_t;
 
 typedef struct user_preference {
@@ -126,6 +134,12 @@ typedef struct user_preference {
   char system_bg_name[SSH_CHATTER_COLOR_NAME_LEN];
   char system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
   bool system_is_bold;
+  char os_name[SSH_CHATTER_OS_NAME_LEN];
+  int daily_year;
+  int daily_yday;
+  char daily_function[64];
+  uint64_t last_poll_id;
+  int last_poll_choice;
 } user_preference_t;
 
 typedef struct host {
@@ -155,6 +169,17 @@ typedef struct host {
   size_t preference_count;
   pthread_mutex_t lock;
   char state_file_path[PATH_MAX];
+  struct {
+    bool active;
+    uint64_t id;
+    char question[SSH_CHATTER_MESSAGE_LIMIT];
+    size_t option_count;
+    struct {
+      char text[SSH_CHATTER_MESSAGE_LIMIT];
+      uint32_t votes;
+    } options[5];
+  } poll;
+  bool random_seeded;
 } host_t;
 
 void host_init(host_t *host, auth_profile_t *auth);
