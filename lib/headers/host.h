@@ -1,9 +1,14 @@
 #ifndef SSH_CHATTER_HOST_H
 #define SSH_CHATTER_HOST_H
 
+#include <limits.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 #include <libssh/libssh.h>
 #include <libssh/server.h>
@@ -42,6 +47,8 @@ typedef struct chat_history_entry {
   const char *user_color_code;
   const char *user_highlight_code;
   bool user_is_bold;
+  char user_color_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char user_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
 } chat_history_entry_t;
 
 typedef struct auth_profile {
@@ -119,6 +126,7 @@ typedef struct host {
   user_preference_t preferences[SSH_CHATTER_MAX_PREFERENCES];
   size_t preference_count;
   pthread_mutex_t lock;
+  char state_file_path[PATH_MAX];
 } host_t;
 
 void host_init(host_t *host, auth_profile_t *auth);
