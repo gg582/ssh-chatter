@@ -29,9 +29,6 @@
 #define SSH_CHATTER_MAX_PREFERENCES 1024
 #define SSH_CHATTER_ATTACHMENT_TARGET_LEN 256
 #define SSH_CHATTER_ATTACHMENT_CAPTION_LEN 256
-#define SSH_CHATTER_SOUND_ALIAS_LEN 32
-#define SSH_CHATTER_SOUND_PATH_LEN 256
-#define SSH_CHATTER_MAX_SOUNDS 64
 #define SSH_CHATTER_REACTION_KIND_COUNT 7
 
 struct host;
@@ -53,15 +50,9 @@ typedef enum chat_attachment_type {
   CHAT_ATTACHMENT_NONE = 0,
   CHAT_ATTACHMENT_IMAGE,
   CHAT_ATTACHMENT_VIDEO,
-  CHAT_ATTACHMENT_SOUND,
+  CHAT_ATTACHMENT_AUDIO,
+  CHAT_ATTACHMENT_FILE,
 } chat_attachment_type_t;
-
-typedef struct host_sound_entry {
-  bool in_use;
-  char alias[SSH_CHATTER_SOUND_ALIAS_LEN];
-  char filename[SSH_CHATTER_SOUND_PATH_LEN];
-  char owner[SSH_CHATTER_USERNAME_LEN];
-} host_sound_entry_t;
 
 typedef struct chat_history_entry {
   bool is_user_message;
@@ -76,7 +67,6 @@ typedef struct chat_history_entry {
   chat_attachment_type_t attachment_type;
   char attachment_target[SSH_CHATTER_ATTACHMENT_TARGET_LEN];
   char attachment_caption[SSH_CHATTER_ATTACHMENT_CAPTION_LEN];
-  char sound_alias[SSH_CHATTER_SOUND_ALIAS_LEN];
   uint32_t reaction_counts[SSH_CHATTER_REACTION_KIND_COUNT];
 } chat_history_entry_t;
 
@@ -160,8 +150,6 @@ typedef struct host {
   size_t history_start;
   size_t history_count;
   uint64_t next_message_id;
-  host_sound_entry_t sounds[SSH_CHATTER_MAX_SOUNDS];
-  size_t sound_count;
   user_preference_t preferences[SSH_CHATTER_MAX_PREFERENCES];
   size_t preference_count;
   pthread_mutex_t lock;
