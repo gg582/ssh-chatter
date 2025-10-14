@@ -18,6 +18,7 @@
 #include <netdb.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -151,6 +152,42 @@ static user_preference_t *host_find_preference_locked(host_t *host, const char *
 static user_preference_t *host_ensure_preference_locked(host_t *host, const char *username);
 static void host_store_user_theme(host_t *host, const session_ctx_t *ctx);
 static void host_store_system_theme(host_t *host, const session_ctx_t *ctx);
+static void host_history_normalize_entry(host_t *host, chat_history_entry_t *entry);
+static void host_state_resolve_path(host_t *host);
+static void host_state_load(host_t *host);
+static void host_state_save_locked(host_t *host);
+
+static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
+static const uint32_t HOST_STATE_VERSION = 1U;
+
+typedef struct host_state_header {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t history_count;
+  uint32_t preference_count;
+} host_state_header_t;
+
+typedef struct host_state_history_entry {
+  uint8_t is_user_message;
+  uint8_t user_is_bold;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  char user_color_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char user_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+} host_state_history_entry_t;
+
+typedef struct host_state_preference_entry {
+  uint8_t has_user_theme;
+  uint8_t has_system_theme;
+  uint8_t user_is_bold;
+  uint8_t system_is_bold;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  char user_color_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char user_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_fg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_bg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+} host_state_preference_entry_t;
 
 static void chat_room_init(chat_room_t *room) {
   if (room == NULL) {
@@ -347,6 +384,8 @@ static void host_history_append(host_t *host, const chat_history_entry_t *entry)
 
   host->history[insert_index] = *entry;
 
+  host_state_save_locked(host);
+
   pthread_mutex_unlock(&host->lock);
 }
 
@@ -362,6 +401,10 @@ static void host_history_record_user(host_t *host, const session_ctx_t *from, co
   entry.user_color_code = from->user_color_code;
   entry.user_highlight_code = from->user_highlight_code;
   entry.user_is_bold = from->user_is_bold;
+  snprintf(entry.user_color_name, sizeof(entry.user_color_name), "%s", from->user_color_name);
+  snprintf(entry.user_highlight_name, sizeof(entry.user_highlight_name), "%s", from->user_highlight_name);
+
+  host_history_normalize_entry(host, &entry);
 
   host_history_append(host, &entry);
 }
@@ -374,6 +417,8 @@ static void host_history_record_system(host_t *host, const char *message) {
   chat_history_entry_t entry = {0};
   entry.is_user_message = false;
   snprintf(entry.message, sizeof(entry.message), "%s", message);
+  entry.user_color_name[0] = '\0';
+  entry.user_highlight_name[0] = '\0';
 
   host_history_append(host, &entry);
 }
@@ -470,6 +515,7 @@ static void host_store_user_theme(host_t *host, const session_ctx_t *ctx) {
     snprintf(pref->user_highlight_name, sizeof(pref->user_highlight_name), "%s", ctx->user_highlight_name);
     pref->user_is_bold = ctx->user_is_bold;
   }
+  host_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 }
 
@@ -487,7 +533,257 @@ static void host_store_system_theme(host_t *host, const session_ctx_t *ctx) {
     snprintf(pref->system_highlight_name, sizeof(pref->system_highlight_name), "%s", ctx->system_highlight_name);
     pref->system_is_bold = ctx->system_is_bold;
   }
+  host_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
+}
+
+static void host_history_normalize_entry(host_t *host, chat_history_entry_t *entry) {
+  if (host == NULL || entry == NULL) {
+    return;
+  }
+
+  if (!entry->is_user_message) {
+    entry->user_color_code = NULL;
+    entry->user_highlight_code = NULL;
+    entry->user_is_bold = false;
+    entry->user_color_name[0] = '\0';
+    entry->user_highlight_name[0] = '\0';
+    return;
+  }
+
+  const char *color_code = lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]),
+                                             entry->user_color_name);
+  if (color_code == NULL) {
+    color_code = host->user_theme.userColor;
+    snprintf(entry->user_color_name, sizeof(entry->user_color_name), "%s", host->default_user_color_name);
+  }
+
+  const char *highlight_code = lookup_color_code(HIGHLIGHT_COLOR_MAP,
+                                                sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]),
+                                                entry->user_highlight_name);
+  if (highlight_code == NULL) {
+    highlight_code = host->user_theme.highlight;
+    snprintf(entry->user_highlight_name, sizeof(entry->user_highlight_name), "%s",
+             host->default_user_highlight_name);
+  }
+
+  entry->user_color_code = color_code;
+  entry->user_highlight_code = highlight_code;
+}
+
+static void host_state_resolve_path(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  const char *state_path = getenv("CHATTER_STATE_FILE");
+  if (state_path == NULL || state_path[0] == '\0') {
+    state_path = "chatter_state.dat";
+  }
+
+  int written = snprintf(host->state_file_path, sizeof(host->state_file_path), "%s", state_path);
+  if (written < 0 || (size_t)written >= sizeof(host->state_file_path)) {
+    humanized_log_error("host", "state file path is too long", ENAMETOOLONG);
+    host->state_file_path[0] = '\0';
+  }
+}
+
+static void host_state_save_locked(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->state_file_path[0] == '\0') {
+    return;
+  }
+
+  char temp_path[PATH_MAX];
+  int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp", host->state_file_path);
+  if (written < 0 || (size_t)written >= sizeof(temp_path)) {
+    humanized_log_error("host", "state file path is too long", ENAMETOOLONG);
+    return;
+  }
+
+  FILE *fp = fopen(temp_path, "wb");
+  if (fp == NULL) {
+    humanized_log_error("host", "failed to open state file", errno);
+    return;
+  }
+
+  size_t preference_count = 0U;
+  for (size_t idx = 0; idx < SSH_CHATTER_MAX_PREFERENCES; ++idx) {
+    if (host->preferences[idx].in_use) {
+      ++preference_count;
+    }
+  }
+
+  host_state_header_t header = {0};
+  header.magic = HOST_STATE_MAGIC;
+  header.version = HOST_STATE_VERSION;
+  header.history_count = (uint32_t)host->history_count;
+  header.preference_count = (uint32_t)preference_count;
+
+  bool success = fwrite(&header, sizeof(header), 1U, fp) == 1U;
+
+  for (size_t idx = 0; success && idx < host->history_count; ++idx) {
+    size_t history_index = (host->history_start + idx) % SSH_CHATTER_HISTORY_LIMIT;
+    const chat_history_entry_t *entry = &host->history[history_index];
+
+    host_state_history_entry_t serialized = {0};
+    serialized.is_user_message = entry->is_user_message ? 1U : 0U;
+    serialized.user_is_bold = entry->user_is_bold ? 1U : 0U;
+    snprintf(serialized.username, sizeof(serialized.username), "%s", entry->username);
+    snprintf(serialized.message, sizeof(serialized.message), "%s", entry->message);
+    snprintf(serialized.user_color_name, sizeof(serialized.user_color_name), "%s", entry->user_color_name);
+    snprintf(serialized.user_highlight_name, sizeof(serialized.user_highlight_name), "%s",
+             entry->user_highlight_name);
+
+    if (fwrite(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+      success = false;
+    }
+  }
+
+  for (size_t idx = 0; success && idx < SSH_CHATTER_MAX_PREFERENCES; ++idx) {
+    const user_preference_t *pref = &host->preferences[idx];
+    if (!pref->in_use) {
+      continue;
+    }
+
+    host_state_preference_entry_t serialized = {0};
+    serialized.has_user_theme = pref->has_user_theme ? 1U : 0U;
+    serialized.has_system_theme = pref->has_system_theme ? 1U : 0U;
+    serialized.user_is_bold = pref->user_is_bold ? 1U : 0U;
+    serialized.system_is_bold = pref->system_is_bold ? 1U : 0U;
+    snprintf(serialized.username, sizeof(serialized.username), "%s", pref->username);
+    snprintf(serialized.user_color_name, sizeof(serialized.user_color_name), "%s", pref->user_color_name);
+    snprintf(serialized.user_highlight_name, sizeof(serialized.user_highlight_name), "%s", pref->user_highlight_name);
+    snprintf(serialized.system_fg_name, sizeof(serialized.system_fg_name), "%s", pref->system_fg_name);
+    snprintf(serialized.system_bg_name, sizeof(serialized.system_bg_name), "%s", pref->system_bg_name);
+    snprintf(serialized.system_highlight_name, sizeof(serialized.system_highlight_name), "%s",
+             pref->system_highlight_name);
+
+    if (fwrite(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+      success = false;
+      break;
+    }
+  }
+
+  if (success && fflush(fp) != 0) {
+    success = false;
+  }
+
+  if (success) {
+    int fd = fileno(fp);
+    if (fd >= 0 && fsync(fd) != 0) {
+      success = false;
+    }
+  }
+
+  if (fclose(fp) != 0) {
+    success = false;
+  }
+
+  if (!success) {
+    humanized_log_error("host", "failed to write state file", errno);
+    unlink(temp_path);
+    return;
+  }
+
+  if (rename(temp_path, host->state_file_path) != 0) {
+    humanized_log_error("host", "failed to update state file", errno);
+    unlink(temp_path);
+  }
+}
+
+static void host_state_load(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->state_file_path[0] == '\0') {
+    return;
+  }
+
+  FILE *fp = fopen(host->state_file_path, "rb");
+  if (fp == NULL) {
+    return;
+  }
+
+  host_state_header_t header = {0};
+  if (fread(&header, sizeof(header), 1U, fp) != 1U) {
+    fclose(fp);
+    return;
+  }
+
+  if (header.magic != HOST_STATE_MAGIC || header.version != HOST_STATE_VERSION) {
+    fclose(fp);
+    return;
+  }
+
+  uint32_t history_count = header.history_count;
+  if (history_count > SSH_CHATTER_HISTORY_LIMIT) {
+    history_count = SSH_CHATTER_HISTORY_LIMIT;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  host->history_start = 0U;
+  host->history_count = 0U;
+  memset(host->history, 0, sizeof(host->history));
+
+  for (uint32_t idx = 0; idx < history_count; ++idx) {
+    host_state_history_entry_t serialized = {0};
+    if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+      break;
+    }
+
+    chat_history_entry_t *entry = &host->history[idx % SSH_CHATTER_HISTORY_LIMIT];
+    memset(entry, 0, sizeof(*entry));
+    entry->is_user_message = serialized.is_user_message != 0U;
+    entry->user_is_bold = serialized.user_is_bold != 0U;
+    snprintf(entry->username, sizeof(entry->username), "%s", serialized.username);
+    snprintf(entry->message, sizeof(entry->message), "%s", serialized.message);
+    snprintf(entry->user_color_name, sizeof(entry->user_color_name), "%s", serialized.user_color_name);
+    snprintf(entry->user_highlight_name, sizeof(entry->user_highlight_name), "%s", serialized.user_highlight_name);
+    host_history_normalize_entry(host, entry);
+    ++host->history_count;
+  }
+
+  memset(host->preferences, 0, sizeof(host->preferences));
+  host->preference_count = 0U;
+
+  uint32_t preference_count = header.preference_count;
+  if (preference_count > SSH_CHATTER_MAX_PREFERENCES) {
+    preference_count = SSH_CHATTER_MAX_PREFERENCES;
+  }
+
+  for (uint32_t idx = 0; idx < preference_count; ++idx) {
+    host_state_preference_entry_t serialized = {0};
+    if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+      break;
+    }
+
+    if (host->preference_count >= SSH_CHATTER_MAX_PREFERENCES) {
+      break;
+    }
+
+    user_preference_t *pref = &host->preferences[host->preference_count];
+    memset(pref, 0, sizeof(*pref));
+    pref->in_use = true;
+    pref->has_user_theme = serialized.has_user_theme != 0U;
+    pref->has_system_theme = serialized.has_system_theme != 0U;
+    pref->user_is_bold = serialized.user_is_bold != 0U;
+    pref->system_is_bold = serialized.system_is_bold != 0U;
+    snprintf(pref->username, sizeof(pref->username), "%s", serialized.username);
+    snprintf(pref->user_color_name, sizeof(pref->user_color_name), "%s", serialized.user_color_name);
+    snprintf(pref->user_highlight_name, sizeof(pref->user_highlight_name), "%s", serialized.user_highlight_name);
+    snprintf(pref->system_fg_name, sizeof(pref->system_fg_name), "%s", serialized.system_fg_name);
+    snprintf(pref->system_bg_name, sizeof(pref->system_bg_name), "%s", serialized.system_bg_name);
+    snprintf(pref->system_highlight_name, sizeof(pref->system_highlight_name), "%s", serialized.system_highlight_name);
+    ++host->preference_count;
+  }
+
+  pthread_mutex_unlock(&host->lock);
+  fclose(fp);
 }
 
 static void session_apply_saved_preferences(session_ctx_t *ctx) {
@@ -2045,7 +2341,11 @@ void host_init(host_t *host, auth_profile_t *auth) {
   memset(host->history, 0, sizeof(host->history));
   memset(host->preferences, 0, sizeof(host->preferences));
   host->preference_count = 0U;
+  host->state_file_path[0] = '\0';
+  host_state_resolve_path(host);
   pthread_mutex_init(&host->lock, NULL);
+
+  host_state_load(host);
 }
 
 void host_set_motd(host_t *host, const char *motd) {
