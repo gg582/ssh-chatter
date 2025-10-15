@@ -5658,8 +5658,8 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
   session_bbs_reset_pending_post(ctx);
 
   if (arguments == NULL) {
-    session_send_system_line(ctx, "Usage: /bbs post <title> [tags...]");
-    session_send_system_line(ctx, "Wrap the title in quotes if it contains spaces.");
+    session_send_system_line(ctx, "Usage: /bbs post <title>[|tags...]");
+    session_send_system_line(ctx, "Use | to separate tags when the title has spaces.");
     return;
   }
 
@@ -5667,43 +5667,65 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
   snprintf(working, sizeof(working), "%s", arguments);
   trim_whitespace_inplace(working);
   if (working[0] == '\0') {
-    session_send_system_line(ctx, "Usage: /bbs post <title> [tags...]");
-    session_send_system_line(ctx, "Wrap the title in quotes if it contains spaces.");
+    session_send_system_line(ctx, "Usage: /bbs post <title>[|tags...]");
+    session_send_system_line(ctx, "Use | to separate tags when the title has spaces.");
     return;
   }
 
   char title[SSH_CHATTER_BBS_TITLE_LEN];
   title[0] = '\0';
-  char *cursor = working;
-  if (*cursor == '\"' || *cursor == '\'') {
-    char quote = *cursor++;
-    char *closing = strchr(cursor, quote);
-    if (closing == NULL) {
-      session_send_system_line(ctx, "Missing closing quote for the title.");
-      return;
+  char *tag_cursor = NULL;
+  char *separator = strchr(working, '|');
+  if (separator != NULL) {
+    *separator = '\0';
+    char *title_part = working;
+    char *tags_part = separator + 1;
+    trim_whitespace_inplace(title_part);
+    trim_whitespace_inplace(tags_part);
+    size_t title_len = strnlen(title_part, sizeof(title));
+    if (title_len > 1U && (title_part[0] == '\"' || title_part[0] == '\'') && title_part[title_len - 1U] == title_part[0]) {
+      title_part[title_len - 1U] = '\0';
+      ++title_part;
+      trim_whitespace_inplace(title_part);
     }
-    size_t copy_len = (size_t)(closing - cursor);
-    if (copy_len >= sizeof(title)) {
-      copy_len = sizeof(title) - 1U;
-    }
-    memcpy(title, cursor, copy_len);
+    size_t copy_len = strnlen(title_part, sizeof(title) - 1U);
+    memcpy(title, title_part, copy_len);
     title[copy_len] = '\0';
-    cursor = closing + 1;
+    tag_cursor = tags_part;
   } else {
-    char *space = cursor;
-    while (*space != '\0' && !isspace((unsigned char)*space)) {
-      ++space;
+    char *cursor = working;
+    if (*cursor == '\"' || *cursor == '\'') {
+      char quote = *cursor++;
+      char *closing = strchr(cursor, quote);
+      if (closing == NULL) {
+        session_send_system_line(ctx, "Missing closing quote for the title.");
+        return;
+      }
+      size_t copy_len = (size_t)(closing - cursor);
+      if (copy_len >= sizeof(title)) {
+        copy_len = sizeof(title) - 1U;
+      }
+      memcpy(title, cursor, copy_len);
+      title[copy_len] = '\0';
+      cursor = closing + 1;
+    } else {
+      char *space = cursor;
+      while (*space != '\0' && !isspace((unsigned char)*space)) {
+        ++space;
+      }
+      size_t copy_len = (size_t)(space - cursor);
+      if (copy_len >= sizeof(title)) {
+        copy_len = sizeof(title) - 1U;
+      }
+      memcpy(title, cursor, copy_len);
+      title[copy_len] = '\0';
+      cursor = space;
     }
-    size_t copy_len = (size_t)(space - cursor);
-    if (copy_len >= sizeof(title)) {
-      copy_len = sizeof(title) - 1U;
-    }
-    memcpy(title, cursor, copy_len);
-    title[copy_len] = '\0';
-    cursor = space;
+
+    trim_whitespace_inplace(cursor);
+    tag_cursor = cursor;
   }
 
-  trim_whitespace_inplace(cursor);
   if (title[0] == '\0') {
     session_send_system_line(ctx, "A title is required to create a post.");
     return;
@@ -5712,31 +5734,31 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
   size_t tag_count = 0U;
   bool discarded_tags = false;
   bool default_tag_applied = false;
-  while (*cursor != '\0') {
-    while (isspace((unsigned char)*cursor)) {
-      ++cursor;
+  while (tag_cursor != NULL && *tag_cursor != '\0') {
+    while (isspace((unsigned char)*tag_cursor)) {
+      ++tag_cursor;
     }
-    if (*cursor == '\0') {
+    if (*tag_cursor == '\0') {
       break;
     }
-    char *end = cursor;
+    char *end = tag_cursor;
     while (*end != '\0' && !isspace((unsigned char)*end)) {
       ++end;
     }
-    size_t length = (size_t)(end - cursor);
+    size_t length = (size_t)(end - tag_cursor);
     if (length > 0U) {
       if (tag_count < SSH_CHATTER_BBS_MAX_TAGS) {
         if (length >= SSH_CHATTER_BBS_TAG_LEN) {
           length = SSH_CHATTER_BBS_TAG_LEN - 1U;
         }
-        memcpy(ctx->pending_bbs_tags[tag_count], cursor, length);
+        memcpy(ctx->pending_bbs_tags[tag_count], tag_cursor, length);
         ctx->pending_bbs_tags[tag_count][length] = '\0';
         ++tag_count;
       } else {
         discarded_tags = true;
       }
     }
-    cursor = end;
+    tag_cursor = end;
   }
 
   if (tag_count == 0U) {
