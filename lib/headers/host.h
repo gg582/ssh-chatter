@@ -48,7 +48,6 @@
 struct host;
 struct session_ctx;
 struct client_manager;
-struct chat_bot;
 struct webssh_client;
 
 typedef struct join_activity_entry {
@@ -60,7 +59,6 @@ typedef struct join_activity_entry {
 } join_activity_entry_t;
 
 typedef struct client_manager client_manager_t;
-typedef struct chat_bot chat_bot_t;
 typedef struct webssh_client webssh_client_t;
 
 typedef struct chat_user {
@@ -264,10 +262,7 @@ typedef struct host {
   uint64_t next_bbs_id;
   bool random_seeded;
   client_manager_t *clients;
-  chat_bot_t *bot;
   webssh_client_t *web_client;
-  bool bot_present;
-  char bot_username[SSH_CHATTER_USERNAME_LEN];
   struct {
     char ip[SSH_CHATTER_IP_LEN];
   } operator_grants[SSH_CHATTER_MAX_GRANTS];
@@ -290,8 +285,6 @@ void host_set_motd(host_t *host, const char *motd);
 int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory);
 bool host_post_client_message(host_t *host, const char *username, const char *message, const char *color_name,
                              const char *highlight_name, bool is_bold);
-void host_bot_joined(host_t *host, const char *bot_name);
-void host_bot_left(host_t *host, const char *bot_name);
 void host_shutdown(host_t *host);
 bool host_snapshot_last_captcha(host_t *host, char *question, size_t question_length, char *answer,
                                size_t answer_length, struct timespec *timestamp);
