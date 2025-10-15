@@ -5,6 +5,7 @@ SSH-Chatter is a C reimplementation of the Go [`ssh-chat`](https://github.com/sh
 ## Recent enhancements
 
 - Named poll management via `/vote` for multiple-choice polls (vote with `/1 <label>`) plus `/vote-single` for classic single-choice runs, including graceful shutdown with `/vote @close <label>`.
+- Poll state persistence to `vote_state.dat` (overridable via `CHATTER_VOTE_FILE`) so active polls and their votes survive restarts.
 - `/bbs` command unlocking a retro bulletin board system with tags, comments, bumping, and a multi-line composer that ends on a `>/__BBS_END>` terminator.
 - `/birthday` to register birthdays, `/soulmate` to find matching dates, `/grant <ip>` so LAN operators can delegate privileges by address, and `/revoke <ip>` so top LAN admins can reclaim them.
 - Chat UI refresh with a clean divider between history and input, instant input clearing after send, and a friendly "Wait for a moment..." banner with a playful loading bar before each join.
@@ -132,6 +133,7 @@ Supported environment variables include:
 - `CHATTER_MOTD_FILE` – Path to the message-of-the-day file (default `/etc/ssh-chatter/motd`).
 - `CHATTER_HOST_KEY_DIR` – Directory containing `ssh_host_rsa_key` (default `/var/lib/ssh-chatter`).
 - `CHATTER_EXTRA_ARGS` – Additional arguments appended to the `ssh-chatter` invocation.
+- `CHATTER_VOTE_FILE` – Path to the vote state file (default `vote_state.dat`).
 
 If you prefer to install without immediately starting the service, run the script with `SKIP_START=1`.
 
