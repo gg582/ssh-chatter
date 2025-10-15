@@ -132,13 +132,20 @@ sudo systemctl disable --now chatter.service
 - MOTD delivery through the `-m` flag or service-managed configuration file.
 - `/help` command for connected clients.
 - Server-side logging of joins, parts, and administrative command attempts (`/ban`, `/poke`).
+- Broadcasting chat messages to all connected participants.
+- Color Palettes
+- BBS-style personal message
+- Media Tag
+- Ban User
+- Clock
+- Nickname Changer
+- Chat Scroll
+- Checking user list
 
 ### In progress / planned
 
-- Broadcasting chat messages to all connected participants.
 - Enforcing moderation commands beyond logging.
 - Authentication and authorisation controls.
-- Session attachment support so broadcasts reach all active channels.
 
 ## Contributing
 
