@@ -5595,13 +5595,16 @@ static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, c
     poll->voters[voter_slot].choice = (int)option_index;
     poll->voters[voter_slot].choices_mask = (option_bit != 0U) ? option_bit : 0U;
   }
+
+  char resolved_label[SSH_CHATTER_POLL_LABEL_LEN];
+  snprintf(resolved_label, sizeof(resolved_label), "%s", poll->label);
   host_vote_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(message, sizeof(message), "Vote recorded for /%zu %s.", option_index + 1U, label);
+  snprintf(message, sizeof(message), "Vote recorded for /%zu %s.", option_index + 1U, resolved_label);
   session_send_system_line(ctx, message);
-  session_send_poll_summary_generic(ctx, &poll->poll, label);
+  session_send_poll_summary_generic(ctx, &poll->poll, resolved_label);
 }
 
 // Parse the /vote command to manage named polls, including listing, creation, and closure.
@@ -7710,7 +7713,7 @@ static named_poll_state_t *host_find_named_poll_locked(host_t *host, const char 
     if (entry->label[0] == '\0') {
       continue;
     }
-    if (strcmp(entry->label, label) == 0) {
+    if (strcasecmp(entry->label, label) == 0) {
       return entry;
     }
   }
