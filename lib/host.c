@@ -4971,14 +4971,23 @@ static bool host_try_load_motd_from_path(host_t *host, const char *path) {
   session_normalize_newlines(motd_buffer);
 
   pthread_mutex_lock(&host->lock);
-  char motd_clean[4096];
+  char motd_clean[sizeof(host->motd)];
+  motd_clean[0] = '\0';
+  size_t offset = 0U;
   char *next_line;
-  char * motd_line = strtok_r(host->motd, "\n", &next_line);
-  while(motd_line != NULL) {
-    snprintf(motd_clean, strlen(motd_line), "\033[1G%s\n", motd_line);
+  char *motd_line = strtok_r(motd_buffer, "\n", &next_line);
+  while (motd_line != NULL && offset < sizeof(motd_clean)) {
+    const int written =
+        snprintf(motd_clean + offset, sizeof(motd_clean) - offset, "\033[1G%s\n", motd_line);
+    if (written < 0 || (size_t)written >= sizeof(motd_clean) - offset) {
+      offset = sizeof(motd_clean) - 1U;
+      break;
+    }
+    offset += (size_t)written;
     motd_line = strtok_r(NULL, "\n", &next_line);
   }
-  snprintf(host->motd, strlen(motd_clean), "%s", motd_clean);
+  motd_clean[sizeof(motd_clean) - 1U] = '\0';
+  snprintf(host->motd, sizeof(host->motd), "%s", motd_clean);
   pthread_mutex_unlock(&host->lock);
   return true;
 }
