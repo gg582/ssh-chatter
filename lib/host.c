@@ -2069,7 +2069,7 @@ static void session_send_poll_summary(session_ctx_t *ctx) {
   for (size_t idx = 0U; idx < snapshot.option_count; ++idx) {
     char option_line[SSH_CHATTER_MESSAGE_LIMIT + 32];
     uint32_t votes = snapshot.options[idx].votes;
-    snprintf(option_line, sizeof(option_line), "  /%zu - %s (%u vote%s)", idx + 1U, snapshot.options[idx].text, votes,
+    snprintf(option_line, sizeof(option_line) + 6, "  /%zu - %s (%u vote%s)", idx + 1U, snapshot.options[idx].text, votes,
              votes == 1U ? "" : "s");
     session_send_system_line(ctx, option_line);
   }
