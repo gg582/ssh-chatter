@@ -64,43 +64,44 @@ typedef struct {
   bool is_male;
   const char *pet_species;
   const char *pet_name;
+  const char *pet_pronoun;
   captcha_template_t template_type;
 } captcha_story_t;
 
 static const captcha_story_t CAPTCHA_STORIES[] = {
-    {"Jiho", "software engineer", true, "cat", "Hodu", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Sujin", "middle school teacher", false, "cat", "Dubu", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Minseok", "photographer", true, "cat", "Mimi", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Haeun", "florist", false, "cat", "Bori", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Yuna", "product designer", false, "cat", "Choco", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Donghyun", "barista", true, "cat", "Gaeul", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Seojun", "research scientist", true, "cat", "Nuri", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Ara", "ceramic artist", false, "cat", "Bam", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Kyungmin", "chef", true, "cat", "Tori", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Jisoo", "translator", false, "cat", "Haneul", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Emily", "librarian", false, "cat", "Whiskers", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Jacob", "firefighter", true, "cat", "Shadow", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Olivia", "graphic designer", false, "cat", "Pumpkin", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Noah", "high school coach", true, "cat", "Midnight", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Ava", "nurse", false, "cat", "Sunny", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Ethan", "software architect", true, "cat", "Clover", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Sophia", "baker", false, "cat", "Pebble", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Liam", "paramedic", true, "cat", "Smokey", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Isabella", "journalist", false, "cat", "Luna", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Mason", "carpenter", true, "cat", "Tiger", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Anya", "interpreter", false, "cat", "Pushok", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Dmitri", "aerospace engineer", true, "cat", "Barsik", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Elena", "doctor", false, "cat", "Sneg", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Nikolai", "history professor", true, "cat", "Murzik", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Irina", "pianist", false, "cat", "Mishka", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Sergei", "marine biologist", true, "cat", "Ryzhik", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Tatiana", "architect", false, "cat", "Zvezda", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Alexei", "journalist", true, "cat", "Kotya", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Yulia", "theatre director", false, "cat", "Lapka", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Mikhail", "chef", true, "cat", "Tuman", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Hyeri", "illustrator", false, "dog", "Gureum", CAPTCHA_TEMPLATE_PET_SPECIES},
-    {"Brandon", "park ranger", true, "dog", "Buddy", CAPTCHA_TEMPLATE_PET_SPECIES},
-    {"Oksana", "music teacher", false, "dog", "Volna", CAPTCHA_TEMPLATE_PET_SPECIES},
+    {"Jiho", "software engineer", true, "cat", "Hodu", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Sujin", "middle school teacher", false, "cat", "Dubu", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Minseok", "photographer", true, "cat", "Mimi", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Haeun", "florist", false, "cat", "Bori", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Yuna", "product designer", false, "cat", "Choco", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Donghyun", "barista", true, "cat", "Gaeul", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Seojun", "research scientist", true, "cat", "Nuri", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Ara", "ceramic artist", false, "cat", "Bam", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Kyungmin", "chef", true, "cat", "Tori", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Jisoo", "translator", false, "cat", "Haneul", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Emily", "librarian", false, "cat", "Whiskers", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Jacob", "firefighter", true, "cat", "Shadow", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Olivia", "graphic designer", false, "cat", "Pumpkin", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Noah", "high school coach", true, "cat", "Midnight", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Ava", "nurse", false, "cat", "Sunny", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Ethan", "software architect", true, "cat", "Clover", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Sophia", "baker", false, "cat", "Pebble", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Liam", "paramedic", true, "cat", "Smokey", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Isabella", "journalist", false, "cat", "Luna", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Mason", "carpenter", true, "cat", "Tiger", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Anya", "interpreter", false, "cat", "Pushok", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Dmitri", "aerospace engineer", true, "cat", "Barsik", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Elena", "doctor", false, "cat", "Sneg", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Nikolai", "history professor", true, "cat", "Murzik", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Irina", "pianist", false, "cat", "Mishka", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Sergei", "marine biologist", true, "cat", "Ryzhik", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Tatiana", "architect", false, "cat", "Zvezda", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Alexei", "journalist", true, "cat", "Kotya", "he", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Yulia", "theatre director", false, "cat", "Lapka", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Mikhail", "chef", true, "cat", "Tuman", NULL, CAPTCHA_TEMPLATE_PRONOUN},
+    {"Hyeri", "illustrator", false, "dog", "Gureum", NULL, CAPTCHA_TEMPLATE_PET_SPECIES},
+    {"Brandon", "park ranger", true, "dog", "Buddy", NULL, CAPTCHA_TEMPLATE_PET_SPECIES},
+    {"Oksana", "music teacher", false, "dog", "Volna", NULL, CAPTCHA_TEMPLATE_PET_SPECIES},
 };
 
 static struct timespec timespec_diff(const struct timespec *end, const struct timespec *start) {
@@ -217,12 +218,10 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
 
   if (story->template_type == CAPTCHA_TEMPLATE_PRONOUN) {
     const bool refer_pet = ((basis / story_count) & 1U) == 0U;
-    const char *pronoun = story->is_male ? "he" : "she";
-    const char *answer = story->person_name;
-    if (refer_pet) {
-      pronoun = "it";
-      answer = story->pet_name;
-    }
+    const char *person_pronoun = story->is_male ? "he" : "she";
+    const char *pet_pronoun = (story->pet_pronoun != NULL) ? story->pet_pronoun : "it";
+    const char *pronoun = refer_pet ? pet_pronoun : person_pronoun;
+    const char *answer = refer_pet ? story->pet_name : story->person_name;
 
     snprintf(prompt->question, sizeof(prompt->question),
              "%s is a %s who has a %s named %s. \"%s\" is adorable. Answer what the double-quoted text refers to.",
