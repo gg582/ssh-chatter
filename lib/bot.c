@@ -27,8 +27,8 @@
 #include "headers/humanized/humanized.h"
 
 #define CHAT_BOT_ENV_PATH "/etc/ssh-chatter/chatter.env"
-#define CHAT_BOT_DEFAULT_NAME "chatgpt"
-#define CHAT_BOT_DEFAULT_MODEL "gpt-4o-mini"
+#define CHAT_BOT_DEFAULT_NAME "gpt"
+#define CHAT_BOT_DEFAULT_MODEL "gpt-4o-latest"
 #define CHAT_BOT_QUEUE_LENGTH 16U
 #define CHAT_BOT_PROMPT_DEFAULT "You are a friendly assistant that participates in a terminal chat room."
 #define CHAT_BOT_HTTP_TIMEOUT 20L
@@ -109,6 +109,9 @@ typedef struct chat_bot_buffer_state {
 } chat_bot_buffer_state_t;
 
 static void chat_bot_save_memory_locked(chat_bot_t *bot);
+static void chat_bot_normalise_model(chat_bot_t *bot);
+static bool chat_bot_model_contains_thinking(const char *model);
+static void chat_bot_normalise_name(chat_bot_t *bot);
 
 static void chat_bot_init_queue(chat_bot_t *bot) {
   bot->queue_start = 0U;
@@ -842,6 +845,62 @@ static void chat_bot_load_env(chat_bot_t *bot) {
   fclose(file);
 }
 
+static bool chat_bot_model_contains_thinking(const char *model) {
+  if (model == NULL) {
+    return false;
+  }
+
+  for (const char *cursor = model; *cursor != '\0'; ++cursor) {
+    if (tolower((unsigned char)*cursor) != 't') {
+      continue;
+    }
+
+    const char *candidate = cursor;
+    const char *needle = "thinking";
+    bool matches = true;
+    for (size_t idx = 0U; needle[idx] != '\0'; ++idx) {
+      if (candidate[idx] == '\0' || tolower((unsigned char)candidate[idx]) != needle[idx]) {
+        matches = false;
+        break;
+      }
+    }
+
+    if (matches) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void chat_bot_normalise_model(chat_bot_t *bot) {
+  if (bot == NULL) {
+    return;
+  }
+
+  bool disallowed = chat_bot_model_contains_thinking(bot->model);
+  if (bot->model[0] == '\0' || disallowed) {
+    if (disallowed) {
+      printf("[chat-bot] model '%s' is disallowed; falling back to %s.\n", bot->model, CHAT_BOT_DEFAULT_MODEL);
+    }
+    snprintf(bot->model, sizeof(bot->model), "%s", CHAT_BOT_DEFAULT_MODEL);
+  }
+}
+
+static void chat_bot_normalise_name(chat_bot_t *bot) {
+  if (bot == NULL) {
+    return;
+  }
+
+  bool matches_default = bot->name[0] != '\0' && strcasecmp(bot->name, CHAT_BOT_DEFAULT_NAME) == 0;
+  if (!matches_default) {
+    if (bot->name[0] != '\0') {
+      printf("[chat-bot] forcing bot name to '%s'.\n", CHAT_BOT_DEFAULT_NAME);
+    }
+    snprintf(bot->name, sizeof(bot->name), "%s", CHAT_BOT_DEFAULT_NAME);
+  }
+}
+
 static pthread_once_t g_chat_bot_curl_once = PTHREAD_ONCE_INIT;
 
 static void chat_bot_init_curl(void) {
@@ -1109,7 +1168,6 @@ chat_bot_t *chat_bot_create(struct host *host, client_manager_t *manager) {
   bot->connection.user_data = bot;
   bot->connection.active = false;
   bot->connection.owner = NULL;
-  snprintf(bot->connection.identifier, sizeof(bot->connection.identifier), "%s", "chatgpt");
   bot->has_captcha_hint = false;
   bot->captcha_question[0] = '\0';
   bot->captcha_answer[0] = '\0';
@@ -1117,7 +1175,10 @@ chat_bot_t *chat_bot_create(struct host *host, client_manager_t *manager) {
   bot->captcha_hint_time.tv_nsec = 0L;
 
   chat_bot_load_env(bot);
+  chat_bot_normalise_name(bot);
+  chat_bot_normalise_model(bot);
   chat_bot_update_name_lower(bot);
+  snprintf(bot->connection.identifier, sizeof(bot->connection.identifier), "%s", bot->name);
   bot->enabled = bot->api_key[0] != '\0';
   if (!bot->enabled) {
     printf("[chat-bot] OPENAI_API_KEY missing in %s; bot disabled.\n", CHAT_BOT_ENV_PATH);
@@ -1140,6 +1201,7 @@ bool chat_bot_start(chat_bot_t *bot) {
       return false;
     }
     bot->registered = true;
+    host_bot_joined(bot->host, bot->name);
   }
 
   if (bot->thread_started) {
@@ -1147,6 +1209,7 @@ bool chat_bot_start(chat_bot_t *bot) {
   }
 
   if (pthread_create(&bot->thread, NULL, chat_bot_thread_main, bot) != 0) {
+    host_bot_left(bot->host, bot->name);
     client_manager_unregister(bot->manager, &bot->connection);
     bot->registered = false;
     humanized_log_error("chat-bot", "failed to start bot thread", errno);
@@ -1175,6 +1238,7 @@ void chat_bot_shutdown(chat_bot_t *bot) {
   }
 
   if (bot->registered && bot->manager != NULL) {
+    host_bot_left(bot->host, bot->name);
     client_manager_unregister(bot->manager, &bot->connection);
     bot->registered = false;
   }
