@@ -4971,7 +4971,11 @@ static bool host_try_load_motd_from_path(host_t *host, const char *path) {
   session_normalize_newlines(motd_buffer);
 
   pthread_mutex_lock(&host->lock);
-  snprintf(host->motd, sizeof(host->motd), "%s", motd_buffer);
+  if (strncmp(motd_buffer, "\033[1G", sizeof("\033[1G") - 1U) == 0) {
+    snprintf(host->motd, sizeof(host->motd), "%s", motd_buffer);
+  } else {
+    snprintf(host->motd, sizeof(host->motd), "\033[1G%s", motd_buffer);
+  }
   pthread_mutex_unlock(&host->lock);
   return true;
 }
@@ -4990,7 +4994,11 @@ void host_set_motd(host_t *host, const char *motd) {
   session_normalize_newlines(normalized);
 
   pthread_mutex_lock(&host->lock);
-  snprintf(host->motd, sizeof(host->motd), "%s", normalized);
+  if (strncmp(normalized, "\033[1G", sizeof("\033[1G") - 1U) == 0) {
+    snprintf(host->motd, sizeof(host->motd), "%s", normalized);
+  } else {
+    snprintf(host->motd, sizeof(host->motd), "\033[1G%s", normalized);
+  }
   pthread_mutex_unlock(&host->lock);
 }
 
