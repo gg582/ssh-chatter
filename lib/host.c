@@ -5037,126 +5037,149 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     return -1;
   }
 
-  ssh_bind bind_handle = ssh_bind_new();
-  if (bind_handle == NULL) {
-    humanized_log_error("host", "failed to allocate ssh_bind", ENOMEM);
-    return -1;
-  }
-
-  ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDADDR, address);
-  ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDPORT_STR, bind_port);
-  ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, "ssh-rsa");
-  errno = 0;
-  bool key_loaded = false;
-  if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_RSAKEY, rsa_key_path) == SSH_OK) {
-    key_loaded = true;
-  } else {
-    const char *error_message = ssh_get_error(bind_handle);
-    const bool unsupported_option = (error_message != NULL &&
-                                     strstr(error_message, "Unknown ssh option") != NULL) ||
-                                    errno == ENOTSUP;
-    if (!unsupported_option) {
-      humanized_log_error("host", error_message, errno != 0 ? errno : EIO);
-      ssh_bind_free(bind_handle);
-      return -1;
-    }
-
-    ssh_key imported_key = NULL;
-    if (ssh_pki_import_privkey_file(rsa_key_path, NULL, NULL, NULL, &imported_key) != SSH_OK ||
-        imported_key == NULL) {
-      humanized_log_error("host", "failed to import RSA host key", EIO);
-      ssh_bind_free(bind_handle);
-      return -1;
-    }
-
-    const int import_result =
-        ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_IMPORT_KEY, imported_key);
-    ssh_key_free(imported_key);
-    if (import_result != SSH_OK) {
-      humanized_log_error("host", ssh_get_error(bind_handle), errno != 0 ? errno : EIO);
-      ssh_bind_free(bind_handle);
-      return -1;
-    }
-
-    key_loaded = true;
-  }
-
-  if (!key_loaded) {
-    humanized_log_error("host", "failed to configure host key", EIO);
-    ssh_bind_free(bind_handle);
-    return -1;
-  }
-
-  if (ssh_bind_listen(bind_handle) < 0) {
-    humanized_log_error("host", ssh_get_error(bind_handle), EIO);
-    ssh_bind_free(bind_handle);
-    return -1;
-  }
-
-  host->listener.handle = bind_handle;
-  printf("[listener] listening on %s:%s\n", address, bind_port);
-
   while (true) {
-    ssh_session session = ssh_new();
-    if (session == NULL) {
-      humanized_log_error("host", "failed to allocate session", ENOMEM);
-      continue;
+    ssh_bind bind_handle = ssh_bind_new();
+    if (bind_handle == NULL) {
+      humanized_log_error("host", "failed to allocate ssh_bind", ENOMEM);
+      return -1;
     }
 
-    if (ssh_bind_accept(bind_handle, session) == SSH_ERROR) {
+    ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDADDR, address);
+    ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDPORT_STR, bind_port);
+    ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, "ssh-rsa");
+    errno = 0;
+    bool key_loaded = false;
+    if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_RSAKEY, rsa_key_path) == SSH_OK) {
+      key_loaded = true;
+    } else {
+      const char *error_message = ssh_get_error(bind_handle);
+      const bool unsupported_option = (error_message != NULL &&
+                                       strstr(error_message, "Unknown ssh option") != NULL) ||
+                                      errno == ENOTSUP;
+      if (!unsupported_option) {
+        humanized_log_error("host", error_message, errno != 0 ? errno : EIO);
+        ssh_bind_free(bind_handle);
+        return -1;
+      }
+
+      ssh_key imported_key = NULL;
+      if (ssh_pki_import_privkey_file(rsa_key_path, NULL, NULL, NULL, &imported_key) != SSH_OK ||
+          imported_key == NULL) {
+        humanized_log_error("host", "failed to import RSA host key", EIO);
+        ssh_bind_free(bind_handle);
+        return -1;
+      }
+
+      const int import_result =
+          ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_IMPORT_KEY, imported_key);
+      ssh_key_free(imported_key);
+      if (import_result != SSH_OK) {
+        humanized_log_error("host", ssh_get_error(bind_handle), errno != 0 ? errno : EIO);
+        ssh_bind_free(bind_handle);
+        return -1;
+      }
+
+      key_loaded = true;
+    }
+
+    if (!key_loaded) {
+      humanized_log_error("host", "failed to configure host key", EIO);
+      ssh_bind_free(bind_handle);
+      return -1;
+    }
+
+    if (ssh_bind_listen(bind_handle) < 0) {
       humanized_log_error("host", ssh_get_error(bind_handle), EIO);
-      ssh_free(session);
-      continue;
+      ssh_bind_free(bind_handle);
+      return -1;
     }
 
-    if (ssh_handle_key_exchange(session) != SSH_OK) {
-      humanized_log_error("host", ssh_get_error(session), EPROTO);
-      ssh_disconnect(session);
-      ssh_free(session);
-      continue;
+    host->listener.handle = bind_handle;
+    printf("[listener] listening on %s:%s\n", address, bind_port);
+
+    bool restart_listener = false;
+    while (!restart_listener) {
+      ssh_session session = ssh_new();
+      if (session == NULL) {
+        humanized_log_error("host", "failed to allocate session", ENOMEM);
+        continue;
+      }
+
+      if (ssh_bind_accept(bind_handle, session) == SSH_ERROR) {
+        humanized_log_error("host", ssh_get_error(bind_handle), EIO);
+        const char *bind_error = ssh_get_error(bind_handle);
+        const bool fatal_socket_error = bind_error != NULL &&
+                                        strstr(bind_error, "Socket error") != NULL;
+        ssh_free(session);
+        if (fatal_socket_error) {
+          printf("[listener] restarting after listener socket error\n");
+          restart_listener = true;
+          break;
+        }
+        continue;
+      }
+
+      if (ssh_handle_key_exchange(session) != SSH_OK) {
+        humanized_log_error("host", ssh_get_error(session), EPROTO);
+        ssh_disconnect(session);
+        ssh_free(session);
+        continue;
+      }
+
+      char peer_address[NI_MAXHOST];
+      session_describe_peer(session, peer_address, sizeof(peer_address));
+      if (peer_address[0] == '\0') {
+        strncpy(peer_address, "unknown", sizeof(peer_address) - 1U);
+        peer_address[sizeof(peer_address) - 1U] = '\0';
+      }
+
+      printf("[connect] accepted client from %s\n", peer_address);
+
+      session_ctx_t *ctx = calloc(1U, sizeof(session_ctx_t));
+      if (ctx == NULL) {
+        humanized_log_error("host", "failed to allocate session context", ENOMEM);
+        ssh_disconnect(session);
+        ssh_free(session);
+        continue;
+      }
+
+      ctx->session = session;
+      ctx->channel = NULL;
+      ctx->owner = host;
+      ctx->auth = (auth_profile_t){0};
+      snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
+
+      pthread_mutex_lock(&host->lock);
+      ++host->connection_count;
+      snprintf(ctx->user.name, sizeof(ctx->user.name), "Guest%zu", host->connection_count);
+      ctx->user.is_operator = false;
+      ctx->user.is_lan_operator = false;
+      pthread_mutex_unlock(&host->lock);
+
+      pthread_t thread_id;
+      if (pthread_create(&thread_id, NULL, session_thread, ctx) != 0) {
+        humanized_log_error("host", "failed to spawn session thread", errno);
+        session_cleanup(ctx);
+        continue;
+      }
+
+      pthread_detach(thread_id);
     }
 
-    char peer_address[NI_MAXHOST];
-    session_describe_peer(session, peer_address, sizeof(peer_address));
-    if (peer_address[0] == '\0') {
-      strncpy(peer_address, "unknown", sizeof(peer_address) - 1U);
-      peer_address[sizeof(peer_address) - 1U] = '\0';
+    ssh_bind_free(bind_handle);
+    host->listener.handle = NULL;
+
+    if (!restart_listener) {
+      break;
     }
 
-    printf("[connect] accepted client from %s\n", peer_address);
-
-    session_ctx_t *ctx = calloc(1U, sizeof(session_ctx_t));
-    if (ctx == NULL) {
-      humanized_log_error("host", "failed to allocate session context", ENOMEM);
-      ssh_disconnect(session);
-      ssh_free(session);
-      continue;
-    }
-
-    ctx->session = session;
-    ctx->channel = NULL;
-    ctx->owner = host;
-    ctx->auth = (auth_profile_t){0};
-    snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
-
-    pthread_mutex_lock(&host->lock);
-    ++host->connection_count;
-    snprintf(ctx->user.name, sizeof(ctx->user.name), "Guest%zu", host->connection_count);
-    ctx->user.is_operator = false;
-    ctx->user.is_lan_operator = false;
-    pthread_mutex_unlock(&host->lock);
-
-    pthread_t thread_id;
-    if (pthread_create(&thread_id, NULL, session_thread, ctx) != 0) {
-      humanized_log_error("host", "failed to spawn session thread", errno);
-      session_cleanup(ctx);
-      continue;
-    }
-
-    pthread_detach(thread_id);
+    struct timespec backoff = {
+        .tv_sec = 1,
+        .tv_nsec = 0,
+    };
+    nanosleep(&backoff, NULL);
+    printf("[listener] attempting to restart listener after socket error\n");
   }
 
-  ssh_bind_free(bind_handle);
-  host->listener.handle = NULL;
   return 0;
 }
