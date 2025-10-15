@@ -406,6 +406,7 @@ static bool host_history_append_locked(host_t *host, const chat_history_entry_t 
 static bool host_history_reserve_locked(host_t *host, size_t min_capacity);
 static size_t host_history_total(host_t *host);
 static size_t host_history_copy_range(host_t *host, size_t start_index, chat_history_entry_t *buffer, size_t capacity);
+static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, chat_history_entry_t *entry);
 static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entry_t *entry, const session_ctx_t *from);
 static bool host_history_apply_reaction(host_t *host, uint64_t message_id, size_t reaction_index, chat_history_entry_t *updated_entry);
 static bool chat_history_entry_build_reaction_summary(const chat_history_entry_t *entry, char *buffer, size_t length);
@@ -435,6 +436,7 @@ static void session_handle_kick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_usercount(session_ctx_t *ctx);
 static bool host_username_reserved(host_t *host, const char *username);
 static void session_handle_search(session_ctx_t *ctx, const char *arguments);
+static void session_handle_chat_lookup(session_ctx_t *ctx, const char *arguments);
 static void session_handle_image(session_ctx_t *ctx, const char *arguments);
 static void session_handle_video(session_ctx_t *ctx, const char *arguments);
 static void session_handle_audio(session_ctx_t *ctx, const char *arguments);
@@ -1108,6 +1110,31 @@ static size_t host_history_copy_range(host_t *host, size_t start_index, chat_his
   copied = available;
   pthread_mutex_unlock(&host->lock);
   return copied;
+}
+
+static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, chat_history_entry_t *entry) {
+  if (host == NULL || entry == NULL || message_id == 0U) {
+    return false;
+  }
+
+  bool found = false;
+
+  pthread_mutex_lock(&host->lock);
+  if (host->history != NULL) {
+    for (size_t idx = 0U; idx < host->history_count; ++idx) {
+      const chat_history_entry_t *candidate = &host->history[idx];
+      if (candidate->message_id != message_id) {
+        continue;
+      }
+
+      *entry = *candidate;
+      found = true;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  return found;
 }
 
 static void chat_history_entry_prepare_user(chat_history_entry_t *entry, const session_ctx_t *from, const char *message) {
@@ -3539,6 +3566,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/motd                - view the message of the day");
   session_send_system_line(ctx, "/users               - announce the number of connected users");
   session_send_system_line(ctx, "/search <text>       - search for users whose name matches text");
+  session_send_system_line(ctx, "/chat <message-id>   - show a past message by its identifier");
   session_send_system_line(ctx, "/image <url> [caption] - share an image link");
   session_send_system_line(ctx, "/video <url> [caption] - share a video link");
   session_send_system_line(ctx, "/audio <url> [caption] - share an audio clip");
@@ -3570,7 +3598,7 @@ static void session_print_help(session_ctx_t *ctx) {
                            "/good|/sad|/cool|/angry|/checked|/love|/wtf <id> - react to a message by number");
   session_send_system_line(ctx, "/1 .. /5             - vote for an option in the active poll");
   session_send_system_line(ctx,
-                           "/bbs [list|read|post|comment|regen] - open the bulletin board system (see /bbs for details, finish "
+                           "/bbs [list|read|post|comment|regen|delete] - open the bulletin board system (see /bbs for details, finish "
                            SSH_CHATTER_BBS_TERMINATOR " to post)");
   session_send_system_line(ctx, "Regular messages are shared with everyone.");
 }
@@ -4009,6 +4037,49 @@ static void session_handle_search(session_ctx_t *ctx, const char *arguments) {
   snprintf(header, sizeof(header), "Matching users (%zu):", match_count);
   session_send_system_line(ctx, header);
   session_send_system_line(ctx, listing);
+}
+
+static void session_handle_chat_lookup(session_ctx_t *ctx, const char *arguments) {
+  static const char *kUsage = "Usage: /chat <message-id>";
+
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char working[64];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char *endptr = NULL;
+  unsigned long long parsed = strtoull(working, &endptr, 10);
+  if (parsed == 0ULL || (endptr != NULL && *endptr != '\0')) {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  uint64_t message_id = (uint64_t)parsed;
+  chat_history_entry_t entry = {0};
+  if (!host_history_find_entry_by_id(ctx->owner, message_id, &entry)) {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "Message #%" PRIu64 " was not found.", message_id);
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  char header[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(header, sizeof(header), "Message #%" PRIu64 ":", message_id);
+  session_send_system_line(ctx, header);
+  session_send_history_entry(ctx, &entry);
 }
 
 static void session_handle_image(session_ctx_t *ctx, const char *arguments) {
@@ -6824,6 +6895,11 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
 
   else if (session_parse_command(line, "/search", &args)) {
     session_handle_search(ctx, args);
+    return;
+  }
+
+  else if (session_parse_command(line, "/chat", &args)) {
+    session_handle_chat_lookup(ctx, args);
     return;
   }
 
