@@ -150,6 +150,12 @@ typedef struct session_ctx {
   bool in_bbs_mode;
   bool has_birthday;
   char birthday[16];
+  bool bbs_post_pending;
+  char pending_bbs_title[SSH_CHATTER_BBS_TITLE_LEN];
+  char pending_bbs_tags[SSH_CHATTER_BBS_MAX_TAGS][SSH_CHATTER_BBS_TAG_LEN];
+  size_t pending_bbs_tag_count;
+  char pending_bbs_body[SSH_CHATTER_BBS_BODY_LEN];
+  size_t pending_bbs_body_length;
 } session_ctx_t;
 
 typedef struct user_preference {
@@ -270,6 +276,10 @@ typedef struct host {
   join_activity_entry_t *join_activity;
   size_t join_activity_count;
   size_t join_activity_capacity;
+  bool has_last_captcha;
+  char last_captcha_question[256];
+  char last_captcha_answer[64];
+  struct timespec last_captcha_generated;
 } host_t;
 
 void host_init(host_t *host, auth_profile_t *auth);
@@ -278,5 +288,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 bool host_post_client_message(host_t *host, const char *username, const char *message, const char *color_name,
                              const char *highlight_name, bool is_bold);
 void host_shutdown(host_t *host);
+bool host_snapshot_last_captcha(host_t *host, char *question, size_t question_length, char *answer,
+                               size_t answer_length, struct timespec *timestamp);
 
 #endif

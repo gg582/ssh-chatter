@@ -97,6 +97,10 @@ struct chat_bot {
   size_t long_memory_start;
   size_t long_memory_count;
   char memory_file_path[PATH_MAX];
+  bool has_captcha_hint;
+  char captcha_question[256];
+  char captcha_answer[64];
+  struct timespec captcha_hint_time;
 };
 
 typedef struct chat_bot_buffer_state {
@@ -1106,6 +1110,11 @@ chat_bot_t *chat_bot_create(struct host *host, client_manager_t *manager) {
   bot->connection.active = false;
   bot->connection.owner = NULL;
   snprintf(bot->connection.identifier, sizeof(bot->connection.identifier), "%s", "chatgpt");
+  bot->has_captcha_hint = false;
+  bot->captcha_question[0] = '\0';
+  bot->captcha_answer[0] = '\0';
+  bot->captcha_hint_time.tv_sec = 0;
+  bot->captcha_hint_time.tv_nsec = 0L;
 
   chat_bot_load_env(bot);
   chat_bot_update_name_lower(bot);
@@ -1189,4 +1198,57 @@ bool chat_bot_is_enabled(const chat_bot_t *bot) {
     return false;
   }
   return bot->enabled;
+}
+
+void chat_bot_set_captcha_hint(chat_bot_t *bot, const char *question, const char *answer) {
+  if (bot == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&bot->lock);
+  if (question != NULL) {
+    snprintf(bot->captcha_question, sizeof(bot->captcha_question), "%s", question);
+  } else {
+    bot->captcha_question[0] = '\0';
+  }
+  if (answer != NULL) {
+    snprintf(bot->captcha_answer, sizeof(bot->captcha_answer), "%s", answer);
+  } else {
+    bot->captcha_answer[0] = '\0';
+  }
+
+  bot->has_captcha_hint = bot->captcha_question[0] != '\0' && bot->captcha_answer[0] != '\0';
+  if (bot->has_captcha_hint) {
+    if (clock_gettime(CLOCK_REALTIME, &bot->captcha_hint_time) != 0) {
+      bot->captcha_hint_time.tv_sec = time(NULL);
+      bot->captcha_hint_time.tv_nsec = 0L;
+    }
+  } else {
+    bot->captcha_hint_time.tv_sec = 0;
+    bot->captcha_hint_time.tv_nsec = 0L;
+  }
+  pthread_mutex_unlock(&bot->lock);
+}
+
+bool chat_bot_snapshot_captcha_hint(chat_bot_t *bot, char *question, size_t question_length, char *answer,
+                                    size_t answer_length, struct timespec *timestamp) {
+  if (bot == NULL) {
+    return false;
+  }
+
+  pthread_mutex_lock(&bot->lock);
+  bool has_hint = bot->has_captcha_hint;
+  if (has_hint) {
+    if (question != NULL && question_length > 0U) {
+      snprintf(question, question_length, "%s", bot->captcha_question);
+    }
+    if (answer != NULL && answer_length > 0U) {
+      snprintf(answer, answer_length, "%s", bot->captcha_answer);
+    }
+    if (timestamp != NULL) {
+      *timestamp = bot->captcha_hint_time;
+    }
+  }
+  pthread_mutex_unlock(&bot->lock);
+  return has_hint;
 }
