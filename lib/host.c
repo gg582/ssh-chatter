@@ -93,7 +93,7 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
     {"adwaita", "Bright background inspired by GNOME Adwaita", "blue", "default", false, "blue", "bright-white", "grey", true},
     {"80shacker", "Bright monochrome green inspired by old CRT", "bright-green", "default", true, "bright-green", "default", "default", true},
     {"plato", "Bright monochrome yellow inspired by old Amber CRT", "yellow", "default", true, "yellow", "default", "default", true},
-    {"atarist", "Sharp paper-white monochrome for high-res work", "bright-white", "black", false, "white", "black", "black", false},
+    {"atarist", "Sharp paper-white monochrome for high-res work", "bright-white", "black", false, "bright-white", "black", "black", false},
     {"win95bsod", "High-contrast blue screen of death style", "bright-white", "blue", true, "bright-white", "blue", "cyan", true},
     {"chn-hanzi", "Bright cyan high-clarity Chinese text terminal", "bright-cyan", "black", true, "white", "black", "cyan", true},
     {"usa-flag", "Flag blue base with red/white highlights", "white", "blue", true, "red", "blue", "white", true},
@@ -106,7 +106,7 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
     {"yin-yang", "Balance of Black and White with Jade accent", "white", "black", false, "cyan", "black", "white", false},
     {"soviet-cold", "Cold blue/white terminal for scientific systems", "white", "blue", false, "white", "blue", "cyan", false},
     {"hi-tel", "1990s Korean BBS blue background and text style", "white", "blue", true, "bright-white", "blue", "magenta", true},
-    {"amiga-cli", "AmigaOS style with cyan/blue on dark background", "cyan", "black", true, "cyan", "black", "white", true},
+    {"amiga-cli", "AmigaOS style with cyan/blue", "cyan", "blue", true, "cyan", "blue", "blue", true},
     {"jpn-pc98", "NEC PC-9801 subtle, earthy low-res tones", "yellow", "black", false, "red", "black", "yellow", false},
     {"deep-blue", "IBM Supercomputer monitoring interface style", "white", "blue", true, "cyan", "blue", "white", true},
     {"win10", "High contrast palette reminiscent of Windows 10", "cyan", "blue", true, "white", "blue", "yellow", true},
@@ -1521,6 +1521,7 @@ static void session_render_banner(session_ctx_t *ctx) {
     "+====================================================+",
 };
 
+
   for (size_t idx = 0; idx < sizeof(kBanner) / sizeof(kBanner[0]); ++idx) {
     session_send_system_line(ctx, kBanner[idx]);
   }
@@ -1531,6 +1532,7 @@ static void session_render_banner(session_ctx_t *ctx) {
   if (welcome_padding < 0) {
     welcome_padding = 0;
   }
+
   snprintf(welcome, sizeof(welcome), "|  Welcome, %s!%*s|", ctx->user.name, welcome_padding, "");
   session_send_system_line(ctx, welcome);
 
@@ -4918,7 +4920,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   }
   host->random_seeded = false;
 
-  (void)host_try_load_motd_from_path(host, "/etc/chatter/motd");
+  (void)host_try_load_motd_from_path(host, "/etc/ssh-chatter/motd");
 
   host_state_load(host);
 }
@@ -4969,7 +4971,13 @@ static bool host_try_load_motd_from_path(host_t *host, const char *path) {
   session_normalize_newlines(motd_buffer);
 
   pthread_mutex_lock(&host->lock);
-  snprintf(host->motd, sizeof(host->motd), "%s", motd_buffer);
+//  snprintf(host->motd, sizeof(host->motd), "%s", motd_buffer);
+  char motd_clean[4096];
+  char * motd_line = strtok(host->motd, "\n");
+  while(motd_line != NULL) {
+    snprintf(motd_clean, strlen(motd_line), "\033[lG%s\n", motd_line);
+  }
+  strcpy(host->motd, motd_clean);
   pthread_mutex_unlock(&host->lock);
   return true;
 }
