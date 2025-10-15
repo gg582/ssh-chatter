@@ -216,15 +216,34 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
   const captcha_story_t *story = &CAPTCHA_STORIES[basis % story_count];
 
   if (story->template_type == CAPTCHA_TEMPLATE_PRONOUN) {
-    const bool refer_pet = ((basis / story_count) & 1U) == 0U;
+    unsigned variant = basis ^ entropy ^ (basis >> 16U) ^ (entropy >> 16U);
+    if (variant == 0U) {
+      variant = 0x5f3759dfU;  // fallback mixing constant to avoid a degenerate branch
+    }
+
+    const bool refer_pet = (variant & 1U) != 0U;
+    const bool use_pronoun = (variant & 2U) != 0U;
+
     const char *person_pronoun = story->is_male ? "he" : "she";
     const char *pet_pronoun = (story->pet_pronoun != NULL) ? story->pet_pronoun : "it";
-    const char *pronoun = refer_pet ? pet_pronoun : person_pronoun;
     const char *answer = refer_pet ? story->pet_name : story->person_name;
+
+    char quoted_buffer[128];
+    const char *quoted_text = NULL;
+    if (use_pronoun) {
+      quoted_text = refer_pet ? pet_pronoun : person_pronoun;
+    } else {
+      if (refer_pet) {
+        snprintf(quoted_buffer, sizeof(quoted_buffer), "the %s", story->pet_species);
+      } else {
+        snprintf(quoted_buffer, sizeof(quoted_buffer), "the %s", story->descriptor);
+      }
+      quoted_text = quoted_buffer;
+    }
 
     snprintf(prompt->question, sizeof(prompt->question),
              "%s is a %s who has a %s named %s. \"%s\" is adorable. Answer what the double-quoted text refers to.",
-             story->person_name, story->descriptor, story->pet_species, story->pet_name, pronoun);
+             story->person_name, story->descriptor, story->pet_species, story->pet_name, quoted_text);
     snprintf(prompt->answer, sizeof(prompt->answer), "%s", answer);
     return;
   }
