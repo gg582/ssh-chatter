@@ -276,6 +276,7 @@ typedef struct host {
   join_activity_entry_t *join_activity;
   size_t join_activity_count;
   size_t join_activity_capacity;
+  uint64_t captcha_nonce;
   bool has_last_captcha;
   char last_captcha_question[256];
   char last_captcha_answer[64];

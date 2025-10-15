@@ -188,6 +188,31 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
 
   unsigned basis = session_simple_hash(ctx != NULL ? ctx->user.name : "user");
   basis ^= session_simple_hash(ctx != NULL ? ctx->client_ip : "ip");
+
+  unsigned entropy = 0U;
+  struct timespec now = {0, 0};
+  if (clock_gettime(CLOCK_REALTIME, &now) == 0) {
+    uint64_t now_sec = (uint64_t)now.tv_sec;
+    entropy ^= (unsigned)now_sec;
+    entropy ^= (unsigned)(now_sec >> 32);
+    entropy ^= (unsigned)now.tv_nsec;
+  } else {
+    uint64_t fallback = (uint64_t)time(NULL);
+    entropy ^= (unsigned)fallback;
+    entropy ^= (unsigned)(fallback >> 32);
+  }
+
+  host_t *host = (ctx != NULL) ? ctx->owner : NULL;
+  if (host != NULL) {
+    pthread_mutex_lock(&host->lock);
+    uint64_t nonce = ++host->captcha_nonce;
+    pthread_mutex_unlock(&host->lock);
+    entropy ^= (unsigned)nonce;
+    entropy ^= (unsigned)(nonce >> 32);
+  }
+
+  basis ^= entropy;
+
   const captcha_story_t *story = &CAPTCHA_STORIES[basis % story_count];
 
   if (story->template_type == CAPTCHA_TEMPLATE_PRONOUN) {
@@ -462,8 +487,10 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments);
 static void session_bbs_capture_body_line(session_ctx_t *ctx, const char *line);
 static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments);
 static void session_bbs_regen_post(session_ctx_t *ctx, uint64_t id);
+static void session_bbs_delete(session_ctx_t *ctx, uint64_t id);
 static bbs_post_t *host_find_bbs_post_locked(host_t *host, uint64_t id);
 static bbs_post_t *host_allocate_bbs_post_locked(host_t *host);
+static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post);
 static void host_update_last_captcha_prompt(host_t *host, const captcha_prompt_t *prompt);
 
@@ -4879,6 +4906,34 @@ static bbs_post_t *host_allocate_bbs_post_locked(host_t *host) {
   return NULL;
 }
 
+static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post) {
+  if (host == NULL || post == NULL) {
+    return;
+  }
+
+  post->in_use = false;
+  post->id = 0U;
+  post->author[0] = '\0';
+  post->title[0] = '\0';
+  post->body[0] = '\0';
+  post->tag_count = 0U;
+  post->created_at = 0;
+  post->bumped_at = 0;
+  post->comment_count = 0U;
+  for (size_t tag = 0U; tag < SSH_CHATTER_BBS_MAX_TAGS; ++tag) {
+    post->tags[tag][0] = '\0';
+  }
+  for (size_t comment = 0U; comment < SSH_CHATTER_BBS_MAX_COMMENTS; ++comment) {
+    post->comments[comment].author[0] = '\0';
+    post->comments[comment].text[0] = '\0';
+    post->comments[comment].created_at = 0;
+  }
+
+  if (host->bbs_post_count > 0U) {
+    host->bbs_post_count -= 1U;
+  }
+}
+
 // Render an ASCII framed view of a post, including metadata and comments.
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post) {
   if (ctx == NULL || post == NULL || !post->in_use) {
@@ -4915,7 +4970,6 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post) 
       }
       if (idx > 0U) {
         tag_line[offset++] = ',';
-        tag_line[offset++] = ' ';
       }
       size_t len = strlen(post->tags[idx]);
       memcpy(tag_line + offset, post->tags[idx], len);
@@ -4975,7 +5029,7 @@ static void session_bbs_show_dashboard(session_ctx_t *ctx) {
   ctx->in_bbs_mode = true;
   session_render_separator(ctx, "BBS Dashboard");
   session_send_system_line(ctx,
-                           "Commands: list, read <id>, post <title> [tags...], comment <id>|<text>, regen <id>, exit");
+                           "Commands: list, read <id>, post <title> [tags...], comment <id>|<text>, regen <id>, delete <id>, exit");
   session_bbs_list(ctx);
 }
 
@@ -5048,7 +5102,7 @@ static void session_bbs_list(session_ctx_t *ctx) {
       title_preview = 80;
     }
     if (listings[idx].tag_count == 0U) {
-      snprintf(line, sizeof(line), "#%" PRIu64 " [%s] %.*s", listings[idx].id, created_buffer, title_preview,
+      snprintf(line, sizeof(line), "#%" PRIu64 " [%s] %.*s|(no tags)", listings[idx].id, created_buffer, title_preview,
                listings[idx].title);
     } else {
       char tag_buffer[SSH_CHATTER_MESSAGE_LIMIT];
@@ -5061,7 +5115,6 @@ static void session_bbs_list(session_ctx_t *ctx) {
         }
         if (tag > 0U) {
           tag_buffer[offset++] = ',';
-          tag_buffer[offset++] = ' ';
         }
         memcpy(tag_buffer + offset, listings[idx].tags[tag], len);
         offset += len;
@@ -5071,7 +5124,7 @@ static void session_bbs_list(session_ctx_t *ctx) {
       if (tags_preview > 80) {
         tags_preview = 80;
       }
-      snprintf(line, sizeof(line), "#%" PRIu64 " [%s] %.*s (tags: %.*s)", listings[idx].id, created_buffer, title_preview,
+      snprintf(line, sizeof(line), "#%" PRIu64 " [%s] %.*s|%.*s", listings[idx].id, created_buffer, title_preview,
                listings[idx].title, tags_preview, tag_buffer);
     }
     session_send_system_line(ctx, line);
@@ -5288,7 +5341,7 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
     if (remaining == 0U) {
       break;
     }
-    int written = snprintf(tag_buffer + offset, remaining, "%s%s", idx > 0U ? ", " : "", ctx->pending_bbs_tags[idx]);
+    int written = snprintf(tag_buffer + offset, remaining, "%s%s", idx > 0U ? "," : "", ctx->pending_bbs_tags[idx]);
     if (written < 0) {
       break;
     }
@@ -5426,6 +5479,39 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   session_bbs_render_post(ctx, &snapshot);
 }
 
+static void session_bbs_delete(session_ctx_t *ctx, uint64_t id) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (id == 0U) {
+    session_send_system_line(ctx, "Invalid post identifier.");
+    return;
+  }
+
+  host_t *host = ctx->owner;
+  pthread_mutex_lock(&host->lock);
+  bbs_post_t *post = host_find_bbs_post_locked(host, id);
+  if (post == NULL || !post->in_use) {
+    pthread_mutex_unlock(&host->lock);
+    session_send_system_line(ctx, "No post exists with that identifier.");
+    return;
+  }
+
+  bool can_delete = (strncmp(post->author, ctx->user.name, SSH_CHATTER_USERNAME_LEN) == 0) || ctx->user.is_operator ||
+                    ctx->user.is_lan_operator;
+  if (!can_delete) {
+    pthread_mutex_unlock(&host->lock);
+    session_send_system_line(ctx, "Only the author or an operator may delete this post.");
+    return;
+  }
+
+  host_clear_bbs_post_locked(host, post);
+  pthread_mutex_unlock(&host->lock);
+
+  session_send_system_line(ctx, "Post deleted.");
+}
+
 // Bump a post to the top of the list by refreshing its activity time.
 static void session_bbs_regen_post(session_ctx_t *ctx, uint64_t id) {
   if (ctx == NULL || ctx->owner == NULL || id == 0U) {
@@ -5509,6 +5595,13 @@ static void session_handle_bbs(session_ctx_t *ctx, const char *arguments) {
     }
     uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
     session_bbs_regen_post(ctx, id);
+  } else if (strcmp(command, "delete") == 0) {
+    if (rest == NULL || rest[0] == '\0') {
+      session_send_system_line(ctx, "Usage: /bbs delete <id>");
+      return;
+    }
+    uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
+    session_bbs_delete(ctx, id);
   } else {
     session_send_system_line(ctx, "Unknown /bbs subcommand. Try /bbs for usage.");
   }
@@ -7244,6 +7337,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->join_activity = NULL;
   host->join_activity_count = 0U;
   host->join_activity_capacity = 0U;
+  host->captcha_nonce = 0U;
   host->has_last_captcha = false;
   host->last_captcha_question[0] = '\0';
   host->last_captcha_answer[0] = '\0';
