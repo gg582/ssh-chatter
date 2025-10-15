@@ -4195,11 +4195,6 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  else if (session_parse_command(line, "/kick", &args)) {
-    session_handle_kick(ctx, args);
-    return;
-  }
-
   else if (session_parse_command(line, "/ban", &args)) {
     session_handle_ban(ctx, args);
     return;
@@ -4244,30 +4239,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  else if (strncmp(line, "/date", 5) == 0) {
-    const char *arguments = line + 5;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
-    session_handle_date(ctx, arguments);
-    return;
-  }
-  else if (strncmp(line, "/os", 3) == 0) {
-    const char *arguments = line + 3;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
-    session_handle_os(ctx, arguments);
-    return;
-  }
-  else if (strncmp(line, "/getos", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
-    session_handle_getos(ctx, arguments);
-    return;
-  }
+  
   else if (strncmp(line, "/pair", 5) == 0) {
     const char *arguments = line + 5;
     while (*arguments == ' ' || *arguments == '\t') {
@@ -4290,14 +4262,6 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     } else {
       session_handle_connected(ctx);
     }
-    return;
-  }
-  else if (strncmp(line, "/poll", 5) == 0) {
-    const char *arguments = line + 5;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
-    session_handle_poll(ctx, arguments);
     return;
   }
 
@@ -4338,17 +4302,6 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-
-  else if (session_parse_command(line, "/connected", &args)) {
-    if (*args != '\0') {
-      session_send_system_line(ctx, "Usage: /connected");
-    } else {
-      session_handle_connected(ctx);
-    }
-    return;
-  }
-
-  else if (session_parse_command(line, "/kick", &args)) {
     session_handle_kick(ctx, args);
     return;
   }
