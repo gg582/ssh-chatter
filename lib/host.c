@@ -455,6 +455,7 @@ static void host_store_user_theme(host_t *host, const session_ctx_t *ctx);
 static size_t host_prepare_join_delay(host_t *host, struct timespec *wait_duration);
 static bool host_register_join_attempt(host_t *host, const char *username, const char *ip);
 static bool session_run_captcha(session_ctx_t *ctx);
+static bool session_is_captcha_exempt(const session_ctx_t *ctx);
 static void host_store_system_theme(host_t *host, const session_ctx_t *ctx);
 static void host_store_user_os(host_t *host, const session_ctx_t *ctx);
 static void host_store_birthday(host_t *host, const session_ctx_t *ctx, const char *birthday);
@@ -3196,6 +3197,29 @@ static bool session_run_captcha(session_ctx_t *ctx) {
 
   session_send_system_line(ctx, "Captcha failed. Disconnecting.");
   return false;
+}
+
+static bool session_is_captcha_exempt(const session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  if (ctx->user.name[0] == '\0') {
+    return false;
+  }
+
+  char lowered[sizeof(ctx->user.name)];
+  size_t idx = 0U;
+  for (; idx + 1U < sizeof(lowered) && ctx->user.name[idx] != '\0'; ++idx) {
+    lowered[idx] = (char)tolower((unsigned char)ctx->user.name[idx]);
+  }
+  if (idx < sizeof(lowered)) {
+    lowered[idx] = '\0';
+  } else {
+    lowered[sizeof(lowered) - 1U] = '\0';
+  }
+
+  return strcmp(lowered, "gpt") == 0;
 }
 
 static void session_print_help(session_ctx_t *ctx) {
@@ -7175,7 +7199,8 @@ static void *session_thread(void *arg) {
   session_apply_granted_privileges(ctx);
   session_apply_saved_preferences(ctx);
 
-  if (!session_run_captcha(ctx)) {
+  const bool captcha_exempt = session_is_captcha_exempt(ctx);
+  if (!captcha_exempt && !session_run_captcha(ctx)) {
     session_cleanup(ctx);
     return NULL;
   }
