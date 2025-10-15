@@ -257,6 +257,7 @@ typedef struct host {
   pthread_mutex_t lock;
   char state_file_path[PATH_MAX];
   char bbs_state_file_path[PATH_MAX];
+  char vote_state_file_path[PATH_MAX];
   poll_state_t poll;
   named_poll_state_t named_polls[SSH_CHATTER_MAX_NAMED_POLLS];
   size_t named_poll_count;
