@@ -461,6 +461,7 @@ static bool palette_apply_to_session(session_ctx_t *ctx, const palette_descripto
 static void session_handle_poll(session_ctx_t *ctx, const char *arguments);
 static void session_handle_vote(session_ctx_t *ctx, size_t option_index);
 static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, const char *label);
+static void session_handle_elect_command(session_ctx_t *ctx, const char *arguments);
 static void session_handle_vote_command(session_ctx_t *ctx, const char *arguments, bool allow_multiple);
 static bool session_line_is_exit_command(const char *line);
 static void session_handle_username_conflict_input(session_ctx_t *ctx, const char *line);
@@ -495,6 +496,9 @@ static void host_state_save_locked(host_t *host);
 static void host_bbs_resolve_path(host_t *host);
 static void host_bbs_state_load(host_t *host);
 static void host_bbs_state_save_locked(host_t *host);
+static void host_vote_resolve_path(host_t *host);
+static void host_vote_state_load(host_t *host);
+static void host_vote_state_save_locked(host_t *host);
 static bool host_try_load_motd_from_path(host_t *host, const char *path);
 static bool username_contains(const char *username, const char *needle);
 static void host_apply_palette_descriptor(host_t *host, const palette_descriptor_t *descriptor);
@@ -658,6 +662,47 @@ typedef struct bbs_state_post_entry {
   char tags[SSH_CHATTER_BBS_MAX_TAGS][SSH_CHATTER_BBS_TAG_LEN];
   bbs_state_comment_entry_t comments[SSH_CHATTER_BBS_MAX_COMMENTS];
 } bbs_state_post_entry_t;
+
+static const uint32_t VOTE_STATE_MAGIC = 0x564F5445U; /* 'VOTE' */
+static const uint32_t VOTE_STATE_VERSION = 1U;
+
+typedef struct vote_state_header {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t named_count;
+  uint32_t reserved;
+} vote_state_header_t;
+
+typedef struct vote_state_poll_option_entry {
+  char text[SSH_CHATTER_MESSAGE_LIMIT];
+  uint32_t votes;
+} vote_state_poll_option_entry_t;
+
+typedef struct vote_state_poll_entry {
+  uint8_t active;
+  uint8_t allow_multiple;
+  uint8_t reserved[6];
+  uint64_t id;
+  uint32_t option_count;
+  uint32_t reserved2;
+  char question[SSH_CHATTER_MESSAGE_LIMIT];
+  vote_state_poll_option_entry_t options[5];
+} vote_state_poll_entry_t;
+
+typedef struct vote_state_named_voter_entry {
+  char username[SSH_CHATTER_USERNAME_LEN];
+  int32_t choice;
+  uint32_t choices_mask;
+} vote_state_named_voter_entry_t;
+
+typedef struct vote_state_named_entry {
+  vote_state_poll_entry_t poll;
+  char label[SSH_CHATTER_POLL_LABEL_LEN];
+  char owner[SSH_CHATTER_USERNAME_LEN];
+  uint32_t voter_count;
+  uint32_t reserved;
+  vote_state_named_voter_entry_t voters[SSH_CHATTER_MAX_NAMED_VOTERS];
+} vote_state_named_entry_t;
 
 
 typedef struct reaction_descriptor {
@@ -1650,6 +1695,23 @@ static void host_state_resolve_path(host_t *host) {
   }
 }
 
+static void host_vote_resolve_path(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  const char *vote_path = getenv("CHATTER_VOTE_FILE");
+  if (vote_path == NULL || vote_path[0] == '\0') {
+    vote_path = "vote_state.dat";
+  }
+
+  int written = snprintf(host->vote_state_file_path, sizeof(host->vote_state_file_path), "%s", vote_path);
+  if (written < 0 || (size_t)written >= sizeof(host->vote_state_file_path)) {
+    humanized_log_error("host", "vote state file path is too long", ENAMETOOLONG);
+    host->vote_state_file_path[0] = '\0';
+  }
+}
+
 static void host_state_save_locked(host_t *host) {
   if (host == NULL) {
     return;
@@ -1783,6 +1845,173 @@ static void host_state_save_locked(host_t *host) {
 
   if (rename(temp_path, host->state_file_path) != 0) {
     humanized_log_error("host", "failed to update state file", errno);
+    unlink(temp_path);
+  }
+}
+
+static void vote_state_export_poll_entry(const poll_state_t *source, vote_state_poll_entry_t *dest) {
+  if (dest == NULL) {
+    return;
+  }
+
+  memset(dest, 0, sizeof(*dest));
+  if (source == NULL) {
+    return;
+  }
+
+  dest->active = source->active ? 1U : 0U;
+  dest->allow_multiple = source->allow_multiple ? 1U : 0U;
+  dest->id = source->id;
+  dest->option_count = (uint32_t)source->option_count;
+  if (dest->option_count > 5U) {
+    dest->option_count = 5U;
+  }
+  snprintf(dest->question, sizeof(dest->question), "%s", source->question);
+  for (size_t idx = 0U; idx < 5U; ++idx) {
+    snprintf(dest->options[idx].text, sizeof(dest->options[idx].text), "%s", source->options[idx].text);
+    dest->options[idx].votes = source->options[idx].votes;
+  }
+}
+
+static void vote_state_import_poll_entry(const vote_state_poll_entry_t *source, poll_state_t *dest) {
+  if (dest == NULL) {
+    return;
+  }
+
+  poll_state_reset(dest);
+  if (source == NULL) {
+    return;
+  }
+
+  dest->active = source->active != 0U;
+  dest->allow_multiple = source->allow_multiple != 0U;
+  dest->id = source->id;
+  size_t option_count = source->option_count;
+  if (option_count > 5U) {
+    option_count = 5U;
+  }
+  dest->option_count = option_count;
+  snprintf(dest->question, sizeof(dest->question), "%s", source->question);
+  for (size_t idx = 0U; idx < option_count; ++idx) {
+    snprintf(dest->options[idx].text, sizeof(dest->options[idx].text), "%s", source->options[idx].text);
+    dest->options[idx].votes = source->options[idx].votes;
+  }
+  for (size_t idx = option_count; idx < 5U; ++idx) {
+    dest->options[idx].text[0] = '\0';
+    dest->options[idx].votes = 0U;
+  }
+}
+
+static void host_vote_state_save_locked(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->vote_state_file_path[0] == '\0') {
+    return;
+  }
+
+  char temp_path[PATH_MAX];
+  int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp", host->vote_state_file_path);
+  if (written < 0 || (size_t)written >= sizeof(temp_path)) {
+    humanized_log_error("host", "vote state file path is too long", ENAMETOOLONG);
+    return;
+  }
+
+  FILE *fp = fopen(temp_path, "wb");
+  if (fp == NULL) {
+    humanized_log_error("host", "failed to open vote state file", errno);
+    return;
+  }
+
+  uint32_t named_count = 0U;
+  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_NAMED_POLLS; ++idx) {
+    if (host->named_polls[idx].label[0] != '\0') {
+      ++named_count;
+    }
+  }
+
+  vote_state_header_t header = {0};
+  header.magic = VOTE_STATE_MAGIC;
+  header.version = VOTE_STATE_VERSION;
+  header.named_count = named_count;
+
+  bool success = fwrite(&header, sizeof(header), 1U, fp) == 1U;
+  int write_error = 0;
+  if (!success && errno != 0) {
+    write_error = errno;
+  }
+
+  vote_state_poll_entry_t main_entry = {0};
+  vote_state_export_poll_entry(&host->poll, &main_entry);
+  if (success) {
+    success = fwrite(&main_entry, sizeof(main_entry), 1U, fp) == 1U;
+    if (!success && errno != 0) {
+      write_error = errno;
+    }
+  }
+
+  for (size_t idx = 0U; success && idx < SSH_CHATTER_MAX_NAMED_POLLS; ++idx) {
+    const named_poll_state_t *poll = &host->named_polls[idx];
+    if (poll->label[0] == '\0') {
+      continue;
+    }
+
+    vote_state_named_entry_t entry = {0};
+    vote_state_export_poll_entry(&poll->poll, &entry.poll);
+    snprintf(entry.label, sizeof(entry.label), "%s", poll->label);
+    snprintf(entry.owner, sizeof(entry.owner), "%s", poll->owner);
+    entry.voter_count = (uint32_t)poll->voter_count;
+    if (entry.voter_count > SSH_CHATTER_MAX_NAMED_VOTERS) {
+      entry.voter_count = SSH_CHATTER_MAX_NAMED_VOTERS;
+    }
+    for (size_t voter = 0U; voter < SSH_CHATTER_MAX_NAMED_VOTERS; ++voter) {
+      snprintf(entry.voters[voter].username, sizeof(entry.voters[voter].username), "%s", poll->voters[voter].username);
+      entry.voters[voter].choice = poll->voters[voter].choice;
+      entry.voters[voter].choices_mask = poll->voters[voter].choices_mask;
+    }
+
+    if (fwrite(&entry, sizeof(entry), 1U, fp) != 1U) {
+      success = false;
+      if (errno != 0) {
+        write_error = errno;
+      }
+      break;
+    }
+  }
+
+  if (success && fflush(fp) != 0) {
+    success = false;
+    if (errno != 0) {
+      write_error = errno;
+    }
+  }
+
+  if (success) {
+    int fd = fileno(fp);
+    if (fd >= 0 && fsync(fd) != 0) {
+      success = false;
+      if (errno != 0) {
+        write_error = errno;
+      }
+    }
+  }
+
+  if (fclose(fp) != 0) {
+    success = false;
+    if (errno != 0) {
+      write_error = errno;
+    }
+  }
+
+  if (!success) {
+    humanized_log_error("host", "failed to write vote state file", write_error != 0 ? write_error : EIO);
+    unlink(temp_path);
+    return;
+  }
+
+  if (rename(temp_path, host->vote_state_file_path) != 0) {
+    humanized_log_error("host", "failed to update vote state file", errno);
     unlink(temp_path);
   }
 }
@@ -2054,6 +2283,93 @@ static void host_state_load(host_t *host) {
     next_message_id = (uint64_t)host->history_count + 1U;
   }
   host->next_message_id = next_message_id;
+
+  pthread_mutex_unlock(&host->lock);
+  fclose(fp);
+}
+
+static void host_vote_state_load(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->vote_state_file_path[0] == '\0') {
+    return;
+  }
+
+  FILE *fp = fopen(host->vote_state_file_path, "rb");
+  if (fp == NULL) {
+    return;
+  }
+
+  vote_state_header_t header = {0};
+  if (fread(&header, sizeof(header), 1U, fp) != 1U) {
+    fclose(fp);
+    return;
+  }
+
+  if (header.magic != VOTE_STATE_MAGIC) {
+    fclose(fp);
+    return;
+  }
+
+  if (header.version == 0U || header.version > VOTE_STATE_VERSION) {
+    fclose(fp);
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+
+  poll_state_reset(&host->poll);
+  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_NAMED_POLLS; ++idx) {
+    named_poll_reset(&host->named_polls[idx]);
+  }
+  host->named_poll_count = 0U;
+
+  bool success = true;
+
+  vote_state_poll_entry_t main_entry = {0};
+  if (fread(&main_entry, sizeof(main_entry), 1U, fp) != 1U) {
+    success = false;
+  } else {
+    vote_state_import_poll_entry(&main_entry, &host->poll);
+  }
+
+  for (uint32_t idx = 0U; success && idx < header.named_count; ++idx) {
+    vote_state_named_entry_t entry = {0};
+    if (fread(&entry, sizeof(entry), 1U, fp) != 1U) {
+      success = false;
+      break;
+    }
+
+    if (idx >= SSH_CHATTER_MAX_NAMED_POLLS) {
+      continue;
+    }
+
+    named_poll_state_t *poll = &host->named_polls[idx];
+    vote_state_import_poll_entry(&entry.poll, &poll->poll);
+    snprintf(poll->label, sizeof(poll->label), "%s", entry.label);
+    snprintf(poll->owner, sizeof(poll->owner), "%s", entry.owner);
+    poll->voter_count = entry.voter_count;
+    if (poll->voter_count > SSH_CHATTER_MAX_NAMED_VOTERS) {
+      poll->voter_count = SSH_CHATTER_MAX_NAMED_VOTERS;
+    }
+    for (size_t voter = 0U; voter < SSH_CHATTER_MAX_NAMED_VOTERS; ++voter) {
+      snprintf(poll->voters[voter].username, sizeof(poll->voters[voter].username), "%s", entry.voters[voter].username);
+      poll->voters[voter].choice = entry.voters[voter].choice;
+      poll->voters[voter].choices_mask = entry.voters[voter].choices_mask;
+    }
+  }
+
+  if (success) {
+    host_recount_named_polls_locked(host);
+  } else {
+    poll_state_reset(&host->poll);
+    for (size_t idx = 0U; idx < SSH_CHATTER_MAX_NAMED_POLLS; ++idx) {
+      named_poll_reset(&host->named_polls[idx]);
+    }
+    host->named_poll_count = 0U;
+  }
 
   pthread_mutex_unlock(&host->lock);
   fclose(fp);
@@ -3683,6 +3999,7 @@ static void session_print_help(session_ctx_t *ctx) {
                            "@close <label> to end it)");
   session_send_system_line(ctx,
                            "/vote-single <label> <question>|<option...> - start or inspect a single-choice named poll");
+  session_send_system_line(ctx, "/elect <label> <choice> - vote in a named poll by label");
   session_send_system_line(ctx, "/poke <username>      - send a bell to call a user");
   session_send_system_line(ctx, "/kick <username>      - disconnect a user (operator only)");
   session_send_system_line(ctx, "/ban <username>       - ban a user (operator only)");
@@ -5145,6 +5462,7 @@ static void session_handle_poll(session_ctx_t *ctx, const char *arguments) {
     host->poll.options[idx].text[0] = '\0';
     host->poll.options[idx].votes = 0U;
   }
+  host_vote_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 
   char announce[SSH_CHATTER_MESSAGE_LIMIT];
@@ -5197,6 +5515,7 @@ static void session_handle_vote(session_ctx_t *ctx, size_t option_index) {
   host->poll.options[option_index].votes += 1U;
   pref->last_poll_id = host->poll.id;
   pref->last_poll_choice = (int)option_index;
+  host_vote_state_save_locked(host);
   host_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 
@@ -5278,12 +5597,104 @@ static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, c
     poll->voters[voter_slot].choice = (int)option_index;
     poll->voters[voter_slot].choices_mask = (option_bit != 0U) ? option_bit : 0U;
   }
+
+  char resolved_label[SSH_CHATTER_POLL_LABEL_LEN];
+  snprintf(resolved_label, sizeof(resolved_label), "%s", poll->label);
+  host_vote_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(message, sizeof(message), "Vote recorded for /%zu %s.", option_index + 1U, label);
+  snprintf(message, sizeof(message), "Vote recorded for /%zu %s.", option_index + 1U, resolved_label);
   session_send_system_line(ctx, message);
-  session_send_poll_summary_generic(ctx, &poll->poll, label);
+  session_send_poll_summary_generic(ctx, &poll->poll, resolved_label);
+}
+
+// Allow voting in a named poll by specifying the label and desired choice directly.
+static void session_handle_elect_command(session_ctx_t *ctx, const char *arguments) {
+  const char *usage = "Usage: /elect <label> <choice>";
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  char *label = working;
+  char *choice = working;
+  while (*choice != '\0' && !isspace((unsigned char)*choice)) {
+    ++choice;
+  }
+  if (*choice != '\0') {
+    *choice++ = '\0';
+  }
+  while (*choice == ' ' || *choice == '\t') {
+    ++choice;
+  }
+
+  if (label[0] == '\0' || *choice == '\0') {
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  trim_whitespace_inplace(choice);
+
+  host_t *host = ctx->owner;
+  pthread_mutex_lock(&host->lock);
+  named_poll_state_t *poll = host_find_named_poll_locked(host, label);
+  if (poll == NULL || !poll->poll.active) {
+    pthread_mutex_unlock(&host->lock);
+    session_send_system_line(ctx, "There is no active poll with that label.");
+    return;
+  }
+
+  char canonical_label[SSH_CHATTER_POLL_LABEL_LEN];
+  snprintf(canonical_label, sizeof(canonical_label), "%s", poll->label);
+
+  size_t option_index = SIZE_MAX;
+  const size_t option_count = poll->poll.option_count;
+
+  const char *numeric_start = choice;
+  if (*numeric_start == '/') {
+    ++numeric_start;
+  }
+  if (*numeric_start != '\0') {
+    char *endptr = NULL;
+    unsigned long parsed = strtoul(numeric_start, &endptr, 10);
+    if (endptr != NULL && endptr != numeric_start && *endptr == '\0' && parsed >= 1UL && parsed <= option_count) {
+      option_index = (size_t)(parsed - 1UL);
+    }
+  }
+
+  if (option_index == SIZE_MAX) {
+    for (size_t idx = 0U; idx < option_count; ++idx) {
+      if (poll->poll.options[idx].text[0] == '\0') {
+        continue;
+      }
+      if (strcasecmp(poll->poll.options[idx].text, choice) == 0) {
+        option_index = idx;
+        break;
+      }
+    }
+  }
+
+  pthread_mutex_unlock(&host->lock);
+
+  if (option_index == SIZE_MAX) {
+    session_send_system_line(ctx, "That choice is not available in this poll.");
+    return;
+  }
+
+  session_handle_named_vote(ctx, option_index, canonical_label);
 }
 
 // Parse the /vote command to manage named polls, including listing, creation, and closure.
@@ -5354,6 +5765,7 @@ static void session_handle_vote_command(session_ctx_t *ctx, const char *argument
     poll_state_reset(&poll->poll);
     poll->voter_count = 0U;
     host_recount_named_polls_locked(host);
+    host_vote_state_save_locked(host);
     pthread_mutex_unlock(&host->lock);
 
     char message[SSH_CHATTER_MESSAGE_LIMIT];
@@ -5481,6 +5893,7 @@ static void session_handle_vote_command(session_ctx_t *ctx, const char *argument
   }
   host_recount_named_polls_locked(host);
   named_poll_state_t snapshot = *poll;
+  host_vote_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 
   char announce[SSH_CHATTER_MESSAGE_LIMIT];
@@ -7252,6 +7665,18 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
+  else if (strncmp(line, "/elect", 6) == 0) {
+    const char *arguments = line + 6;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    if (*arguments == '\0') {
+      session_handle_elect_command(ctx, NULL);
+    } else {
+      session_handle_elect_command(ctx, arguments);
+    }
+    return;
+  }
   else if (strncmp(line, "/bbs", 4) == 0) {
     const char *arguments = line + 4;
     while (*arguments == ' ' || *arguments == '\t') {
@@ -7390,7 +7815,7 @@ static named_poll_state_t *host_find_named_poll_locked(host_t *host, const char 
     if (entry->label[0] == '\0') {
       continue;
     }
-    if (strcmp(entry->label, label) == 0) {
+    if (strcasecmp(entry->label, label) == 0) {
       return entry;
     }
   }
@@ -8090,6 +8515,8 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_state_resolve_path(host);
   host->bbs_state_file_path[0] = '\0';
   host_bbs_resolve_path(host);
+  host->vote_state_file_path[0] = '\0';
+  host_vote_resolve_path(host);
   pthread_mutex_init(&host->lock, NULL);
   poll_state_reset(&host->poll);
   for (size_t idx = 0U; idx < SSH_CHATTER_MAX_NAMED_POLLS; ++idx) {
@@ -8133,6 +8560,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   (void)host_try_load_motd_from_path(host, "/etc/ssh-chatter/motd");
 
   host_state_load(host);
+  host_vote_state_load(host);
   host_bbs_state_load(host);
 
   host->clients = client_manager_create(host);
