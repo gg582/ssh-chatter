@@ -384,7 +384,10 @@ static void chat_history_entry_prepare_user(chat_history_entry_t *entry, const s
 static bool host_history_record_user(host_t *host, const session_ctx_t *from, const char *message, chat_history_entry_t *stored_entry);
 static bool host_history_commit_entry(host_t *host, chat_history_entry_t *entry, chat_history_entry_t *stored_entry);
 static void host_notify_external_clients(host_t *host, const chat_history_entry_t *entry);
-static void host_history_append_locked(host_t *host, const chat_history_entry_t *entry);
+static bool host_history_append_locked(host_t *host, const chat_history_entry_t *entry);
+static bool host_history_reserve_locked(host_t *host, size_t min_capacity);
+static size_t host_history_total(host_t *host);
+static size_t host_history_copy_range(host_t *host, size_t start_index, chat_history_entry_t *buffer, size_t capacity);
 static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entry_t *entry, const session_ctx_t *from);
 static bool host_history_apply_reaction(host_t *host, uint64_t message_id, size_t reaction_index, chat_history_entry_t *updated_entry);
 static bool chat_history_entry_build_reaction_summary(const chat_history_entry_t *entry, char *buffer, size_t length);
@@ -466,8 +469,6 @@ static void host_state_load(host_t *host);
 static void host_state_save_locked(host_t *host);
 static bool host_try_load_motd_from_path(host_t *host, const char *path);
 static bool username_contains(const char *username, const char *needle);
-static size_t host_history_snapshot(host_t *host, chat_history_entry_t *snapshot, size_t capacity);
-static size_t host_history_snapshot(host_t *host, chat_history_entry_t *snapshot, size_t capacity);
 static void host_apply_palette_descriptor(host_t *host, const palette_descriptor_t *descriptor);
 static bool host_lookup_user_os(host_t *host, const char *username, char *buffer, size_t length);
 static void session_send_poll_summary(session_ctx_t *ctx);
@@ -956,44 +957,104 @@ static void chat_room_broadcast_reaction_update(host_t *host, const chat_history
   chat_room_broadcast(&host->room, line, NULL);
 }
 
-static size_t host_history_snapshot(host_t *host, chat_history_entry_t *snapshot, size_t capacity) {
-  if (host == NULL || snapshot == NULL || capacity == 0U) {
+static bool host_history_reserve_locked(host_t *host, size_t min_capacity) {
+  if (host == NULL) {
+    return false;
+  }
+
+  if (min_capacity <= host->history_capacity) {
+    return true;
+  }
+
+  if (min_capacity > SIZE_MAX / sizeof(chat_history_entry_t)) {
+    humanized_log_error("host-history", "history buffer too large to allocate", ENOMEM);
+    return false;
+  }
+
+  size_t new_capacity = host->history_capacity > 0U ? host->history_capacity : 64U;
+  if (new_capacity == 0U) {
+    new_capacity = 64U;
+  }
+
+  while (new_capacity < min_capacity) {
+    if (new_capacity > SIZE_MAX / 2U) {
+      new_capacity = min_capacity;
+      break;
+    }
+    size_t doubled = new_capacity * 2U;
+    if (doubled < new_capacity || doubled > SIZE_MAX / sizeof(chat_history_entry_t)) {
+      new_capacity = min_capacity;
+      break;
+    }
+    new_capacity = doubled;
+  }
+
+  size_t bytes = new_capacity * sizeof(chat_history_entry_t);
+  chat_history_entry_t *resized = realloc(host->history, bytes);
+  if (resized == NULL) {
+    humanized_log_error("host-history", "failed to grow chat history buffer", errno != 0 ? errno : ENOMEM);
+    return false;
+  }
+
+  if (new_capacity > host->history_capacity) {
+    size_t old_capacity = host->history_capacity;
+    size_t added = new_capacity - old_capacity;
+    memset(resized + old_capacity, 0, added * sizeof(chat_history_entry_t));
+  }
+
+  host->history = resized;
+  host->history_capacity = new_capacity;
+  return true;
+}
+
+static bool host_history_append_locked(host_t *host, const chat_history_entry_t *entry) {
+  if (host == NULL || entry == NULL) {
+    return false;
+  }
+
+  if (!host_history_reserve_locked(host, host->history_count + 1U)) {
+    return false;
+  }
+
+  host->history[host->history_count++] = *entry;
+  host_state_save_locked(host);
+  return true;
+}
+
+static size_t host_history_total(host_t *host) {
+  if (host == NULL) {
     return 0U;
   }
 
   size_t count = 0U;
-
   pthread_mutex_lock(&host->lock);
   count = host->history_count;
-  if (count > capacity) {
-    count = capacity;
-  }
-  for (size_t idx = 0U; idx < count; ++idx) {
-    size_t history_index = (host->history_start + idx) % SSH_CHATTER_HISTORY_LIMIT;
-    snapshot[idx] = host->history[history_index];
-  }
   pthread_mutex_unlock(&host->lock);
-
   return count;
 }
 
-static void host_history_append_locked(host_t *host, const chat_history_entry_t *entry) {
-  if (host == NULL || entry == NULL) {
-    return;
+static size_t host_history_copy_range(host_t *host, size_t start_index, chat_history_entry_t *buffer, size_t capacity) {
+  if (host == NULL || buffer == NULL || capacity == 0U) {
+    return 0U;
   }
 
-  size_t insert_index = 0U;
-  if (host->history_count < SSH_CHATTER_HISTORY_LIMIT) {
-    insert_index = (host->history_start + host->history_count) % SSH_CHATTER_HISTORY_LIMIT;
-    host->history_count++;
-  } else {
-    insert_index = host->history_start;
-    host->history_start = (host->history_start + 1U) % SSH_CHATTER_HISTORY_LIMIT;
+  size_t copied = 0U;
+  pthread_mutex_lock(&host->lock);
+  size_t total = host->history_count;
+  if (start_index >= total || host->history == NULL) {
+    pthread_mutex_unlock(&host->lock);
+    return 0U;
   }
 
-  host->history[insert_index] = *entry;
+  size_t available = total - start_index;
+  if (available > capacity) {
+    available = capacity;
+  }
 
-  host_state_save_locked(host);
+  memcpy(buffer, host->history + start_index, available * sizeof(chat_history_entry_t));
+  copied = available;
+  pthread_mutex_unlock(&host->lock);
+  return copied;
 }
 
 static void chat_history_entry_prepare_user(chat_history_entry_t *entry, const session_ctx_t *from, const char *message) {
@@ -1033,7 +1094,10 @@ static bool host_history_commit_entry(host_t *host, chat_history_entry_t *entry,
     entry->message_id = 0U;
   }
 
-  host_history_append_locked(host, entry);
+  if (!host_history_append_locked(host, entry)) {
+    pthread_mutex_unlock(&host->lock);
+    return false;
+  }
 
   if (stored_entry != NULL) {
     *stored_entry = *entry;
@@ -1092,9 +1156,12 @@ static bool host_history_apply_reaction(host_t *host, uint64_t message_id, size_
   bool applied = false;
 
   pthread_mutex_lock(&host->lock);
+  if (host->history == NULL) {
+    pthread_mutex_unlock(&host->lock);
+    return false;
+  }
   for (size_t idx = 0U; idx < host->history_count; ++idx) {
-    size_t history_index = (host->history_start + idx) % SSH_CHATTER_HISTORY_LIMIT;
-    chat_history_entry_t *entry = &host->history[history_index];
+    chat_history_entry_t *entry = &host->history[idx];
     if (!entry->is_user_message) {
       continue;
     }
@@ -1466,9 +1533,12 @@ static void host_state_save_locked(host_t *host) {
 
   bool success = fwrite(&header, sizeof(header), 1U, fp) == 1U;
 
+  if (host->history_count > 0U && host->history == NULL) {
+    success = false;
+  }
+
   for (size_t idx = 0; success && idx < host->history_count; ++idx) {
-    size_t history_index = (host->history_start + idx) % SSH_CHATTER_HISTORY_LIMIT;
-    const chat_history_entry_t *entry = &host->history[history_index];
+    const chat_history_entry_t *entry = &host->history[idx];
 
     host_state_history_entry_v3_t serialized = {0};
     serialized.base.is_user_message = entry->is_user_message ? 1U : 0U;
@@ -1612,9 +1682,6 @@ static void host_state_load(host_t *host) {
     }
   }
 
-  if (history_count > SSH_CHATTER_HISTORY_LIMIT) {
-    history_count = SSH_CHATTER_HISTORY_LIMIT;
-  }
   if (preference_count > SSH_CHATTER_MAX_PREFERENCES) {
     preference_count = SSH_CHATTER_MAX_PREFERENCES;
   }
@@ -1623,12 +1690,13 @@ static void host_state_load(host_t *host) {
 
   bool success = true;
 
-  host->history_start = 0U;
+  if (history_count > 0U) {
+    success = host_history_reserve_locked(host, history_count);
+  }
   host->history_count = 0U;
-  memset(host->history, 0, sizeof(host->history));
 
   for (uint32_t idx = 0; success && idx < history_count; ++idx) {
-    chat_history_entry_t *entry = &host->history[idx % SSH_CHATTER_HISTORY_LIMIT];
+    chat_history_entry_t *entry = &host->history[idx];
     memset(entry, 0, sizeof(*entry));
 
     if (version >= 3U) {
@@ -1814,9 +1882,11 @@ static void host_state_load(host_t *host) {
   }
 
   if (!success) {
+    if (host->history != NULL && host->history_capacity > 0U) {
+      memset(host->history, 0, host->history_capacity * sizeof(chat_history_entry_t));
+    }
     host->history_count = 0U;
     host->preference_count = 0U;
-    memset(host->history, 0, sizeof(host->history));
     memset(host->preferences, 0, sizeof(host->preferences));
   }
 
@@ -2409,24 +2479,26 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
     return;
   }
 
-  chat_history_entry_t snapshot[SSH_CHATTER_HISTORY_LIMIT];
-  size_t count = host_history_snapshot(ctx->owner, snapshot, SSH_CHATTER_HISTORY_LIMIT);
-  if (count == 0U) {
+  size_t total = host_history_total(ctx->owner);
+  if (total == 0U) {
     session_send_system_line(ctx, "No chat history available yet.");
     return;
   }
 
   const size_t step = SSH_CHATTER_SCROLLBACK_CHUNK > 0 ? SSH_CHATTER_SCROLLBACK_CHUNK : 1U;
+  if (ctx->history_scroll_position >= total) {
+    ctx->history_scroll_position = total > 0U ? total - 1U : 0U;
+  }
   size_t position = ctx->history_scroll_position;
   size_t new_position = position;
   bool reached_oldest = false;
 
-  const size_t max_position = count > 0U ? count - 1U : 0U;
+  const size_t max_position = total > 0U ? total - 1U : 0U;
 
   if (direction > 0) {
     size_t current_newest_visible = 0U;
-    if (position < count) {
-      current_newest_visible = count - 1U - position;
+    if (position < total) {
+      current_newest_visible = total - 1U - position;
     }
 
     size_t current_chunk = step;
@@ -2480,7 +2552,7 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
     return;
   }
 
-  const size_t newest_visible = count - 1U - new_position;
+  const size_t newest_visible = total - 1U - new_position;
   size_t chunk = step;
   if (chunk > newest_visible + 1U) {
     chunk = newest_visible + 1U;
@@ -2496,11 +2568,23 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
   }
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(header, sizeof(header), "Scrollback (%zu-%zu of %zu)", oldest_visible + 1U, newest_visible + 1U, count);
+  snprintf(header, sizeof(header), "Scrollback (%zu-%zu of %zu)", oldest_visible + 1U, newest_visible + 1U, total);
   session_send_system_line(ctx, header);
 
-  for (size_t idx = oldest_visible; idx <= newest_visible; ++idx) {
-    session_send_history_entry(ctx, &snapshot[idx]);
+  chat_history_entry_t buffer[SSH_CHATTER_SCROLLBACK_CHUNK];
+  size_t request = chunk;
+  if (request > SSH_CHATTER_SCROLLBACK_CHUNK) {
+    request = SSH_CHATTER_SCROLLBACK_CHUNK;
+  }
+  size_t copied = host_history_copy_range(ctx->owner, oldest_visible, buffer, request);
+  if (copied == 0U) {
+    session_send_system_line(ctx, "Unable to read chat history right now.");
+    session_render_prompt(ctx, false);
+    return;
+  }
+
+  for (size_t idx = 0; idx < copied; ++idx) {
+    session_send_history_entry(ctx, &buffer[idx]);
   }
 
   if (direction < 0 && new_position == 0U) {
@@ -2874,29 +2958,36 @@ static void session_send_history(session_ctx_t *ctx) {
     return;
   }
 
-  chat_history_entry_t snapshot[SSH_CHATTER_HISTORY_LIMIT];
-  size_t count = host_history_snapshot(ctx->owner, snapshot, SSH_CHATTER_HISTORY_LIMIT);
-  if (count == 0U) {
+  size_t total = host_history_total(ctx->owner);
+  if (total == 0U) {
     return;
   }
 
-  size_t visible = count;
-  if (visible > SSH_CHATTER_SCROLLBACK_CHUNK) {
-    visible = SSH_CHATTER_SCROLLBACK_CHUNK;
+  size_t window = SSH_CHATTER_SCROLLBACK_CHUNK;
+  if (window == 0U) {
+    window = 1U;
+  }
+  if (window > total) {
+    window = total;
   }
 
-  const size_t start = (count > visible) ? (count - visible) : 0U;
+  chat_history_entry_t snapshot[SSH_CHATTER_SCROLLBACK_CHUNK];
+  size_t start_index = total - window;
+  size_t copied = host_history_copy_range(ctx->owner, start_index, snapshot, window);
+  if (copied == 0U) {
+    return;
+  }
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];
-  if (count > visible) {
-    snprintf(header, sizeof(header), "Recent activity (last %zu of %zu messages):", visible, count);
+  if (total > copied) {
+    snprintf(header, sizeof(header), "Recent activity (last %zu of %zu messages):", copied, total);
   } else {
-    snprintf(header, sizeof(header), "Recent activity (last %zu message%s):", visible, visible == 1U ? "" : "s");
+    snprintf(header, sizeof(header), "Recent activity (last %zu message%s):", copied, copied == 1U ? "" : "s");
   }
   session_render_separator(ctx, "Recent activity");
   session_send_system_line(ctx, header);
 
-  for (size_t idx = start; idx < count; ++idx) {
+  for (size_t idx = 0; idx < copied; ++idx) {
     session_send_history_entry(ctx, &snapshot[idx]);
   }
 
@@ -7296,9 +7387,9 @@ void host_init(host_t *host, auth_profile_t *auth) {
 
 
   host->connection_count = 0U;
-  host->history_start = 0U;
+  host->history = NULL;
   host->history_count = 0U;
-  memset(host->history, 0, sizeof(host->history));
+  host->history_capacity = 0U;
   host->next_message_id = 1U;
   memset(host->preferences, 0, sizeof(host->preferences));
   host->preference_count = 0U;
@@ -7557,6 +7648,12 @@ void host_shutdown(host_t *host) {
     client_manager_destroy(host->clients);
     host->clients = NULL;
   }
+  pthread_mutex_lock(&host->lock);
+  free(host->history);
+  host->history = NULL;
+  host->history_capacity = 0U;
+  host->history_count = 0U;
+  pthread_mutex_unlock(&host->lock);
   free(host->join_activity);
   host->join_activity = NULL;
   host->join_activity_capacity = 0U;

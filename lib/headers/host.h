@@ -248,9 +248,9 @@ typedef struct host {
   char version[64];
   char motd[4096];
   size_t connection_count;
-  chat_history_entry_t history[SSH_CHATTER_HISTORY_LIMIT];
-  size_t history_start;
+  chat_history_entry_t *history;
   size_t history_count;
+  size_t history_capacity;
   uint64_t next_message_id;
   user_preference_t preferences[SSH_CHATTER_MAX_PREFERENCES];
   size_t preference_count;
