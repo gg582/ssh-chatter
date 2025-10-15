@@ -2069,7 +2069,7 @@ static void session_send_poll_summary(session_ctx_t *ctx) {
   for (size_t idx = 0U; idx < snapshot.option_count; ++idx) {
     char option_line[SSH_CHATTER_MESSAGE_LIMIT + 32];
     uint32_t votes = snapshot.options[idx].votes;
-    snprintf(option_line, sizeof(option_line) + 6, "  /%zu - %s (%u vote%s)", idx + 1U, snapshot.options[idx].text, votes,
+    snprintf(option_line, sizeof(option_line), "  /%zu - %s (%u vote%s)", idx + 1U, snapshot.options[idx].text, votes,
              votes == 1U ? "" : "s");
     session_send_system_line(ctx, option_line);
   }
@@ -3085,7 +3085,7 @@ static void session_handle_today(session_ctx_t *ctx) {
       session_send_system_line(ctx, "No functions available today.");
       return;
     }
-    size_t index = (size_t)(rand() % function_count);
+    size_t index = (size_t)rand() % function_count;
     chosen = DAILY_FUNCTIONS[index];
     pref->daily_year = year;
     pref->daily_yday = yday;
@@ -4070,30 +4070,30 @@ static bool session_parse_command(const char *line, const char *command, const c
 }
 
 static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
-  const char *arguments = NULL;
+  const char *args = NULL;
 
   if (strncmp(line, "/help", 5) == 0) {
     session_print_help(ctx);
     return;
   }
 
-  if (strncmp(line, "/exit", 5) == 0) {
+  else if (strncmp(line, "/exit", 5) == 0) {
     session_handle_exit(ctx);
     return;
   }
 
-  if (session_parse_command(line, "/nick", &arguments)) {
-    session_handle_nick(ctx, arguments);
+  else if (session_parse_command(line, "/nick", &args)) {
+    session_handle_nick(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/pm", &arguments)) {
-    session_handle_pm(ctx, arguments);
+  else if (session_parse_command(line, "/pm", &args)) {
+    session_handle_pm(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/motd", &arguments)) {
-    if (*arguments != '\0') {
+  else if (session_parse_command(line, "/motd", &args)) {
+    if (*args != '\0') {
       session_send_system_line(ctx, "Usage: /motd");
     } else {
       session_handle_motd(ctx);
@@ -4101,8 +4101,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  if (session_parse_command(line, "/users", &arguments)) {
-    if (*arguments != '\0') {
+  else if (session_parse_command(line, "/users", &args)) {
+    if (*args != '\0') {
       session_send_system_line(ctx, "Usage: /users");
     } else {
       session_handle_usercount(ctx);
@@ -4110,56 +4110,56 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  if (session_parse_command(line, "/search", &arguments)) {
-    session_handle_search(ctx, arguments);
+  else if (session_parse_command(line, "/search", &args)) {
+    session_handle_search(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/image", &arguments)) {
-    session_handle_image(ctx, arguments);
+  else if (session_parse_command(line, "/image", &args)) {
+    session_handle_image(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/video", &arguments)) {
-    session_handle_video(ctx, arguments);
+  else if (session_parse_command(line, "/video", &args)) {
+    session_handle_video(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/audio", &arguments)) {
-    session_handle_audio(ctx, arguments);
+  else if (session_parse_command(line, "/audio", &args)) {
+    session_handle_audio(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/files", &arguments)) {
-    session_handle_files(ctx, arguments);
+  else if (session_parse_command(line, "/files", &args)) {
+    session_handle_files(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/ban", &arguments)) {
-    session_handle_ban(ctx, arguments);
+  else if (session_parse_command(line, "/ban", &args)) {
+    session_handle_ban(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/pardon", &arguments)) {
-    session_handle_pardon(ctx, arguments);
+  else if (session_parse_command(line, "/pardon", &args)) {
+    session_handle_pardon(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/poke", &arguments)) {
-    session_handle_poke(ctx, arguments);
+  else if (session_parse_command(line, "/poke", &args)) {
+    session_handle_poke(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/color", &arguments)) {
-    session_handle_color(ctx, arguments);
+  else if (session_parse_command(line, "/color", &args)) {
+    session_handle_color(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/systemcolor", &arguments)) {
-    session_handle_system_color(ctx, arguments);
+  else if (session_parse_command(line, "/systemcolor", &args)) {
+    session_handle_system_color(ctx, args);
     return;
   }
-  if (strncmp(line, "/palette", 8) == 0) {
+  else if (strncmp(line, "/palette", 8) == 0) {
     const char *arguments = line + 8;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
@@ -4167,7 +4167,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_palette(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/today", 6) == 0) {
+  else if (strncmp(line, "/today", 6) == 0) {
     const char *arguments = line + 6;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
@@ -4179,7 +4179,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  if (strncmp(line, "/date", 5) == 0) {
+  else if (strncmp(line, "/date", 5) == 0) {
     const char *arguments = line + 5;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
@@ -4187,7 +4187,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_date(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/os", 3) == 0) {
+  else if (strncmp(line, "/os", 3) == 0) {
     const char *arguments = line + 3;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
@@ -4195,7 +4195,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_os(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/getos", 6) == 0) {
+  else if (strncmp(line, "/getos", 6) == 0) {
     const char *arguments = line + 6;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
@@ -4203,7 +4203,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_getos(ctx, arguments);
     return;
   }
-  if (strncmp(line, "/pair", 5) == 0) {
+  else if (strncmp(line, "/pair", 5) == 0) {
     const char *arguments = line + 5;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
@@ -4215,7 +4215,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  if (strncmp(line, "/connected", 10) == 0) {
+  else if (strncmp(line, "/connected", 10) == 0) {
     const char *arguments = line + 10;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
@@ -4227,7 +4227,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  if (strncmp(line, "/poll", 5) == 0) {
+  else if (strncmp(line, "/poll", 5) == 0) {
     const char *arguments = line + 5;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
@@ -4236,13 +4236,13 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  if (session_parse_command(line, "/palette", &arguments)) {
-    session_handle_palette(ctx, arguments);
+  else if (session_parse_command(line, "/palette", &args)) {
+    session_handle_palette(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/today", &arguments)) {
-    if (*arguments != '\0') {
+  else if (session_parse_command(line, "/today", &args)) {
+    if (*args != '\0') {
       session_send_system_line(ctx, "Usage: /today");
     } else {
       session_handle_today(ctx);
@@ -4250,23 +4250,23 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  if (session_parse_command(line, "/date", &arguments)) {
-    session_handle_date(ctx, arguments);
+  else if (session_parse_command(line, "/date", &args)) {
+    session_handle_date(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/os", &arguments)) {
-    session_handle_os(ctx, arguments);
+  else if (session_parse_command(line, "/os", &args)) {
+    session_handle_os(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/getos", &arguments)) {
-    session_handle_getos(ctx, arguments);
+  else if (session_parse_command(line, "/getos", &args)) {
+    session_handle_getos(ctx, args);
     return;
   }
 
-  if (session_parse_command(line, "/pair", &arguments)) {
-    if (*arguments != '\0') {
+  else if (session_parse_command(line, "/pair", &args)) {
+    if (*args != '\0') {
       session_send_system_line(ctx, "Usage: /pair");
     } else {
       session_handle_pair(ctx);
@@ -4274,8 +4274,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  if (session_parse_command(line, "/connected", &arguments)) {
-    if (*arguments != '\0') {
+  else if (session_parse_command(line, "/connected", &args)) {
+    if (*args != '\0') {
       session_send_system_line(ctx, "Usage: /connected");
     } else {
       session_handle_connected(ctx);
@@ -4283,12 +4283,12 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  if (session_parse_command(line, "/poll", &arguments)) {
-    session_handle_poll(ctx, arguments);
+  else if (session_parse_command(line, "/poll", &args)) {
+    session_handle_poll(ctx, args);
     return;
   }
 
-  if (line[0] == '/') {
+  else if (line[0] == '/') {
     if (isdigit((unsigned char)line[1])) {
       char *endptr = NULL;
       unsigned long vote_index = strtoul(line + 1, &endptr, 10);
