@@ -152,6 +152,7 @@ sudo systemctl disable --now chatter.service
 ### Implemented
 
 - SSH listener that negotiates connections and spawns a thread per session.
+- Login Captcha
 - MOTD delivery through the `-m` flag or service-managed configuration file.
 - `/help` command for connected clients.
 - Server-side logging of joins, parts, and administrative command attempts (`/ban`, `/poke`).
@@ -169,9 +170,7 @@ sudo systemctl disable --now chatter.service
 - Retro bulletin board system accessible through `/bbs` with tagging, comments, bumping, and an interactive composer that ends with `>/__BBS_END>`.
 
 ### In progress / planned
-
 - Enforcing moderation commands beyond logging.
-- Authentication and authorisation controls.
 
 ## Contributing
 
