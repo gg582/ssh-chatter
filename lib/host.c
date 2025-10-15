@@ -212,6 +212,7 @@ static void session_handle_motd(session_ctx_t *ctx);
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments);
 static void session_handle_palette(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
+static void session_handle_kick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_usercount(session_ctx_t *ctx);
 static void session_handle_search(session_ctx_t *ctx, const char *arguments);
 static void session_handle_image(session_ctx_t *ctx, const char *arguments);
@@ -2316,6 +2317,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/connected           - privately list everyone connected");
   session_send_system_line(ctx, "/poll <question>|<option...> - start or view a poll");
   session_send_system_line(ctx, "/poke <username>      - send a bell to call a user");
+  session_send_system_line(ctx, "/kick <username>      - disconnect a user (operator only)");
   session_send_system_line(ctx, "/ban <username>       - ban a user (operator only)");
   session_send_system_line(ctx, "/pardon <user|ip>     - remove a ban (operator only)");
   session_send_system_line(ctx,
@@ -2431,6 +2433,64 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
 
   session_send_history_entry(ctx, &entry);
   chat_room_broadcast_entry(&ctx->owner->room, &entry, ctx);
+}
+
+static void session_handle_kick(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (!ctx->user.is_operator) {
+    session_send_system_line(ctx, "You are not allowed to kick users.");
+    return;
+  }
+
+  if (arguments == NULL || *arguments == '\0') {
+    session_send_system_line(ctx, "Usage: /kick <username>");
+    return;
+  }
+
+  char target_name[SSH_CHATTER_USERNAME_LEN];
+  snprintf(target_name, sizeof(target_name), "%s", arguments);
+  trim_whitespace_inplace(target_name);
+
+  if (target_name[0] == '\0') {
+    session_send_system_line(ctx, "Usage: /kick <username>");
+    return;
+  }
+
+  session_ctx_t *target = chat_room_find_user(&ctx->owner->room, target_name);
+  if (target == NULL) {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "User '%s' is not connected.", target_name);
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  if (target == ctx) {
+    session_send_system_line(ctx, "You cannot kick yourself.");
+    return;
+  }
+
+  char notice[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(notice, sizeof(notice), "* %s has been kicked by %s", target->user.name, ctx->user.name);
+  host_history_record_system(ctx->owner, notice);
+  chat_room_broadcast(&ctx->owner->room, notice, NULL);
+
+  if (target->channel == NULL || target->session == NULL) {
+    target->should_exit = true;
+    target->has_joined_room = false;
+    chat_room_remove(&ctx->owner->room, target);
+    session_send_system_line(ctx, "User removed from the chat.");
+  } else {
+    session_send_system_line(target, "You have been kicked by an operator.");
+    target->should_exit = true;
+    ssh_channel_send_eof(target->channel);
+    ssh_channel_close(target->channel);
+    session_send_system_line(ctx, "Kick request sent.");
+  }
+
+  printf("[kick] %s kicked %s\n", ctx->user.name, target->user.name);
 }
 
 static void session_handle_ban(session_ctx_t *ctx, const char *arguments) {
@@ -4236,55 +4296,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  else if (session_parse_command(line, "/palette", &args)) {
-    session_handle_palette(ctx, args);
-    return;
-  }
-
-  else if (session_parse_command(line, "/today", &args)) {
-    if (*args != '\0') {
-      session_send_system_line(ctx, "Usage: /today");
-    } else {
-      session_handle_today(ctx);
-    }
-    return;
-  }
-
-  else if (session_parse_command(line, "/date", &args)) {
-    session_handle_date(ctx, args);
-    return;
-  }
-
-  else if (session_parse_command(line, "/os", &args)) {
-    session_handle_os(ctx, args);
-    return;
-  }
-
-  else if (session_parse_command(line, "/getos", &args)) {
-    session_handle_getos(ctx, args);
-    return;
-  }
-
-  else if (session_parse_command(line, "/pair", &args)) {
-    if (*args != '\0') {
-      session_send_system_line(ctx, "Usage: /pair");
-    } else {
-      session_handle_pair(ctx);
-    }
-    return;
-  }
-
-  else if (session_parse_command(line, "/connected", &args)) {
-    if (*args != '\0') {
-      session_send_system_line(ctx, "Usage: /connected");
-    } else {
-      session_handle_connected(ctx);
-    }
-    return;
-  }
-
-  else if (session_parse_command(line, "/poll", &args)) {
-    session_handle_poll(ctx, args);
+  else if (session_parse_command(line, "/kick", &args)) {
+    session_handle_kick(ctx, args);
     return;
   }
 
