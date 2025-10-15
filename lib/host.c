@@ -1818,6 +1818,18 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
   bool at_boundary = (new_position == position);
   ctx->history_scroll_position = new_position;
 
+  const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
+  ssh_channel_write(ctx->channel, clear_sequence, sizeof(clear_sequence) - 1U);
+  ssh_channel_write(ctx->channel, "\r\n", 2U);
+
+  if (direction < 0 && at_boundary && new_position == 0U) {
+    if (position == 0U) {
+      session_send_system_line(ctx, "Already at the latest messages.");
+    }
+    session_render_prompt(ctx, false);
+    return;
+  }
+
   const size_t newest_visible = count - 1U - new_position;
   size_t chunk = step;
   if (chunk > newest_visible + 1U) {
@@ -1829,14 +1841,8 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
 
   const size_t oldest_visible = (newest_visible + 1U > chunk) ? (newest_visible + 1U - chunk) : 0U;
 
-  const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
-  ssh_channel_write(ctx->channel, clear_sequence, sizeof(clear_sequence) - 1U);
-  ssh_channel_write(ctx->channel, "\r\n", 2U);
-
   if (direction > 0 && at_boundary && new_position == max_position) {
     session_send_system_line(ctx, "Reached the oldest stored message.");
-  } else if (direction < 0 && at_boundary && new_position == 0U) {
-    session_send_system_line(ctx, "Already at the latest messages.");
   }
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];
@@ -1847,7 +1853,7 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
     session_send_history_entry(ctx, &snapshot[idx]);
   }
 
-  if (new_position == 0U) {
+  if (direction < 0 && new_position == 0U) {
     session_send_system_line(ctx, "End of scrollback.");
   }
 
