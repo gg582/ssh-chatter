@@ -300,7 +300,8 @@ static void resolve_accept_channel_once(void) {
 static void trim_whitespace_inplace(char *text);
 static const char *lookup_color_code(const color_entry_t *entries, size_t entry_count, const char *name);
 static bool parse_bool_token(const char *token, bool *value);
-static void session_send_line(ssh_channel channel, const char *message);
+static void session_apply_background_fill(session_ctx_t *ctx);
+static void session_send_line(session_ctx_t *ctx, const char *message);
 static void session_send_plain_line(session_ctx_t *ctx, const char *message);
 static void session_send_system_line(session_ctx_t *ctx, const char *message);
 static void session_send_raw_text(session_ctx_t *ctx, const char *text);
@@ -1843,18 +1844,86 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
   }
 }
 
-static void session_send_line(ssh_channel channel, const char *message) {
-  if (channel == NULL || message == NULL) {
+// session_apply_background_fill reapplies the palette background to the
+// current terminal row so subsequent output starts from a clean, tinted
+// baseline.
+static void session_apply_background_fill(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->channel == NULL) {
     return;
   }
+
+  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
+  const size_t bg_len = strlen(bg);
+
+  if (bg_len > 0U) {
+    ssh_channel_write(ctx->channel, bg, bg_len);
+  }
+
+  ssh_channel_write(ctx->channel, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
+  ssh_channel_write(ctx->channel, "\r", 1U);
+
+  if (bg_len > 0U) {
+    ssh_channel_write(ctx->channel, bg, bg_len);
+  }
+}
+
+// session_send_line writes a single line while preserving the session's
+// background color even when individual strings reset their ANSI attributes by
+// clearing the row with the palette tint before printing.
+static void session_send_line(session_ctx_t *ctx, const char *message) {
+  if (ctx == NULL || ctx->channel == NULL || message == NULL) {
+    return;
+  }
+
+  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
+  const size_t bg_len = strlen(bg);
 
   char buffer[SSH_CHATTER_MESSAGE_LIMIT + 1U];
   memset(buffer, 0, sizeof(buffer));
   strncpy(buffer, message, SSH_CHATTER_MESSAGE_LIMIT);
   buffer[SSH_CHATTER_MESSAGE_LIMIT] = '\0';
 
-  ssh_channel_write(channel, buffer, strlen(buffer));
-  ssh_channel_write(channel, "\r\n", 2U);
+  if (bg_len == 0U) {
+    ssh_channel_write(ctx->channel, buffer, strlen(buffer));
+    ssh_channel_write(ctx->channel, "\r\n", 2U);
+    return;
+  }
+
+  ssh_channel_write(ctx->channel, bg, bg_len);
+  ssh_channel_write(ctx->channel, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
+  ssh_channel_write(ctx->channel, "\r", 1U);
+
+  char expanded[SSH_CHATTER_MESSAGE_LIMIT * 4U];
+  size_t out_idx = 0U;
+  const size_t length = strlen(buffer);
+
+  for (size_t idx = 0U; idx < length && out_idx + 1U < sizeof(expanded);) {
+    if (buffer[idx] == '\033' && idx + 3U < length && buffer[idx + 1U] == '[' && buffer[idx + 2U] == '0' &&
+        buffer[idx + 3U] == 'm') {
+      if (out_idx + 4U >= sizeof(expanded)) {
+        break;
+      }
+
+      memcpy(expanded + out_idx, buffer + idx, 4U);
+      out_idx += 4U;
+      idx += 4U;
+
+      if (out_idx + bg_len >= sizeof(expanded)) {
+        break;
+      }
+      memcpy(expanded + out_idx, bg, bg_len);
+      out_idx += bg_len;
+      continue;
+    }
+
+    expanded[out_idx++] = buffer[idx++];
+  }
+
+  expanded[out_idx] = '\0';
+
+  ssh_channel_write(ctx->channel, expanded, out_idx);
+  ssh_channel_write(ctx->channel, "\r\n", 2U);
+  ssh_channel_write(ctx->channel, bg, bg_len);
 }
 
 static void session_send_plain_line(session_ctx_t *ctx, const char *message) {
@@ -1862,7 +1931,7 @@ static void session_send_plain_line(session_ctx_t *ctx, const char *message) {
     return;
   }
 
-  session_send_line(ctx->channel, message);
+  session_send_line(ctx, message);
 }
 
 static void session_send_system_line(session_ctx_t *ctx, const char *message) {
@@ -1876,7 +1945,7 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
 
   char formatted[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(formatted, sizeof(formatted), "%s%s%s%s%s", bg, fg, bold, message, ANSI_RESET);
-  session_send_line(ctx->channel, formatted);
+  session_send_line(ctx, formatted);
 }
 
 static void session_send_raw_text(session_ctx_t *ctx, const char *text) {
@@ -1950,13 +2019,15 @@ static void session_render_separator(session_ctx_t *ctx, const char *label) {
 
   char line[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(line, sizeof(line), "%s%s%s%s%s", hl, fg, bold, body, ANSI_RESET);
-  session_send_line(ctx->channel, line);
+  session_send_line(ctx, line);
 }
 
 static void session_render_banner(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return;
   }
+
+  session_apply_background_fill(ctx);
 
   static const char *kBanner[] = {
     "+====================================================+",
@@ -2010,10 +2081,39 @@ static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
   const char *fg = ctx->system_fg_code != NULL ? ctx->system_fg_code : "";
   const char *hl = ctx->system_highlight_code != NULL ? ctx->system_highlight_code : "";
   const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
+  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
 
-  char prompt[96];
-  snprintf(prompt, sizeof(prompt), "%s%s%s│%s %s%s> %s", hl, fg, bold, ANSI_RESET, fg, bold, ANSI_RESET);
-  ssh_channel_write(ctx->channel, prompt, strlen(prompt));
+  if (hl[0] != '\0') {
+    ssh_channel_write(ctx->channel, hl, strlen(hl));
+  }
+  if (fg[0] != '\0') {
+    ssh_channel_write(ctx->channel, fg, strlen(fg));
+  }
+  if (bold[0] != '\0') {
+    ssh_channel_write(ctx->channel, bold, strlen(bold));
+  }
+  const char pipe_symbol[] = "│";
+  ssh_channel_write(ctx->channel, pipe_symbol, sizeof(pipe_symbol) - 1U);
+
+  ssh_channel_write(ctx->channel, ANSI_RESET, strlen(ANSI_RESET));
+  if (bg[0] != '\0') {
+    ssh_channel_write(ctx->channel, bg, strlen(bg));
+  }
+  ssh_channel_write(ctx->channel, " ", 1U);
+  if (fg[0] != '\0') {
+    ssh_channel_write(ctx->channel, fg, strlen(fg));
+  }
+  if (bold[0] != '\0') {
+    ssh_channel_write(ctx->channel, bold, strlen(bold));
+  }
+  ssh_channel_write(ctx->channel, "> ", 2U);
+  ssh_channel_write(ctx->channel, ANSI_RESET, strlen(ANSI_RESET));
+  if (bg[0] != '\0') {
+    ssh_channel_write(ctx->channel, bg, strlen(bg));
+  }
+  if (fg[0] != '\0') {
+    ssh_channel_write(ctx->channel, fg, strlen(fg));
+  }
 
   if (ctx->input_length > 0U) {
     ssh_channel_write(ctx->channel, ctx->input_buffer, ctx->input_length);
@@ -2025,8 +2125,18 @@ static void session_refresh_input_line(session_ctx_t *ctx) {
     return;
   }
 
+  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
+  if (bg[0] != '\0') {
+    ssh_channel_write(ctx->channel, bg, strlen(bg));
+  }
+
   static const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
   ssh_channel_write(ctx->channel, clear_sequence, sizeof(clear_sequence) - 1U);
+
+  if (bg[0] != '\0') {
+    ssh_channel_write(ctx->channel, bg, strlen(bg));
+  }
+
   session_render_prompt(ctx, false);
 }
 
@@ -2445,7 +2555,7 @@ static void session_send_private_message_line(session_ctx_t *ctx, const session_
 
   char line[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(line, sizeof(line), "%s%s%s[%s]%s %s", highlight, bold, color, label, ANSI_RESET, message);
-  session_send_line(ctx->channel, line);
+  session_send_line(ctx, line);
 
   if (ctx != color_source && ctx->history_scroll_position == 0U) {
     session_refresh_input_line(ctx);
@@ -5280,7 +5390,7 @@ static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
   char preview[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(preview, sizeof(preview), "%s%s%s[%s] preview%s", highlight_code, bold_code, text_code, ctx->user.name,
            ANSI_RESET);
-  session_send_line(ctx->channel, preview);
+  session_send_line(ctx, preview);
 
   if (ctx->owner != NULL) {
     host_store_user_theme(ctx->owner, ctx);
@@ -5429,6 +5539,8 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
     snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s", tokens[2]);
   }
 
+  session_apply_background_fill(ctx);
+
   session_send_system_line(ctx, "System colors updated.");
   session_render_separator(ctx, "Chatroom");
   session_render_prompt(ctx, true);
@@ -5475,6 +5587,8 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
     session_send_system_line(ctx, "Unable to apply that palette right now.");
     return;
   }
+
+  session_apply_background_fill(ctx);
 
   char info[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(info, sizeof(info), "Palette '%s' applied - %s", descriptor->name, descriptor->description);
