@@ -194,6 +194,7 @@ typedef struct poll_state {
   char question[SSH_CHATTER_MESSAGE_LIMIT];
   size_t option_count;
   poll_option_t options[5];
+  bool allow_multiple;
 } poll_state_t;
 
 typedef struct named_poll_state {
@@ -203,6 +204,7 @@ typedef struct named_poll_state {
   struct {
     char username[SSH_CHATTER_USERNAME_LEN];
     int choice;
+    uint32_t choices_mask;
   } voters[SSH_CHATTER_MAX_NAMED_VOTERS];
   size_t voter_count;
 } named_poll_state_t;

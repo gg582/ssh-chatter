@@ -452,6 +452,7 @@ static bool session_parse_birthday(const char *input, char *normalized, size_t l
 static void session_handle_birthday(session_ctx_t *ctx, const char *arguments);
 static void session_handle_soulmate(session_ctx_t *ctx);
 static void session_handle_grant(session_ctx_t *ctx, const char *arguments);
+static void session_handle_revoke(session_ctx_t *ctx, const char *arguments);
 static void session_normalize_newlines(char *text);
 static bool timezone_sanitize_identifier(const char *input, char *output, size_t length);
 static bool timezone_resolve_identifier(const char *input, char *resolved, size_t length);
@@ -460,7 +461,7 @@ static bool palette_apply_to_session(session_ctx_t *ctx, const palette_descripto
 static void session_handle_poll(session_ctx_t *ctx, const char *arguments);
 static void session_handle_vote(session_ctx_t *ctx, size_t option_index);
 static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, const char *label);
-static void session_handle_vote_command(session_ctx_t *ctx, const char *arguments);
+static void session_handle_vote_command(session_ctx_t *ctx, const char *arguments, bool allow_multiple);
 static bool session_line_is_exit_command(const char *line);
 static void session_handle_username_conflict_input(session_ctx_t *ctx, const char *line);
 static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count);
@@ -483,7 +484,9 @@ static void host_store_birthday(host_t *host, const session_ctx_t *ctx, const ch
 static bool host_ip_has_grant_locked(host_t *host, const char *ip);
 static bool host_ip_has_grant(host_t *host, const char *ip);
 static bool host_add_operator_grant_locked(host_t *host, const char *ip);
+static bool host_remove_operator_grant_locked(host_t *host, const char *ip);
 static void host_apply_grant_to_ip(host_t *host, const char *ip);
+static void host_revoke_grant_from_ip(host_t *host, const char *ip);
 static void host_history_normalize_entry(host_t *host, chat_history_entry_t *entry);
 static const char *chat_attachment_type_label(chat_attachment_type_t type);
 static void host_state_resolve_path(host_t *host);
@@ -1491,6 +1494,80 @@ static void host_apply_grant_to_ip(host_t *host, const char *ip) {
     session_ctx_t *member = matches[idx];
     session_send_system_line(member, "Operator privileges granted for your IP address.");
   }
+  free(matches);
+}
+
+static bool host_remove_operator_grant_locked(host_t *host, const char *ip) {
+  if (host == NULL || ip == NULL || ip[0] == '\0') {
+    return false;
+  }
+
+  for (size_t idx = 0U; idx < host->operator_grant_count; ++idx) {
+    if (strncmp(host->operator_grants[idx].ip, ip, SSH_CHATTER_IP_LEN) != 0) {
+      continue;
+    }
+
+    for (size_t shift = idx; shift + 1U < host->operator_grant_count; ++shift) {
+      host->operator_grants[shift] = host->operator_grants[shift + 1U];
+    }
+    memset(&host->operator_grants[host->operator_grant_count - 1U], 0,
+           sizeof(host->operator_grants[host->operator_grant_count - 1U]));
+    --host->operator_grant_count;
+    return true;
+  }
+
+  return false;
+}
+
+static void host_revoke_grant_from_ip(host_t *host, const char *ip) {
+  if (host == NULL || ip == NULL || ip[0] == '\0') {
+    return;
+  }
+
+  session_ctx_t **matches = NULL;
+  size_t match_count = 0U;
+
+  pthread_mutex_lock(&host->room.lock);
+  if (host->room.member_count > 0U) {
+    session_ctx_t **allocated = calloc(host->room.member_count, sizeof(*allocated));
+    if (allocated != NULL) {
+      matches = allocated;
+    }
+
+    for (size_t idx = 0U; idx < host->room.member_count; ++idx) {
+      session_ctx_t *member = host->room.members[idx];
+      if (member == NULL) {
+        continue;
+      }
+      if (strncmp(member->client_ip, ip, SSH_CHATTER_IP_LEN) != 0) {
+        continue;
+      }
+      if (member->user.is_lan_operator) {
+        continue;
+      }
+
+      member->user.is_operator = false;
+      member->auth.is_operator = false;
+
+      if (matches != NULL) {
+        matches[match_count++] = member;
+      }
+    }
+  }
+  pthread_mutex_unlock(&host->room.lock);
+
+  if (matches == NULL) {
+    return;
+  }
+
+  for (size_t idx = 0U; idx < match_count; ++idx) {
+    session_ctx_t *member = matches[idx];
+    if (member == NULL) {
+      continue;
+    }
+    session_send_system_line(member, "Operator privileges revoked for your IP address.");
+  }
+
   free(matches);
 }
 
@@ -3125,10 +3202,11 @@ static void session_send_poll_summary_generic(session_ctx_t *ctx, const poll_sta
   }
 
   char header[SSH_CHATTER_MESSAGE_LIMIT + 64];
+  const char *mode_suffix = poll->allow_multiple ? " (multiple choice)" : "";
   if (label == NULL) {
-    snprintf(header, sizeof(header), "Poll #%" PRIu64 ": %s", poll->id, poll->question);
+    snprintf(header, sizeof(header), "Poll #%" PRIu64 ": %s%s", poll->id, poll->question, mode_suffix);
   } else {
-    snprintf(header, sizeof(header), "Poll [%s] #%" PRIu64 ": %s", label, poll->id, poll->question);
+    snprintf(header, sizeof(header), "Poll [%s] #%" PRIu64 ": %s%s", label, poll->id, poll->question, mode_suffix);
   }
   session_send_system_line(ctx, header);
 
@@ -3146,10 +3224,19 @@ static void session_send_poll_summary_generic(session_ctx_t *ctx, const poll_sta
   }
 
   if (label == NULL) {
-    session_send_system_line(ctx, "Vote with /1 through /5.");
+    if (poll->allow_multiple) {
+      session_send_system_line(ctx, "Vote with /1 through /5 (multiple selections allowed).");
+    } else {
+      session_send_system_line(ctx, "Vote with /1 through /5.");
+    }
   } else {
-    char footer[128];
-    snprintf(footer, sizeof(footer), "Vote with /1 %s through /%zu %s.", label, poll->option_count, label);
+    char footer[192];
+    if (poll->allow_multiple) {
+      snprintf(footer, sizeof(footer), "Vote with /1 %s through /%zu %s (multiple selections allowed).", label,
+               poll->option_count, label);
+    } else {
+      snprintf(footer, sizeof(footer), "Vote with /1 %s through /%zu %s.", label, poll->option_count, label);
+    }
     session_send_system_line(ctx, footer);
   }
 }
@@ -3193,7 +3280,8 @@ static void session_send_poll_summary(session_ctx_t *ctx) {
 
   if (active_named == 0U) {
     session_send_system_line(ctx,
-                             "No active named polls. Use /vote <label> <question>|<option1>|<option2> to start one.");
+                             "No active named polls. Use /vote <label> <question>|<option1>|<option2> or /vote-single for a "
+                             "single-choice poll.");
   }
 }
 
@@ -3221,7 +3309,8 @@ static void session_list_named_polls(session_ctx_t *ctx) {
 
   if (count == 0U) {
     session_send_system_line(ctx,
-                             "No named polls exist. Start one with /vote <label> <question>|<option1>|<option2>.");
+                             "No named polls exist. Start one with /vote <label> <question>|<option1>|<option2> or /vote-single "
+                             "for single-choice voting.");
     return;
   }
 
@@ -3230,8 +3319,9 @@ static void session_list_named_polls(session_ctx_t *ctx) {
     const named_poll_state_t *entry = &snapshot[idx];
     char line[SSH_CHATTER_MESSAGE_LIMIT];
     const char *status = entry->poll.active ? "active" : "inactive";
-    snprintf(line, sizeof(line), "- [%s] %s (options: %zu, %s)", entry->label, entry->poll.question,
-             entry->poll.option_count, status);
+    const char *mode = entry->poll.allow_multiple ? "multiple choice" : "single choice";
+    snprintf(line, sizeof(line), "- [%s] %s (options: %zu, %s, %s)", entry->label, entry->poll.question,
+             entry->poll.option_count, status, mode);
     session_send_system_line(ctx, line);
   }
 }
@@ -3586,10 +3676,13 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/pair                - list users sharing your recorded OS");
   session_send_system_line(ctx, "/connected           - privately list everyone connected");
   session_send_system_line(ctx, "/grant <ip>          - grant operator access to an IP (LAN only)");
+  session_send_system_line(ctx, "/revoke <ip>         - revoke an IP's operator access (LAN top admin)");
   session_send_system_line(ctx, "/poll <question>|<option...> - start or view a poll");
   session_send_system_line(ctx,
-                           "/vote <label> <question>|<option...> - start or inspect a named poll (use /vote @close <label> to "
-                           "end it)");
+                           "/vote <label> <question>|<option...> - start or inspect a multiple-choice named poll (use /vote "
+                           "@close <label> to end it)");
+  session_send_system_line(ctx,
+                           "/vote-single <label> <question>|<option...> - start or inspect a single-choice named poll");
   session_send_system_line(ctx, "/poke <username>      - send a bell to call a user");
   session_send_system_line(ctx, "/kick <username>      - disconnect a user (operator only)");
   session_send_system_line(ctx, "/ban <username>       - ban a user (operator only)");
@@ -4930,6 +5023,55 @@ static void session_handle_grant(session_ctx_t *ctx, const char *arguments) {
   host_apply_grant_to_ip(ctx->owner, ip);
 }
 
+static void session_handle_revoke(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (!ctx->user.is_lan_operator) {
+    session_send_system_line(ctx, "Only LAN administrators may revoke operator privileges.");
+    return;
+  }
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, "Usage: /revoke <ip-address>");
+    return;
+  }
+
+  char ip[SSH_CHATTER_IP_LEN];
+  snprintf(ip, sizeof(ip), "%s", arguments);
+  trim_whitespace_inplace(ip);
+  if (ip[0] == '\0') {
+    session_send_system_line(ctx, "Usage: /revoke <ip-address>");
+    return;
+  }
+
+  unsigned char buf[sizeof(struct in6_addr)];
+  if (inet_pton(AF_INET, ip, buf) != 1 && inet_pton(AF_INET6, ip, buf) != 1) {
+    session_send_system_line(ctx, "Provide a valid IPv4 or IPv6 address.");
+    return;
+  }
+
+  bool removed = false;
+  pthread_mutex_lock(&ctx->owner->lock);
+  removed = host_remove_operator_grant_locked(ctx->owner, ip);
+  if (removed) {
+    host_state_save_locked(ctx->owner);
+  }
+  pthread_mutex_unlock(&ctx->owner->lock);
+
+  if (!removed) {
+    session_send_system_line(ctx, "No stored grant exists for that IP address.");
+    return;
+  }
+
+  host_revoke_grant_from_ip(ctx->owner, ip);
+
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(message, sizeof(message), "Operator privileges revoked for %s.", ip);
+  session_send_system_line(ctx, message);
+}
+
 static void session_handle_poll(session_ctx_t *ctx, const char *arguments) {
   static const char *kUsage =
       "Usage: /poll <question>|<option1>|<option2>[|option3][|option4][|option5] or /poll to view current poll";
@@ -4993,6 +5135,7 @@ static void session_handle_poll(session_ctx_t *ctx, const char *arguments) {
   host->poll.id += 1U;
   host->poll.active = true;
   host->poll.option_count = option_count;
+  host->poll.allow_multiple = false;
   snprintf(host->poll.question, sizeof(host->poll.question), "%s", tokens[0]);
   for (size_t idx = 0U; idx < option_count; ++idx) {
     snprintf(host->poll.options[idx].text, sizeof(host->poll.options[idx].text), "%s", tokens[idx + 1U]);
@@ -5078,6 +5221,9 @@ static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, c
     return;
   }
 
+  const bool allow_multiple = poll->poll.allow_multiple;
+  const uint32_t option_bit = (option_index < 32U) ? (1U << option_index) : 0U;
+
   size_t voter_slot = SIZE_MAX;
   for (size_t idx = 0U; idx < poll->voter_count; ++idx) {
     if (poll->voters[idx].username[0] == '\0') {
@@ -5089,18 +5235,7 @@ static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, c
     }
   }
 
-  if (voter_slot != SIZE_MAX && poll->voters[voter_slot].choice == (int)option_index) {
-    pthread_mutex_unlock(&host->lock);
-    session_send_system_line(ctx, "You have already voted for that option.");
-    return;
-  }
-
-  if (voter_slot != SIZE_MAX && poll->voters[voter_slot].choice >= 0) {
-    int previous = poll->voters[voter_slot].choice;
-    if (previous >= 0 && (size_t)previous < poll->poll.option_count && poll->poll.options[previous].votes > 0U) {
-      poll->poll.options[previous].votes -= 1U;
-    }
-  } else {
+  if (voter_slot == SIZE_MAX) {
     if (poll->voter_count >= SSH_CHATTER_MAX_NAMED_VOTERS) {
       pthread_mutex_unlock(&host->lock);
       session_send_system_line(ctx, "Vote tracking is full for this poll right now.");
@@ -5108,10 +5243,41 @@ static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, c
     }
     voter_slot = poll->voter_count++;
     snprintf(poll->voters[voter_slot].username, sizeof(poll->voters[voter_slot].username), "%s", ctx->user.name);
+    poll->voters[voter_slot].choice = -1;
+    poll->voters[voter_slot].choices_mask = 0U;
+  }
+
+  uint32_t *mask = &poll->voters[voter_slot].choices_mask;
+  if (allow_multiple) {
+    if (option_bit != 0U && (*mask & option_bit) != 0U) {
+      pthread_mutex_unlock(&host->lock);
+      session_send_system_line(ctx, "You have already voted for that option.");
+      return;
+    }
+  } else {
+    if (poll->voters[voter_slot].choice == (int)option_index) {
+      pthread_mutex_unlock(&host->lock);
+      session_send_system_line(ctx, "You have already voted for that option.");
+      return;
+    }
+    if (poll->voters[voter_slot].choice >= 0) {
+      int previous = poll->voters[voter_slot].choice;
+      if (previous >= 0 && (size_t)previous < poll->poll.option_count && poll->poll.options[previous].votes > 0U) {
+        poll->poll.options[previous].votes -= 1U;
+      }
+    }
   }
 
   poll->poll.options[option_index].votes += 1U;
-  poll->voters[voter_slot].choice = (int)option_index;
+  if (allow_multiple) {
+    if (option_bit != 0U) {
+      *mask |= option_bit;
+    }
+    poll->voters[voter_slot].choice = -1;
+  } else {
+    poll->voters[voter_slot].choice = (int)option_index;
+    poll->voters[voter_slot].choices_mask = (option_bit != 0U) ? option_bit : 0U;
+  }
   pthread_mutex_unlock(&host->lock);
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
@@ -5121,9 +5287,10 @@ static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, c
 }
 
 // Parse the /vote command to manage named polls, including listing, creation, and closure.
-static void session_handle_vote_command(session_ctx_t *ctx, const char *arguments) {
-  static const char *kUsage =
-      "Usage: /vote <label> <question>|<option1>|<option2>[|option3][|option4][|option5]";
+static void session_handle_vote_command(session_ctx_t *ctx, const char *arguments, bool allow_multiple) {
+  const char *usage = allow_multiple
+                          ? "Usage: /vote <label> <question>|<option1>|<option2>[|option3][|option4][|option5]"
+                          : "Usage: /vote-single <label> <question>|<option1>|<option2>[|option3][|option4][|option5]";
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
@@ -5239,7 +5406,7 @@ static void session_handle_vote_command(session_ctx_t *ctx, const char *argument
   snprintf(definition, sizeof(definition), "%s", cursor);
   trim_whitespace_inplace(definition);
   if (definition[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -5295,6 +5462,7 @@ static void session_handle_vote_command(session_ctx_t *ctx, const char *argument
   poll->poll.id += 1U;
   poll->poll.active = true;
   poll->poll.option_count = option_count;
+  poll->poll.allow_multiple = allow_multiple;
   snprintf(poll->poll.question, sizeof(poll->poll.question), "%s", tokens[0]);
   for (size_t idx = 0U; idx < option_count; ++idx) {
     snprintf(poll->poll.options[idx].text, sizeof(poll->poll.options[idx].text), "%s", tokens[idx + 1U]);
@@ -5309,6 +5477,7 @@ static void session_handle_vote_command(session_ctx_t *ctx, const char *argument
   for (size_t idx = 0U; idx < SSH_CHATTER_MAX_NAMED_VOTERS; ++idx) {
     poll->voters[idx].username[0] = '\0';
     poll->voters[idx].choice = -1;
+    poll->voters[idx].choices_mask = 0U;
   }
   host_recount_named_polls_locked(host);
   named_poll_state_t snapshot = *poll;
@@ -7019,6 +7188,14 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_grant(ctx, arguments);
     return;
   }
+  else if (strncmp(line, "/revoke", 7) == 0) {
+    const char *arguments = line + 7;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_revoke(ctx, arguments);
+    return;
+  }
   else if (strncmp(line, "/pair", 5) == 0) {
     const char *arguments = line + 5;
     while (*arguments == ' ' || *arguments == '\t') {
@@ -7051,15 +7228,27 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_poll(ctx, arguments);
     return;
   }
+  else if (strncmp(line, "/vote-single", 12) == 0) {
+    const char *arguments = line + 12;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    if (*arguments == '\0') {
+      session_handle_vote_command(ctx, NULL, false);
+    } else {
+      session_handle_vote_command(ctx, arguments, false);
+    }
+    return;
+  }
   else if (strncmp(line, "/vote", 5) == 0) {
     const char *arguments = line + 5;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
     if (*arguments == '\0') {
-      session_handle_vote_command(ctx, NULL);
+      session_handle_vote_command(ctx, NULL, true);
     } else {
-      session_handle_vote_command(ctx, arguments);
+      session_handle_vote_command(ctx, arguments, true);
     }
     return;
   }
@@ -7166,6 +7355,7 @@ static void poll_state_reset(poll_state_t *poll) {
   poll->active = false;
   poll->option_count = 0U;
   poll->question[0] = '\0';
+  poll->allow_multiple = false;
   for (size_t idx = 0U; idx < sizeof(poll->options) / sizeof(poll->options[0]); ++idx) {
     poll->options[idx].text[0] = '\0';
     poll->options[idx].votes = 0U;
@@ -7185,6 +7375,7 @@ static void named_poll_reset(named_poll_state_t *poll) {
   for (size_t idx = 0U; idx < SSH_CHATTER_MAX_NAMED_VOTERS; ++idx) {
     poll->voters[idx].username[0] = '\0';
     poll->voters[idx].choice = -1;
+    poll->voters[idx].choices_mask = 0U;
   }
 }
 
