@@ -1815,18 +1815,16 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
     }
   }
 
+  bool at_boundary = (new_position == position);
+  ctx->history_scroll_position = new_position;
+
   const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
   ssh_channel_write(ctx->channel, clear_sequence, sizeof(clear_sequence) - 1U);
   ssh_channel_write(ctx->channel, "\r\n", 2U);
 
-  bool at_boundary = (new_position == position);
-  ctx->history_scroll_position = new_position;
-
-  if (direction < 0 && new_position == 0U) {
+  if (direction < 0 && at_boundary && new_position == 0U) {
     if (position == 0U) {
       session_send_system_line(ctx, "Already at the latest messages.");
-    } else {
-      session_send_system_line(ctx, "End of scrollback.");
     }
     session_render_prompt(ctx, false);
     return;
@@ -1853,6 +1851,10 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
 
   for (size_t idx = oldest_visible; idx <= newest_visible; ++idx) {
     session_send_history_entry(ctx, &snapshot[idx]);
+  }
+
+  if (direction < 0 && new_position == 0U) {
+    session_send_system_line(ctx, "End of scrollback.");
   }
 
   session_render_prompt(ctx, false);
