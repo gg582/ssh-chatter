@@ -1,5 +1,5 @@
 CC := cc
-CFLAGS := -std=c2x -Wall -Wextra -Werror -Ilib/headers
+CFLAGS := -std=c2x -Wall -Wextra -Werror -Ilib/headers -fsanitize=address,leak
 LDFLAGS := -lpthread -lssh -ldl
 TARGET := ssh-chatter
 SRC := main.c lib/host.c
