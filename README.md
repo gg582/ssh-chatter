@@ -2,6 +2,17 @@
 
 SSH-Chatter is a C reimplementation of the Go [`ssh-chat`](https://github.com/shazow/ssh-chat) server.  It mirrors the original behaviour while using modern C patterns and a small, testable core.  The server listens for SSH connections and places every authenticated user into a shared chat room that exposes the same command surface as the Go reference implementation.
 
+## Recent enhancements
+
+- Embedded ChatGPT-powered bot that maintains short-term and long-term memory while watching the live chat feed.
+- Named poll management via `/vote`, including sub-poll creation, voting with `/1 <label>`, and graceful shutdown with `/vote @close <label>`.
+- `/bbs` command unlocking a retro bulletin board system with posts, tags, comments, and bumping.
+- Bot memory persistence stored in `chat_bot_memory.dat` (overridable with `CHAT_BOT_MEMORY_FILE`), independent of `chatter_state.dat`.
+- `/birthday` to register birthdays, `/soulmate` to find matching dates, and `/grant <ip>` so LAN operators can delegate privileges by address.
+- Chat UI refresh with a clean divider between history and input, instant input clearing after send, and a friendly "Wait for a moment..." banner with a playful loading bar before each join.
+- Pronoun puzzle captcha that every client (including the embedded bot) must solve before entering, paired with global join throttling and automatic IP bans for rapid reconnect spam or repeated nickname hopping.
+- Expanded nickname support for non-Latin characters plus `/ban` upgrades that accept raw IP addresses alongside usernames.
+
 # Preview
 
 ![Preview](./preview.png)
@@ -75,6 +86,12 @@ Once running, connect with any SSH client:
 ssh -p 2222 user@server-address
 ```
 
+The public server is available at `chat.korokorok.com` on the default SSH port:
+
+```bash
+ssh -p 22 yourname@chat.korokorok.com
+```
+
 Usernames provided at the SSH prompt are used as your chat nickname.
 
 ## Installing as a systemd service
@@ -141,6 +158,9 @@ sudo systemctl disable --now chatter.service
 - Nickname Changer
 - Chat Scroll
 - Checking user list
+- ChatGPT assistant with adaptive memory sourced from `/etc/ssh-chatter/chatter.env`.
+- Named polls with label-based voting (`/vote` and `/1 <label>` syntax).
+- Retro bulletin board system accessible through `/bbs` with tagging, comments, and bumping.
 
 ### In progress / planned
 

@@ -7,10 +7,10 @@ CFLAGS = -std=c2x -O1 \
 	-fno-omit-frame-pointer -fstack-protector-strong -fno-common \
 	-g
 LDFLAGS = -fsanitize=address,leak,undefined,shift,bounds,float-divide-by-zero,vptr \
-	-lpthread -lssh -ldl
+        -lpthread -lssh -ldl -lcurl
 
 TARGET := ssh-chatter
-SRC := main.c lib/host.c
+SRC := main.c lib/host.c lib/client.c lib/bot.c lib/webssh_client.c
 OBJ := $(SRC:.c=.o)
 
 .PHONY: all clean run
