@@ -3598,7 +3598,7 @@ static void session_print_help(session_ctx_t *ctx) {
                            "/good|/sad|/cool|/angry|/checked|/love|/wtf <id> - react to a message by number");
   session_send_system_line(ctx, "/1 .. /5             - vote for an option in the active poll");
   session_send_system_line(ctx,
-                           "/bbs [list|read|post|comment|regen] - open the bulletin board system (see /bbs for details, finish "
+                           "/bbs [list|read|post|comment|regen|delete] - open the bulletin board system (see /bbs for details, finish "
                            SSH_CHATTER_BBS_TERMINATOR " to post)");
   session_send_system_line(ctx, "Regular messages are shared with everyone.");
 }
