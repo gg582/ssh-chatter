@@ -89,7 +89,7 @@ typedef struct palette_descriptor {
 
 static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
     {"moe", "Soft magenta accents with playful highlights", "bright-magenta", "white", true, "white", "bright-magenta", "cyan", true},
-    {"neon-genesis-evangelion", "Sho-nen yo Shin-wa ni nare--", "bright-magenta", "white", true, "white", "bright-red", "bright-white", true},
+    {"neon-genesis-evangelion", "Sho-nen yo Shin-wa ni nare--", "bright-magenta", "white", true, "white", "bright-red", "magenta", true},
     {"megami", "Japanese anime goddess cliche", "bright-white", "black", true, "black", "bright-white", "black", true},
     {"clean", "Balanced neutral palette", "default", "default", false, "default", "default", "default", false},
     {"adwaita", "Bright background inspired by GNOME Adwaita", "blue", "default", false, "blue", "bright-white", "white", true},
