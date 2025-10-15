@@ -4744,6 +4744,7 @@ static void *session_thread(void *arg) {
                              "Reconnect with a different username by running: ssh newname@<server> (or ssh -l newname <server>).");
     session_send_system_line(ctx, "Type /exit to quit.");
   } else {
+    (void)host_try_load_motd_from_path(ctx->owner, "/etc/ssh-chatter/motd");
     chat_room_add(&ctx->owner->room, ctx);
     ctx->has_joined_room = true;
     printf("[join] %s\n", ctx->user.name);
