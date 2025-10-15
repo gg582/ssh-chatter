@@ -46,6 +46,7 @@
 #define SSH_CHATTER_IMAGE_PREVIEW_HEIGHT 48U
 #define SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN 128U
 #define SSH_CHATTER_BBS_DEFAULT_TAG "general"
+#define SSH_CHATTER_BBS_TERMINATOR ">/__BBS_END>"
 
 typedef struct {
   char question[256];
@@ -486,6 +487,9 @@ static const char *chat_attachment_type_label(chat_attachment_type_t type);
 static void host_state_resolve_path(host_t *host);
 static void host_state_load(host_t *host);
 static void host_state_save_locked(host_t *host);
+static void host_bbs_resolve_path(host_t *host);
+static void host_bbs_state_load(host_t *host);
+static void host_bbs_state_save_locked(host_t *host);
 static bool host_try_load_motd_from_path(host_t *host, const char *path);
 static bool username_contains(const char *username, const char *needle);
 static void host_apply_palette_descriptor(host_t *host, const palette_descriptor_t *descriptor);
@@ -619,6 +623,36 @@ typedef struct host_state_preference_entry {
 typedef struct host_state_grant_entry {
   char ip[SSH_CHATTER_IP_LEN];
 } host_state_grant_entry_t;
+
+static const uint32_t BBS_STATE_MAGIC = 0x42425331U; /* 'BBS1' */
+static const uint32_t BBS_STATE_VERSION = 1U;
+
+typedef struct bbs_state_header {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t post_count;
+  uint32_t reserved;
+  uint64_t next_id;
+} bbs_state_header_t;
+
+typedef struct bbs_state_comment_entry {
+  char author[SSH_CHATTER_USERNAME_LEN];
+  char text[SSH_CHATTER_BBS_COMMENT_LEN];
+  int64_t created_at;
+} bbs_state_comment_entry_t;
+
+typedef struct bbs_state_post_entry {
+  uint64_t id;
+  int64_t created_at;
+  int64_t bumped_at;
+  uint32_t tag_count;
+  uint32_t comment_count;
+  char author[SSH_CHATTER_USERNAME_LEN];
+  char title[SSH_CHATTER_BBS_TITLE_LEN];
+  char body[SSH_CHATTER_BBS_BODY_LEN];
+  char tags[SSH_CHATTER_BBS_MAX_TAGS][SSH_CHATTER_BBS_TAG_LEN];
+  bbs_state_comment_entry_t comments[SSH_CHATTER_BBS_MAX_COMMENTS];
+} bbs_state_post_entry_t;
 
 
 typedef struct reaction_descriptor {
@@ -1916,6 +1950,261 @@ static void host_state_load(host_t *host) {
     next_message_id = (uint64_t)host->history_count + 1U;
   }
   host->next_message_id = next_message_id;
+
+  pthread_mutex_unlock(&host->lock);
+  fclose(fp);
+}
+
+static void host_bbs_resolve_path(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  const char *bbs_path = getenv("CHATTER_BBS_FILE");
+  if (bbs_path == NULL || bbs_path[0] == '\0') {
+    bbs_path = "bbs_state.dat";
+  }
+
+  int written = snprintf(host->bbs_state_file_path, sizeof(host->bbs_state_file_path), "%s", bbs_path);
+  if (written < 0 || (size_t)written >= sizeof(host->bbs_state_file_path)) {
+    humanized_log_error("host", "bbs state file path is too long", ENAMETOOLONG);
+    host->bbs_state_file_path[0] = '\0';
+  }
+}
+
+static void host_bbs_state_save_locked(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->bbs_state_file_path[0] == '\0') {
+    return;
+  }
+
+  char temp_path[PATH_MAX];
+  int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp", host->bbs_state_file_path);
+  if (written < 0 || (size_t)written >= sizeof(temp_path)) {
+    humanized_log_error("host", "bbs state file path is too long", ENAMETOOLONG);
+    return;
+  }
+
+  FILE *fp = fopen(temp_path, "wb");
+  if (fp == NULL) {
+    humanized_log_error("host", "failed to open bbs state file", errno);
+    return;
+  }
+
+  uint32_t post_count = 0U;
+  for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+    if (host->bbs_posts[idx].in_use) {
+      ++post_count;
+    }
+  }
+
+  bbs_state_header_t header = {0};
+  header.magic = BBS_STATE_MAGIC;
+  header.version = BBS_STATE_VERSION;
+  header.post_count = post_count;
+  header.next_id = host->next_bbs_id;
+
+  bool success = fwrite(&header, sizeof(header), 1U, fp) == 1U;
+
+  for (size_t idx = 0U; success && idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+    const bbs_post_t *post = &host->bbs_posts[idx];
+    if (!post->in_use) {
+      continue;
+    }
+
+    bbs_state_post_entry_t serialized = {0};
+    serialized.id = post->id;
+    serialized.created_at = (int64_t)post->created_at;
+    serialized.bumped_at = (int64_t)post->bumped_at;
+    serialized.tag_count = (uint32_t)post->tag_count;
+    if (serialized.tag_count > SSH_CHATTER_BBS_MAX_TAGS) {
+      serialized.tag_count = SSH_CHATTER_BBS_MAX_TAGS;
+    }
+    serialized.comment_count = (uint32_t)post->comment_count;
+    if (serialized.comment_count > SSH_CHATTER_BBS_MAX_COMMENTS) {
+      serialized.comment_count = SSH_CHATTER_BBS_MAX_COMMENTS;
+    }
+
+    snprintf(serialized.author, sizeof(serialized.author), "%s", post->author);
+    snprintf(serialized.title, sizeof(serialized.title), "%s", post->title);
+    snprintf(serialized.body, sizeof(serialized.body), "%s", post->body);
+
+    for (size_t tag = 0U; tag < serialized.tag_count; ++tag) {
+      snprintf(serialized.tags[tag], sizeof(serialized.tags[tag]), "%s", post->tags[tag]);
+    }
+
+    for (size_t comment = 0U; comment < serialized.comment_count; ++comment) {
+      snprintf(serialized.comments[comment].author, sizeof(serialized.comments[comment].author), "%s",
+               post->comments[comment].author);
+      snprintf(serialized.comments[comment].text, sizeof(serialized.comments[comment].text), "%s",
+               post->comments[comment].text);
+      serialized.comments[comment].created_at = (int64_t)post->comments[comment].created_at;
+    }
+
+    if (fwrite(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+      success = false;
+      break;
+    }
+  }
+
+  if (success && fflush(fp) != 0) {
+    success = false;
+  }
+
+  if (success) {
+    int fd = fileno(fp);
+    if (fd >= 0 && fsync(fd) != 0) {
+      success = false;
+    }
+  }
+
+  if (fclose(fp) != 0) {
+    success = false;
+  }
+
+  if (!success) {
+    humanized_log_error("host", "failed to write bbs state file", errno);
+    unlink(temp_path);
+    return;
+  }
+
+  if (rename(temp_path, host->bbs_state_file_path) != 0) {
+    humanized_log_error("host", "failed to update bbs state file", errno);
+    unlink(temp_path);
+  }
+}
+
+static void host_bbs_state_load(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->bbs_state_file_path[0] == '\0') {
+    return;
+  }
+
+  FILE *fp = fopen(host->bbs_state_file_path, "rb");
+  if (fp == NULL) {
+    return;
+  }
+
+  bbs_state_header_t header = {0};
+  if (fread(&header, sizeof(header), 1U, fp) != 1U) {
+    fclose(fp);
+    return;
+  }
+
+  if (header.magic != BBS_STATE_MAGIC) {
+    fclose(fp);
+    return;
+  }
+
+  if (header.version == 0U || header.version > BBS_STATE_VERSION) {
+    fclose(fp);
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+    host->bbs_posts[idx].in_use = false;
+    host->bbs_posts[idx].id = 0U;
+    host->bbs_posts[idx].author[0] = '\0';
+    host->bbs_posts[idx].title[0] = '\0';
+    host->bbs_posts[idx].body[0] = '\0';
+    host->bbs_posts[idx].tag_count = 0U;
+    host->bbs_posts[idx].created_at = 0;
+    host->bbs_posts[idx].bumped_at = 0;
+    host->bbs_posts[idx].comment_count = 0U;
+    for (size_t comment = 0U; comment < SSH_CHATTER_BBS_MAX_COMMENTS; ++comment) {
+      host->bbs_posts[idx].comments[comment].author[0] = '\0';
+      host->bbs_posts[idx].comments[comment].text[0] = '\0';
+      host->bbs_posts[idx].comments[comment].created_at = 0;
+    }
+  }
+  host->bbs_post_count = 0U;
+
+  uint64_t max_id = 0U;
+  bool success = true;
+
+  for (uint32_t idx = 0U; idx < header.post_count; ++idx) {
+    bbs_state_post_entry_t serialized = {0};
+    if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+      success = false;
+      break;
+    }
+
+    if (serialized.id > max_id) {
+      max_id = serialized.id;
+    }
+
+    if (idx >= SSH_CHATTER_BBS_MAX_POSTS) {
+      continue;
+    }
+
+    bbs_post_t *post = &host->bbs_posts[host->bbs_post_count];
+    memset(post, 0, sizeof(*post));
+    post->in_use = true;
+    post->id = serialized.id;
+    post->created_at = (time_t)serialized.created_at;
+    post->bumped_at = (time_t)serialized.bumped_at;
+    snprintf(post->author, sizeof(post->author), "%s", serialized.author);
+    snprintf(post->title, sizeof(post->title), "%s", serialized.title);
+    snprintf(post->body, sizeof(post->body), "%s", serialized.body);
+
+    size_t tag_limit = serialized.tag_count;
+    if (tag_limit > SSH_CHATTER_BBS_MAX_TAGS) {
+      tag_limit = SSH_CHATTER_BBS_MAX_TAGS;
+    }
+    post->tag_count = tag_limit;
+    for (size_t tag = 0U; tag < tag_limit; ++tag) {
+      snprintf(post->tags[tag], sizeof(post->tags[tag]), "%s", serialized.tags[tag]);
+    }
+
+    size_t comment_limit = serialized.comment_count;
+    if (comment_limit > SSH_CHATTER_BBS_MAX_COMMENTS) {
+      comment_limit = SSH_CHATTER_BBS_MAX_COMMENTS;
+    }
+    post->comment_count = comment_limit;
+    for (size_t comment = 0U; comment < comment_limit; ++comment) {
+      snprintf(post->comments[comment].author, sizeof(post->comments[comment].author), "%s",
+               serialized.comments[comment].author);
+      snprintf(post->comments[comment].text, sizeof(post->comments[comment].text), "%s",
+               serialized.comments[comment].text);
+      post->comments[comment].created_at = (time_t)serialized.comments[comment].created_at;
+    }
+
+    ++host->bbs_post_count;
+  }
+
+  if (success) {
+    host->next_bbs_id = header.next_id;
+    if (host->next_bbs_id == 0U || host->next_bbs_id <= max_id) {
+      host->next_bbs_id = max_id + 1U;
+    }
+  } else {
+    for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+      host->bbs_posts[idx].in_use = false;
+      host->bbs_posts[idx].id = 0U;
+      host->bbs_posts[idx].author[0] = '\0';
+      host->bbs_posts[idx].title[0] = '\0';
+      host->bbs_posts[idx].body[0] = '\0';
+      host->bbs_posts[idx].tag_count = 0U;
+      host->bbs_posts[idx].created_at = 0;
+      host->bbs_posts[idx].bumped_at = 0;
+      host->bbs_posts[idx].comment_count = 0U;
+      for (size_t comment = 0U; comment < SSH_CHATTER_BBS_MAX_COMMENTS; ++comment) {
+        host->bbs_posts[idx].comments[comment].author[0] = '\0';
+        host->bbs_posts[idx].comments[comment].text[0] = '\0';
+        host->bbs_posts[idx].comments[comment].created_at = 0;
+      }
+    }
+    host->bbs_post_count = 0U;
+    host->next_bbs_id = 1U;
+  }
 
   pthread_mutex_unlock(&host->lock);
   fclose(fp);
@@ -3281,7 +3570,8 @@ static void session_print_help(session_ctx_t *ctx) {
                            "/good|/sad|/cool|/angry|/checked|/love|/wtf <id> - react to a message by number");
   session_send_system_line(ctx, "/1 .. /5             - vote for an option in the active poll");
   session_send_system_line(ctx,
-                           "/bbs [list|read|post|comment|regen] - open the bulletin board system (see /bbs for details)");
+                           "/bbs [list|read|post|comment|regen] - open the bulletin board system (see /bbs for details, finish "
+                           SSH_CHATTER_BBS_TERMINATOR " to post)");
   session_send_system_line(ctx, "Regular messages are shared with everyone.");
 }
 
@@ -5208,7 +5498,7 @@ static void session_bbs_list(session_ctx_t *ctx) {
   if (count == 0U) {
     session_send_system_line(ctx,
                              "The bulletin board is empty. Use /bbs post <title> [tags...] to write something. Finish drafts "
-                             "with >/__BBS_END>.");
+                             "with " SSH_CHATTER_BBS_TERMINATOR ".");
     return;
   }
 
@@ -5341,6 +5631,7 @@ static void session_bbs_commit_pending_post(session_ctx_t *ctx) {
   }
 
   bbs_post_t snapshot = *post;
+  host_bbs_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 
   session_bbs_reset_pending_post(ctx);
@@ -5355,7 +5646,7 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (ctx->bbs_post_pending) {
-    session_send_system_line(ctx, "You are already composing a post. Finish it with >/__BBS_END>.");
+    session_send_system_line(ctx, "You are already composing a post. Finish it with " SSH_CHATTER_BBS_TERMINATOR ".");
     return;
   }
 
@@ -5489,8 +5780,8 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
     snprintf(default_line, sizeof(default_line), "No tags provided; default tag '%s' applied.", SSH_CHATTER_BBS_DEFAULT_TAG);
     session_send_system_line(ctx, default_line);
   }
-  session_send_system_line(ctx,
-                           "Enter your post body. Type >/__BBS_END> on a line by itself when you are finished.");
+  session_send_system_line(ctx, "Enter your post body. Type " SSH_CHATTER_BBS_TERMINATOR
+                               " on a line by itself when you are finished (Ctrl+S inserts it automatically).");
   session_send_system_line(ctx, "Sending the terminator immediately will cancel the draft.");
   if (discarded_tags) {
     session_send_system_line(ctx, "Only the first four tags were kept. Extra tags were ignored.");
@@ -5505,7 +5796,7 @@ static void session_bbs_capture_body_line(session_ctx_t *ctx, const char *line) 
   char trimmed[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(trimmed, sizeof(trimmed), "%s", line != NULL ? line : "");
   trim_whitespace_inplace(trimmed);
-  if (strcmp(trimmed, ">/__BBS_END>") == 0) {
+  if (strcmp(trimmed, SSH_CHATTER_BBS_TERMINATOR) == 0) {
     session_bbs_commit_pending_post(ctx);
     return;
   }
@@ -5603,6 +5894,7 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   comment->created_at = time(NULL);
   post->bumped_at = comment->created_at;
   bbs_post_t snapshot = *post;
+  host_bbs_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 
   session_send_system_line(ctx, "Comment added.");
@@ -5637,6 +5929,7 @@ static void session_bbs_delete(session_ctx_t *ctx, uint64_t id) {
   }
 
   host_clear_bbs_post_locked(host, post);
+  host_bbs_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 
   session_send_system_line(ctx, "Post deleted.");
@@ -5659,6 +5952,7 @@ static void session_bbs_regen_post(session_ctx_t *ctx, uint64_t id) {
 
   post->bumped_at = time(NULL);
   bbs_post_t snapshot = *post;
+  host_bbs_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 
   session_send_system_line(ctx, "Post bumped to the top.");
@@ -7321,6 +7615,34 @@ static void *session_thread(void *arg) {
         continue;
       }
 
+      if (ch == 0x13) {
+        if (ctx->bbs_post_pending) {
+          ctx->input_buffer[ctx->input_length] = '\0';
+          bool had_body = ctx->input_length > 0U;
+          if (had_body) {
+            session_local_echo_char(ctx, '\n');
+            session_history_record(ctx, ctx->input_buffer);
+            session_bbs_capture_body_line(ctx, ctx->input_buffer);
+          } else {
+            session_local_echo_char(ctx, '\n');
+          }
+
+          const char *terminator = SSH_CHATTER_BBS_TERMINATOR;
+          for (const char *cursor = terminator; *cursor != '\0'; ++cursor) {
+            session_local_echo_char(ctx, *cursor);
+          }
+          session_local_echo_char(ctx, '\n');
+          session_history_record(ctx, terminator);
+          session_bbs_capture_body_line(ctx, terminator);
+          session_clear_input(ctx);
+          if (ctx->should_exit) {
+            break;
+          }
+          session_render_prompt(ctx, false);
+        }
+        continue;
+      }
+
       if (ch == '\r' || ch == '\n') {
         session_local_echo_char(ctx, '\n');
         if (ctx->input_length > 0U) {
@@ -7454,6 +7776,8 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->preference_count = 0U;
   host->state_file_path[0] = '\0';
   host_state_resolve_path(host);
+  host->bbs_state_file_path[0] = '\0';
+  host_bbs_resolve_path(host);
   pthread_mutex_init(&host->lock, NULL);
   poll_state_reset(&host->poll);
   for (size_t idx = 0U; idx < SSH_CHATTER_MAX_NAMED_POLLS; ++idx) {
@@ -7497,6 +7821,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   (void)host_try_load_motd_from_path(host, "/etc/ssh-chatter/motd");
 
   host_state_load(host);
+  host_bbs_state_load(host);
 
   host->clients = client_manager_create(host);
   if (host->clients == NULL) {
