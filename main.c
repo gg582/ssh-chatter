@@ -63,6 +63,7 @@ int main(int argc, char **argv) {
          bind_port != NULL ? bind_port : "2222");
 
   const int serve_result = host_serve(&host, bind_address, bind_port, host_key_dir);
+  host_shutdown(&host);
   if (serve_result != 0) {
     fprintf(stderr, "Failed to start ssh-chatter: %s\n", strerror(errno));
     return EXIT_FAILURE;
