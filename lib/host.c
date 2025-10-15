@@ -5326,8 +5326,8 @@ static bbs_post_t *host_allocate_bbs_post_locked(host_t *host) {
   return NULL;
 }
 
-static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post) {
-  if (host == NULL || post == NULL) {
+static void host_reset_bbs_post(bbs_post_t *post) {
+  if (post == NULL) {
     return;
   }
 
@@ -5348,10 +5348,33 @@ static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post) {
     post->comments[comment].text[0] = '\0';
     post->comments[comment].created_at = 0;
   }
+}
 
-  if (host->bbs_post_count > 0U) {
-    host->bbs_post_count -= 1U;
+static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post) {
+  if (host == NULL || post == NULL) {
+    return;
   }
+
+  host_reset_bbs_post(post);
+
+  size_t write_index = 0U;
+  for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+    if (!host->bbs_posts[idx].in_use) {
+      continue;
+    }
+
+    if (write_index != idx) {
+      host->bbs_posts[write_index] = host->bbs_posts[idx];
+    }
+
+    ++write_index;
+  }
+
+  for (size_t idx = write_index; idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+    host_reset_bbs_post(&host->bbs_posts[idx]);
+  }
+
+  host->bbs_post_count = write_index;
 }
 
 // Render an ASCII framed view of a post, including metadata and comments.
