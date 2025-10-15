@@ -4,7 +4,6 @@
 
 #include "host.h"
 #include "client.h"
-#include "bot.h"
 #include "webssh_client.h"
 
 #include <ctype.h>
@@ -414,7 +413,6 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
 static void session_handle_kick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_usercount(session_ctx_t *ctx);
-static bool host_snapshot_bot_username(host_t *host, char *buffer, size_t length);
 static bool host_username_reserved(host_t *host, const char *username);
 static void session_handle_search(session_ctx_t *ctx, const char *arguments);
 static void session_handle_image(session_ctx_t *ctx, const char *arguments);
@@ -3147,9 +3145,6 @@ static bool session_run_captcha(session_ctx_t *ctx) {
   captcha_prompt_t prompt;
   session_build_captcha_prompt(ctx, &prompt);
   host_update_last_captcha_prompt(ctx->owner, &prompt);
-  if (ctx->owner != NULL && ctx->owner->bot != NULL) {
-    chat_bot_set_captcha_hint(ctx->owner->bot, prompt.question, prompt.answer);
-  }
   session_send_system_line(ctx, "Before entering the room, solve this small puzzle.");
   session_send_system_line(ctx, prompt.question);
   session_send_system_line(ctx, "Type your answer and press Enter:");
@@ -4017,11 +4012,6 @@ static void session_handle_usercount(session_ctx_t *ctx) {
   count = ctx->owner->room.member_count;
   pthread_mutex_unlock(&ctx->owner->room.lock);
 
-  char bot_name[SSH_CHATTER_USERNAME_LEN];
-  if (host_snapshot_bot_username(ctx->owner, bot_name, sizeof(bot_name))) {
-    ++count;
-  }
-
   char message[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(message, sizeof(message), "There %s currently %zu user%s connected.",
            count == 1U ? "is" : "are", count, count == 1U ? "" : "s");
@@ -4342,8 +4332,6 @@ static void session_handle_connected(session_ctx_t *ctx) {
   char buffer[SSH_CHATTER_MESSAGE_LIMIT];
   size_t offset = 0U;
   size_t count = 0U;
-  char bot_name[SSH_CHATTER_USERNAME_LEN];
-  bool include_bot = host_snapshot_bot_username(ctx->owner, bot_name, sizeof(bot_name));
 
   pthread_mutex_lock(&ctx->owner->room.lock);
   for (size_t idx = 0U; idx < ctx->owner->room.member_count; ++idx) {
@@ -4367,23 +4355,6 @@ static void session_handle_connected(session_ctx_t *ctx) {
     ++count;
   }
   pthread_mutex_unlock(&ctx->owner->room.lock);
-
-  if (include_bot && bot_name[0] != '\0') {
-    size_t name_len = strnlen(bot_name, sizeof(bot_name));
-    if (name_len > 0U) {
-      const size_t prefix = count == 0U ? 0U : 2U;
-      if (offset + prefix + name_len < sizeof(buffer)) {
-        if (count > 0U) {
-          buffer[offset++] = ',';
-          buffer[offset++] = ' ';
-        }
-        memcpy(buffer + offset, bot_name, name_len);
-        offset += name_len;
-        buffer[offset] = '\0';
-      }
-      ++count;
-    }
-  }
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(header, sizeof(header), "Connected users (%zu):", count);
@@ -6208,42 +6179,10 @@ static session_ctx_t *chat_room_find_user(chat_room_t *room, const char *usernam
   return result;
 }
 
-static bool host_snapshot_bot_username(host_t *host, char *buffer, size_t length) {
-  if (host == NULL || buffer == NULL || length == 0U) {
-    return false;
-  }
-
-  bool present = false;
-  pthread_mutex_lock(&host->lock);
-  if (host->bot_present && host->bot_username[0] != '\0') {
-    snprintf(buffer, length, "%s", host->bot_username);
-    present = true;
-  } else {
-    buffer[0] = '\0';
-  }
-  pthread_mutex_unlock(&host->lock);
-
-  if (!present) {
-    buffer[0] = '\0';
-  }
-  return present;
-}
-
 static bool host_username_reserved(host_t *host, const char *username) {
-  if (host == NULL || username == NULL || username[0] == '\0') {
-    return false;
-  }
-
-  bool reserved = false;
-  pthread_mutex_lock(&host->lock);
-  if (host->bot_present && host->bot_username[0] != '\0') {
-    if (strncasecmp(host->bot_username, username, SSH_CHATTER_USERNAME_LEN) == 0) {
-      reserved = true;
-    }
-  }
-  pthread_mutex_unlock(&host->lock);
-
-  return reserved;
+  (void)host;
+  (void)username;
+  return false;
 }
 
 static join_activity_entry_t *host_find_join_activity_locked(host_t *host, const char *ip) {
@@ -7452,10 +7391,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->listener.handle = NULL;
   host->auth = auth;
   host->clients = NULL;
-  host->bot = NULL;
   host->web_client = NULL;
-  host->bot_present = false;
-  host->bot_username[0] = '\0';
   const palette_descriptor_t *default_palette = palette_find_descriptor("clean");
   if (default_palette != NULL) {
     host_apply_palette_descriptor(host, default_palette);
@@ -7552,10 +7488,6 @@ void host_init(host_t *host, auth_profile_t *auth) {
       humanized_log_error("host", "failed to initialise webssh client", ENOMEM);
     }
 
-    host->bot = chat_bot_create(host, host->clients);
-    if (host->bot != NULL) {
-      (void)chat_bot_start(host->bot);
-    }
   }
 }
 
@@ -7644,38 +7576,6 @@ void host_set_motd(host_t *host, const char *motd) {
   pthread_mutex_unlock(&host->lock);
 }
 
-void host_bot_joined(host_t *host, const char *bot_name) {
-  if (host == NULL || bot_name == NULL || bot_name[0] == '\0') {
-    return;
-  }
-
-  pthread_mutex_lock(&host->lock);
-  host->bot_present = true;
-  snprintf(host->bot_username, sizeof(host->bot_username), "%s", bot_name);
-  pthread_mutex_unlock(&host->lock);
-
-  char message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(message, sizeof(message), "* %s has joined the chat", bot_name);
-  host_history_record_system(host, message);
-  chat_room_broadcast(&host->room, message, NULL);
-}
-
-void host_bot_left(host_t *host, const char *bot_name) {
-  if (host == NULL || bot_name == NULL || bot_name[0] == '\0') {
-    return;
-  }
-
-  pthread_mutex_lock(&host->lock);
-  host->bot_present = false;
-  host->bot_username[0] = '\0';
-  pthread_mutex_unlock(&host->lock);
-
-  char message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(message, sizeof(message), "* %s has left the chat", bot_name);
-  host_history_record_system(host, message);
-  chat_room_broadcast(&host->room, message, NULL);
-}
-
 bool host_post_client_message(host_t *host, const char *username, const char *message, const char *color_name,
                              const char *highlight_name, bool is_bold) {
   if (host == NULL || username == NULL || username[0] == '\0' || message == NULL) {
@@ -7750,10 +7650,6 @@ void host_shutdown(host_t *host) {
     return;
   }
 
-  if (host->bot != NULL) {
-    chat_bot_destroy(host->bot);
-    host->bot = NULL;
-  }
   if (host->web_client != NULL) {
     webssh_client_destroy(host->web_client);
     host->web_client = NULL;

@@ -4,13 +4,11 @@ SSH-Chatter is a C reimplementation of the Go [`ssh-chat`](https://github.com/sh
 
 ## Recent enhancements
 
-- Embedded ChatGPT-powered bot that maintains short-term and long-term memory while watching the live chat feed.
 - Named poll management via `/vote`, including sub-poll creation, voting with `/1 <label>`, and graceful shutdown with `/vote @close <label>`.
 - `/bbs` command unlocking a retro bulletin board system with tags, comments, bumping, and a multi-line composer that ends on a `>/__BBS_END>` terminator.
-- Bot memory persistence stored in `chat_bot_memory.dat` (overridable with `CHAT_BOT_MEMORY_FILE`), independent of `chatter_state.dat`.
 - `/birthday` to register birthdays, `/soulmate` to find matching dates, and `/grant <ip>` so LAN operators can delegate privileges by address.
 - Chat UI refresh with a clean divider between history and input, instant input clearing after send, and a friendly "Wait for a moment..." banner with a playful loading bar before each join.
-- Story-driven captcha covering regional cat and dog ownership prompts. The server now forwards the active puzzle (and its answer) to automation hooks so the embedded bot can solve it autonomously while rate limiting abusive joins.
+- Story-driven captcha covering regional cat and dog ownership prompts.
 - Expanded nickname support for non-Latin characters plus `/ban` upgrades that accept raw IP addresses alongside usernames.
 
 # Preview
@@ -30,8 +28,7 @@ The codebase is intentionally compact so new contributors can navigate it quickl
 
 ## Automation hooks
 
-- `host_snapshot_last_captcha` exposes the most recently generated captcha prompt and answer along with a timestamp so external clients (or supervising agents) can pass challenges on behalf of unattended bots.
-- `chat_bot_snapshot_captcha_hint` mirrors the same data from the ChatGPT integration for processes that coordinate with the embedded bot without grabbing host-wide locks.
+- `host_snapshot_last_captcha` exposes the most recently generated captcha prompt and answer along with a timestamp so external clients can pass challenges on behalf of unattended automation.
 
 ## Prerequisites
 
@@ -40,14 +37,13 @@ Building the project requires a POSIX environment with:
 - A C11 compatible compiler (e.g. `gcc` or `clang`)
 - `make`
 - `libssh` development headers and library (`libssh-dev` on Debian/Ubuntu)
-- `libcurl` development headers for the ChatGPT bot integration (`libcurl4-openssl-dev` on Debian/Ubuntu)
 - POSIX threads (usually supplied by the system `libpthread`)
 
 On Debian/Ubuntu the dependencies can be installed with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential libssh-dev libcurl4-openssl-dev
+sudo apt-get install build-essential libssh-dev
 ```
 
 ## Building from source
