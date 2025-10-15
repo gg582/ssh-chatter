@@ -804,47 +804,85 @@ static void chat_bot_trim_message(char *message) {
 
 static void chat_bot_load_env(chat_bot_t *bot) {
   FILE *file = fopen(CHAT_BOT_ENV_PATH, "r");
-  if (file == NULL) {
-    return;
-  }
-
-  char line[2048];
-  while (fgets(line, sizeof(line), file) != NULL) {
-    chat_bot_trim(line);
-    if (line[0] == '\0' || line[0] == '#') {
-      continue;
-    }
-    if (strncmp(line, "export ", 7) == 0) {
-      memmove(line, line + 7, strlen(line + 7) + 1U);
+  if (file != NULL) {
+    char line[2048];
+    while (fgets(line, sizeof(line), file) != NULL) {
       chat_bot_trim(line);
-    }
-    char *equals = strchr(line, '=');
-    if (equals == NULL) {
-      continue;
-    }
-    *equals = '\0';
-    char *key = line;
-    char *value = equals + 1;
-    chat_bot_trim(key);
-    chat_bot_trim(value);
-    chat_bot_strip_quotes(value);
+      if (line[0] == '\0' || line[0] == '#') {
+        continue;
+      }
+      if (strncmp(line, "export ", 7) == 0) {
+        memmove(line, line + 7, strlen(line + 7) + 1U);
+        chat_bot_trim(line);
+      }
+      char *equals = strchr(line, '=');
+      if (equals == NULL) {
+        continue;
+      }
+      *equals = '\0';
+      char *key = line;
+      char *value = equals + 1;
+      chat_bot_trim(key);
+      chat_bot_trim(value);
+      chat_bot_strip_quotes(value);
 
-    if (strcmp(key, "OPENAI_API_KEY") == 0) {
-      snprintf(bot->api_key, sizeof(bot->api_key), "%s", value);
-    } else if (strcmp(key, "CHAT_BOT_PROMPT") == 0) {
-      snprintf(bot->system_prompt, sizeof(bot->system_prompt), "%s", value);
-    } else if (strcmp(key, "CHAT_BOT_NAME") == 0) {
-      if (value[0] != '\0') {
-        snprintf(bot->name, sizeof(bot->name), "%s", value);
+      if (strcmp(key, "OPENAI_API_KEY") == 0) {
+        snprintf(bot->api_key, sizeof(bot->api_key), "%s", value);
+      } else if (strcmp(key, "CHAT_BOT_PROMPT") == 0) {
+        snprintf(bot->system_prompt, sizeof(bot->system_prompt), "%s", value);
+      } else if (strcmp(key, "CHAT_BOT_NAME") == 0) {
+        if (value[0] != '\0') {
+          snprintf(bot->name, sizeof(bot->name), "%s", value);
+        }
+      } else if (strcmp(key, "CHAT_BOT_MODEL") == 0) {
+        if (value[0] != '\0') {
+          snprintf(bot->model, sizeof(bot->model), "%s", value);
+        }
       }
-    } else if (strcmp(key, "CHAT_BOT_MODEL") == 0) {
-      if (value[0] != '\0') {
-        snprintf(bot->model, sizeof(bot->model), "%s", value);
-      }
+    }
+
+    fclose(file);
+  }
+
+  const char *env_value = getenv("OPENAI_API_KEY");
+  if (env_value != NULL && env_value[0] != '\0') {
+    char trimmed[sizeof(bot->api_key)];
+    snprintf(trimmed, sizeof(trimmed), "%s", env_value);
+    chat_bot_trim(trimmed);
+    if (trimmed[0] != '\0') {
+      snprintf(bot->api_key, sizeof(bot->api_key), "%s", trimmed);
     }
   }
 
-  fclose(file);
+  env_value = getenv("CHAT_BOT_PROMPT");
+  if (env_value != NULL && env_value[0] != '\0') {
+    char trimmed[sizeof(bot->system_prompt)];
+    snprintf(trimmed, sizeof(trimmed), "%s", env_value);
+    chat_bot_trim(trimmed);
+    if (trimmed[0] != '\0') {
+      snprintf(bot->system_prompt, sizeof(bot->system_prompt), "%s", trimmed);
+    }
+  }
+
+  env_value = getenv("CHAT_BOT_NAME");
+  if (env_value != NULL && env_value[0] != '\0') {
+    char trimmed[sizeof(bot->name)];
+    snprintf(trimmed, sizeof(trimmed), "%s", env_value);
+    chat_bot_trim(trimmed);
+    if (trimmed[0] != '\0') {
+      snprintf(bot->name, sizeof(bot->name), "%s", trimmed);
+    }
+  }
+
+  env_value = getenv("CHAT_BOT_MODEL");
+  if (env_value != NULL && env_value[0] != '\0') {
+    char trimmed[sizeof(bot->model)];
+    snprintf(trimmed, sizeof(trimmed), "%s", env_value);
+    chat_bot_trim(trimmed);
+    if (trimmed[0] != '\0') {
+      snprintf(bot->model, sizeof(bot->model), "%s", trimmed);
+    }
+  }
 }
 
 static bool chat_bot_model_contains_thinking(const char *model) {
