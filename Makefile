@@ -1,5 +1,5 @@
 CC := cc
-CFLAGS := -std=c11 -Wall -Wextra -Werror -Ilib/headers
+CFLAGS := -std=c2x -Wall -Wextra -Werror -Ilib/headers
 LDFLAGS := -lpthread -lssh -ldl
 TARGET := ssh-chatter
 SRC := main.c lib/host.c
