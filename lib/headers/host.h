@@ -266,6 +266,8 @@ typedef struct host {
   client_manager_t *clients;
   chat_bot_t *bot;
   webssh_client_t *web_client;
+  bool bot_present;
+  char bot_username[SSH_CHATTER_USERNAME_LEN];
   struct {
     char ip[SSH_CHATTER_IP_LEN];
   } operator_grants[SSH_CHATTER_MAX_GRANTS];

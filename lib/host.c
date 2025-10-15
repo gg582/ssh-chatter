@@ -414,6 +414,8 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
 static void session_handle_kick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_usercount(session_ctx_t *ctx);
+static bool host_snapshot_bot_username(host_t *host, char *buffer, size_t length);
+static bool host_username_reserved(host_t *host, const char *username);
 static void session_handle_search(session_ctx_t *ctx, const char *arguments);
 static void session_handle_image(session_ctx_t *ctx, const char *arguments);
 static void session_handle_video(session_ctx_t *ctx, const char *arguments);
@@ -4015,6 +4017,11 @@ static void session_handle_usercount(session_ctx_t *ctx) {
   count = ctx->owner->room.member_count;
   pthread_mutex_unlock(&ctx->owner->room.lock);
 
+  char bot_name[SSH_CHATTER_USERNAME_LEN];
+  if (host_snapshot_bot_username(ctx->owner, bot_name, sizeof(bot_name))) {
+    ++count;
+  }
+
   char message[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(message, sizeof(message), "There %s currently %zu user%s connected.",
            count == 1U ? "is" : "are", count, count == 1U ? "" : "s");
@@ -4335,6 +4342,8 @@ static void session_handle_connected(session_ctx_t *ctx) {
   char buffer[SSH_CHATTER_MESSAGE_LIMIT];
   size_t offset = 0U;
   size_t count = 0U;
+  char bot_name[SSH_CHATTER_USERNAME_LEN];
+  bool include_bot = host_snapshot_bot_username(ctx->owner, bot_name, sizeof(bot_name));
 
   pthread_mutex_lock(&ctx->owner->room.lock);
   for (size_t idx = 0U; idx < ctx->owner->room.member_count; ++idx) {
@@ -4358,6 +4367,23 @@ static void session_handle_connected(session_ctx_t *ctx) {
     ++count;
   }
   pthread_mutex_unlock(&ctx->owner->room.lock);
+
+  if (include_bot && bot_name[0] != '\0') {
+    size_t name_len = strnlen(bot_name, sizeof(bot_name));
+    if (name_len > 0U) {
+      const size_t prefix = count == 0U ? 0U : 2U;
+      if (offset + prefix + name_len < sizeof(buffer)) {
+        if (count > 0U) {
+          buffer[offset++] = ',';
+          buffer[offset++] = ' ';
+        }
+        memcpy(buffer + offset, bot_name, name_len);
+        offset += name_len;
+        buffer[offset] = '\0';
+      }
+      ++count;
+    }
+  }
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(header, sizeof(header), "Connected users (%zu):", count);
@@ -6095,6 +6121,11 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  if (host_username_reserved(ctx->owner, new_name)) {
+    session_send_system_line(ctx, "That name is reserved for the chat bot.");
+    return;
+  }
+
   session_ctx_t *existing = chat_room_find_user(&ctx->owner->room, new_name);
   if (existing != NULL && existing != ctx) {
     session_send_system_line(ctx, "That name is already taken.");
@@ -6175,6 +6206,44 @@ static session_ctx_t *chat_room_find_user(chat_room_t *room, const char *usernam
   pthread_mutex_unlock(&room->lock);
 
   return result;
+}
+
+static bool host_snapshot_bot_username(host_t *host, char *buffer, size_t length) {
+  if (host == NULL || buffer == NULL || length == 0U) {
+    return false;
+  }
+
+  bool present = false;
+  pthread_mutex_lock(&host->lock);
+  if (host->bot_present && host->bot_username[0] != '\0') {
+    snprintf(buffer, length, "%s", host->bot_username);
+    present = true;
+  } else {
+    buffer[0] = '\0';
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (!present) {
+    buffer[0] = '\0';
+  }
+  return present;
+}
+
+static bool host_username_reserved(host_t *host, const char *username) {
+  if (host == NULL || username == NULL || username[0] == '\0') {
+    return false;
+  }
+
+  bool reserved = false;
+  pthread_mutex_lock(&host->lock);
+  if (host->bot_present && host->bot_username[0] != '\0') {
+    if (strncasecmp(host->bot_username, username, SSH_CHATTER_USERNAME_LEN) == 0) {
+      reserved = true;
+    }
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  return reserved;
 }
 
 static join_activity_entry_t *host_find_join_activity_locked(host_t *host, const char *ip) {
@@ -7216,14 +7285,23 @@ static void *session_thread(void *arg) {
     return NULL;
   }
 
+  const bool reserved_username = host_username_reserved(ctx->owner, ctx->user.name);
   session_ctx_t *existing = chat_room_find_user(&ctx->owner->room, ctx->user.name);
-  if (existing != NULL) {
+  if (reserved_username || existing != NULL) {
     ctx->username_conflict = true;
-    printf("[reject] username in use: %s\n", ctx->user.name);
+    if (reserved_username) {
+      printf("[reject] reserved username requested: %s\n", ctx->user.name);
+    } else {
+      printf("[reject] username in use: %s\n", ctx->user.name);
+    }
     session_render_banner(ctx);
-    char in_use[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(in_use, sizeof(in_use), "The username '%s' is already in use.", ctx->user.name);
-    session_send_system_line(ctx, in_use);
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    if (reserved_username) {
+      snprintf(message, sizeof(message), "The username '%s' is reserved.", ctx->user.name);
+    } else {
+      snprintf(message, sizeof(message), "The username '%s' is already in use.", ctx->user.name);
+    }
+    session_send_system_line(ctx, message);
     session_send_system_line(ctx,
                              "Reconnect with a different username by running: ssh newname@<server> (or ssh -l newname <server>).");
     session_send_system_line(ctx, "Type /exit to quit.");
@@ -7376,6 +7454,8 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->clients = NULL;
   host->bot = NULL;
   host->web_client = NULL;
+  host->bot_present = false;
+  host->bot_username[0] = '\0';
   const palette_descriptor_t *default_palette = palette_find_descriptor("clean");
   if (default_palette != NULL) {
     host_apply_palette_descriptor(host, default_palette);
@@ -7569,6 +7649,11 @@ void host_bot_joined(host_t *host, const char *bot_name) {
     return;
   }
 
+  pthread_mutex_lock(&host->lock);
+  host->bot_present = true;
+  snprintf(host->bot_username, sizeof(host->bot_username), "%s", bot_name);
+  pthread_mutex_unlock(&host->lock);
+
   char message[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(message, sizeof(message), "* %s has joined the chat", bot_name);
   host_history_record_system(host, message);
@@ -7579,6 +7664,11 @@ void host_bot_left(host_t *host, const char *bot_name) {
   if (host == NULL || bot_name == NULL || bot_name[0] == '\0') {
     return;
   }
+
+  pthread_mutex_lock(&host->lock);
+  host->bot_present = false;
+  host->bot_username[0] = '\0';
+  pthread_mutex_unlock(&host->lock);
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(message, sizeof(message), "* %s has left the chat", bot_name);
