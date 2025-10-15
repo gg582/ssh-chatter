@@ -16,6 +16,8 @@ SSH-Chatter is a C reimplementation of the Go [`ssh-chat`](https://github.com/sh
 
 ![Preview](./preview.png)
 
+![Preview]("./full screenshot.png")
+
 ## Repository layout
 
 The codebase is intentionally compact so new contributors can navigate it quickly:
