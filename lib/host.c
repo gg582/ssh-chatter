@@ -461,6 +461,7 @@ static bool palette_apply_to_session(session_ctx_t *ctx, const palette_descripto
 static void session_handle_poll(session_ctx_t *ctx, const char *arguments);
 static void session_handle_vote(session_ctx_t *ctx, size_t option_index);
 static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, const char *label);
+static void session_handle_elect_command(session_ctx_t *ctx, const char *arguments);
 static void session_handle_vote_command(session_ctx_t *ctx, const char *arguments, bool allow_multiple);
 static bool session_line_is_exit_command(const char *line);
 static void session_handle_username_conflict_input(session_ctx_t *ctx, const char *line);
@@ -3998,6 +3999,7 @@ static void session_print_help(session_ctx_t *ctx) {
                            "@close <label> to end it)");
   session_send_system_line(ctx,
                            "/vote-single <label> <question>|<option...> - start or inspect a single-choice named poll");
+  session_send_system_line(ctx, "/elect <label> <choice> - vote in a named poll by label");
   session_send_system_line(ctx, "/poke <username>      - send a bell to call a user");
   session_send_system_line(ctx, "/kick <username>      - disconnect a user (operator only)");
   session_send_system_line(ctx, "/ban <username>       - ban a user (operator only)");
@@ -5605,6 +5607,94 @@ static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, c
   snprintf(message, sizeof(message), "Vote recorded for /%zu %s.", option_index + 1U, resolved_label);
   session_send_system_line(ctx, message);
   session_send_poll_summary_generic(ctx, &poll->poll, resolved_label);
+}
+
+// Allow voting in a named poll by specifying the label and desired choice directly.
+static void session_handle_elect_command(session_ctx_t *ctx, const char *arguments) {
+  const char *usage = "Usage: /elect <label> <choice>";
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  char *label = working;
+  char *choice = working;
+  while (*choice != '\0' && !isspace((unsigned char)*choice)) {
+    ++choice;
+  }
+  if (*choice != '\0') {
+    *choice++ = '\0';
+  }
+  while (*choice == ' ' || *choice == '\t') {
+    ++choice;
+  }
+
+  if (label[0] == '\0' || *choice == '\0') {
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  trim_whitespace_inplace(choice);
+
+  host_t *host = ctx->owner;
+  pthread_mutex_lock(&host->lock);
+  named_poll_state_t *poll = host_find_named_poll_locked(host, label);
+  if (poll == NULL || !poll->poll.active) {
+    pthread_mutex_unlock(&host->lock);
+    session_send_system_line(ctx, "There is no active poll with that label.");
+    return;
+  }
+
+  char canonical_label[SSH_CHATTER_POLL_LABEL_LEN];
+  snprintf(canonical_label, sizeof(canonical_label), "%s", poll->label);
+
+  size_t option_index = SIZE_MAX;
+  const size_t option_count = poll->poll.option_count;
+
+  const char *numeric_start = choice;
+  if (*numeric_start == '/') {
+    ++numeric_start;
+  }
+  if (*numeric_start != '\0') {
+    char *endptr = NULL;
+    unsigned long parsed = strtoul(numeric_start, &endptr, 10);
+    if (endptr != NULL && endptr != numeric_start && *endptr == '\0' && parsed >= 1UL && parsed <= option_count) {
+      option_index = (size_t)(parsed - 1UL);
+    }
+  }
+
+  if (option_index == SIZE_MAX) {
+    for (size_t idx = 0U; idx < option_count; ++idx) {
+      if (poll->poll.options[idx].text[0] == '\0') {
+        continue;
+      }
+      if (strcasecmp(poll->poll.options[idx].text, choice) == 0) {
+        option_index = idx;
+        break;
+      }
+    }
+  }
+
+  pthread_mutex_unlock(&host->lock);
+
+  if (option_index == SIZE_MAX) {
+    session_send_system_line(ctx, "That choice is not available in this poll.");
+    return;
+  }
+
+  session_handle_named_vote(ctx, option_index, canonical_label);
 }
 
 // Parse the /vote command to manage named polls, including listing, creation, and closure.
@@ -7572,6 +7662,18 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
       session_handle_vote_command(ctx, NULL, true);
     } else {
       session_handle_vote_command(ctx, arguments, true);
+    }
+    return;
+  }
+  else if (strncmp(line, "/elect", 6) == 0) {
+    const char *arguments = line + 6;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    if (*arguments == '\0') {
+      session_handle_elect_command(ctx, NULL);
+    } else {
+      session_handle_elect_command(ctx, arguments);
     }
     return;
   }

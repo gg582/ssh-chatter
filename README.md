@@ -4,7 +4,7 @@ SSH-Chatter is a C reimplementation of the Go [`ssh-chat`](https://github.com/sh
 
 ## Recent enhancements
 
-- Named poll management via `/vote` for multiple-choice polls (vote with `/1 <label>`) plus `/vote-single` for classic single-choice runs, including graceful shutdown with `/vote @close <label>`.
+- Named poll management via `/vote` for multiple-choice polls (vote with `/1 <label>` or `/elect <label> <choice>`) plus `/vote-single` for classic single-choice runs, including graceful shutdown with `/vote @close <label>`.
 - Poll state persistence to `vote_state.dat` (overridable via `CHATTER_VOTE_FILE`) so active polls and their votes survive restarts.
 - `/bbs` command unlocking a retro bulletin board system with tags, comments, bumping, and a multi-line composer that ends on a `>/__BBS_END>` terminator.
 - `/birthday` to register birthdays, `/soulmate` to find matching dates, `/grant <ip>` so LAN operators can delegate privileges by address, and `/revoke <ip>` so top LAN admins can reclaim them.
@@ -163,7 +163,7 @@ sudo systemctl disable --now chatter.service
 - Chat Scroll
 - Checking user list
 - ChatGPT assistant with adaptive memory sourced from `/etc/ssh-chatter/chatter.env`.
-- Named polls with label-based voting, supporting multiple-choice `/vote` polls and single-choice `/vote-single` alternatives.
+- Named polls with label-based voting, supporting multiple-choice `/vote` polls and single-choice `/vote-single` alternatives, including `/elect <label> <choice>` as a text-friendly voting shortcut.
 - Retro bulletin board system accessible through `/bbs` with tagging, comments, bumping, and an interactive composer that ends with `>/__BBS_END>`.
 
 ### In progress / planned
