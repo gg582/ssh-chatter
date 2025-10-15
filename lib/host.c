@@ -1794,16 +1794,41 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
   const size_t step = SSH_CHATTER_SCROLLBACK_CHUNK > 0 ? SSH_CHATTER_SCROLLBACK_CHUNK : 1U;
   size_t position = ctx->history_scroll_position;
   size_t new_position = position;
+  bool reached_oldest = false;
 
   const size_t max_position = count > 0U ? count - 1U : 0U;
 
   if (direction > 0) {
-    if (new_position < max_position) {
+    size_t current_newest_visible = 0U;
+    if (position < count) {
+      current_newest_visible = count - 1U - position;
+    }
+
+    size_t current_chunk = step;
+    if (current_chunk > current_newest_visible + 1U) {
+      current_chunk = current_newest_visible + 1U;
+    }
+    if (current_chunk == 0U) {
+      current_chunk = 1U;
+    }
+
+    const size_t current_oldest_visible =
+        (current_newest_visible + 1U > current_chunk) ? (current_newest_visible + 1U - current_chunk) : 0U;
+
+    if (current_oldest_visible == 0U) {
+      reached_oldest = true;
+    } else if (new_position < max_position) {
       size_t advance = step;
       if (advance > max_position - new_position) {
         advance = max_position - new_position;
       }
-      new_position += advance;
+      if (advance == 0U) {
+        reached_oldest = true;
+      } else {
+        new_position += advance;
+      }
+    } else {
+      reached_oldest = true;
     }
   } else if (direction < 0) {
     if (new_position > 0U) {
@@ -1841,7 +1866,7 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
 
   const size_t oldest_visible = (newest_visible + 1U > chunk) ? (newest_visible + 1U - chunk) : 0U;
 
-  if (direction > 0 && at_boundary && new_position == max_position) {
+  if (direction > 0 && (reached_oldest || (at_boundary && new_position == max_position))) {
     session_send_system_line(ctx, "Reached the oldest stored message.");
   }
 
