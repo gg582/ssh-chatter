@@ -451,16 +451,18 @@ static void chat_bot_seed_history(chat_bot_t *bot) {
 
   pthread_mutex_lock(&bot->host->lock);
   size_t history_count = bot->host->history_count;
-  for (size_t idx = 0U; idx < history_count && buffer_count < CHAT_BOT_SHORT_MEMORY; ++idx) {
-    size_t history_index = (bot->host->history_start + history_count - idx - 1U) % SSH_CHATTER_HISTORY_LIMIT;
-    const chat_history_entry_t *entry = &bot->host->history[history_index];
-    if (!entry->is_user_message) {
-      continue;
+  if (bot->host->history != NULL) {
+    for (size_t idx = 0U; idx < history_count && buffer_count < CHAT_BOT_SHORT_MEMORY; ++idx) {
+      size_t history_index = history_count - idx - 1U;
+      const chat_history_entry_t *entry = &bot->host->history[history_index];
+      if (!entry->is_user_message) {
+        continue;
+      }
+      snprintf(buffer[buffer_count].username, sizeof(buffer[buffer_count].username), "%s", entry->username);
+      snprintf(buffer[buffer_count].content, sizeof(buffer[buffer_count].content), "%s", entry->message);
+      buffer[buffer_count].from_bot = strncmp(entry->username, bot->name, sizeof(entry->username)) == 0;
+      ++buffer_count;
     }
-    snprintf(buffer[buffer_count].username, sizeof(buffer[buffer_count].username), "%s", entry->username);
-    snprintf(buffer[buffer_count].content, sizeof(buffer[buffer_count].content), "%s", entry->message);
-    buffer[buffer_count].from_bot = strncmp(entry->username, bot->name, sizeof(entry->username)) == 0;
-    ++buffer_count;
   }
   pthread_mutex_unlock(&bot->host->lock);
 

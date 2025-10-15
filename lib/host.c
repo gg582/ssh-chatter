@@ -188,6 +188,31 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
 
   unsigned basis = session_simple_hash(ctx != NULL ? ctx->user.name : "user");
   basis ^= session_simple_hash(ctx != NULL ? ctx->client_ip : "ip");
+
+  unsigned entropy = 0U;
+  struct timespec now = {0, 0};
+  if (clock_gettime(CLOCK_REALTIME, &now) == 0) {
+    uint64_t now_sec = (uint64_t)now.tv_sec;
+    entropy ^= (unsigned)now_sec;
+    entropy ^= (unsigned)(now_sec >> 32);
+    entropy ^= (unsigned)now.tv_nsec;
+  } else {
+    uint64_t fallback = (uint64_t)time(NULL);
+    entropy ^= (unsigned)fallback;
+    entropy ^= (unsigned)(fallback >> 32);
+  }
+
+  host_t *host = (ctx != NULL) ? ctx->owner : NULL;
+  if (host != NULL) {
+    pthread_mutex_lock(&host->lock);
+    uint64_t nonce = ++host->captcha_nonce;
+    pthread_mutex_unlock(&host->lock);
+    entropy ^= (unsigned)nonce;
+    entropy ^= (unsigned)(nonce >> 32);
+  }
+
+  basis ^= entropy;
+
   const captcha_story_t *story = &CAPTCHA_STORIES[basis % story_count];
 
   if (story->template_type == CAPTCHA_TEMPLATE_PRONOUN) {
@@ -359,7 +384,10 @@ static void chat_history_entry_prepare_user(chat_history_entry_t *entry, const s
 static bool host_history_record_user(host_t *host, const session_ctx_t *from, const char *message, chat_history_entry_t *stored_entry);
 static bool host_history_commit_entry(host_t *host, chat_history_entry_t *entry, chat_history_entry_t *stored_entry);
 static void host_notify_external_clients(host_t *host, const chat_history_entry_t *entry);
-static void host_history_append_locked(host_t *host, const chat_history_entry_t *entry);
+static bool host_history_append_locked(host_t *host, const chat_history_entry_t *entry);
+static bool host_history_reserve_locked(host_t *host, size_t min_capacity);
+static size_t host_history_total(host_t *host);
+static size_t host_history_copy_range(host_t *host, size_t start_index, chat_history_entry_t *buffer, size_t capacity);
 static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entry_t *entry, const session_ctx_t *from);
 static bool host_history_apply_reaction(host_t *host, uint64_t message_id, size_t reaction_index, chat_history_entry_t *updated_entry);
 static bool chat_history_entry_build_reaction_summary(const chat_history_entry_t *entry, char *buffer, size_t length);
@@ -441,8 +469,6 @@ static void host_state_load(host_t *host);
 static void host_state_save_locked(host_t *host);
 static bool host_try_load_motd_from_path(host_t *host, const char *path);
 static bool username_contains(const char *username, const char *needle);
-static size_t host_history_snapshot(host_t *host, chat_history_entry_t *snapshot, size_t capacity);
-static size_t host_history_snapshot(host_t *host, chat_history_entry_t *snapshot, size_t capacity);
 static void host_apply_palette_descriptor(host_t *host, const palette_descriptor_t *descriptor);
 static bool host_lookup_user_os(host_t *host, const char *username, char *buffer, size_t length);
 static void session_send_poll_summary(session_ctx_t *ctx);
@@ -462,8 +488,10 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments);
 static void session_bbs_capture_body_line(session_ctx_t *ctx, const char *line);
 static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments);
 static void session_bbs_regen_post(session_ctx_t *ctx, uint64_t id);
+static void session_bbs_delete(session_ctx_t *ctx, uint64_t id);
 static bbs_post_t *host_find_bbs_post_locked(host_t *host, uint64_t id);
 static bbs_post_t *host_allocate_bbs_post_locked(host_t *host);
+static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post);
 static void host_update_last_captcha_prompt(host_t *host, const captcha_prompt_t *prompt);
 
@@ -929,44 +957,104 @@ static void chat_room_broadcast_reaction_update(host_t *host, const chat_history
   chat_room_broadcast(&host->room, line, NULL);
 }
 
-static size_t host_history_snapshot(host_t *host, chat_history_entry_t *snapshot, size_t capacity) {
-  if (host == NULL || snapshot == NULL || capacity == 0U) {
+static bool host_history_reserve_locked(host_t *host, size_t min_capacity) {
+  if (host == NULL) {
+    return false;
+  }
+
+  if (min_capacity <= host->history_capacity) {
+    return true;
+  }
+
+  if (min_capacity > SIZE_MAX / sizeof(chat_history_entry_t)) {
+    humanized_log_error("host-history", "history buffer too large to allocate", ENOMEM);
+    return false;
+  }
+
+  size_t new_capacity = host->history_capacity > 0U ? host->history_capacity : 64U;
+  if (new_capacity == 0U) {
+    new_capacity = 64U;
+  }
+
+  while (new_capacity < min_capacity) {
+    if (new_capacity > SIZE_MAX / 2U) {
+      new_capacity = min_capacity;
+      break;
+    }
+    size_t doubled = new_capacity * 2U;
+    if (doubled < new_capacity || doubled > SIZE_MAX / sizeof(chat_history_entry_t)) {
+      new_capacity = min_capacity;
+      break;
+    }
+    new_capacity = doubled;
+  }
+
+  size_t bytes = new_capacity * sizeof(chat_history_entry_t);
+  chat_history_entry_t *resized = realloc(host->history, bytes);
+  if (resized == NULL) {
+    humanized_log_error("host-history", "failed to grow chat history buffer", errno != 0 ? errno : ENOMEM);
+    return false;
+  }
+
+  if (new_capacity > host->history_capacity) {
+    size_t old_capacity = host->history_capacity;
+    size_t added = new_capacity - old_capacity;
+    memset(resized + old_capacity, 0, added * sizeof(chat_history_entry_t));
+  }
+
+  host->history = resized;
+  host->history_capacity = new_capacity;
+  return true;
+}
+
+static bool host_history_append_locked(host_t *host, const chat_history_entry_t *entry) {
+  if (host == NULL || entry == NULL) {
+    return false;
+  }
+
+  if (!host_history_reserve_locked(host, host->history_count + 1U)) {
+    return false;
+  }
+
+  host->history[host->history_count++] = *entry;
+  host_state_save_locked(host);
+  return true;
+}
+
+static size_t host_history_total(host_t *host) {
+  if (host == NULL) {
     return 0U;
   }
 
   size_t count = 0U;
-
   pthread_mutex_lock(&host->lock);
   count = host->history_count;
-  if (count > capacity) {
-    count = capacity;
-  }
-  for (size_t idx = 0U; idx < count; ++idx) {
-    size_t history_index = (host->history_start + idx) % SSH_CHATTER_HISTORY_LIMIT;
-    snapshot[idx] = host->history[history_index];
-  }
   pthread_mutex_unlock(&host->lock);
-
   return count;
 }
 
-static void host_history_append_locked(host_t *host, const chat_history_entry_t *entry) {
-  if (host == NULL || entry == NULL) {
-    return;
+static size_t host_history_copy_range(host_t *host, size_t start_index, chat_history_entry_t *buffer, size_t capacity) {
+  if (host == NULL || buffer == NULL || capacity == 0U) {
+    return 0U;
   }
 
-  size_t insert_index = 0U;
-  if (host->history_count < SSH_CHATTER_HISTORY_LIMIT) {
-    insert_index = (host->history_start + host->history_count) % SSH_CHATTER_HISTORY_LIMIT;
-    host->history_count++;
-  } else {
-    insert_index = host->history_start;
-    host->history_start = (host->history_start + 1U) % SSH_CHATTER_HISTORY_LIMIT;
+  size_t copied = 0U;
+  pthread_mutex_lock(&host->lock);
+  size_t total = host->history_count;
+  if (start_index >= total || host->history == NULL) {
+    pthread_mutex_unlock(&host->lock);
+    return 0U;
   }
 
-  host->history[insert_index] = *entry;
+  size_t available = total - start_index;
+  if (available > capacity) {
+    available = capacity;
+  }
 
-  host_state_save_locked(host);
+  memcpy(buffer, host->history + start_index, available * sizeof(chat_history_entry_t));
+  copied = available;
+  pthread_mutex_unlock(&host->lock);
+  return copied;
 }
 
 static void chat_history_entry_prepare_user(chat_history_entry_t *entry, const session_ctx_t *from, const char *message) {
@@ -1006,7 +1094,10 @@ static bool host_history_commit_entry(host_t *host, chat_history_entry_t *entry,
     entry->message_id = 0U;
   }
 
-  host_history_append_locked(host, entry);
+  if (!host_history_append_locked(host, entry)) {
+    pthread_mutex_unlock(&host->lock);
+    return false;
+  }
 
   if (stored_entry != NULL) {
     *stored_entry = *entry;
@@ -1065,9 +1156,12 @@ static bool host_history_apply_reaction(host_t *host, uint64_t message_id, size_
   bool applied = false;
 
   pthread_mutex_lock(&host->lock);
+  if (host->history == NULL) {
+    pthread_mutex_unlock(&host->lock);
+    return false;
+  }
   for (size_t idx = 0U; idx < host->history_count; ++idx) {
-    size_t history_index = (host->history_start + idx) % SSH_CHATTER_HISTORY_LIMIT;
-    chat_history_entry_t *entry = &host->history[history_index];
+    chat_history_entry_t *entry = &host->history[idx];
     if (!entry->is_user_message) {
       continue;
     }
@@ -1439,9 +1533,12 @@ static void host_state_save_locked(host_t *host) {
 
   bool success = fwrite(&header, sizeof(header), 1U, fp) == 1U;
 
+  if (host->history_count > 0U && host->history == NULL) {
+    success = false;
+  }
+
   for (size_t idx = 0; success && idx < host->history_count; ++idx) {
-    size_t history_index = (host->history_start + idx) % SSH_CHATTER_HISTORY_LIMIT;
-    const chat_history_entry_t *entry = &host->history[history_index];
+    const chat_history_entry_t *entry = &host->history[idx];
 
     host_state_history_entry_v3_t serialized = {0};
     serialized.base.is_user_message = entry->is_user_message ? 1U : 0U;
@@ -1585,9 +1682,6 @@ static void host_state_load(host_t *host) {
     }
   }
 
-  if (history_count > SSH_CHATTER_HISTORY_LIMIT) {
-    history_count = SSH_CHATTER_HISTORY_LIMIT;
-  }
   if (preference_count > SSH_CHATTER_MAX_PREFERENCES) {
     preference_count = SSH_CHATTER_MAX_PREFERENCES;
   }
@@ -1596,12 +1690,13 @@ static void host_state_load(host_t *host) {
 
   bool success = true;
 
-  host->history_start = 0U;
+  if (history_count > 0U) {
+    success = host_history_reserve_locked(host, history_count);
+  }
   host->history_count = 0U;
-  memset(host->history, 0, sizeof(host->history));
 
   for (uint32_t idx = 0; success && idx < history_count; ++idx) {
-    chat_history_entry_t *entry = &host->history[idx % SSH_CHATTER_HISTORY_LIMIT];
+    chat_history_entry_t *entry = &host->history[idx];
     memset(entry, 0, sizeof(*entry));
 
     if (version >= 3U) {
@@ -1787,9 +1882,11 @@ static void host_state_load(host_t *host) {
   }
 
   if (!success) {
+    if (host->history != NULL && host->history_capacity > 0U) {
+      memset(host->history, 0, host->history_capacity * sizeof(chat_history_entry_t));
+    }
     host->history_count = 0U;
     host->preference_count = 0U;
-    memset(host->history, 0, sizeof(host->history));
     memset(host->preferences, 0, sizeof(host->preferences));
   }
 
@@ -2382,24 +2479,26 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
     return;
   }
 
-  chat_history_entry_t snapshot[SSH_CHATTER_HISTORY_LIMIT];
-  size_t count = host_history_snapshot(ctx->owner, snapshot, SSH_CHATTER_HISTORY_LIMIT);
-  if (count == 0U) {
+  size_t total = host_history_total(ctx->owner);
+  if (total == 0U) {
     session_send_system_line(ctx, "No chat history available yet.");
     return;
   }
 
   const size_t step = SSH_CHATTER_SCROLLBACK_CHUNK > 0 ? SSH_CHATTER_SCROLLBACK_CHUNK : 1U;
+  if (ctx->history_scroll_position >= total) {
+    ctx->history_scroll_position = total > 0U ? total - 1U : 0U;
+  }
   size_t position = ctx->history_scroll_position;
   size_t new_position = position;
   bool reached_oldest = false;
 
-  const size_t max_position = count > 0U ? count - 1U : 0U;
+  const size_t max_position = total > 0U ? total - 1U : 0U;
 
   if (direction > 0) {
     size_t current_newest_visible = 0U;
-    if (position < count) {
-      current_newest_visible = count - 1U - position;
+    if (position < total) {
+      current_newest_visible = total - 1U - position;
     }
 
     size_t current_chunk = step;
@@ -2453,7 +2552,7 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
     return;
   }
 
-  const size_t newest_visible = count - 1U - new_position;
+  const size_t newest_visible = total - 1U - new_position;
   size_t chunk = step;
   if (chunk > newest_visible + 1U) {
     chunk = newest_visible + 1U;
@@ -2469,11 +2568,23 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
   }
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(header, sizeof(header), "Scrollback (%zu-%zu of %zu)", oldest_visible + 1U, newest_visible + 1U, count);
+  snprintf(header, sizeof(header), "Scrollback (%zu-%zu of %zu)", oldest_visible + 1U, newest_visible + 1U, total);
   session_send_system_line(ctx, header);
 
-  for (size_t idx = oldest_visible; idx <= newest_visible; ++idx) {
-    session_send_history_entry(ctx, &snapshot[idx]);
+  chat_history_entry_t buffer[SSH_CHATTER_SCROLLBACK_CHUNK];
+  size_t request = chunk;
+  if (request > SSH_CHATTER_SCROLLBACK_CHUNK) {
+    request = SSH_CHATTER_SCROLLBACK_CHUNK;
+  }
+  size_t copied = host_history_copy_range(ctx->owner, oldest_visible, buffer, request);
+  if (copied == 0U) {
+    session_send_system_line(ctx, "Unable to read chat history right now.");
+    session_render_prompt(ctx, false);
+    return;
+  }
+
+  for (size_t idx = 0; idx < copied; ++idx) {
+    session_send_history_entry(ctx, &buffer[idx]);
   }
 
   if (direction < 0 && new_position == 0U) {
@@ -2847,29 +2958,36 @@ static void session_send_history(session_ctx_t *ctx) {
     return;
   }
 
-  chat_history_entry_t snapshot[SSH_CHATTER_HISTORY_LIMIT];
-  size_t count = host_history_snapshot(ctx->owner, snapshot, SSH_CHATTER_HISTORY_LIMIT);
-  if (count == 0U) {
+  size_t total = host_history_total(ctx->owner);
+  if (total == 0U) {
     return;
   }
 
-  size_t visible = count;
-  if (visible > SSH_CHATTER_SCROLLBACK_CHUNK) {
-    visible = SSH_CHATTER_SCROLLBACK_CHUNK;
+  size_t window = SSH_CHATTER_SCROLLBACK_CHUNK;
+  if (window == 0U) {
+    window = 1U;
+  }
+  if (window > total) {
+    window = total;
   }
 
-  const size_t start = (count > visible) ? (count - visible) : 0U;
+  chat_history_entry_t snapshot[SSH_CHATTER_SCROLLBACK_CHUNK];
+  size_t start_index = total - window;
+  size_t copied = host_history_copy_range(ctx->owner, start_index, snapshot, window);
+  if (copied == 0U) {
+    return;
+  }
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];
-  if (count > visible) {
-    snprintf(header, sizeof(header), "Recent activity (last %zu of %zu messages):", visible, count);
+  if (total > copied) {
+    snprintf(header, sizeof(header), "Recent activity (last %zu of %zu messages):", copied, total);
   } else {
-    snprintf(header, sizeof(header), "Recent activity (last %zu message%s):", visible, visible == 1U ? "" : "s");
+    snprintf(header, sizeof(header), "Recent activity (last %zu message%s):", copied, copied == 1U ? "" : "s");
   }
   session_render_separator(ctx, "Recent activity");
   session_send_system_line(ctx, header);
 
-  for (size_t idx = start; idx < count; ++idx) {
+  for (size_t idx = 0; idx < copied; ++idx) {
     session_send_history_entry(ctx, &snapshot[idx]);
   }
 
@@ -4879,6 +4997,34 @@ static bbs_post_t *host_allocate_bbs_post_locked(host_t *host) {
   return NULL;
 }
 
+static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post) {
+  if (host == NULL || post == NULL) {
+    return;
+  }
+
+  post->in_use = false;
+  post->id = 0U;
+  post->author[0] = '\0';
+  post->title[0] = '\0';
+  post->body[0] = '\0';
+  post->tag_count = 0U;
+  post->created_at = 0;
+  post->bumped_at = 0;
+  post->comment_count = 0U;
+  for (size_t tag = 0U; tag < SSH_CHATTER_BBS_MAX_TAGS; ++tag) {
+    post->tags[tag][0] = '\0';
+  }
+  for (size_t comment = 0U; comment < SSH_CHATTER_BBS_MAX_COMMENTS; ++comment) {
+    post->comments[comment].author[0] = '\0';
+    post->comments[comment].text[0] = '\0';
+    post->comments[comment].created_at = 0;
+  }
+
+  if (host->bbs_post_count > 0U) {
+    host->bbs_post_count -= 1U;
+  }
+}
+
 // Render an ASCII framed view of a post, including metadata and comments.
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post) {
   if (ctx == NULL || post == NULL || !post->in_use) {
@@ -4915,7 +5061,6 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post) 
       }
       if (idx > 0U) {
         tag_line[offset++] = ',';
-        tag_line[offset++] = ' ';
       }
       size_t len = strlen(post->tags[idx]);
       memcpy(tag_line + offset, post->tags[idx], len);
@@ -4975,7 +5120,7 @@ static void session_bbs_show_dashboard(session_ctx_t *ctx) {
   ctx->in_bbs_mode = true;
   session_render_separator(ctx, "BBS Dashboard");
   session_send_system_line(ctx,
-                           "Commands: list, read <id>, post <title> [tags...], comment <id>|<text>, regen <id>, exit");
+                           "Commands: list, read <id>, post <title> [tags...], comment <id>|<text>, regen <id>, delete <id>, exit");
   session_bbs_list(ctx);
 }
 
@@ -5048,7 +5193,7 @@ static void session_bbs_list(session_ctx_t *ctx) {
       title_preview = 80;
     }
     if (listings[idx].tag_count == 0U) {
-      snprintf(line, sizeof(line), "#%" PRIu64 " [%s] %.*s", listings[idx].id, created_buffer, title_preview,
+      snprintf(line, sizeof(line), "#%" PRIu64 " [%s] %.*s|(no tags)", listings[idx].id, created_buffer, title_preview,
                listings[idx].title);
     } else {
       char tag_buffer[SSH_CHATTER_MESSAGE_LIMIT];
@@ -5061,7 +5206,6 @@ static void session_bbs_list(session_ctx_t *ctx) {
         }
         if (tag > 0U) {
           tag_buffer[offset++] = ',';
-          tag_buffer[offset++] = ' ';
         }
         memcpy(tag_buffer + offset, listings[idx].tags[tag], len);
         offset += len;
@@ -5071,7 +5215,7 @@ static void session_bbs_list(session_ctx_t *ctx) {
       if (tags_preview > 80) {
         tags_preview = 80;
       }
-      snprintf(line, sizeof(line), "#%" PRIu64 " [%s] %.*s (tags: %.*s)", listings[idx].id, created_buffer, title_preview,
+      snprintf(line, sizeof(line), "#%" PRIu64 " [%s] %.*s|%.*s", listings[idx].id, created_buffer, title_preview,
                listings[idx].title, tags_preview, tag_buffer);
     }
     session_send_system_line(ctx, line);
@@ -5288,7 +5432,7 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
     if (remaining == 0U) {
       break;
     }
-    int written = snprintf(tag_buffer + offset, remaining, "%s%s", idx > 0U ? ", " : "", ctx->pending_bbs_tags[idx]);
+    int written = snprintf(tag_buffer + offset, remaining, "%s%s", idx > 0U ? "," : "", ctx->pending_bbs_tags[idx]);
     if (written < 0) {
       break;
     }
@@ -5426,6 +5570,39 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   session_bbs_render_post(ctx, &snapshot);
 }
 
+static void session_bbs_delete(session_ctx_t *ctx, uint64_t id) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (id == 0U) {
+    session_send_system_line(ctx, "Invalid post identifier.");
+    return;
+  }
+
+  host_t *host = ctx->owner;
+  pthread_mutex_lock(&host->lock);
+  bbs_post_t *post = host_find_bbs_post_locked(host, id);
+  if (post == NULL || !post->in_use) {
+    pthread_mutex_unlock(&host->lock);
+    session_send_system_line(ctx, "No post exists with that identifier.");
+    return;
+  }
+
+  bool can_delete = (strncmp(post->author, ctx->user.name, SSH_CHATTER_USERNAME_LEN) == 0) || ctx->user.is_operator ||
+                    ctx->user.is_lan_operator;
+  if (!can_delete) {
+    pthread_mutex_unlock(&host->lock);
+    session_send_system_line(ctx, "Only the author or an operator may delete this post.");
+    return;
+  }
+
+  host_clear_bbs_post_locked(host, post);
+  pthread_mutex_unlock(&host->lock);
+
+  session_send_system_line(ctx, "Post deleted.");
+}
+
 // Bump a post to the top of the list by refreshing its activity time.
 static void session_bbs_regen_post(session_ctx_t *ctx, uint64_t id) {
   if (ctx == NULL || ctx->owner == NULL || id == 0U) {
@@ -5509,6 +5686,13 @@ static void session_handle_bbs(session_ctx_t *ctx, const char *arguments) {
     }
     uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
     session_bbs_regen_post(ctx, id);
+  } else if (strcmp(command, "delete") == 0) {
+    if (rest == NULL || rest[0] == '\0') {
+      session_send_system_line(ctx, "Usage: /bbs delete <id>");
+      return;
+    }
+    uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
+    session_bbs_delete(ctx, id);
   } else {
     session_send_system_line(ctx, "Unknown /bbs subcommand. Try /bbs for usage.");
   }
@@ -7203,9 +7387,9 @@ void host_init(host_t *host, auth_profile_t *auth) {
 
 
   host->connection_count = 0U;
-  host->history_start = 0U;
+  host->history = NULL;
   host->history_count = 0U;
-  memset(host->history, 0, sizeof(host->history));
+  host->history_capacity = 0U;
   host->next_message_id = 1U;
   memset(host->preferences, 0, sizeof(host->preferences));
   host->preference_count = 0U;
@@ -7244,6 +7428,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->join_activity = NULL;
   host->join_activity_count = 0U;
   host->join_activity_capacity = 0U;
+  host->captcha_nonce = 0U;
   host->has_last_captcha = false;
   host->last_captcha_question[0] = '\0';
   host->last_captcha_answer[0] = '\0';
@@ -7463,6 +7648,12 @@ void host_shutdown(host_t *host) {
     client_manager_destroy(host->clients);
     host->clients = NULL;
   }
+  pthread_mutex_lock(&host->lock);
+  free(host->history);
+  host->history = NULL;
+  host->history_capacity = 0U;
+  host->history_count = 0U;
+  pthread_mutex_unlock(&host->lock);
   free(host->join_activity);
   host->join_activity = NULL;
   host->join_activity_capacity = 0U;
