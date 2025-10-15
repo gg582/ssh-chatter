@@ -1129,7 +1129,23 @@ static void chat_bot_on_message(client_connection_t *connection, const chat_hist
 }
 
 static void chat_bot_on_detach(client_connection_t *connection) {
-  (void)connection;
+  if (connection == NULL || connection->user_data == NULL) {
+    return;
+  }
+
+  chat_bot_t *bot = (chat_bot_t *)connection->user_data;
+  if (bot->shutting_down || bot->manager == NULL) {
+    return;
+  }
+
+  bot->registered = false;
+  if (!client_manager_register(bot->manager, &bot->connection)) {
+    return;
+  }
+
+  bot->registered = true;
+  host_bot_joined(bot->host, bot->name);
+  printf("[chat-bot] ChatGPT bot '%s' rejoined after disconnect.\n", bot->name);
 }
 
 static void *chat_bot_thread_main(void *arg) {
@@ -1221,7 +1237,8 @@ chat_bot_t *chat_bot_create(struct host *host, client_manager_t *manager) {
   snprintf(bot->connection.identifier, sizeof(bot->connection.identifier), "%s", bot->name);
   bot->enabled = bot->api_key[0] != '\0';
   if (!bot->enabled) {
-    printf("[chat-bot] OPENAI_API_KEY missing in %s; bot disabled.\n", CHAT_BOT_ENV_PATH);
+    printf("[chat-bot] OPENAI_API_KEY missing in %s; bot will stay idle but remain connected.\n",
+           CHAT_BOT_ENV_PATH);
   } else {
     if (!chat_bot_load_memory(bot)) {
       chat_bot_seed_history(bot);
@@ -1232,7 +1249,7 @@ chat_bot_t *chat_bot_create(struct host *host, client_manager_t *manager) {
 }
 
 bool chat_bot_start(chat_bot_t *bot) {
-  if (bot == NULL || !bot->enabled) {
+  if (bot == NULL) {
     return false;
   }
 
@@ -1242,6 +1259,10 @@ bool chat_bot_start(chat_bot_t *bot) {
     }
     bot->registered = true;
     host_bot_joined(bot->host, bot->name);
+  }
+
+  if (!bot->enabled) {
+    return true;
   }
 
   if (bot->thread_started) {
