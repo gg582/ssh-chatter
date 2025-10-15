@@ -4195,11 +4195,6 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  else if (session_parse_command(line, "/kick", &args)) {
-    session_handle_kick(ctx, args);
-    return;
-  }
-
   else if (session_parse_command(line, "/ban", &args)) {
     session_handle_ban(ctx, args);
     return;
@@ -4301,60 +4296,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  else if (session_parse_command(line, "/palette", &args)) {
-    session_handle_palette(ctx, args);
-    return;
-  }
-
-  else if (session_parse_command(line, "/today", &args)) {
-    if (*args != '\0') {
-      session_send_system_line(ctx, "Usage: /today");
-    } else {
-      session_handle_today(ctx);
-    }
-    return;
-  }
-
-  else if (session_parse_command(line, "/date", &args)) {
-    session_handle_date(ctx, args);
-    return;
-  }
-
-  else if (session_parse_command(line, "/os", &args)) {
-    session_handle_os(ctx, args);
-    return;
-  }
-
-  else if (session_parse_command(line, "/getos", &args)) {
-    session_handle_getos(ctx, args);
-    return;
-  }
-
-  else if (session_parse_command(line, "/pair", &args)) {
-    if (*args != '\0') {
-      session_send_system_line(ctx, "Usage: /pair");
-    } else {
-      session_handle_pair(ctx);
-    }
-    return;
-  }
-
-  else if (session_parse_command(line, "/connected", &args)) {
-    if (*args != '\0') {
-      session_send_system_line(ctx, "Usage: /connected");
-    } else {
-      session_handle_connected(ctx);
-    }
-    return;
-  }
-
   else if (session_parse_command(line, "/kick", &args)) {
     session_handle_kick(ctx, args);
-    return;
-  }
-
-  else if (session_parse_command(line, "/poll", &args)) {
-    session_handle_poll(ctx, args);
     return;
   }
 
