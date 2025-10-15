@@ -46,6 +46,7 @@
 #define SSH_CHATTER_IMAGE_PREVIEW_WIDTH 48U
 #define SSH_CHATTER_IMAGE_PREVIEW_HEIGHT 48U
 #define SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN 128U
+#define SSH_CHATTER_BBS_DEFAULT_TAG "general"
 
 typedef struct {
   char question[256];
@@ -5236,6 +5237,7 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
 
   size_t tag_count = 0U;
   bool discarded_tags = false;
+  bool default_tag_applied = false;
   while (*cursor != '\0') {
     while (isspace((unsigned char)*cursor)) {
       ++cursor;
@@ -5263,6 +5265,12 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
     cursor = end;
   }
 
+  if (tag_count == 0U) {
+    snprintf(ctx->pending_bbs_tags[0], sizeof(ctx->pending_bbs_tags[0]), "%s", SSH_CHATTER_BBS_DEFAULT_TAG);
+    tag_count = 1U;
+    default_tag_applied = true;
+  }
+
   snprintf(ctx->pending_bbs_title, sizeof(ctx->pending_bbs_title), "%s", title);
   ctx->pending_bbs_tag_count = tag_count;
   ctx->pending_bbs_body[0] = '\0';
@@ -5272,29 +5280,31 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
   char title_line[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(title_line, sizeof(title_line), "Composing '%s'", ctx->pending_bbs_title);
   session_send_system_line(ctx, title_line);
-  if (tag_count > 0U) {
-    char tag_buffer[SSH_CHATTER_BBS_MAX_TAGS * (SSH_CHATTER_BBS_TAG_LEN + 2)];
-    size_t offset = 0U;
-    for (size_t idx = 0U; idx < tag_count; ++idx) {
-      size_t remaining = sizeof(tag_buffer) - offset;
-      if (remaining == 0U) {
-        break;
-      }
-      int written = snprintf(tag_buffer + offset, remaining, "%s%s", idx > 0U ? ", " : "", ctx->pending_bbs_tags[idx]);
-      if (written < 0) {
-        break;
-      }
-      if ((size_t)written >= remaining) {
-        offset = sizeof(tag_buffer) - 1U;
-        break;
-      }
-      offset += (size_t)written;
+  char tag_buffer[SSH_CHATTER_BBS_MAX_TAGS * (SSH_CHATTER_BBS_TAG_LEN + 2)];
+  tag_buffer[0] = '\0';
+  size_t offset = 0U;
+  for (size_t idx = 0U; idx < tag_count; ++idx) {
+    size_t remaining = sizeof(tag_buffer) - offset;
+    if (remaining == 0U) {
+      break;
     }
-    char tags_line[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(tags_line, sizeof(tags_line), "Tags: %s", tag_buffer);
-    session_send_system_line(ctx, tags_line);
-  } else {
-    session_send_system_line(ctx, "No tags were provided for this post.");
+    int written = snprintf(tag_buffer + offset, remaining, "%s%s", idx > 0U ? ", " : "", ctx->pending_bbs_tags[idx]);
+    if (written < 0) {
+      break;
+    }
+    if ((size_t)written >= remaining) {
+      offset = sizeof(tag_buffer) - 1U;
+      break;
+    }
+    offset += (size_t)written;
+  }
+  char tags_line[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(tags_line, sizeof(tags_line), "Tags: %s", tag_buffer);
+  session_send_system_line(ctx, tags_line);
+  if (default_tag_applied) {
+    char default_line[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(default_line, sizeof(default_line), "No tags provided; default tag '%s' applied.", SSH_CHATTER_BBS_DEFAULT_TAG);
+    session_send_system_line(ctx, default_line);
   }
   session_send_system_line(ctx,
                            "Enter your post body. Type >/__BBS_END> on a line by itself when you are finished.");
@@ -7343,6 +7353,28 @@ void host_set_motd(host_t *host, const char *motd) {
   pthread_mutex_lock(&host->lock);
   snprintf(host->motd, sizeof(host->motd), "%s", normalized);
   pthread_mutex_unlock(&host->lock);
+}
+
+void host_bot_joined(host_t *host, const char *bot_name) {
+  if (host == NULL || bot_name == NULL || bot_name[0] == '\0') {
+    return;
+  }
+
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(message, sizeof(message), "* %s has joined the chat", bot_name);
+  host_history_record_system(host, message);
+  chat_room_broadcast(&host->room, message, NULL);
+}
+
+void host_bot_left(host_t *host, const char *bot_name) {
+  if (host == NULL || bot_name == NULL || bot_name[0] == '\0') {
+    return;
+  }
+
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(message, sizeof(message), "* %s has left the chat", bot_name);
+  host_history_record_system(host, message);
+  chat_room_broadcast(&host->room, message, NULL);
 }
 
 bool host_post_client_message(host_t *host, const char *username, const char *message, const char *color_name,

@@ -287,6 +287,8 @@ void host_set_motd(host_t *host, const char *motd);
 int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory);
 bool host_post_client_message(host_t *host, const char *username, const char *message, const char *color_name,
                              const char *highlight_name, bool is_bold);
+void host_bot_joined(host_t *host, const char *bot_name);
+void host_bot_left(host_t *host, const char *bot_name);
 void host_shutdown(host_t *host);
 bool host_snapshot_last_captcha(host_t *host, char *question, size_t question_length, char *answer,
                                size_t answer_length, struct timespec *timestamp);
