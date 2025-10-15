@@ -48,28 +48,58 @@
 #define SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN 128U
 
 typedef struct {
-  const char *name;
-  const char *descriptor;
-  bool is_male;
-} captcha_person_t;
-
-typedef struct {
-  const char *species;
-  const char *name;
-} captcha_pet_t;
-
-typedef struct {
   char question[256];
   char answer[64];
 } captcha_prompt_t;
 
-static const captcha_person_t CAPTCHA_PEOPLE[] = {
-    {"Tom", "man", true},       {"Hana", "woman", false}, {"Alex", "person", true},
-    {"Mina", "artist", false}, {"Ravi", "musician", true},
-};
+typedef enum {
+  CAPTCHA_TEMPLATE_PRONOUN,
+  CAPTCHA_TEMPLATE_PET_SPECIES,
+} captcha_template_t;
 
-static const captcha_pet_t CAPTCHA_PETS[] = {
-    {"cat", "Nabi"}, {"dog", "Mong"}, {"parrot", "Chirpy"}, {"ferret", "Slinky"}, {"rabbit", "Bun"},
+typedef struct {
+  const char *person_name;
+  const char *descriptor;
+  bool is_male;
+  const char *pet_species;
+  const char *pet_name;
+  captcha_template_t template_type;
+} captcha_story_t;
+
+static const captcha_story_t CAPTCHA_STORIES[] = {
+    {"Jiho", "software engineer", true, "cat", "Hodu", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Sujin", "middle school teacher", false, "cat", "Dubu", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Minseok", "photographer", true, "cat", "Mimi", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Haeun", "florist", false, "cat", "Bori", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Yuna", "product designer", false, "cat", "Choco", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Donghyun", "barista", true, "cat", "Gaeul", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Seojun", "research scientist", true, "cat", "Nuri", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Ara", "ceramic artist", false, "cat", "Bam", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Kyungmin", "chef", true, "cat", "Tori", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Jisoo", "translator", false, "cat", "Haneul", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Emily", "librarian", false, "cat", "Whiskers", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Jacob", "firefighter", true, "cat", "Shadow", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Olivia", "graphic designer", false, "cat", "Pumpkin", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Noah", "high school coach", true, "cat", "Midnight", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Ava", "nurse", false, "cat", "Sunny", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Ethan", "software architect", true, "cat", "Clover", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Sophia", "baker", false, "cat", "Pebble", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Liam", "paramedic", true, "cat", "Smokey", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Isabella", "journalist", false, "cat", "Luna", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Mason", "carpenter", true, "cat", "Tiger", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Anya", "interpreter", false, "cat", "Pushok", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Dmitri", "aerospace engineer", true, "cat", "Barsik", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Elena", "doctor", false, "cat", "Sneg", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Nikolai", "history professor", true, "cat", "Murzik", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Irina", "pianist", false, "cat", "Mishka", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Sergei", "marine biologist", true, "cat", "Ryzhik", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Tatiana", "architect", false, "cat", "Zvezda", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Alexei", "journalist", true, "cat", "Kotya", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Yulia", "theatre director", false, "cat", "Lapka", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Mikhail", "chef", true, "cat", "Tuman", CAPTCHA_TEMPLATE_PRONOUN},
+    {"Hyeri", "illustrator", false, "dog", "Gureum", CAPTCHA_TEMPLATE_PET_SPECIES},
+    {"Brandon", "park ranger", true, "dog", "Buddy", CAPTCHA_TEMPLATE_PET_SPECIES},
+    {"Oksana", "music teacher", false, "dog", "Volna", CAPTCHA_TEMPLATE_PET_SPECIES},
 };
 
 static struct timespec timespec_diff(const struct timespec *end, const struct timespec *start) {
@@ -147,31 +177,38 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
   }
 
   memset(prompt, 0, sizeof(*prompt));
-  const size_t person_count = sizeof(CAPTCHA_PEOPLE) / sizeof(CAPTCHA_PEOPLE[0]);
-  const size_t pet_count = sizeof(CAPTCHA_PETS) / sizeof(CAPTCHA_PETS[0]);
-  if (person_count == 0U || pet_count == 0U) {
-    snprintf(prompt->question, sizeof(prompt->question), "Tom is a man who has a cat named Tom. \"it\" is adorable.");
+  const size_t story_count = sizeof(CAPTCHA_STORIES) / sizeof(CAPTCHA_STORIES[0]);
+  if (story_count == 0U) {
+    snprintf(prompt->question, sizeof(prompt->question),
+             "Tom is a man who has a cat named Tom. \"it\" is adorable. Answer what the double-quoted text refers to.");
     snprintf(prompt->answer, sizeof(prompt->answer), "%s", "Tom");
     return;
   }
 
   unsigned basis = session_simple_hash(ctx != NULL ? ctx->user.name : "user");
   basis ^= session_simple_hash(ctx != NULL ? ctx->client_ip : "ip");
-  const captcha_person_t *person = &CAPTCHA_PEOPLE[basis % person_count];
-  const captcha_pet_t *pet = &CAPTCHA_PETS[(basis / (person_count + 1U)) % pet_count];
-  const bool refer_pet = ((basis >> 3U) & 1U) == 0U;
+  const captcha_story_t *story = &CAPTCHA_STORIES[basis % story_count];
 
-  const char *pronoun = person->is_male ? "he" : "she";
-  const char *answer = person->name;
-  if (refer_pet) {
-    pronoun = "it";
-    answer = pet->name;
+  if (story->template_type == CAPTCHA_TEMPLATE_PRONOUN) {
+    const bool refer_pet = ((basis / story_count) & 1U) == 0U;
+    const char *pronoun = story->is_male ? "he" : "she";
+    const char *answer = story->person_name;
+    if (refer_pet) {
+      pronoun = "it";
+      answer = story->pet_name;
+    }
+
+    snprintf(prompt->question, sizeof(prompt->question),
+             "%s is a %s who has a %s named %s. \"%s\" is adorable. Answer what the double-quoted text refers to.",
+             story->person_name, story->descriptor, story->pet_species, story->pet_name, pronoun);
+    snprintf(prompt->answer, sizeof(prompt->answer), "%s", answer);
+    return;
   }
 
   snprintf(prompt->question, sizeof(prompt->question),
-           "%s is a %s who has a %s named %s. \"%s\" is adorable. Answer what the double-quoted text refers to.",
-           person->name, person->descriptor, pet->species, pet->name, pronoun);
-  snprintf(prompt->answer, sizeof(prompt->answer), "%s", answer);
+           "%s is a %s who has a %s named %s. What kind of pet does %s have? Answer in lowercase.",
+           story->person_name, story->descriptor, story->pet_species, story->pet_name, story->person_name);
+  snprintf(prompt->answer, sizeof(prompt->answer), "%s", story->pet_species);
 }
 
 typedef struct {
