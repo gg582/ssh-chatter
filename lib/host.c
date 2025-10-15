@@ -4972,7 +4972,7 @@ static bool host_try_load_motd_from_path(host_t *host, const char *path) {
   session_normalize_newlines(motd_buffer);
 
   pthread_mutex_lock(&host->lock);
-  char motd_clean[sizeof(host->motd)];
+  char motd_clean[4096];
   motd_clean[0] = '\0';
   size_t offset = 0U;
   char *next_line;

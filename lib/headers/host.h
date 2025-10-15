@@ -159,7 +159,7 @@ typedef struct host {
   } bans[SSH_CHATTER_MAX_BANS];
   size_t ban_count;
   char version[64];
-  char motd[8192];
+  char motd[4096];
   size_t connection_count;
   chat_history_entry_t history[SSH_CHATTER_HISTORY_LIMIT];
   size_t history_start;
