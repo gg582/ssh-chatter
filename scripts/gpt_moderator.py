@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib import error as urllib_error
 from urllib import request as urllib_request
+from urllib.parse import urlparse
 
 
 # --- Captcha solving ---------------------------------------------------------------------------
@@ -544,6 +545,43 @@ CHAT_PATTERNS: Tuple[re.Pattern[str], ...] = (
 )
 
 
+DEFAULT_SSH_PORT = 2022
+
+
+def _parse_host_port(raw_value: str) -> Tuple[str, Optional[int]]:
+    """Extract host and optional port from a variety of input formats."""
+
+    text = raw_value.strip()
+    if not text:
+        return text, None
+
+    comma_match = re.match(r"^\s*([^,\s]+)\s*,\s*(?:port\s*)?(\d+)\s*$", text, re.IGNORECASE)
+    if comma_match:
+        return comma_match.group(1), int(comma_match.group(2))
+
+    word_match = re.match(r"^\s*([^\s]+)\s+port\s+(\d+)\s*$", text, re.IGNORECASE)
+    if word_match:
+        return word_match.group(1), int(word_match.group(2))
+
+    if text.startswith("[") and "]" in text:
+        closing = text.index("]")
+        host_part = text[1:closing]
+        rest = text[closing + 1 :].strip()
+        if rest.startswith(":") and rest[1:].isdigit():
+            return host_part, int(rest[1:])
+        return host_part, None
+
+    if ":" in text and text.count(":") == 1:
+        host_part, port_part = text.rsplit(":", 1)
+        if port_part.isdigit():
+            return host_part, int(port_part)
+
+    parsed = urlparse(text if "://" in text else f"ssh://{text}")
+    host = parsed.hostname or text
+    port = parsed.port
+    return host, port
+
+
 @dataclass
 class BotConfig:
     host: str
@@ -836,7 +874,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Autonomous ChatGPT 5 moderator for ssh-chatter"
     )
     parser.add_argument("host", nargs="?", help="ssh-chatter host to connect to")
-    parser.add_argument("--port", type=int, default=2022, help="SSH port (default: 2022)")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="SSH port (defaults to 2022 or a value embedded in the host)",
+    )
     parser.add_argument("--username", default="gpt-5", help="login username (default: gpt-5)")
     parser.add_argument("--password", default=None, help="login password, if required")
     parser.add_argument("--identity", default=None, help="path to a private key for public-key auth")
@@ -987,8 +1030,59 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.self_test:
         return run_captcha_self_test()
+
+    env_host = os.environ.get("CHATTER_HOST")
+    if not args.host and env_host:
+        args.host = env_host
+
     if not args.host:
         parser.error("host is required unless --self-test is used")
+
+    args.host, embedded_port = _parse_host_port(args.host)
+
+    if args.port is None:
+        env_port = os.environ.get("CHATTER_PORT")
+        if env_port:
+            try:
+                args.port = int(env_port)
+            except ValueError:
+                parser.error("CHATTER_PORT must be an integer")
+        elif embedded_port is not None:
+            args.port = embedded_port
+        else:
+            args.port = DEFAULT_SSH_PORT
+
+    if args.port <= 0:
+        parser.error("port must be a positive integer")
+
+    if args.username == parser.get_default("username"):
+        env_username = os.environ.get("CHATTER_USERNAME")
+        if env_username:
+            args.username = env_username
+
+    if args.password is None:
+        env_password = os.environ.get("CHATTER_PASSWORD")
+        if env_password:
+            args.password = env_password
+
+    if args.identity is None:
+        env_identity = os.environ.get("CHATTER_IDENTITY")
+        if env_identity:
+            args.identity = env_identity
+
+    if args.warning_limit == parser.get_default("warning_limit"):
+        env_warning_limit = os.environ.get("CHATTER_WARNING_LIMIT")
+        if env_warning_limit:
+            try:
+                args.warning_limit = int(env_warning_limit)
+            except ValueError:
+                parser.error("CHATTER_WARNING_LIMIT must be an integer")
+
+    if args.log_level == parser.get_default("log_level"):
+        env_log_level = os.environ.get("CHATTER_LOG_LEVEL")
+        if env_log_level:
+            args.log_level = env_log_level
+
     try:
         asyncio.run(main_async(args))
     except KeyboardInterrupt:

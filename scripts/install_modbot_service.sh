@@ -153,6 +153,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
 # ssh-chatter GPT moderator configuration
 # Mandatory settings
 CHATTER_HOST=ssh-chatter.example.com
+#CHATTER_HOST=chat.example.com:444  # host entries may include the port directly
 
 # Optional overrides
 #CHATTER_PORT=2022
