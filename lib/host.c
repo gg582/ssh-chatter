@@ -332,7 +332,7 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
     {"moe", "Soft magenta accents with playful highlights", "bright-magenta", "white", true, "white", "bright-magenta", "cyan", true},
     {"neon-genesis-evangelion", "Sho-nen yo Shin-wa ni nare--", "bright-red", "white", true, "white", "bright-magenta", "blue", true},
     {"megami", "Japanese anime goddess cliché", "bright-white", "black", false, "bright-yellow", "blue", "cyan", false},
-    {"clean", "Balanced neutral palette", "default", "default", false, "default", "default", "default", false},
+    {"clean", "Balanced neutral palette", "default", "default", false, "white", "default", "default", false},
     {"adwaita", "Bright background inspired by GNOME Adwaita", "blue", "default", false, "blue", "bright-white", "white", true},
     {"80shacker", "Bright monochrome green inspired by old CRT", "bright-green", "default", true, "bright-green", "default", "default", true},
     {"plato", "Bright monochrome yellow inspired by old Amber CRT", "yellow", "default", false, "yellow", "default", "default", false},
@@ -453,6 +453,7 @@ static void session_assign_lan_privileges(session_ctx_t *ctx);
 static void session_apply_granted_privileges(session_ctx_t *ctx);
 static void session_apply_theme_defaults(session_ctx_t *ctx);
 static void session_apply_system_theme_defaults(session_ctx_t *ctx);
+static void session_force_dark_mode_foreground(session_ctx_t *ctx);
 static void session_apply_saved_preferences(session_ctx_t *ctx);
 static void session_dispatch_command(session_ctx_t *ctx, const char *line);
 static void session_handle_exit(session_ctx_t *ctx);
@@ -1374,6 +1375,26 @@ static void session_apply_system_theme_defaults(session_ctx_t *ctx) {
   snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", host->default_system_fg_name);
   snprintf(ctx->system_bg_name, sizeof(ctx->system_bg_name), "%s", host->default_system_bg_name);
   snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s", host->default_system_highlight_name);
+  session_force_dark_mode_foreground(ctx);
+}
+
+static void session_force_dark_mode_foreground(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  ctx->system_fg_code = ANSI_WHITE;
+  snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", "white");
+
+  host_t *host = ctx->owner;
+  if (host == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  host->system_theme.foregroundColor = ANSI_WHITE;
+  snprintf(host->default_system_fg_name, sizeof(host->default_system_fg_name), "%s", "white");
+  pthread_mutex_unlock(&host->lock);
 }
 
 static user_preference_t *host_find_preference_locked(host_t *host, const char *username) {
@@ -2676,67 +2697,67 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
   }
   pthread_mutex_unlock(&host->lock);
 
-  if (!has_snapshot) {
-    return;
-  }
-
-  if (snapshot.has_user_theme) {
-    const char *color_code = lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]),
-                                               snapshot.user_color_name);
-    const char *highlight_code = lookup_color_code(
-        HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), snapshot.user_highlight_name);
-    if (color_code != NULL && highlight_code != NULL) {
-      ctx->user_color_code = color_code;
-      ctx->user_highlight_code = highlight_code;
-      ctx->user_is_bold = snapshot.user_is_bold;
-      snprintf(ctx->user_color_name, sizeof(ctx->user_color_name), "%s", snapshot.user_color_name);
-      snprintf(ctx->user_highlight_name, sizeof(ctx->user_highlight_name), "%s", snapshot.user_highlight_name);
+  if (has_snapshot) {
+    if (snapshot.has_user_theme) {
+      const char *color_code = lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]),
+                                                 snapshot.user_color_name);
+      const char *highlight_code = lookup_color_code(
+          HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), snapshot.user_highlight_name);
+      if (color_code != NULL && highlight_code != NULL) {
+        ctx->user_color_code = color_code;
+        ctx->user_highlight_code = highlight_code;
+        ctx->user_is_bold = snapshot.user_is_bold;
+        snprintf(ctx->user_color_name, sizeof(ctx->user_color_name), "%s", snapshot.user_color_name);
+        snprintf(ctx->user_highlight_name, sizeof(ctx->user_highlight_name), "%s", snapshot.user_highlight_name);
+      }
     }
-  }
 
-  if (snapshot.has_system_theme) {
-    const char *fg_code = lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]),
-                                            snapshot.system_fg_name);
-    const char *bg_code = lookup_color_code(
-        HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), snapshot.system_bg_name);
-    if (fg_code != NULL && bg_code != NULL) {
-      const char *highlight_code = ctx->system_highlight_code;
-      if (snapshot.system_highlight_name[0] != '\0') {
-        const char *candidate = lookup_color_code(HIGHLIGHT_COLOR_MAP,
-                                                 sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]),
-                                                 snapshot.system_highlight_name);
-        if (candidate != NULL) {
-          highlight_code = candidate;
+    if (snapshot.has_system_theme) {
+      const char *fg_code = lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]),
+                                              snapshot.system_fg_name);
+      const char *bg_code = lookup_color_code(
+          HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), snapshot.system_bg_name);
+      if (fg_code != NULL && bg_code != NULL) {
+        const char *highlight_code = ctx->system_highlight_code;
+        if (snapshot.system_highlight_name[0] != '\0') {
+          const char *candidate = lookup_color_code(HIGHLIGHT_COLOR_MAP,
+                                                   sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]),
+                                                   snapshot.system_highlight_name);
+          if (candidate != NULL) {
+            highlight_code = candidate;
+          }
+        }
+
+        ctx->system_fg_code = fg_code;
+        ctx->system_bg_code = bg_code;
+        ctx->system_highlight_code = highlight_code;
+        ctx->system_is_bold = snapshot.system_is_bold;
+        snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", snapshot.system_fg_name);
+        snprintf(ctx->system_bg_name, sizeof(ctx->system_bg_name), "%s", snapshot.system_bg_name);
+        if (snapshot.system_highlight_name[0] != '\0') {
+          snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s",
+                   snapshot.system_highlight_name);
         }
       }
+    }
 
-      ctx->system_fg_code = fg_code;
-      ctx->system_bg_code = bg_code;
-      ctx->system_highlight_code = highlight_code;
-      ctx->system_is_bold = snapshot.system_is_bold;
-      snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", snapshot.system_fg_name);
-      snprintf(ctx->system_bg_name, sizeof(ctx->system_bg_name), "%s", snapshot.system_bg_name);
-      if (snapshot.system_highlight_name[0] != '\0') {
-        snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s",
-                 snapshot.system_highlight_name);
-      }
+    if (snapshot.os_name[0] != '\0') {
+      snprintf(ctx->os_name, sizeof(ctx->os_name), "%s", snapshot.os_name);
+    }
+    ctx->daily_year = snapshot.daily_year;
+    ctx->daily_yday = snapshot.daily_yday;
+    if (snapshot.daily_function[0] != '\0') {
+      snprintf(ctx->daily_function, sizeof(ctx->daily_function), "%s", snapshot.daily_function);
+    }
+    ctx->has_birthday = snapshot.has_birthday;
+    if (ctx->has_birthday) {
+      snprintf(ctx->birthday, sizeof(ctx->birthday), "%s", snapshot.birthday);
+    } else {
+      ctx->birthday[0] = '\0';
     }
   }
 
-  if (snapshot.os_name[0] != '\0') {
-    snprintf(ctx->os_name, sizeof(ctx->os_name), "%s", snapshot.os_name);
-  }
-  ctx->daily_year = snapshot.daily_year;
-  ctx->daily_yday = snapshot.daily_yday;
-  if (snapshot.daily_function[0] != '\0') {
-    snprintf(ctx->daily_function, sizeof(ctx->daily_function), "%s", snapshot.daily_function);
-  }
-  ctx->has_birthday = snapshot.has_birthday;
-  if (ctx->has_birthday) {
-    snprintf(ctx->birthday, sizeof(ctx->birthday), "%s", snapshot.birthday);
-  } else {
-    ctx->birthday[0] = '\0';
-  }
+  session_force_dark_mode_foreground(ctx);
 }
 
 // session_apply_background_fill reapplies the palette background to the
@@ -7040,6 +7061,7 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
     snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s", tokens[2]);
   }
 
+  session_force_dark_mode_foreground(ctx);
   session_apply_background_fill(ctx);
 
   session_send_system_line(ctx, "System colors updated.");
@@ -8164,6 +8186,8 @@ static bool palette_apply_to_session(session_ctx_t *ctx, const palette_descripto
   snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", descriptor->system_fg_name);
   snprintf(ctx->system_bg_name, sizeof(ctx->system_bg_name), "%s", descriptor->system_bg_name);
   snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s", descriptor->system_highlight_name);
+
+  session_force_dark_mode_foreground(ctx);
 
   return true;
 }
