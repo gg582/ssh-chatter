@@ -353,7 +353,7 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
   {"jpn-pc98", "NEC PC-9801 subtle, earthy low-res tones", "yellow", "black", false, "red", "black", "yellow", false},
   {"deep-blue", "IBM Supercomputer monitoring interface style", "white", "blue", true, "cyan", "blue", "white", true},
   {"win10", "High contrast palette reminiscent of Windows 10", "cyan", "blue", true, "white", "blue", "yellow", true},
-  {"korea", "Taegeuk-gi inspired black base with red and blue accents", "bright-blue", "black", true, "cyan", "black", "red", true},
+  {"korea", "Taegeuk-gi inspired black base with red and blue accents", "bright-blue", "black", true, "red", "black", "blue", true},
 };
 
 typedef int (*accept_channel_fn_t)(ssh_message, ssh_channel);
