@@ -105,6 +105,35 @@ static const captcha_story_t CAPTCHA_STORIES[] = {
     {"Oksana", "music teacher", false, "dog", "Volna", NULL, CAPTCHA_TEMPLATE_PET_SPECIES},
 };
 
+static bool string_contains_case_insensitive(const char *haystack, const char *needle) {
+  if (haystack == NULL || needle == NULL || *needle == '\0') {
+    return false;
+  }
+
+  const size_t haystack_length = strlen(haystack);
+  const size_t needle_length = strlen(needle);
+  if (needle_length == 0U || haystack_length < needle_length) {
+    return false;
+  }
+
+  for (size_t idx = 0; idx <= haystack_length - needle_length; ++idx) {
+    size_t matched = 0U;
+    while (matched < needle_length) {
+      const unsigned char hay = (unsigned char)haystack[idx + matched];
+      const unsigned char nee = (unsigned char)needle[matched];
+      if (tolower(hay) != tolower(nee)) {
+        break;
+      }
+      ++matched;
+    }
+    if (matched == needle_length) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 static struct timespec timespec_diff(const struct timespec *end, const struct timespec *start) {
   struct timespec result = {0, 0};
   if (end == NULL || start == NULL) {
@@ -8991,7 +9020,9 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         }
 
         if (fatal_socket_error && bind_error != NULL) {
-          if (strstr(bind_error, "Socket error") != NULL || strstr(bind_error, "Error in kex") != NULL) {
+          if (string_contains_case_insensitive(bind_error, "Socket error") ||
+              string_contains_case_insensitive(bind_error, "Error in kex") ||
+              string_contains_case_insensitive(bind_error, "kex error")) {
             fatal_socket_error = false;
           }
         }
