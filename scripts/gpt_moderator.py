@@ -412,8 +412,16 @@ class GPTModeratorBot:
             return
 
         if stripped.startswith("Type your answer") and self._captcha_question:
-            answer = solve_captcha(self._captcha_question) or "cat"
-            await self._send(answer)
+            answer = solve_captcha(self._captcha_question)
+            if answer is None:
+                logging.error("unable to solve captcha question: %s", self._captcha_question)
+                # Send an empty response so the server can react (usually by
+                # issuing a new captcha or disconnecting us) and stop the bot
+                # to avoid spamming incorrect answers.
+                await self._send("")
+                self.stop()
+            else:
+                await self._send(answer)
             self._captcha_question = None
             return
 
