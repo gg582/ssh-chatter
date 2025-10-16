@@ -9044,12 +9044,9 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
             break;
         }
 
-        if (fatal_socket_error && bind_error != NULL) {
-          if (string_contains_case_insensitive(bind_error, "Socket error") ||
-              string_contains_case_insensitive(bind_error, "Error in kex") ||
-              string_contains_case_insensitive(bind_error, "kex error")) {
+        if ((fatal_socket_error && bind_error != NULL)
+           || string_contains_case_insensitive(bind_error, "kex")) {
             fatal_socket_error = false;
-          }
         }
 
         ssh_free(session);
@@ -9063,7 +9060,6 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 
       if (ssh_handle_key_exchange(session) != SSH_OK) {
         humanized_log_error("host", ssh_get_error(session), EPROTO);
-        ssh_disconnect(session);
         ssh_free(session);
         continue;
       }
