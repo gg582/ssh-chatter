@@ -122,6 +122,26 @@ if [[ -n "\${OPENAI_API_KEY:-}" ]]; then
     export OPENAI_API_KEY="\${OPENAI_API_KEY}"
 fi
 
+if [[ -n "\${GPT_MEMORY_PATH:-}" ]]; then
+    ARGS+=("--memory-path" "\${GPT_MEMORY_PATH}")
+fi
+if [[ -n "\${GPT_MEMORY_MAX:-}" ]]; then
+    ARGS+=("--memory-max-entries" "\${GPT_MEMORY_MAX}")
+fi
+if [[ -n "\${GPT_MEMORY_RECALL:-}" ]]; then
+    ARGS+=("--memory-recall" "\${GPT_MEMORY_RECALL}")
+fi
+if [[ -n "\${GPT_MEMORY_MIN_LENGTH:-}" ]]; then
+    ARGS+=("--memory-min-length" "\${GPT_MEMORY_MIN_LENGTH}")
+fi
+if [[ -n "\${GPT_DISABLE_MEMORY:-}" ]]; then
+    case "\${GPT_DISABLE_MEMORY,,}" in
+        1|true|yes|on)
+            ARGS+=("--disable-memory")
+            ;;
+    esac
+fi
+
 exec "$VENV_PATH/bin/python" "$PY_SCRIPT_DEST" "\${ARGS[@]}"
 RUNNER
 
@@ -148,6 +168,11 @@ CHATTER_HOST=ssh-chatter.example.com
 #GPT_RESPONSE_COOLDOWN=2.0
 #GPT_RESPOND_TO_QUESTIONS=0
 #OPENAI_BASE_URL=https://api.openai.com
+#GPT_MEMORY_PATH=/opt/chatter-modbot/memory.json
+#GPT_MEMORY_MAX=200
+#GPT_MEMORY_RECALL=3
+#GPT_MEMORY_MIN_LENGTH=4
+#GPT_DISABLE_MEMORY=0
 ENV
 fi
 

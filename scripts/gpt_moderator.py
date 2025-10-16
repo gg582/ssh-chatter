@@ -257,6 +257,9 @@ DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 DEFAULT_HISTORY_LIMIT = _get_env_int("GPT_HISTORY_LIMIT", 12)
 DEFAULT_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com")
 DEFAULT_RESPONSE_COOLDOWN = _get_env_float("GPT_RESPONSE_COOLDOWN", 2.0)
+DEFAULT_MEMORY_MAX_ENTRIES = _get_env_int("GPT_MEMORY_MAX", 200)
+DEFAULT_MEMORY_RECALL = _get_env_int("GPT_MEMORY_RECALL", 3)
+DEFAULT_MEMORY_MIN_LENGTH = _get_env_int("GPT_MEMORY_MIN_LENGTH", 4)
 
 
 # --- Moderation policy -------------------------------------------------------------------------
@@ -323,6 +326,135 @@ class ChatConfig:
     base_url: str = DEFAULT_BASE_URL
     respond_to_questions: bool = False
     response_cooldown: float = DEFAULT_RESPONSE_COOLDOWN
+    memory_path: Optional[str] = os.environ.get("GPT_MEMORY_PATH")
+    memory_max_entries: int = DEFAULT_MEMORY_MAX_ENTRIES
+    memory_recall: int = DEFAULT_MEMORY_RECALL
+    memory_min_length: int = DEFAULT_MEMORY_MIN_LENGTH
+
+
+class SimpleMemoryStore:
+    """Naive keyword-based memory for lightweight retrieval augmentation."""
+
+    def __init__(
+        self,
+        *,
+        path: Optional[str],
+        max_entries: int,
+        recall: int,
+        min_length: int,
+    ) -> None:
+        self._enabled = bool(path)
+        self._path = path
+        self._max_entries = max(1, max_entries)
+        self._recall = max(1, recall)
+        self._min_length = max(1, min_length)
+        self._entries: List[Dict[str, Any]] = []
+        if self._enabled:
+            self._load()
+
+    @staticmethod
+    def _extract_keywords(text: str, min_length: int) -> Set[str]:
+        tokens = re.findall(r"[A-Za-z0-9']+", text.lower())
+        return {token for token in tokens if len(token) >= min_length}
+
+    def _load(self) -> None:
+        if not self._path:
+            return
+        try:
+            with open(self._path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except FileNotFoundError:
+            return
+        except Exception as exc:  # pragma: no cover - file corruption
+            logging.warning("unable to load memory store %s: %s", self._path, exc)
+            return
+
+        if not isinstance(data, list):
+            logging.warning("memory store %s is not a list; ignoring", self._path)
+            return
+
+        now = time.time()
+        for entry in data:
+            text = entry.get("text") if isinstance(entry, dict) else None
+            if not text or not isinstance(text, str):
+                continue
+            keywords = entry.get("keywords") if isinstance(entry, dict) else None
+            if not isinstance(keywords, list):
+                keywords = list(self._extract_keywords(text, self._min_length))
+            timestamp = entry.get("timestamp") if isinstance(entry, dict) else None
+            if not isinstance(timestamp, (int, float)):
+                timestamp = now
+            self._entries.append(
+                {
+                    "text": text,
+                    "keywords": {str(k) for k in keywords},
+                    "timestamp": float(timestamp),
+                }
+            )
+        if len(self._entries) > self._max_entries:
+            self._entries = self._entries[-self._max_entries :]
+
+    def _persist(self) -> None:
+        if not self._path:
+            return
+        directory = os.path.dirname(self._path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        serialisable = [
+            {
+                "text": entry["text"],
+                "keywords": sorted(entry["keywords"]),
+                "timestamp": entry["timestamp"],
+            }
+            for entry in self._entries[-self._max_entries :]
+        ]
+        tmp_path = f"{self._path}.tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as fh:
+                json.dump(serialisable, fh, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, self._path)
+        except OSError as exc:  # pragma: no cover - filesystem issues
+            logging.warning("unable to persist memory store %s: %s", self._path, exc)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+    def remember(self, text: str) -> None:
+        if not self._enabled:
+            return
+        cleaned = text.strip()
+        if not cleaned:
+            return
+        keywords = self._extract_keywords(cleaned, self._min_length)
+        if not keywords:
+            return
+        timestamp = time.time()
+        self._entries.append(
+            {"text": cleaned, "keywords": keywords, "timestamp": timestamp}
+        )
+        if len(self._entries) > self._max_entries:
+            self._entries = self._entries[-self._max_entries :]
+        self._persist()
+
+    def retrieve(self, query: str) -> List[str]:
+        if not self._enabled:
+            return []
+        keywords = self._extract_keywords(query, self._min_length)
+        if not keywords:
+            return []
+        scored: List[Tuple[int, float, str]] = []
+        for entry in self._entries:
+            overlap = len(keywords.intersection(entry["keywords"]))
+            if overlap == 0:
+                continue
+            scored.append((overlap, entry["timestamp"], entry["text"]))
+        scored.sort(key=lambda item: (-item[0], -item[1]))
+        return [text for _, _, text in scored[: self._recall]]
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
 
 
 class ModerationEngine:
@@ -440,6 +572,12 @@ class GPTModeratorBot:
         self._process: Optional[Any] = None
         self._chat_history: List[Dict[str, str]] = []
         self._system_message = {"role": "system", "content": config.chat.system_prompt}
+        self._memory = SimpleMemoryStore(
+            path=config.chat.memory_path,
+            max_entries=config.chat.memory_max_entries,
+            recall=config.chat.memory_recall,
+            min_length=config.chat.memory_min_length,
+        )
         self._responder: Optional[OpenAIChatResponder] = None
         self._last_response_ts = 0.0
 
@@ -451,6 +589,14 @@ class GPTModeratorBot:
             )
         else:
             logging.warning("OPENAI_API_KEY not configured; GPT responses disabled.")
+
+        if self._memory.enabled:
+            logging.info(
+                "RAG memory enabled (%d entries, recalling %d) at %s",
+                config.chat.memory_max_entries,
+                config.chat.memory_recall,
+                config.chat.memory_path,
+            )
 
     async def run(self) -> None:
         while self._running:
@@ -537,8 +683,16 @@ class GPTModeratorBot:
         user_entry = f"{username}: {message}"
         self._append_history("user", user_entry)
 
+        memory_context = self._memory.retrieve(message)
+        messages = self._build_messages()
+        if memory_context:
+            memory_block = "Relevant saved notes:\n" + "\n".join(
+                f"- {item}" for item in memory_context
+            )
+            messages = [messages[0], {"role": "system", "content": memory_block}, *messages[1:]]
+
         try:
-            reply = await self._responder.generate_reply(self._build_messages())
+            reply = await self._responder.generate_reply(messages)
         except Exception as exc:  # pragma: no cover - network/HTTP exceptions
             logging.error("failed to generate GPT reply: %s", exc)
             if self._chat_history and self._chat_history[-1]["content"] == user_entry:
@@ -552,6 +706,8 @@ class GPTModeratorBot:
             return
 
         self._append_history("assistant", reply)
+        self._memory.remember(user_entry)
+        self._memory.remember(f"{self._config.username}: {reply}")
         self._last_response_ts = time.time()
         await self._send(reply)
 
@@ -739,6 +895,34 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_RESPONSE_COOLDOWN,
         help="minimum seconds between GPT replies",
     )
+    parser.add_argument(
+        "--memory-path",
+        default=None,
+        help="path to a JSON file for persistent GPT memory (or set GPT_MEMORY_PATH)",
+    )
+    parser.add_argument(
+        "--memory-max-entries",
+        type=int,
+        default=DEFAULT_MEMORY_MAX_ENTRIES,
+        help="maximum number of saved memory entries",
+    )
+    parser.add_argument(
+        "--memory-recall",
+        type=int,
+        default=DEFAULT_MEMORY_RECALL,
+        help="maximum number of memory snippets to inject",
+    )
+    parser.add_argument(
+        "--memory-min-length",
+        type=int,
+        default=DEFAULT_MEMORY_MIN_LENGTH,
+        help="minimum keyword length for memory matching",
+    )
+    parser.add_argument(
+        "--disable-memory",
+        action="store_true",
+        help="skip loading or saving persistent GPT memory",
+    )
     return parser
 
 
@@ -759,6 +943,9 @@ async def main_async(args: argparse.Namespace) -> None:
         env_flag = os.environ.get("GPT_RESPOND_TO_QUESTIONS")
         if env_flag and env_flag.lower() in {"1", "true", "yes", "on"}:
             respond_to_questions = True
+    memory_path = args.memory_path or os.environ.get("GPT_MEMORY_PATH")
+    if args.disable_memory:
+        memory_path = None
     config = BotConfig(
         host=args.host,
         port=args.port,
@@ -775,6 +962,10 @@ async def main_async(args: argparse.Namespace) -> None:
             base_url=args.openai_base_url,
             respond_to_questions=respond_to_questions,
             response_cooldown=args.response_cooldown,
+            memory_path=memory_path,
+            memory_max_entries=max(1, args.memory_max_entries),
+            memory_recall=max(1, args.memory_recall),
+            memory_min_length=max(1, args.memory_min_length),
         ),
     )
     bot = GPTModeratorBot(config, ssh_module)
