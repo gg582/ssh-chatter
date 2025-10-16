@@ -1,0 +1,17 @@
+[Unit]
+Description=ssh-chatter GPT moderator bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_GROUP@
+WorkingDirectory=@INSTALL_ROOT@
+EnvironmentFile=-@ENV_FILE@
+ExecStart=@INSTALL_ROOT@/run.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

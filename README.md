@@ -33,6 +33,34 @@ The codebase is intentionally compact so new contributors can navigate it quickl
 
 - `host_snapshot_last_captcha` exposes the most recently generated captcha prompt and answer along with a timestamp so external clients can pass challenges on behalf of unattended automation.
 - `scripts/gpt_moderator.py` provides an out-of-process GPT moderator that logs in over SSH, issues warnings for unethical content, and escalates to kicks or bans after repeated violations (requires Python 3.9+ and the `asyncssh` package).
+- `scripts/install_modbot_service.sh` installs the moderator into a dedicated virtual environment and wires it up as a `systemd` service.
+
+### Running the moderator as a systemd service
+
+1. Install the bot and create the service unit:
+
+   ```bash
+   sudo scripts/install_modbot_service.sh
+   ```
+
+   Use `--install-dir`, `--service-user`, or `--service-name` to adjust the install layout, or `--skip-start` to install without immediately starting the service.
+
+2. Update `/etc/default/chatter-modbot` with real connection details (host, credentials, warning thresholds, etc.).
+
+3. Start and enable the service if you skipped auto-start:
+
+   ```bash
+   sudo systemctl enable --now chatter-modbot
+   ```
+
+4. Monitor the bot with the usual `systemd` tools:
+
+   ```bash
+   sudo systemctl status chatter-modbot
+   sudo journalctl -u chatter-modbot -f
+   ```
+
+The installer creates a virtual environment, installs `asyncssh`, copies the moderator script, and configures a dedicated service account so the bot can be managed like any other daemon on the host.
 
 ## Prerequisites
 
