@@ -8957,10 +8957,45 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       }
 
       if (ssh_bind_accept(bind_handle, session) == SSH_ERROR) {
-        humanized_log_error("host", ssh_get_error(bind_handle), EIO);
+        const int accept_error = errno;
         const char *bind_error = ssh_get_error(bind_handle);
-        const bool fatal_socket_error = bind_error != NULL &&
-                                        strstr(bind_error, "Socket error") != NULL;
+        humanized_log_error("host", bind_error, accept_error != 0 ? accept_error : EIO);
+
+        bool fatal_socket_error = accept_error != 0;
+        switch (accept_error) {
+          case 0:
+          case EAGAIN:
+#ifdef EWOULDBLOCK
+#if EWOULDBLOCK != EAGAIN
+          case EWOULDBLOCK:
+#endif
+#endif
+          case EINTR:
+          case ECONNRESET:
+          case ECONNABORTED:
+          case ETIMEDOUT:
+          case ENOTCONN:
+          case EPIPE:
+            fatal_socket_error = false;
+            break;
+          case EBADF:
+          case ENOTSOCK:
+          case EINVAL:
+            fatal_socket_error = true;
+            break;
+          default:
+            if (accept_error != 0) {
+              fatal_socket_error = true;
+            }
+            break;
+        }
+
+        if (fatal_socket_error && bind_error != NULL) {
+          if (strstr(bind_error, "Socket error") != NULL || strstr(bind_error, "Error in kex") != NULL) {
+            fatal_socket_error = false;
+          }
+        }
+
         ssh_free(session);
         if (fatal_socket_error) {
           printf("[listener] restarting after listener socket error\n");
