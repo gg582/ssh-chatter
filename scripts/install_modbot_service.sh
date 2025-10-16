@@ -92,33 +92,37 @@ cat > "$RUNNER_PATH" <<RUNNER
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -z "${CHATTER_HOST:-}" ]]; then
+if [[ -z "\${CHATTER_HOST:-}" ]]; then
     echo "CHATTER_HOST must be set (see $ENV_FILE)." >&2
     exit 1
 fi
 
-ARGS=("${CHATTER_HOST}")
+ARGS=("\${CHATTER_HOST}")
 
-if [[ -n "${CHATTER_PORT:-}" ]]; then
-    ARGS+=("--port" "${CHATTER_PORT}")
+if [[ -n "\${CHATTER_PORT:-}" ]]; then
+    ARGS+=("--port" "\${CHATTER_PORT}")
 fi
-if [[ -n "${CHATTER_USERNAME:-}" ]]; then
-    ARGS+=("--username" "${CHATTER_USERNAME}")
+if [[ -n "\${CHATTER_USERNAME:-}" ]]; then
+    ARGS+=("--username" "\${CHATTER_USERNAME}")
 fi
-if [[ -n "${CHATTER_PASSWORD:-}" ]]; then
-    ARGS+=("--password" "${CHATTER_PASSWORD}")
+if [[ -n "\${CHATTER_PASSWORD:-}" ]]; then
+    ARGS+=("--password" "\${CHATTER_PASSWORD}")
 fi
-if [[ -n "${CHATTER_IDENTITY:-}" ]]; then
-    ARGS+=("--identity" "${CHATTER_IDENTITY}")
+if [[ -n "\${CHATTER_IDENTITY:-}" ]]; then
+    ARGS+=("--identity" "\${CHATTER_IDENTITY}")
 fi
-if [[ -n "${CHATTER_WARNING_LIMIT:-}" ]]; then
-    ARGS+=("--warning-limit" "${CHATTER_WARNING_LIMIT}")
+if [[ -n "\${CHATTER_WARNING_LIMIT:-}" ]]; then
+    ARGS+=("--warning-limit" "\${CHATTER_WARNING_LIMIT}")
 fi
-if [[ -n "${CHATTER_LOG_LEVEL:-}" ]]; then
-    ARGS+=("--log-level" "${CHATTER_LOG_LEVEL}")
+if [[ -n "\${CHATTER_LOG_LEVEL:-}" ]]; then
+    ARGS+=("--log-level" "\${CHATTER_LOG_LEVEL}")
 fi
 
-exec "$VENV_PATH/bin/python" "$PY_SCRIPT_DEST" "${ARGS[@]}"
+if [[ -n "\${OPENAI_API_KEY:-}" ]]; then
+    export OPENAI_API_KEY="\${OPENAI_API_KEY}"
+fi
+
+exec "$VENV_PATH/bin/python" "$PY_SCRIPT_DEST" "\${ARGS[@]}"
 RUNNER
 
 chown "$SERVICE_USER":"$SERVICE_GROUP" "$RUNNER_PATH"
@@ -137,6 +141,7 @@ CHATTER_HOST=ssh-chatter.example.com
 #CHATTER_IDENTITY=/path/to/private_key
 #CHATTER_WARNING_LIMIT=5
 #CHATTER_LOG_LEVEL=INFO
+#OPENAI_API_KEY=
 ENV
 fi
 

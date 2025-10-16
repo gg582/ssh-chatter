@@ -45,7 +45,7 @@ The codebase is intentionally compact so new contributors can navigate it quickl
 
    Use `--install-dir`, `--service-user`, or `--service-name` to adjust the install layout, or `--skip-start` to install without immediately starting the service.
 
-2. Update `/etc/default/chatter-modbot` with real connection details (host, credentials, warning thresholds, etc.).
+2. Update `/etc/default/chatter-modbot` with real connection details (host, credentials, warning thresholds, API keys, etc.).
 
 3. Start and enable the service if you skipped auto-start:
 
