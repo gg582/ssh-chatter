@@ -340,7 +340,7 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
   {"win95bsod", "High-contrast blue screen of death style", "bright-white", "blue", true, "bright-white", "blue", "cyan", true},
   {"chn-hanzi", "Bright cyan high-clarity Chinese text terminal", "bright-cyan", "black", true, "white", "black", "cyan", true},
   {"usa-flag", "Flag blue base with red/white highlights", "bright-white", "blue", true, "red", "blue", "bright-white", true},
-  {"jpn-flag", "Minimalist white with rising sun red accent", "bright-white", "black", false, "bright-white", "red", "red", true},
+  {"jpn-flag", "Minimalist white with rising sun red accent", "bright-white", "black", false, "red", "black", "black", true},
   {"chn-flag", "Star-red background with lucky yellow text", "bright-yellow", "red", true, "white", "red", "white", true},
   {"rus-flag", "Tricolor base with strong red emphasis", "bright-white", "blue", true, "red", "blue", "bright-white", true},
   {"holy-light", "Christian sacred light on pure white/blue base", "bright-white", "blue", false, "blue", "black", "yellow", true},
