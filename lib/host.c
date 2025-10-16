@@ -4210,7 +4210,9 @@ static void session_handle_kick(session_ctx_t *ctx, const char *arguments) {
     target->should_exit = true;
     ssh_channel_send_eof(target->channel);
     ssh_channel_close(target->channel);
-    session_send_system_line(ctx, "Kick request sent.");
+    target->has_joined_room = false;
+    chat_room_remove(&ctx->owner->room, target);
+    session_send_system_line(ctx, "User removed from the chat.");
   }
 
   printf("[kick] %s kicked %s\n", ctx->user.name, target->user.name);
