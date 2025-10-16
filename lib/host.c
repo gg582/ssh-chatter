@@ -340,7 +340,7 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
   {"win95bsod", "High-contrast blue screen of death style", "bright-white", "blue", true, "bright-white", "blue", "cyan", true},
   {"chn-hanzi", "Bright cyan high-clarity Chinese text terminal", "bright-cyan", "black", true, "white", "black", "cyan", true},
   {"usa-flag", "Flag blue base with red/white highlights", "bright-white", "blue", true, "red", "blue", "bright-white", true},
-  {"jpn-flag", "Minimalist white with rising sun red accent", "bright-white", "black", false, "red", "black", "red", true},
+  {"jpn-flag", "Minimalist white with rising sun red accent", "bright-white", "black", false, "bright-white", "red", "red", true},
   {"chn-flag", "Star-red background with lucky yellow text", "bright-yellow", "red", true, "white", "red", "white", true},
   {"rus-flag", "Tricolor base with strong red emphasis", "bright-white", "blue", true, "red", "blue", "bright-white", true},
   {"holy-light", "Christian sacred light on pure white/blue base", "bright-white", "blue", false, "blue", "black", "yellow", true},
@@ -1383,18 +1383,17 @@ static void session_force_dark_mode_foreground(session_ctx_t *ctx) {
     return;
   }
 
-  ctx->system_fg_code = ANSI_WHITE;
-  snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", "white");
+  const bool has_name = ctx->system_fg_name[0] != '\0';
+  const bool name_is_default = has_name && strcasecmp(ctx->system_fg_name, "default") == 0;
+  const bool missing_name = !has_name;
+  const bool code_is_default = ctx->system_fg_code == NULL || strcmp(ctx->system_fg_code, ANSI_DEFAULT) == 0;
 
-  host_t *host = ctx->owner;
-  if (host == NULL) {
+  if (!missing_name && !name_is_default && !code_is_default) {
     return;
   }
 
-  pthread_mutex_lock(&host->lock);
-  host->system_theme.foregroundColor = ANSI_WHITE;
-  snprintf(host->default_system_fg_name, sizeof(host->default_system_fg_name), "%s", "white");
-  pthread_mutex_unlock(&host->lock);
+  ctx->system_fg_code = ANSI_WHITE;
+  snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", "white");
 }
 
 static user_preference_t *host_find_preference_locked(host_t *host, const char *username) {
