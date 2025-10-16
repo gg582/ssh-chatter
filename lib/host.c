@@ -47,6 +47,7 @@
 #define SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN 128U
 #define SSH_CHATTER_BBS_DEFAULT_TAG "general"
 #define SSH_CHATTER_BBS_TERMINATOR ">/__BBS_END>"
+#define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT 3U
 
 typedef struct {
   char question[256];
@@ -8205,17 +8206,84 @@ static bool parse_bool_token(const char *token, bool *value) {
   return false;
 }
 
+static bool session_transport_active(const session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->session == NULL) {
+    return false;
+  }
+
+  return ssh_get_fd(ctx->session) >= 0;
+}
+
+static void session_close_channel(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->channel == NULL) {
+    return;
+  }
+
+  ssh_channel_send_eof(ctx->channel);
+  ssh_channel_close(ctx->channel);
+  ssh_channel_free(ctx->channel);
+  ctx->channel = NULL;
+}
+
+static void session_reset_for_retry(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  session_close_channel(ctx);
+  ctx->should_exit = false;
+  ctx->username_conflict = false;
+  ctx->has_joined_room = false;
+  ctx->input_length = 0U;
+  ctx->input_buffer[0] = '\0';
+  ctx->input_escape_active = false;
+  ctx->input_escape_length = 0U;
+  ctx->input_escape_buffer[0] = '\0';
+  ctx->bbs_post_pending = false;
+  ctx->pending_bbs_title[0] = '\0';
+  ctx->pending_bbs_body[0] = '\0';
+  ctx->pending_bbs_body_length = 0U;
+  ctx->pending_bbs_tag_count = 0U;
+  memset(ctx->pending_bbs_tags, 0, sizeof(ctx->pending_bbs_tags));
+  ctx->input_history_count = 0U;
+  ctx->input_history_position = -1;
+  ctx->history_scroll_position = 0U;
+  ctx->has_last_message_time = false;
+  ctx->last_message_time.tv_sec = 0;
+  ctx->last_message_time.tv_nsec = 0;
+}
+
+static bool session_attempt_handshake_restart(session_ctx_t *ctx, unsigned int *attempts) {
+  if (ctx == NULL || attempts == NULL) {
+    return false;
+  }
+
+  if (!session_transport_active(ctx)) {
+    return false;
+  }
+
+  if (*attempts >= SSH_CHATTER_HANDSHAKE_RETRY_LIMIT) {
+    return false;
+  }
+
+  ++(*attempts);
+  printf("[session] retrying handshake (attempt %u/%u)\n", *attempts, SSH_CHATTER_HANDSHAKE_RETRY_LIMIT);
+  session_reset_for_retry(ctx);
+  session_apply_theme_defaults(ctx);
+  struct timespec backoff = {
+      .tv_sec = 0,
+      .tv_nsec = 200000000L,
+  };
+  nanosleep(&backoff, NULL);
+  return true;
+}
+
 static void session_cleanup(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return;
   }
 
-  if (ctx->channel != NULL) {
-    ssh_channel_send_eof(ctx->channel);
-    ssh_channel_close(ctx->channel);
-    ssh_channel_free(ctx->channel);
-    ctx->channel = NULL;
-  }
+  session_close_channel(ctx);
 
   if (ctx->session != NULL) {
     ssh_disconnect(ctx->session);
@@ -8234,22 +8302,37 @@ static void *session_thread(void *arg) {
 
   session_apply_theme_defaults(ctx);
 
-  if (session_authenticate(ctx) != 0) {
-    humanized_log_error("session", "authentication failed", EACCES);
-    session_cleanup(ctx);
-    return NULL;
-  }
+  bool authenticated = false;
+  unsigned int handshake_retries = 0U;
+  while (true) {
+    if (!authenticated) {
+      if (session_authenticate(ctx) != 0) {
+        humanized_log_error("session", "authentication failed", EACCES);
+        session_cleanup(ctx);
+        return NULL;
+      }
+      authenticated = true;
+    }
 
-  if (session_accept_channel(ctx) != 0) {
-    humanized_log_error("session", "failed to open channel", EIO);
-    session_cleanup(ctx);
-    return NULL;
-  }
+    if (session_accept_channel(ctx) != 0) {
+      humanized_log_error("session", "failed to open channel", EIO);
+      if (session_attempt_handshake_restart(ctx, &handshake_retries)) {
+        continue;
+      }
+      session_cleanup(ctx);
+      return NULL;
+    }
 
-  if (session_prepare_shell(ctx) != 0) {
-    humanized_log_error("session", "shell negotiation failed", EPROTO);
-    session_cleanup(ctx);
-    return NULL;
+    if (session_prepare_shell(ctx) != 0) {
+      humanized_log_error("session", "shell negotiation failed", EPROTO);
+      if (session_attempt_handshake_restart(ctx, &handshake_retries)) {
+        continue;
+      }
+      session_cleanup(ctx);
+      return NULL;
+    }
+
+    break;
   }
 
   session_assign_lan_privileges(ctx);
