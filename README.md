@@ -32,7 +32,7 @@ The codebase is intentionally compact so new contributors can navigate it quickl
 ## Automation hooks
 
 - `host_snapshot_last_captcha` exposes the most recently generated captcha prompt and answer along with a timestamp so external clients can pass challenges on behalf of unattended automation.
-- `scripts/gpt_moderator.py` provides an out-of-process GPT moderator that logs in over SSH, issues warnings for unethical content, and escalates to kicks or bans after repeated violations (requires Python 3.9+ and the `asyncssh` package).  Verify that its captcha solver matches every server prompt with `python3 scripts/gpt_moderator.py --self-test`, which also reports how ambiguous pronoun prompts (e.g. "he" for Alexei and Kotya) are resolved.  If the bot encounters a captcha it cannot solve, it now aborts the session instead of guessing so operators can review the transcript and update the solver data set.
+- `scripts/gpt_moderator.py` provides an out-of-process ChatGPT 5 bot that logs in over SSH, solves captchas, chats like a regular user, and still issues warnings for unethical content or bans for explicitly criminal conversations (requires Python 3.9+ and the `asyncssh` package).  Verify that its captcha solver matches every server prompt with `python3 scripts/gpt_moderator.py --self-test`, which also reports how ambiguous pronoun prompts (e.g. "he" for Alexei and Kotya) are resolved.  When the bot encounters a captcha it cannot solve, it aborts the session so operators can update the solver data set without spamming wrong answers.  Provide an OpenAI-compatible API key via `OPENAI_API_KEY` and optionally customize its persona with `GPT_PROMPT`, `OPENAI_MODEL`, or `GPT_HISTORY_LIMIT`.
 - `scripts/install_modbot_service.sh` installs the moderator into a dedicated virtual environment and wires it up as a `systemd` service.
 
 ### Running the moderator as a systemd service
@@ -45,7 +45,11 @@ The codebase is intentionally compact so new contributors can navigate it quickl
 
    Use `--install-dir`, `--service-user`, or `--service-name` to adjust the install layout, or `--skip-start` to install without immediately starting the service.
 
-2. Update `/etc/default/chatter-modbot` with real connection details (host, credentials, warning thresholds, API keys, etc.).
+2. Update `/etc/default/chatter-modbot` with real connection details and AI settings:
+
+   - `CHATTER_HOST`, `CHATTER_PORT`, `CHATTER_USERNAME` (defaults to `gpt-5`), and related SSH credentials.
+   - `OPENAI_API_KEY` so the bot can answer questions, plus `GPT_PROMPT` if you want a custom persona or `OPENAI_MODEL` / `GPT_HISTORY_LIMIT` / `GPT_RESPONSE_COOLDOWN` for fine-tuning.
+   - Set `GPT_RESPOND_TO_QUESTIONS=1` if you want the bot to answer any question in the room even when not mentioned directly.
 
 3. Start and enable the service if you skipped auto-start:
 

@@ -25,7 +25,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib
+import json
 import logging
+import os
 import re
 import signal
 import sys
@@ -33,6 +35,8 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 
 # --- Captcha solving ---------------------------------------------------------------------------
@@ -221,6 +225,40 @@ def run_captcha_self_test() -> int:
     return 0
 
 
+# --- Chat configuration ------------------------------------------------------------------------
+
+def _get_env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _get_env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+DEFAULT_SYSTEM_PROMPT = (
+    "You are ChatGPT 5, a friendly and lawful participant in the ssh-chatter room. "
+    "Answer succinctly, follow U.S. law, refuse disallowed or dangerous requests, "
+    "and keep the conversation welcoming."
+)
+
+DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+DEFAULT_HISTORY_LIMIT = _get_env_int("GPT_HISTORY_LIMIT", 12)
+DEFAULT_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com")
+DEFAULT_RESPONSE_COOLDOWN = _get_env_float("GPT_RESPONSE_COOLDOWN", 2.0)
+
+
 # --- Moderation policy -------------------------------------------------------------------------
 
 UNETHICAL_KEYWORDS: Tuple[str, ...] = (
@@ -276,6 +314,17 @@ class WarningRecord:
     last_timestamp: float = field(default_factory=time.time)
 
 
+@dataclass
+class ChatConfig:
+    model: str = DEFAULT_MODEL
+    history_limit: int = DEFAULT_HISTORY_LIMIT
+    system_prompt: str = DEFAULT_SYSTEM_PROMPT
+    api_key: Optional[str] = None
+    base_url: str = DEFAULT_BASE_URL
+    respond_to_questions: bool = False
+    response_cooldown: float = DEFAULT_RESPONSE_COOLDOWN
+
+
 class ModerationEngine:
     """Track moderation warnings and determine escalation paths."""
 
@@ -313,6 +362,47 @@ class ModerationEngine:
         self._warnings.pop(username, None)
 
 
+class OpenAIChatResponder:
+    """Thin wrapper around the OpenAI chat completions API."""
+
+    def __init__(self, model: str, api_key: str, base_url: str, *, timeout: float = 30.0) -> None:
+        self._model = model
+        self._api_key = api_key
+        self._base_url = base_url.rstrip("/") or "https://api.openai.com"
+        self._timeout = timeout
+
+    def _complete(self, messages: List[Dict[str, str]]) -> str:
+        payload = json.dumps({"model": self._model, "messages": messages}).encode("utf-8")
+        url = f"{self._base_url}/v1/chat/completions"
+        req = urllib_request.Request(url, data=payload, method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Authorization", f"Bearer {self._api_key}")
+
+        try:
+            with urllib_request.urlopen(req, timeout=self._timeout) as response:
+                body = response.read()
+        except urllib_error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "ignore") if exc.fp else exc.reason
+            raise RuntimeError(f"OpenAI request failed with status {exc.code}: {detail}") from exc
+        except urllib_error.URLError as exc:
+            raise RuntimeError(f"OpenAI request failed: {exc.reason}") from exc
+
+        parsed = json.loads(body.decode("utf-8"))
+        choices = parsed.get("choices")
+        if not choices:
+            raise RuntimeError("OpenAI response did not include choices")
+
+        message = choices[0].get("message", {}).get("content")
+        if not message:
+            raise RuntimeError("OpenAI response did not include message content")
+
+        return message.strip()
+
+    async def generate_reply(self, messages: List[Dict[str, str]]) -> str:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._complete, messages)
+
+
 # --- SSH chat client ---------------------------------------------------------------------------
 
 CHAT_PATTERNS: Tuple[re.Pattern[str], ...] = (
@@ -331,6 +421,7 @@ class BotConfig:
     identity: Optional[str]
     reconnect_delay: float
     moderation: ModerationConfig
+    chat: ChatConfig
     announce: bool = True
 
 
@@ -347,6 +438,19 @@ class GPTModeratorBot:
         self._ssh = ssh_module
         self._connection: Optional[Any] = None
         self._process: Optional[Any] = None
+        self._chat_history: List[Dict[str, str]] = []
+        self._system_message = {"role": "system", "content": config.chat.system_prompt}
+        self._responder: Optional[OpenAIChatResponder] = None
+        self._last_response_ts = 0.0
+
+        if config.chat.api_key:
+            self._responder = OpenAIChatResponder(
+                config.chat.model,
+                config.chat.api_key,
+                config.chat.base_url,
+            )
+        else:
+            logging.warning("OPENAI_API_KEY not configured; GPT responses disabled.")
 
     async def run(self) -> None:
         while self._running:
@@ -371,6 +475,7 @@ class GPTModeratorBot:
             self._joined = False
             self._announced = False
             self._captcha_question = None
+            self._reset_conversation()
 
             process = await connection.create_process(term_type="xterm-256color")
             self._process = process
@@ -385,6 +490,70 @@ class GPTModeratorBot:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
             await asyncio.gather(*done, return_exceptions=True)
+
+    def _reset_conversation(self) -> None:
+        self._chat_history.clear()
+        self._last_response_ts = 0.0
+
+    def _append_history(self, role: str, content: str) -> None:
+        self._chat_history.append({"role": role, "content": content})
+        self._trim_history()
+
+    def _trim_history(self) -> None:
+        max_entries = max(self._config.chat.history_limit * 2, 2)
+        if len(self._chat_history) > max_entries:
+            self._chat_history = self._chat_history[-max_entries:]
+
+    def _build_messages(self) -> List[Dict[str, str]]:
+        return [self._system_message, *self._chat_history]
+
+    def _should_respond(self, username: str, message: str) -> bool:
+        if self._responder is None:
+            return False
+        if not self._joined:
+            return False
+        stripped = message.strip()
+        if not stripped or stripped.startswith("/"):
+            return False
+
+        now = time.time()
+        if now - self._last_response_ts < self._config.chat.response_cooldown:
+            return False
+
+        lowered = stripped.lower()
+        bot_name = self._config.username.lower()
+        if bot_name in lowered:
+            return True
+        if lowered.startswith("gpt") or lowered.startswith("@gpt"):
+            return True
+        if self._config.chat.respond_to_questions and stripped.endswith("?"):
+            return True
+        return False
+
+    async def _respond_to_message(self, username: str, message: str) -> None:
+        if self._responder is None:
+            return
+
+        user_entry = f"{username}: {message}"
+        self._append_history("user", user_entry)
+
+        try:
+            reply = await self._responder.generate_reply(self._build_messages())
+        except Exception as exc:  # pragma: no cover - network/HTTP exceptions
+            logging.error("failed to generate GPT reply: %s", exc)
+            if self._chat_history and self._chat_history[-1]["content"] == user_entry:
+                self._chat_history.pop()
+            return
+
+        reply = reply.strip()
+        if not reply:
+            if self._chat_history and self._chat_history[-1]["content"] == user_entry:
+                self._chat_history.pop()
+            return
+
+        self._append_history("assistant", reply)
+        self._last_response_ts = time.time()
+        await self._send(reply)
 
     async def _log_stderr(self, process: Any) -> None:
         async for line in process.stderr:
@@ -426,13 +595,17 @@ class GPTModeratorBot:
             return
 
         if "Captcha solved" in stripped or stripped.startswith("* You are now chatting"):
+            if not self._joined:
+                self._reset_conversation()
             self._joined = True
 
         if self._config.username in stripped and "has joined the chat" in stripped:
+            if not self._joined:
+                self._reset_conversation()
             self._joined = True
 
         if self._joined and self._config.announce and not self._announced:
-            await self._send("Hello! I am the GPT moderator bot. Behave responsibly.")
+            await self._send("Hello! I'm ChatGPT 5. Mention me or ask a question and I'll reply.")
             self._announced = True
 
         parsed = self._parse_chat_line(stripped)
@@ -444,14 +617,16 @@ class GPTModeratorBot:
             return
 
         violation = self._engine.register_message(username, message)
-        if violation is None:
+        if violation is not None:
+            severity, keyword = violation
+            if severity == "criminal":
+                await self._handle_criminal(username, keyword)
+            else:
+                await self._handle_unethical(username, keyword)
             return
 
-        severity, keyword = violation
-        if severity == "criminal":
-            await self._handle_criminal(username, keyword)
-        else:
-            await self._handle_unethical(username, keyword)
+        if self._should_respond(username, message):
+            await self._respond_to_message(username, message)
 
     @staticmethod
     def _parse_chat_line(line: str) -> Optional[Tuple[str, str]]:
@@ -501,10 +676,12 @@ class GPTModeratorBot:
 # --- Command-line interface -------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Autonomous GPT moderator for ssh-chatter")
+    parser = argparse.ArgumentParser(
+        description="Autonomous ChatGPT 5 moderator for ssh-chatter"
+    )
     parser.add_argument("host", nargs="?", help="ssh-chatter host to connect to")
     parser.add_argument("--port", type=int, default=2022, help="SSH port (default: 2022)")
-    parser.add_argument("--username", default="gpt", help="login username (default: gpt)")
+    parser.add_argument("--username", default="gpt-5", help="login username (default: gpt-5)")
     parser.add_argument("--password", default=None, help="login password, if required")
     parser.add_argument("--identity", default=None, help="path to a private key for public-key auth")
     parser.add_argument("--reconnect-delay", type=float, default=5.0, help="seconds between reconnect attempts")
@@ -525,6 +702,43 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="verify captcha solving against all known prompts and exit",
     )
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help="OpenAI model to use for chat replies (default from OPENAI_MODEL or gpt-4o-mini)",
+    )
+    parser.add_argument(
+        "--history-limit",
+        type=int,
+        default=DEFAULT_HISTORY_LIMIT,
+        help="number of recent exchanges to keep in GPT context",
+    )
+    parser.add_argument(
+        "--system-prompt",
+        default=None,
+        help="override the GPT system prompt (or set GPT_PROMPT env)",
+    )
+    parser.add_argument(
+        "--openai-api-key",
+        default=None,
+        help="OpenAI API key (overrides OPENAI_API_KEY env variable)",
+    )
+    parser.add_argument(
+        "--openai-base-url",
+        default=DEFAULT_BASE_URL,
+        help="Base URL for OpenAI-compatible APIs (default from OPENAI_BASE_URL)",
+    )
+    parser.add_argument(
+        "--respond-to-questions",
+        action="store_true",
+        help="respond to any question even without being mentioned",
+    )
+    parser.add_argument(
+        "--response-cooldown",
+        type=float,
+        default=DEFAULT_RESPONSE_COOLDOWN,
+        help="minimum seconds between GPT replies",
+    )
     return parser
 
 
@@ -538,6 +752,13 @@ def configure_logging(level: str) -> None:
 async def main_async(args: argparse.Namespace) -> None:
     configure_logging(args.log_level)
     ssh_module = importlib.import_module("asyncssh")
+    system_prompt = args.system_prompt or os.environ.get("GPT_PROMPT") or DEFAULT_SYSTEM_PROMPT
+    api_key = args.openai_api_key or os.environ.get("OPENAI_API_KEY")
+    respond_to_questions = args.respond_to_questions
+    if not respond_to_questions:
+        env_flag = os.environ.get("GPT_RESPOND_TO_QUESTIONS")
+        if env_flag and env_flag.lower() in {"1", "true", "yes", "on"}:
+            respond_to_questions = True
     config = BotConfig(
         host=args.host,
         port=args.port,
@@ -546,6 +767,15 @@ async def main_async(args: argparse.Namespace) -> None:
         identity=args.identity,
         reconnect_delay=args.reconnect_delay,
         moderation=ModerationConfig(warning_limit=args.warning_limit),
+        chat=ChatConfig(
+            model=args.model,
+            history_limit=args.history_limit,
+            system_prompt=system_prompt,
+            api_key=api_key,
+            base_url=args.openai_base_url,
+            respond_to_questions=respond_to_questions,
+            response_cooldown=args.response_cooldown,
+        ),
     )
     bot = GPTModeratorBot(config, ssh_module)
 
