@@ -32,6 +32,7 @@ The codebase is intentionally compact so new contributors can navigate it quickl
 ## Automation hooks
 
 - `host_snapshot_last_captcha` exposes the most recently generated captcha prompt and answer along with a timestamp so external clients can pass challenges on behalf of unattended automation.
+- `scripts/gpt_moderator.py` provides an out-of-process GPT moderator that logs in over SSH, issues warnings for unethical content, and escalates to kicks or bans after repeated violations (requires Python 3.9+ and the `asyncssh` package).
 
 ## Prerequisites
 
