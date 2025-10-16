@@ -24,15 +24,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
 import logging
 import re
 import signal
 import sys
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, Optional, Tuple
-
-import asyncssh
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 
 # --- Captcha solving ---------------------------------------------------------------------------
@@ -127,10 +127,10 @@ def solve_captcha(question: str) -> Optional[str]:
         descriptor_token = f"the {descriptor.lower()}"
         species_token = f"the {species.lower()}"
 
-        if quoted == person_pronoun or quoted == descriptor_token:
-            return story.person_name
         if quoted == pet_pronoun or quoted == species_token:
             return story.pet_name
+        if quoted == person_pronoun or quoted == descriptor_token:
+            return story.person_name
 
         # When pronouns collide (e.g. both "he"), prefer the pet if the
         # descriptor token matches the person.  Otherwise fall back to the
@@ -149,6 +149,76 @@ def solve_captcha(question: str) -> Optional[str]:
         return story.pet_species.lower()
 
     return None
+
+
+# --- Self-test helpers -------------------------------------------------------------------------
+
+def _format_pronoun_prompt(story: CaptchaStory, refer_pet: bool, use_pronoun: bool) -> Tuple[str, str]:
+    person_pronoun = "he" if story.is_male else "she"
+    pet_pronoun = story.pet_pronoun or "it"
+    if use_pronoun:
+        quoted = pet_pronoun if refer_pet else person_pronoun
+    else:
+        quoted = f"the {story.pet_species}" if refer_pet else f"the {story.descriptor}"
+    answer = story.pet_name if refer_pet else story.person_name
+    question = (
+        f"{story.person_name} is a {story.descriptor} who has a {story.pet_species} named {story.pet_name}. "
+        f"\"{quoted}\" is adorable. Answer what the double-quoted text refers to."
+    )
+    return question, answer
+
+
+def _format_species_prompt(story: CaptchaStory) -> Tuple[str, str]:
+    question = (
+        f"{story.person_name} is a {story.descriptor} who has a {story.pet_species} named {story.pet_name}. "
+        f"What kind of pet does {story.person_name} have? Answer in lowercase."
+    )
+    answer = story.pet_species.lower()
+    return question, answer
+
+
+def run_captcha_self_test() -> int:
+    """Verify the solver matches every captcha prompt used by the server."""
+
+    question_answers: Dict[str, Set[str]] = defaultdict(set)
+    for story in CAPTCHA_STORIES:
+        if story.template_type == "pronoun":
+            for refer_pet in (False, True):
+                for use_pronoun in (False, True):
+                    question, expected = _format_pronoun_prompt(story, refer_pet, use_pronoun)
+                    question_answers[question].add(expected)
+        else:
+            question, expected = _format_species_prompt(story)
+            question_answers[question].add(expected)
+
+    failures: List[str] = []
+    ambiguous: List[str] = []
+    for question, answers in question_answers.items():
+        observed = solve_captcha(question)
+        if observed is None or observed not in answers:
+            expected_str = ", ".join(sorted(answers))
+            failures.append(
+                f"expected one of {{{expected_str}}} but solver returned {observed!r} for question '{question}'"
+            )
+        if len(answers) > 1:
+            ambiguous.append(question)
+
+    if failures:
+        print("captcha self-test failed:", file=sys.stderr)
+        for failure in failures:
+            print(f" - {failure}", file=sys.stderr)
+        return 1
+
+    if ambiguous:
+        print("captcha self-test passed; ambiguous prompts were resolved using deterministic tie-breakers.")
+        for question in ambiguous:
+            choices = ", ".join(sorted(question_answers[question]))
+            observed = solve_captcha(question)
+            print(f" - '{question}' → accepted answers {{{choices}}}, solver chose '{observed}'")
+        return 0
+
+    print("captcha self-test passed for all known prompts.")
+    return 0
 
 
 # --- Moderation policy -------------------------------------------------------------------------
@@ -246,9 +316,9 @@ class ModerationEngine:
 # --- SSH chat client ---------------------------------------------------------------------------
 
 CHAT_PATTERNS: Tuple[re.Pattern[str], ...] = (
-    re.compile(r"^\\[([^\\]]+)\\]\\s+(.*)$"),
-    re.compile(r"^<([^>]+)>\\s+(.*)$"),
-    re.compile(r"^([^:]+):\\s+(.*)$"),
+    re.compile(r"^\[([^\]]+)\]\s+(.*)$"),
+    re.compile(r"^<([^>]+)>\s+(.*)$"),
+    re.compile(r"^([^:]+):\s+(.*)$"),
 )
 
 
@@ -267,27 +337,28 @@ class BotConfig:
 class GPTModeratorBot:
     """Autonomous moderator that connects to ssh-chatter via SSH."""
 
-    def __init__(self, config: BotConfig) -> None:
+    def __init__(self, config: BotConfig, ssh_module: Any) -> None:
         self._config = config
         self._engine = ModerationEngine(config.moderation)
         self._running = True
         self._joined = False
         self._captcha_question: Optional[str] = None
         self._announced = False
-        self._connection: Optional[asyncssh.SSHClientConnection] = None
-        self._process: Optional[asyncssh.SSHClientProcess] = None
+        self._ssh = ssh_module
+        self._connection: Optional[Any] = None
+        self._process: Optional[Any] = None
 
     async def run(self) -> None:
         while self._running:
             try:
                 await self._connect_and_moderate()
-            except (asyncssh.Error, OSError) as exc:
+            except (self._ssh.Error, OSError) as exc:
                 logging.error("connection failure: %s", exc)
                 await asyncio.sleep(self._config.reconnect_delay)
 
     async def _connect_and_moderate(self) -> None:
         logging.info("connecting to %s:%s as %s", self._config.host, self._config.port, self._config.username)
-        async with asyncssh.connect(
+        async with self._ssh.connect(
             self._config.host,
             port=self._config.port,
             username=self._config.username,
@@ -315,12 +386,12 @@ class GPTModeratorBot:
             await asyncio.gather(*pending, return_exceptions=True)
             await asyncio.gather(*done, return_exceptions=True)
 
-    async def _log_stderr(self, process: asyncssh.SSHClientProcess) -> None:
+    async def _log_stderr(self, process: Any) -> None:
         async for line in process.stderr:
             text = line.rstrip("\n")
             logging.debug("stderr: %s", text)
 
-    async def _read_stdout(self, process: asyncssh.SSHClientProcess) -> None:
+    async def _read_stdout(self, process: Any) -> None:
         async for line in process.stdout:
             text = line.rstrip("\n")
             await self._handle_line(text)
@@ -423,7 +494,7 @@ class GPTModeratorBot:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Autonomous GPT moderator for ssh-chatter")
-    parser.add_argument("host", help="ssh-chatter host to connect to")
+    parser.add_argument("host", nargs="?", help="ssh-chatter host to connect to")
     parser.add_argument("--port", type=int, default=2022, help="SSH port (default: 2022)")
     parser.add_argument("--username", default="gpt", help="login username (default: gpt)")
     parser.add_argument("--password", default=None, help="login password, if required")
@@ -441,6 +512,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help="logging verbosity",
     )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="verify captcha solving against all known prompts and exit",
+    )
     return parser
 
 
@@ -453,6 +529,7 @@ def configure_logging(level: str) -> None:
 
 async def main_async(args: argparse.Namespace) -> None:
     configure_logging(args.log_level)
+    ssh_module = importlib.import_module("asyncssh")
     config = BotConfig(
         host=args.host,
         port=args.port,
@@ -462,7 +539,7 @@ async def main_async(args: argparse.Namespace) -> None:
         reconnect_delay=args.reconnect_delay,
         moderation=ModerationConfig(warning_limit=args.warning_limit),
     )
-    bot = GPTModeratorBot(config)
+    bot = GPTModeratorBot(config, ssh_module)
 
     loop = asyncio.get_running_loop()
 
@@ -479,6 +556,10 @@ async def main_async(args: argparse.Namespace) -> None:
 def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.self_test:
+        return run_captcha_self_test()
+    if not args.host:
+        parser.error("host is required unless --self-test is used")
     try:
         asyncio.run(main_async(args))
     except KeyboardInterrupt:

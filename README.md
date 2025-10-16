@@ -32,7 +32,7 @@ The codebase is intentionally compact so new contributors can navigate it quickl
 ## Automation hooks
 
 - `host_snapshot_last_captcha` exposes the most recently generated captcha prompt and answer along with a timestamp so external clients can pass challenges on behalf of unattended automation.
-- `scripts/gpt_moderator.py` provides an out-of-process GPT moderator that logs in over SSH, issues warnings for unethical content, and escalates to kicks or bans after repeated violations (requires Python 3.9+ and the `asyncssh` package).
+- `scripts/gpt_moderator.py` provides an out-of-process GPT moderator that logs in over SSH, issues warnings for unethical content, and escalates to kicks or bans after repeated violations (requires Python 3.9+ and the `asyncssh` package).  Verify that its captcha solver matches every server prompt with `python3 scripts/gpt_moderator.py --self-test`, which also reports how ambiguous pronoun prompts (e.g. "he" for Alexei and Kotya) are resolved.
 - `scripts/install_modbot_service.sh` installs the moderator into a dedicated virtual environment and wires it up as a `systemd` service.
 
 ### Running the moderator as a systemd service
