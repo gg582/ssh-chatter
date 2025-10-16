@@ -781,10 +781,10 @@ class GPTModeratorBot:
                 # Send an empty response so the server can react (usually by
                 # issuing a new captcha or disconnecting us) and stop the bot
                 # to avoid spamming incorrect answers.
-                await self._send("")
+                await self._submit_captcha_answer("")
                 self.stop()
             else:
-                await self._send(answer)
+                await self._submit_captcha_answer(answer)
             self._captcha_question = None
             return
 
@@ -859,6 +859,14 @@ class GPTModeratorBot:
             return
         logging.info("send: %s", message)
         self._process.stdin.write(message + "\n")
+        await self._process.stdin.drain()
+
+    async def _submit_captcha_answer(self, answer: str) -> None:
+        if not self._process:
+            return
+        logging.info("captcha answer: %s", answer)
+        self._process.stdin.write(answer)
+        self._process.stdin.write("\n")
         await self._process.stdin.drain()
 
     def stop(self) -> None:
