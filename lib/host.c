@@ -6,6 +6,9 @@
 #include "client.h"
 #include "webssh_client.h"
 
+int ssh_message_channel_request_pty_width(ssh_message msg);
+int ssh_message_channel_request_pty_height(ssh_message msg);
+
 #include <ctype.h>
 #include <dirent.h>
 #include <dlfcn.h>
@@ -22,6 +25,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
@@ -578,6 +582,9 @@ static uint32_t session_game_random(session_ctx_t *ctx);
 static int session_game_random_range(session_ctx_t *ctx, int max);
 static void session_game_start_tetris(session_ctx_t *ctx);
 static void session_game_tetris_reset(tetris_game_state_t *state);
+static void session_game_tetris_reset_drop_timer(tetris_game_state_t *state);
+static void session_game_tetris_update_speed(tetris_game_state_t *state);
+static void session_game_tetris_clear_messages(tetris_game_state_t *state);
 static void session_game_tetris_fill_bag(session_ctx_t *ctx);
 static int session_game_tetris_take_piece(session_ctx_t *ctx);
 static bool session_game_tetris_spawn_piece(session_ctx_t *ctx);
@@ -589,7 +596,19 @@ static bool session_game_tetris_soft_drop(session_ctx_t *ctx);
 static bool session_game_tetris_rotate(session_ctx_t *ctx);
 static void session_game_tetris_lock_piece(session_ctx_t *ctx);
 static void session_game_tetris_clear_lines(session_ctx_t *ctx, unsigned *cleared);
+static void session_update_terminal_size(session_ctx_t *ctx, unsigned cols, unsigned rows);
+static void session_game_tetris_required_dimensions(unsigned *min_cols, unsigned *min_rows);
+static bool session_game_tetris_fullscreen_supported(const session_ctx_t *ctx);
 static void session_game_tetris_render(session_ctx_t *ctx);
+static void session_game_tetris_render_textmode(session_ctx_t *ctx);
+static void session_game_tetris_render_fullscreen(session_ctx_t *ctx);
+static void session_game_tetris_capture_message(session_ctx_t *ctx, const char *line);
+static void session_game_tetris_enter_fullscreen(session_ctx_t *ctx);
+static void session_game_tetris_exit_fullscreen(session_ctx_t *ctx);
+static void session_game_tetris_tick(session_ctx_t *ctx, const struct timespec *now);
+static int session_game_tetris_poll_timeout_ms(const session_ctx_t *ctx);
+static bool session_game_tetris_handle_key(session_ctx_t *ctx, char ch);
+static bool session_game_tetris_handle_arrow(session_ctx_t *ctx, char arrow);
 static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line);
 static void session_game_start_liargame(session_ctx_t *ctx);
 static void session_game_liar_present_round(session_ctx_t *ctx);
@@ -3217,6 +3236,11 @@ static void session_send_line(session_ctx_t *ctx, const char *message) {
     return;
   }
 
+  if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS && ctx->game.tetris.fullscreen) {
+    session_game_tetris_capture_message(ctx, message);
+    return;
+  }
+
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   const size_t bg_len = strlen(bg);
 
@@ -3502,6 +3526,10 @@ static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
     return;
   }
 
+  if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS && ctx->game.tetris.fullscreen) {
+    return;
+  }
+
   if (include_separator) {
     session_render_separator(ctx, "Input");
   }
@@ -3553,6 +3581,10 @@ static void session_refresh_input_line(session_ctx_t *ctx) {
     return;
   }
 
+  if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS && ctx->game.tetris.fullscreen) {
+    return;
+  }
+
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   if (bg[0] != '\0') {
     ssh_channel_write(ctx->channel, bg, strlen(bg));
@@ -3588,6 +3620,10 @@ static void session_set_input_text(session_ctx_t *ctx, const char *text) {
 
 static void session_local_echo_char(session_ctx_t *ctx, char ch) {
   if (ctx == NULL || ctx->channel == NULL) {
+    return;
+  }
+
+  if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS && ctx->game.tetris.fullscreen) {
     return;
   }
 
@@ -3932,6 +3968,13 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
   }
 
   if (length == 3U && sequence[1] == '[') {
+    if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS && ctx->game.tetris.fullscreen) {
+      if (session_game_tetris_handle_arrow(ctx, sequence[2])) {
+        ctx->input_escape_active = false;
+        ctx->input_escape_length = 0U;
+        return true;
+      }
+    }
     if (sequence[2] == 'A') {
       session_scrollback_navigate(ctx, 1);
       ctx->input_escape_active = false;
@@ -3947,6 +3990,13 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
   }
 
   if (length == 3U && sequence[1] == 'O') {
+    if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS && ctx->game.tetris.fullscreen) {
+      if (session_game_tetris_handle_arrow(ctx, sequence[2])) {
+        ctx->input_escape_active = false;
+        ctx->input_escape_length = 0U;
+        return true;
+      }
+    }
     if (sequence[2] == 'A') {
       session_scrollback_navigate(ctx, 1);
       ctx->input_escape_active = false;
@@ -4396,6 +4446,19 @@ static int session_accept_channel(session_ctx_t *ctx) {
   return ctx->channel != NULL ? 0 : -1;
 }
 
+static void session_update_terminal_size(session_ctx_t *ctx, unsigned cols, unsigned rows) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (cols > 0U) {
+    ctx->terminal_cols = cols;
+  }
+  if (rows > 0U) {
+    ctx->terminal_rows = rows;
+  }
+}
+
 static int session_prepare_shell(session_ctx_t *ctx) {
   ssh_message message = NULL;
   bool shell_ready = false;
@@ -4403,11 +4466,17 @@ static int session_prepare_shell(session_ctx_t *ctx) {
   while (!shell_ready && (message = ssh_message_get(ctx->session)) != NULL) {
     if (ssh_message_type(message) == SSH_REQUEST_CHANNEL) {
       const int subtype = ssh_message_subtype(message);
-      if (subtype == SSH_CHANNEL_REQUEST_PTY || subtype == SSH_CHANNEL_REQUEST_SHELL) {
+      if (subtype == SSH_CHANNEL_REQUEST_PTY) {
+        session_update_terminal_size(ctx, (unsigned)ssh_message_channel_request_pty_width(message),
+                                     (unsigned)ssh_message_channel_request_pty_height(message));
         ssh_message_channel_request_reply_success(message);
-        if (subtype == SSH_CHANNEL_REQUEST_SHELL) {
-          shell_ready = true;
-        }
+      } else if (subtype == SSH_CHANNEL_REQUEST_WINDOW_CHANGE) {
+        session_update_terminal_size(ctx, (unsigned)ssh_message_channel_request_pty_width(message),
+                                     (unsigned)ssh_message_channel_request_pty_height(message));
+        ssh_message_channel_request_reply_success(message);
+      } else if (subtype == SSH_CHANNEL_REQUEST_SHELL) {
+        ssh_message_channel_request_reply_success(message);
+        shell_ready = true;
       } else {
         ssh_message_reply_default(message);
       }
@@ -7573,9 +7642,72 @@ static void session_game_tetris_reset(tetris_game_state_t *state) {
   state->lines_cleared = 0U;
   state->game_over = false;
   state->bag_index = 0U;
+  state->fullscreen = false;
+  state->fullscreen_requested = false;
+  state->fullscreen_warning_shown = false;
+  state->timers_initialised = false;
+  state->drop_interval_ms = 700U;
+  state->level = 1U;
+  state->last_tick = (struct timespec){0, 0};
+  state->last_drop = (struct timespec){0, 0};
+  state->message_log_count = 0U;
+  for (size_t idx = 0U; idx < SSH_CHATTER_TETRIS_LOG_LINES; ++idx) {
+    state->message_log[idx][0] = '\0';
+  }
   for (size_t idx = 0U; idx < 7U; ++idx) {
     state->bag[idx] = (int)idx;
   }
+}
+
+static void session_game_tetris_reset_drop_timer(tetris_game_state_t *state) {
+  if (state != NULL) {
+    state->timers_initialised = false;
+  }
+}
+
+static void session_game_tetris_update_speed(tetris_game_state_t *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  unsigned new_level = (state->lines_cleared / 10U) + 1U;
+  if (new_level == 0U) {
+    new_level = 1U;
+  }
+  if (new_level > 20U) {
+    new_level = 20U;
+  }
+  state->level = new_level;
+
+  unsigned base = 700U;
+  if (new_level > 1U) {
+    unsigned reduction = (new_level - 1U) * 60U;
+    if (reduction > 620U) {
+      reduction = 620U;
+    }
+    if (base > reduction) {
+      base -= reduction;
+    } else {
+      base = 80U;
+    }
+  }
+
+  if (base < 80U) {
+    base = 80U;
+  }
+
+  state->drop_interval_ms = base;
+}
+
+static void session_game_tetris_clear_messages(tetris_game_state_t *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_TETRIS_LOG_LINES; ++idx) {
+    state->message_log[idx][0] = '\0';
+  }
+  state->message_log_count = 0U;
 }
 
 static void session_game_tetris_fill_bag(session_ctx_t *ctx) {
@@ -7656,6 +7788,7 @@ static bool session_game_tetris_spawn_piece(session_ctx_t *ctx) {
     state->game_over = true;
     return false;
   }
+  session_game_tetris_reset_drop_timer(state);
   return true;
 }
 
@@ -7674,14 +7807,21 @@ static bool session_game_tetris_move(session_ctx_t *ctx, int drow, int dcol) {
   }
   state->row = new_row;
   state->column = new_col;
+  session_game_tetris_reset_drop_timer(state);
   return true;
 }
 
 static bool session_game_tetris_soft_drop(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
+    return false;
+  }
+  tetris_game_state_t *state = &ctx->game.tetris;
   if (session_game_tetris_move(ctx, 1, 0)) {
+    state->score += 1U;
     return true;
   }
   session_game_tetris_lock_piece(ctx);
+  session_game_tetris_reset_drop_timer(state);
   return false;
 }
 
@@ -7698,6 +7838,7 @@ static bool session_game_tetris_rotate(session_ctx_t *ctx) {
     return false;
   }
   state->rotation = new_rotation;
+  session_game_tetris_reset_drop_timer(state);
   return true;
 }
 
@@ -7733,6 +7874,21 @@ static void session_game_tetris_clear_lines(session_ctx_t *ctx, unsigned *cleare
   }
 }
 
+static unsigned session_game_tetris_line_value(unsigned cleared) {
+  switch (cleared) {
+  case 1:
+    return 40U;
+  case 2:
+    return 100U;
+  case 3:
+    return 300U;
+  case 4:
+    return 1200U;
+  default:
+    return cleared * 40U;
+  }
+}
+
 static void session_game_tetris_lock_piece(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
     return;
@@ -7761,7 +7917,9 @@ static void session_game_tetris_lock_piece(session_ctx_t *ctx) {
   session_game_tetris_clear_lines(ctx, &cleared);
   if (cleared > 0U) {
     state->lines_cleared += cleared;
-    state->score += cleared * 100U;
+    session_game_tetris_update_speed(state);
+    unsigned base = session_game_tetris_line_value(cleared);
+    state->score += base * state->level;
   }
 
   if (!session_game_tetris_spawn_piece(ctx)) {
@@ -7769,7 +7927,97 @@ static void session_game_tetris_lock_piece(session_ctx_t *ctx) {
   }
 }
 
-static void session_game_tetris_render(session_ctx_t *ctx) {
+static size_t session_game_tetris_append_text(char *buffer, size_t capacity, size_t offset, const char *text) {
+  if (buffer == NULL || text == NULL || capacity == 0U || offset >= capacity) {
+    return offset;
+  }
+
+  size_t remaining = capacity - offset;
+  if (remaining == 0U) {
+    return offset;
+  }
+
+  size_t length = strnlen(text, remaining - 1U);
+  memcpy(buffer + offset, text, length);
+  offset += length;
+  buffer[offset] = '\0';
+  return offset;
+}
+
+static size_t session_game_tetris_append_format(char *buffer, size_t capacity, size_t offset, const char *fmt, ...) {
+  if (buffer == NULL || fmt == NULL || capacity == 0U || offset >= capacity) {
+    return offset;
+  }
+
+  va_list args;
+  va_start(args, fmt);
+  int written = vsnprintf(buffer + offset, capacity - offset, fmt, args);
+  va_end(args);
+  if (written < 0) {
+    return offset;
+  }
+  if ((size_t)written >= capacity - offset) {
+    return capacity - 1U;
+  }
+  return offset + (size_t)written;
+}
+
+static void session_game_tetris_capture_message(session_ctx_t *ctx, const char *line) {
+  if (ctx == NULL || line == NULL) {
+    return;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (!state->fullscreen) {
+    return;
+  }
+
+  char cleaned[96];
+  size_t out = 0U;
+  bool skipping = false;
+  for (const char *cursor = line; *cursor != '\0' && out + 1U < sizeof(cleaned); ++cursor) {
+    unsigned char ch = (unsigned char)*cursor;
+    if (skipping) {
+      if (ch >= 0x40U && ch <= 0x7eU) {
+        skipping = false;
+      }
+      continue;
+    }
+    if (ch == 0x1bU) {
+      skipping = true;
+      continue;
+    }
+    if (ch == '\r' || ch == '\n') {
+      if (out > 0U && cleaned[out - 1U] != ' ') {
+        cleaned[out++] = ' ';
+      }
+      continue;
+    }
+    if (ch < 0x20U) {
+      continue;
+    }
+    cleaned[out++] = (char)ch;
+  }
+  cleaned[out] = '\0';
+  trim_whitespace_inplace(cleaned);
+  if (cleaned[0] == '\0') {
+    return;
+  }
+
+  if (state->message_log_count >= SSH_CHATTER_TETRIS_LOG_LINES) {
+    for (size_t idx = 1U; idx < SSH_CHATTER_TETRIS_LOG_LINES; ++idx) {
+      snprintf(state->message_log[idx - 1U], sizeof(state->message_log[idx - 1U]), "%s", state->message_log[idx]);
+    }
+    state->message_log_count = SSH_CHATTER_TETRIS_LOG_LINES - 1U;
+  }
+
+  snprintf(state->message_log[state->message_log_count], sizeof(state->message_log[0]), "%s", cleaned);
+  ++state->message_log_count;
+
+  session_game_tetris_render(ctx);
+}
+
+static void session_game_tetris_render_textmode(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
     return;
   }
@@ -7781,7 +8029,7 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
   char next_char = TETROMINO_DISPLAY_CHARS[state->next_piece % 7];
   snprintf(header, sizeof(header), "Score: %u   Lines: %u   Next: %c", state->score, state->lines_cleared, next_char);
   session_send_system_line(ctx, header);
-  session_send_system_line(ctx, "Controls: left, right, down, rotate, drop. Blank line = down.");
+  session_send_system_line(ctx, "Controls: ←/→ move, ↓ soft drop, ↑ rotate, space = hard drop. Ctrl+D exits.");
 
   char border[SSH_CHATTER_TETRIS_WIDTH + 3];
   border[0] = '+';
@@ -7822,6 +8070,221 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
   session_send_system_line(ctx, border);
 }
 
+static void session_game_tetris_render_fullscreen(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->channel == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
+    return;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  char screen[8192];
+  size_t offset = 0U;
+  const char *line_reset = "\n\033[1G";
+  unsigned rows = ctx->terminal_rows;
+  bool add_title_spacing = rows == 0U || rows >= SSH_CHATTER_TETRIS_HEIGHT + 10U;
+  bool include_messages = rows == 0U || rows >= SSH_CHATTER_TETRIS_HEIGHT + 11U;
+  unsigned info_lines = state->game_over ? 1U : 2U;
+  unsigned base_rows = 1U + (add_title_spacing ? 1U : 0U) + 1U + SSH_CHATTER_TETRIS_HEIGHT + 1U + 1U + info_lines;
+  unsigned message_overhead = include_messages ? 3U : 0U; /* blank line, header, trailing blank */
+  unsigned max_messages = 0U;
+
+  if (include_messages) {
+    if (rows == 0U) {
+      max_messages = SSH_CHATTER_TETRIS_LOG_LINES;
+    } else if (rows > base_rows + message_overhead) {
+      max_messages = rows - (base_rows + message_overhead);
+      if (max_messages > SSH_CHATTER_TETRIS_LOG_LINES) {
+        max_messages = SSH_CHATTER_TETRIS_LOG_LINES;
+      }
+      if (max_messages == 0U) {
+        include_messages = false;
+      }
+    } else {
+      include_messages = false;
+    }
+  }
+
+  if (!include_messages) {
+    max_messages = 0U;
+  }
+
+  offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "\033[H\033[0m\033[1G");
+  offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "        ТЕТРИС 1984");
+  offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+  if (add_title_spacing) {
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+  }
+
+  offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "╔");
+  for (int col = 0; col < SSH_CHATTER_TETRIS_WIDTH * 2; ++col) {
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "═");
+  }
+  offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "╗  NEXT");
+  offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+
+  char next_lines[4][9];
+  for (int r = 0; r < 4; ++r) {
+    next_lines[r][0] = '\0';
+    size_t line_offset = 0U;
+    for (int c = 0; c < 4; ++c) {
+      const char *token = session_game_tetris_cell_occupied(state->next_piece, 0, r, c) ? "██" : "  ";
+      line_offset = session_game_tetris_append_text(next_lines[r], sizeof(next_lines[r]), line_offset, token);
+    }
+  }
+
+  for (int row = 0; row < SSH_CHATTER_TETRIS_HEIGHT; ++row) {
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "║");
+    for (int col = 0; col < SSH_CHATTER_TETRIS_WIDTH; ++col) {
+      bool filled = state->board[row][col] != 0;
+      if (!filled && !state->game_over && state->current_piece >= 0) {
+        int local_row = row - state->row;
+        int local_col = col - state->column;
+        if (local_row >= 0 && local_row < SSH_CHATTER_TETROMINO_SIZE && local_col >= 0 &&
+            local_col < SSH_CHATTER_TETROMINO_SIZE &&
+            session_game_tetris_cell_occupied(state->current_piece, state->rotation, local_row, local_col)) {
+          filled = true;
+        }
+      }
+      offset = session_game_tetris_append_text(screen, sizeof(screen), offset, filled ? "██" : "  ");
+    }
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "║");
+    if (row == 0) {
+      offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "  ╔════╗");
+    } else if (row >= 1 && row <= 4) {
+      offset = session_game_tetris_append_format(screen, sizeof(screen), offset, "  ║%s║", next_lines[row - 1]);
+    } else if (row == 5) {
+      offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "  ╚════╝");
+    }
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+  }
+
+  offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "╚");
+  for (int col = 0; col < SSH_CHATTER_TETRIS_WIDTH * 2; ++col) {
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "═");
+  }
+  offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "╝");
+  offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+
+  offset = session_game_tetris_append_format(screen, sizeof(screen), offset, "Score: %06u   Level: %u   Lines: %u",
+                                             state->score, state->level, state->lines_cleared);
+  offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+  if (state->game_over) {
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset,
+                                             "GAME OVER! Press Ctrl+D to leave the arcade.");
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+  } else {
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset,
+                                             "Controls: ←/→ move  ↓ soft drop  ↑ rotate  Space hard drop.");
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset,
+                                             "Press Ctrl+D to return to the chat room.");
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+  }
+
+  if (include_messages) {
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "Messages from chat:");
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+
+    if (state->message_log_count == 0U) {
+      offset = session_game_tetris_append_text(screen, sizeof(screen), offset, "  (no new chat messages)");
+      offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+    } else {
+      size_t visible = state->message_log_count;
+      if (visible > max_messages) {
+        visible = max_messages;
+      }
+      size_t start_index = state->message_log_count > visible ? state->message_log_count - visible : 0U;
+      for (size_t idx = start_index; idx < state->message_log_count; ++idx) {
+        offset = session_game_tetris_append_format(screen, sizeof(screen), offset, "  %s", state->message_log[idx]);
+        offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+      }
+    }
+
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+  } else {
+    offset = session_game_tetris_append_text(screen, sizeof(screen), offset, line_reset);
+  }
+
+  ssh_channel_write(ctx->channel, screen, offset);
+}
+
+static void session_game_tetris_required_dimensions(unsigned *min_cols, unsigned *min_rows) {
+  if (min_cols != NULL) {
+    *min_cols = SSH_CHATTER_TETRIS_WIDTH * 2U + 14U;
+  }
+  if (min_rows != NULL) {
+    *min_rows = SSH_CHATTER_TETRIS_HEIGHT + 8U;
+  }
+}
+
+static bool session_game_tetris_fullscreen_supported(const session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  unsigned min_cols = 0U;
+  unsigned min_rows = 0U;
+  session_game_tetris_required_dimensions(&min_cols, &min_rows);
+
+  unsigned cols = ctx->terminal_cols;
+  unsigned rows = ctx->terminal_rows;
+  if (cols == 0U) {
+    cols = min_cols;
+  }
+  if (rows == 0U) {
+    rows = min_rows;
+  }
+
+  return cols >= min_cols && rows >= min_rows;
+}
+
+static void session_game_tetris_render(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
+    return;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  const bool supports_fullscreen = session_game_tetris_fullscreen_supported(ctx);
+
+  if (state->fullscreen && !supports_fullscreen) {
+    session_game_tetris_exit_fullscreen(ctx);
+  }
+
+  if (state->fullscreen_requested && !state->fullscreen && supports_fullscreen) {
+    session_game_tetris_enter_fullscreen(ctx);
+  }
+
+  if (state->fullscreen) {
+    state->fullscreen_warning_shown = false;
+    session_game_tetris_render_fullscreen(ctx);
+    return;
+  }
+
+  if (state->fullscreen_requested && !supports_fullscreen && !state->fullscreen_warning_shown) {
+    unsigned min_cols = 0U;
+    unsigned min_rows = 0U;
+    session_game_tetris_required_dimensions(&min_cols, &min_rows);
+
+    unsigned cols = ctx->terminal_cols;
+    unsigned rows = ctx->terminal_rows;
+    if (cols == 0U) {
+      cols = min_cols;
+    }
+    if (rows == 0U) {
+      rows = min_rows;
+    }
+
+    char notice[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(notice, sizeof(notice),
+             "Terminal size %ux%u is too small for the arcade view (requires %ux%u). Showing compact layout.", cols,
+             rows, min_cols, min_rows);
+    session_send_system_line(ctx, notice);
+    state->fullscreen_warning_shown = true;
+  }
+
+  session_game_tetris_render_textmode(ctx);
+}
+
 static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line) {
   if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
     return;
@@ -7857,7 +8320,8 @@ static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line
   }
 
   if (strcmp(command, "help") == 0) {
-    session_send_system_line(ctx, "Tetris controls: left, right, down, rotate, drop, help.");
+    session_send_system_line(ctx,
+                             "Tetris controls: use ←/→, ↓, ↑, space, or type left/right/down/rotate/drop.");
     return;
   }
 
@@ -7872,11 +8336,16 @@ static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line
   } else if (strcmp(command, "rotate") == 0 || strcmp(command, "cw") == 0) {
     redraw = session_game_tetris_rotate(ctx);
   } else if (strcmp(command, "drop") == 0) {
+    unsigned steps = 0U;
     while (session_game_tetris_soft_drop(ctx)) {
+      ++steps;
+    }
+    if (steps > 0U) {
+      state->score += steps;
     }
     redraw = true;
   } else {
-    session_send_system_line(ctx, "Unknown Tetris command. Use left, right, down, rotate, drop, or help.");
+    session_send_system_line(ctx, "Unknown Tetris command. Use left/right/down/rotate/drop or help.");
     return;
   }
 
@@ -7909,8 +8378,237 @@ static void session_game_start_tetris(session_ctx_t *ctx) {
     return;
   }
 
-  session_send_system_line(ctx, "Tetris started. Use left/right/down/rotate/drop. Ctrl+D or /suspend! exits.");
+  session_send_system_line(ctx, "Launching Tetris arcade. Press Ctrl+D or /suspend! to return to chat.");
+  ctx->game.tetris.fullscreen_requested = true;
+  ctx->game.tetris.fullscreen_warning_shown = false;
+  if (session_game_tetris_fullscreen_supported(ctx)) {
+    session_game_tetris_enter_fullscreen(ctx);
+  }
   session_game_tetris_render(ctx);
+}
+
+static void session_game_tetris_enter_fullscreen(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->channel == NULL) {
+    return;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (state->fullscreen) {
+    return;
+  }
+
+  session_game_tetris_clear_messages(state);
+  state->fullscreen = true;
+  state->fullscreen_requested = true;
+  state->fullscreen_warning_shown = false;
+  state->timers_initialised = false;
+
+  const char *sequence = "\033[?1049h\033[?25l\033[2J\033[H\033[0m";
+  ssh_channel_write(ctx->channel, sequence, strlen(sequence));
+}
+
+static void session_game_tetris_exit_fullscreen(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->channel == NULL) {
+    return;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (!state->fullscreen) {
+    return;
+  }
+
+  const char *sequence = "\033[?1049l\033[?25h\033[0m";
+  ssh_channel_write(ctx->channel, sequence, strlen(sequence));
+  state->fullscreen = false;
+  state->fullscreen_warning_shown = false;
+  state->timers_initialised = false;
+
+  for (size_t idx = 0U; idx < state->message_log_count; ++idx) {
+    session_send_plain_line(ctx, state->message_log[idx]);
+  }
+  session_game_tetris_clear_messages(state);
+}
+
+static int session_game_tetris_poll_timeout_ms(const session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+    return -1;
+  }
+
+  const tetris_game_state_t *state = &ctx->game.tetris;
+  if (!state->fullscreen || state->game_over) {
+    return 100;
+  }
+
+  if (!state->timers_initialised) {
+    return (int)state->drop_interval_ms;
+  }
+
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+    now.tv_sec = time(NULL);
+    now.tv_nsec = 0L;
+  }
+
+  long ms_elapsed = (now.tv_sec - state->last_drop.tv_sec) * 1000L +
+                    (now.tv_nsec - state->last_drop.tv_nsec) / 1000000L;
+  if (ms_elapsed < 0L) {
+    ms_elapsed = 0L;
+  }
+
+  long remaining = (long)state->drop_interval_ms - ms_elapsed;
+  if (remaining < 0L) {
+    remaining = 0L;
+  }
+  if (remaining > INT_MAX) {
+    remaining = INT_MAX;
+  }
+  return (int)remaining;
+}
+
+static void session_game_tetris_tick(session_ctx_t *ctx, const struct timespec *now_opt) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+    return;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (!state->fullscreen || state->game_over) {
+    return;
+  }
+
+  struct timespec now;
+  if (now_opt != NULL) {
+    now = *now_opt;
+  } else if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+    now.tv_sec = time(NULL);
+    now.tv_nsec = 0L;
+  }
+
+  if (!state->timers_initialised) {
+    state->last_drop = now;
+    state->timers_initialised = true;
+    return;
+  }
+
+  long ms_elapsed = (now.tv_sec - state->last_drop.tv_sec) * 1000L +
+                    (now.tv_nsec - state->last_drop.tv_nsec) / 1000000L;
+  if (ms_elapsed < 0L) {
+    ms_elapsed = 0L;
+  }
+
+  if (ms_elapsed >= (long)state->drop_interval_ms) {
+    bool moved = session_game_tetris_soft_drop(ctx);
+    state->last_drop = now;
+    if (moved || state->game_over) {
+      session_game_tetris_render(ctx);
+    }
+  }
+}
+
+static bool session_game_tetris_handle_arrow(session_ctx_t *ctx, char arrow) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+    return false;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (!state->fullscreen) {
+    return false;
+  }
+
+  if (state->game_over) {
+    return true;
+  }
+
+  bool render = false;
+  switch (arrow) {
+  case 'C':
+    render = session_game_tetris_move(ctx, 0, 1);
+    break;
+  case 'D':
+    render = session_game_tetris_move(ctx, 0, -1);
+    break;
+  case 'B':
+    session_game_tetris_soft_drop(ctx);
+    render = true;
+    break;
+  case 'A':
+    render = session_game_tetris_rotate(ctx);
+    break;
+  default:
+    return false;
+  }
+
+  if (render) {
+    session_game_tetris_render(ctx);
+  }
+
+  return true;
+}
+
+static bool session_game_tetris_handle_key(session_ctx_t *ctx, char ch) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+    return false;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (!state->fullscreen) {
+    return false;
+  }
+
+  if (state->game_over) {
+    return true;
+  }
+
+  bool handled = false;
+  bool render = false;
+  switch (ch) {
+  case 'a':
+  case 'h':
+    render = session_game_tetris_move(ctx, 0, -1);
+    handled = true;
+    break;
+  case 'd':
+  case 'l':
+    render = session_game_tetris_move(ctx, 0, 1);
+    handled = true;
+    break;
+  case 's':
+  case 'j':
+    session_game_tetris_soft_drop(ctx);
+    render = true;
+    handled = true;
+    break;
+  case 'w':
+  case 'k':
+    render = session_game_tetris_rotate(ctx);
+    handled = true;
+    break;
+  case ' ': {
+    unsigned steps = 0U;
+    while (session_game_tetris_soft_drop(ctx)) {
+      ++steps;
+    }
+    if (steps > 0U) {
+      state->score += steps;
+    }
+    render = true;
+    handled = true;
+    break;
+  }
+  case '\r':
+  case '\n':
+    session_game_tetris_soft_drop(ctx);
+    render = true;
+    handled = true;
+    break;
+  default:
+    break;
+  }
+
+  if (handled && render) {
+    session_game_tetris_render(ctx);
+  }
+
+  return handled;
 }
 
 static void session_game_start_liargame(session_ctx_t *ctx) {
@@ -8070,6 +8768,7 @@ static void session_game_suspend(session_ctx_t *ctx, const char *reason) {
   }
 
   if (ctx->game.type == SESSION_GAME_TETRIS) {
+    session_game_tetris_exit_fullscreen(ctx);
     char summary[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(summary, sizeof(summary), "Tetris final score: %u (lines cleared: %u).", ctx->game.tetris.score,
              ctx->game.tetris.lines_cleared);
@@ -9647,6 +10346,8 @@ static void session_reset_for_retry(session_ctx_t *ctx) {
   ctx->has_last_message_time = false;
   ctx->last_message_time.tv_sec = 0;
   ctx->last_message_time.tv_nsec = 0;
+  ctx->terminal_cols = 0U;
+  ctx->terminal_rows = 0U;
 }
 
 static bool session_attempt_handshake_restart(session_ctx_t *ctx, unsigned int *attempts) {
@@ -9818,7 +10519,68 @@ static void *session_thread(void *arg) {
   session_render_prompt(ctx, true);
 
   char buffer[SSH_CHATTER_MAX_INPUT_LEN];
+  const int session_fd = ssh_get_fd(ctx->session);
   while (!ctx->should_exit) {
+    if (session_fd >= 0) {
+      int timeout = session_game_tetris_poll_timeout_ms(ctx);
+      struct pollfd poll_fd;
+      poll_fd.fd = session_fd;
+      poll_fd.events = POLLIN;
+      poll_fd.revents = 0;
+      int poll_result = poll(&poll_fd, 1, timeout);
+      if (poll_result < 0) {
+        if (errno == EINTR) {
+          session_game_tetris_tick(ctx, NULL);
+          continue;
+        }
+        break;
+      }
+
+      session_game_tetris_tick(ctx, NULL);
+
+      if (poll_result == 0) {
+        continue;
+      }
+
+      if ((poll_fd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+        break;
+      }
+
+      if ((poll_fd.revents & POLLIN) == 0) {
+        continue;
+      }
+    } else {
+      session_game_tetris_tick(ctx, NULL);
+    }
+
+    ssh_message window_message = NULL;
+    while ((window_message = ssh_message_get(ctx->session)) != NULL) {
+      if (ssh_message_type(window_message) == SSH_REQUEST_CHANNEL) {
+        const int subtype = ssh_message_subtype(window_message);
+        if (subtype == SSH_CHANNEL_REQUEST_WINDOW_CHANGE) {
+          session_update_terminal_size(ctx, (unsigned)ssh_message_channel_request_pty_width(window_message),
+                                       (unsigned)ssh_message_channel_request_pty_height(window_message));
+          ssh_message_channel_request_reply_success(window_message);
+          if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS) {
+            ctx->game.tetris.fullscreen_warning_shown = false;
+            session_game_tetris_render(ctx);
+          }
+          ssh_message_free(window_message);
+          continue;
+        }
+        if (subtype == SSH_CHANNEL_REQUEST_PTY) {
+          session_update_terminal_size(ctx, (unsigned)ssh_message_channel_request_pty_width(window_message),
+                                       (unsigned)ssh_message_channel_request_pty_height(window_message));
+          ssh_message_channel_request_reply_success(window_message);
+          ssh_message_free(window_message);
+          continue;
+        }
+      }
+
+      ssh_message_reply_default(window_message);
+      ssh_message_free(window_message);
+    }
+
     const int bytes_read = ssh_channel_read(ctx->channel, buffer, sizeof(buffer) - 1U, 0);
     if (bytes_read <= 0) {
       break;
@@ -9829,6 +10591,37 @@ static void *session_thread(void *arg) {
 
       if (session_consume_escape_sequence(ctx, ch)) {
         continue;
+      }
+
+      if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS && ctx->game.tetris.fullscreen) {
+        if (ch == 0x04) {
+          session_game_suspend(ctx, "Game suspended.");
+          session_clear_input(ctx);
+          if (ctx->should_exit) {
+            break;
+          }
+          session_render_prompt(ctx, false);
+          continue;
+        }
+
+        if (ch == 0x03) {
+          session_game_suspend(ctx, "Game suspended.");
+          session_handle_exit(ctx);
+          session_clear_input(ctx);
+          if (ctx->should_exit) {
+            break;
+          }
+          session_render_prompt(ctx, false);
+          continue;
+        }
+
+        if (session_game_tetris_handle_key(ctx, ch)) {
+          continue;
+        }
+
+        if (ch == 0x01 || ch == 0x13) {
+          continue;
+        }
       }
 
       if (ch == 0x01) {

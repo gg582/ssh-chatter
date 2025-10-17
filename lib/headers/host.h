@@ -49,6 +49,7 @@
 #define SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS 60
 #define SSH_CHATTER_TETRIS_WIDTH 10
 #define SSH_CHATTER_TETRIS_HEIGHT 20
+#define SSH_CHATTER_TETRIS_LOG_LINES 8
 
 struct host;
 struct session_ctx;
@@ -131,6 +132,16 @@ typedef struct tetris_game_state {
   bool game_over;
   int bag[7];
   size_t bag_index;
+  bool fullscreen;
+  bool fullscreen_requested;
+  bool fullscreen_warning_shown;
+  bool timers_initialised;
+  unsigned drop_interval_ms;
+  unsigned level;
+  struct timespec last_tick;
+  struct timespec last_drop;
+  char message_log[SSH_CHATTER_TETRIS_LOG_LINES][SSH_CHATTER_MESSAGE_LIMIT];
+  size_t message_log_count;
 } tetris_game_state_t;
 
 typedef struct liar_game_state {
@@ -202,6 +213,8 @@ typedef struct session_ctx {
   size_t asciiart_line_count;
   bool asciiart_has_cooldown;
   struct timespec last_asciiart_post;
+  unsigned terminal_cols;
+  unsigned terminal_rows;
   session_game_state_t game;
 } session_ctx_t;
 
