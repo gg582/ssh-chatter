@@ -3968,7 +3968,11 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
   }
 
   if (length == 3U && sequence[1] == '[') {
-    if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS && ctx->game.tetris.fullscreen) {
+    bool tetris_fullscreen =
+        ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS && ctx->game.tetris.fullscreen;
+    bool tetris_command_active =
+        tetris_fullscreen && ctx->input_length > 0U && ctx->input_buffer[0] == '/';
+    if (tetris_fullscreen && !tetris_command_active) {
       if (session_game_tetris_handle_arrow(ctx, sequence[2])) {
         ctx->input_escape_active = false;
         ctx->input_escape_length = 0U;
@@ -3990,7 +3994,11 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
   }
 
   if (length == 3U && sequence[1] == 'O') {
-    if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS && ctx->game.tetris.fullscreen) {
+    bool tetris_fullscreen =
+        ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS && ctx->game.tetris.fullscreen;
+    bool tetris_command_active =
+        tetris_fullscreen && ctx->input_length > 0U && ctx->input_buffer[0] == '/';
+    if (tetris_fullscreen && !tetris_command_active) {
       if (session_game_tetris_handle_arrow(ctx, sequence[2])) {
         ctx->input_escape_active = false;
         ctx->input_escape_length = 0U;
@@ -10594,6 +10602,10 @@ static void *session_thread(void *arg) {
       }
 
       if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS && ctx->game.tetris.fullscreen) {
+        const bool tetris_command_active =
+            (ctx->input_length > 0U && ctx->input_buffer[0] == '/') ||
+            (ctx->input_length == 0U && ch == '/');
+
         if (ch == 0x04) {
           session_game_suspend(ctx, "Game suspended.");
           session_clear_input(ctx);
@@ -10615,11 +10627,29 @@ static void *session_thread(void *arg) {
           continue;
         }
 
-        if (session_game_tetris_handle_key(ctx, ch)) {
-          continue;
-        }
+        if (!tetris_command_active) {
+          if (session_game_tetris_handle_key(ctx, ch)) {
+            continue;
+          }
 
-        if (ch == 0x01 || ch == 0x13) {
+          if (ch == 0x01 || ch == 0x13) {
+            continue;
+          }
+
+          if (ch == '\r' || ch == '\n') {
+            continue;
+          }
+
+          if (ch == '\b' || ch == 0x7f) {
+            continue;
+          }
+
+          if ((unsigned char)ch < 0x20U) {
+            continue;
+          }
+
+          /* Ignore printable characters so they don't leak into the chat buffer
+           * while the arcade is focused. */
           continue;
         }
       }
