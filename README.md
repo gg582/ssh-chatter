@@ -224,7 +224,8 @@ sudo systemctl disable --now chatter.service
 - Nickname Changer
 - Chat Scroll
 - Checking user list
-- ChatGPT assistant with adaptive memory sourced from `/etc/ssh-chatter/chatter.env`.
+- Language Translation
+- OpenWeather `/weather`
 - Named polls with label-based voting, supporting multiple-choice `/vote` polls and single-choice `/vote-single` alternatives, including `/elect <label> <choice>` as a text-friendly voting shortcut.
 - Retro bulletin board system accessible through `/bbs` with tagging, comments, bumping, and an interactive composer that ends with `>/__BBS_END>`.
 - `/asciiart` editor with 15-line drafts, a one-minute posting cooldown, and Ctrl+A/Ctrl+S shortcuts.
