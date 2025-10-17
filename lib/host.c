@@ -11511,6 +11511,8 @@ static void *session_thread(void *arg) {
       }
     }
 
+    }
+
     if (ctx->should_exit) {
       break;
     }
@@ -11533,6 +11535,7 @@ static void *session_thread(void *arg) {
     chat_room_broadcast(&ctx->owner->room, part_message, NULL);
     chat_room_remove(&ctx->owner->room, ctx);
   }
+
   session_cleanup(ctx);
 
   return NULL;
