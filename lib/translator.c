@@ -278,7 +278,7 @@ bool translator_translate(const char *text, const char *target_language, char *t
 
   static const char body_template[] =
       "{"
-      "\"model\":\"gpt-4o-mini\"," 
+      "\"model\":\"gpt-5\"," 
       "\"input\":["
       "{\"role\":\"system\",\"content\":[{\"type\":\"text\",\"text\":\"You are a translation engine that detects "
       "the source language of text and translates it to a requested target language. Preserve tokens like [[ANSI0]] unchanged.\"}]},"
