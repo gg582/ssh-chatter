@@ -133,6 +133,8 @@ typedef struct tetris_game_state {
   int bag[7];
   size_t bag_index;
   bool fullscreen;
+  bool fullscreen_requested;
+  bool fullscreen_warning_shown;
   bool timers_initialised;
   unsigned drop_interval_ms;
   unsigned level;
@@ -211,6 +213,8 @@ typedef struct session_ctx {
   size_t asciiart_line_count;
   bool asciiart_has_cooldown;
   struct timespec last_asciiart_post;
+  unsigned terminal_cols;
+  unsigned terminal_rows;
   session_game_state_t game;
 } session_ctx_t;
 
