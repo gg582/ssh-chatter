@@ -12,6 +12,7 @@ SSH-Chatter is a C reimplementation of the Go [`ssh-chat`](https://github.com/sh
 - Chat UI refresh with a clean divider between history and input, instant input clearing after send, and a friendly "Wait for a moment..." banner with a playful loading bar before each join.
 - Story-driven captcha covering regional cat and dog ownership prompts.
 - Expanded nickname support for non-Latin characters plus `/ban` upgrades that accept raw IP addresses alongside usernames.
+- Listener resilience that tries in-place socket recovery before restarting, logging downtime events so existing games stay uninterrupted whenever possible.
 
 # Preview
 
@@ -170,7 +171,7 @@ sudo systemctl disable --now chatter.service
 - Named polls with label-based voting, supporting multiple-choice `/vote` polls and single-choice `/vote-single` alternatives, including `/elect <label> <choice>` as a text-friendly voting shortcut.
 - Retro bulletin board system accessible through `/bbs` with tagging, comments, bumping, and an interactive composer that ends with `>/__BBS_END>`.
 - `/asciiart` editor with 15-line drafts, a one-minute posting cooldown, and Ctrl+A/Ctrl+S shortcuts.
-- `/game` hub featuring built-in `tetris` (transcoded from the original Soviet-era C implementation) and `liargame`, both suspendable via `/suspend!` or Ctrl+D.
+- `/game` hub featuring built-in `tetris` (transcoded from the original Soviet-era C implementation) and `liargame`, both suspendable via `/suspend!` or Ctrl+Z.
 
 ### In progress / planned
 - Enforcing moderation commands beyond logging.
