@@ -583,10 +583,11 @@ static int session_game_tetris_take_piece(session_ctx_t *ctx);
 static bool session_game_tetris_spawn_piece(session_ctx_t *ctx);
 static bool session_game_tetris_cell_occupied(int piece, int rotation, int row, int column);
 static bool session_game_tetris_position_valid(const tetris_game_state_t *state, int piece, int rotation, int row,
-                                              int column);
+                                               int column);
 static bool session_game_tetris_move(session_ctx_t *ctx, int drow, int dcol);
 static bool session_game_tetris_soft_drop(session_ctx_t *ctx);
 static bool session_game_tetris_rotate(session_ctx_t *ctx);
+static bool session_game_tetris_apply_gravity(session_ctx_t *ctx, unsigned ticks);
 static void session_game_tetris_lock_piece(session_ctx_t *ctx);
 static void session_game_tetris_clear_lines(session_ctx_t *ctx, unsigned *cleared);
 static void session_game_tetris_render(session_ctx_t *ctx);
@@ -7576,6 +7577,9 @@ static void session_game_tetris_reset(tetris_game_state_t *state) {
   for (size_t idx = 0U; idx < 7U; ++idx) {
     state->bag[idx] = (int)idx;
   }
+  state->gravity_counter = 0U;
+  state->gravity_threshold = SSH_CHATTER_TETRIS_GRAVITY_THRESHOLD;
+  state->gravity_rate = SSH_CHATTER_TETRIS_GRAVITY_RATE;
 }
 
 static void session_game_tetris_fill_bag(session_ctx_t *ctx) {
@@ -7651,6 +7655,7 @@ static bool session_game_tetris_spawn_piece(session_ctx_t *ctx) {
   state->rotation = 0;
   state->row = 0;
   state->column = (SSH_CHATTER_TETRIS_WIDTH / 2) - 2;
+  state->gravity_counter = 0U;
   state->next_piece = session_game_tetris_take_piece(ctx);
   if (!session_game_tetris_position_valid(state, state->current_piece, state->rotation, state->row, state->column)) {
     state->game_over = true;
@@ -7683,6 +7688,36 @@ static bool session_game_tetris_soft_drop(session_ctx_t *ctx) {
   }
   session_game_tetris_lock_piece(ctx);
   return false;
+}
+
+static bool session_game_tetris_apply_gravity(session_ctx_t *ctx, unsigned ticks) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+    return false;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (state->game_over || ticks == 0U) {
+    return false;
+  }
+
+  if (state->gravity_threshold == 0U) {
+    state->gravity_threshold = SSH_CHATTER_TETRIS_GRAVITY_THRESHOLD;
+  }
+
+  bool moved = false;
+  state->gravity_counter += ticks;
+  while (state->gravity_counter >= state->gravity_threshold) {
+    if (!session_game_tetris_soft_drop(ctx)) {
+      state->gravity_counter = 0U;
+      break;
+    }
+    moved = true;
+    state->gravity_counter -= state->gravity_threshold;
+    if (state->game_over) {
+      break;
+    }
+  }
+  return moved;
 }
 
 static bool session_game_tetris_rotate(session_ctx_t *ctx) {
@@ -7781,7 +7816,7 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
   char next_char = TETROMINO_DISPLAY_CHARS[state->next_piece % 7];
   snprintf(header, sizeof(header), "Score: %u   Lines: %u   Next: %c", state->score, state->lines_cleared, next_char);
   session_send_system_line(ctx, header);
-  session_send_system_line(ctx, "Controls: left, right, down, rotate, drop. Blank line = down.");
+  session_send_system_line(ctx, "Controls: left, right, down, Ctrl+R rotate, drop. Blank line = down.");
 
   char border[SSH_CHATTER_TETRIS_WIDTH + 3];
   border[0] = '+';
@@ -7842,42 +7877,51 @@ static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line
     command[copy_len] = '\0';
   }
   trim_whitespace_inplace(command);
-  for (size_t idx = 0U; command[idx] != '\0'; ++idx) {
-    command[idx] = (char)tolower((unsigned char)command[idx]);
-  }
-
-  if (command[0] == '\0') {
-    session_game_tetris_soft_drop(ctx);
-    if (state->game_over) {
-      session_game_suspend(ctx, "Game over!");
-      return;
+  bool is_escape_sequence = command[0] == '\x1b';
+  if (!is_escape_sequence) {
+    for (size_t idx = 0U; command[idx] != '\0'; ++idx) {
+      command[idx] = (char)tolower((unsigned char)command[idx]);
     }
-    session_game_tetris_render(ctx);
-    return;
-  }
-
-  if (strcmp(command, "help") == 0) {
-    session_send_system_line(ctx, "Tetris controls: left, right, down, rotate, drop, help.");
-    return;
   }
 
   bool redraw = false;
-  if (strcmp(command, "left") == 0 || strcmp(command, "l") == 0) {
+  bool manual_drop = false;
+  bool accelerate_gravity = false;
+  bool gravity_applied = false;
+
+  if (command[0] == '\0') {
+    redraw = session_game_tetris_apply_gravity(ctx, state->gravity_rate);
+    gravity_applied = true;
+  } else if (strcmp(command, "help") == 0) {
+    session_send_system_line(ctx, "Tetris controls: use arrow keys (\xE2\x86\x90/\xE2\x86\x92 move, \xE2\x86\x93 speed up) and Ctrl+R to rotate, type drop for a hard drop, or type help.");
+    return;
+  } else if (strcmp(command, "\x1b[D") == 0 || strcmp(command, "left") == 0 || strcmp(command, "l") == 0) {
     redraw = session_game_tetris_move(ctx, 0, -1);
-  } else if (strcmp(command, "right") == 0 || strcmp(command, "r") == 0) {
+  } else if (strcmp(command, "\x1b[C") == 0 || strcmp(command, "right") == 0 || strcmp(command, "r") == 0) {
     redraw = session_game_tetris_move(ctx, 0, 1);
-  } else if (strcmp(command, "down") == 0 || strcmp(command, "d") == 0) {
-    session_game_tetris_soft_drop(ctx);
-    redraw = true;
-  } else if (strcmp(command, "rotate") == 0 || strcmp(command, "cw") == 0) {
+  } else if (strcmp(command, "\x1b[B") == 0 || strcmp(command, "down") == 0 || strcmp(command, "d") == 0) {
+    accelerate_gravity = true;
+  } else if (strcmp(command, "\x1b[A") == 0 || strcmp(command, "\x12") == 0 || strcmp(command, "rotate") == 0 || strcmp(command, "cw") == 0) {
     redraw = session_game_tetris_rotate(ctx);
   } else if (strcmp(command, "drop") == 0) {
     while (session_game_tetris_soft_drop(ctx)) {
     }
     redraw = true;
+    manual_drop = true;
   } else {
-    session_send_system_line(ctx, "Unknown Tetris command. Use left, right, down, rotate, drop, or help.");
+    session_send_system_line(ctx, "Unknown Tetris command. Use the arrow keys, drop, or help.");
     return;
+  }
+
+  if (!gravity_applied && !manual_drop) {
+    unsigned ticks = state->gravity_rate;
+    if (accelerate_gravity) {
+      ticks += state->gravity_threshold;
+    }
+    bool gravity_redraw = session_game_tetris_apply_gravity(ctx, ticks);
+    if (gravity_redraw) {
+      redraw = true;
+    }
   }
 
   if (state->game_over) {
@@ -7909,7 +7953,7 @@ static void session_game_start_tetris(session_ctx_t *ctx) {
     return;
   }
 
-  session_send_system_line(ctx, "Tetris started. Use left/right/down/rotate/drop. Ctrl+D or /suspend! exits.");
+  session_send_system_line(ctx, "Tetris started. Use the arrow keys (\xE2\x86\x90/\xE2\x86\x92 move, \xE2\x86\x93 speed up) and Ctrl+R to rotate. Type drop for a hard drop. Ctrl+D or /suspend! exits.");
   session_game_tetris_render(ctx);
 }
 

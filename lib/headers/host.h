@@ -49,6 +49,8 @@
 #define SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS 60
 #define SSH_CHATTER_TETRIS_WIDTH 10
 #define SSH_CHATTER_TETRIS_HEIGHT 20
+#define SSH_CHATTER_TETRIS_GRAVITY_THRESHOLD 5U
+#define SSH_CHATTER_TETRIS_GRAVITY_RATE 1U
 
 struct host;
 struct session_ctx;
@@ -131,6 +133,9 @@ typedef struct tetris_game_state {
   bool game_over;
   int bag[7];
   size_t bag_index;
+  unsigned gravity_counter;
+  unsigned gravity_threshold;
+  unsigned gravity_rate;
 } tetris_game_state_t;
 
 typedef struct liar_game_state {
