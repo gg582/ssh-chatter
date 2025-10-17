@@ -47,6 +47,8 @@
 #define SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN 128U
 #define SSH_CHATTER_BBS_DEFAULT_TAG "general"
 #define SSH_CHATTER_BBS_TERMINATOR ">/__BBS_END>"
+#define SSH_CHATTER_ASCIIART_TERMINATOR ">/__ARTWORK_END>"
+#define SSH_CHATTER_TETROMINO_SIZE 4
 #define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT 3U
 
 typedef struct {
@@ -557,7 +559,187 @@ static bbs_post_t *host_find_bbs_post_locked(host_t *host, uint64_t id);
 static bbs_post_t *host_allocate_bbs_post_locked(host_t *host);
 static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post);
+static bool session_asciiart_cooldown_active(session_ctx_t *ctx, struct timespec *now, long *remaining_seconds);
+static void session_asciiart_reset(session_ctx_t *ctx);
+static void session_asciiart_begin(session_ctx_t *ctx);
+static void session_asciiart_capture_line(session_ctx_t *ctx, const char *line);
+static void session_asciiart_commit(session_ctx_t *ctx);
+static void session_asciiart_cancel(session_ctx_t *ctx, const char *reason);
+static void session_handle_game(session_ctx_t *ctx, const char *arguments);
+static void session_game_suspend(session_ctx_t *ctx, const char *reason);
+static void session_game_seed_rng(session_ctx_t *ctx);
+static uint32_t session_game_random(session_ctx_t *ctx);
+static int session_game_random_range(session_ctx_t *ctx, int max);
+static void session_game_start_tetris(session_ctx_t *ctx);
+static void session_game_tetris_reset(tetris_game_state_t *state);
+static void session_game_tetris_fill_bag(session_ctx_t *ctx);
+static int session_game_tetris_take_piece(session_ctx_t *ctx);
+static bool session_game_tetris_spawn_piece(session_ctx_t *ctx);
+static bool session_game_tetris_cell_occupied(int piece, int rotation, int row, int column);
+static bool session_game_tetris_position_valid(const tetris_game_state_t *state, int piece, int rotation, int row,
+                                              int column);
+static bool session_game_tetris_move(session_ctx_t *ctx, int drow, int dcol);
+static bool session_game_tetris_soft_drop(session_ctx_t *ctx);
+static bool session_game_tetris_rotate(session_ctx_t *ctx);
+static void session_game_tetris_lock_piece(session_ctx_t *ctx);
+static void session_game_tetris_clear_lines(session_ctx_t *ctx, unsigned *cleared);
+static void session_game_tetris_render(session_ctx_t *ctx);
+static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line);
+static void session_game_start_liargame(session_ctx_t *ctx);
+static void session_game_liar_present_round(session_ctx_t *ctx);
+static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line);
 static void host_update_last_captcha_prompt(host_t *host, const captcha_prompt_t *prompt);
+
+typedef struct liar_prompt {
+  const char *statements[3];
+  unsigned liar_index;
+} liar_prompt_t;
+
+static const liar_prompt_t LIAR_PROMPTS[] = {
+    {{"I have contributed code to an open source project.", "I once replaced an entire server rack solo.",
+      "I prefer mechanical keyboards with clicky switches."}, 1U},
+    {{"I have memorized pi to 200 digits.", "I used to write BASIC games in middle school.",
+      "I cannot solve a Rubik's Cube."}, 0U},
+    {{"I drink my coffee without sugar.", "I debug using `printf` more than any other tool.",
+      "I have never broken a build."}, 2U},
+    {{"I run Linux on my primary laptop.", "I have camped overnight for a console launch.",
+      "I have attended a demoparty."}, 1U},
+    {{"I know how to solder surface-mount components.", "I have written an emulator in C.",
+      "I have a pet snake named Segfault."}, 2U},
+    {{"I play at least one rhythm game competitively.", "I once deployed to production from my phone.",
+      "I have built a keyboard from scratch."}, 1U},
+};
+
+static const char *const TETROMINO_SHAPES[7][4] = {
+    {
+        "...."
+        "####"
+        "...."
+        "....",
+        "..#."
+        "..#."
+        "..#."
+        "..#.",
+        "...."
+        "####"
+        "...."
+        "....",
+        "..#."
+        "..#."
+        "..#."
+        "..#.",
+    },
+    {
+        "#..."
+        "###."
+        "...."
+        "....",
+        ".##."
+        ".#.."
+        ".#.."
+        "....",
+        "...."
+        "###."
+        "..#."
+        "....",
+        ".#.."
+        ".#.."
+        "##.."
+        "....",
+    },
+    {
+        "..#."
+        "###."
+        "...."
+        "....",
+        ".#.."
+        ".#.."
+        ".##."
+        "....",
+        "...."
+        "###."
+        "#..."
+        "....",
+        "##.."
+        ".#.."
+        ".#.."
+        "....",
+    },
+    {
+        ".##."
+        ".##."
+        "...."
+        "....",
+        ".##."
+        ".##."
+        "...."
+        "....",
+        ".##."
+        ".##."
+        "...."
+        "....",
+        ".##."
+        ".##."
+        "...."
+        "....",
+    },
+    {
+        ".##."
+        "##.."
+        "...."
+        "....",
+        ".#.."
+        ".##."
+        "..#."
+        "....",
+        ".##."
+        "##.."
+        "...."
+        "....",
+        ".#.."
+        ".##."
+        "..#."
+        "....",
+    },
+    {
+        ".#.."
+        "###."
+        "...."
+        "....",
+        ".#.."
+        ".##."
+        ".#.."
+        "....",
+        "...."
+        "###."
+        ".#.."
+        "....",
+        ".#.."
+        "##.."
+        ".#.."
+        "....",
+    },
+    {
+        "##.."
+        ".##."
+        "...."
+        "....",
+        "..#."
+        ".##."
+        ".#.."
+        "....",
+        "##.."
+        ".##."
+        "...."
+        "....",
+        "..#."
+        ".##."
+        ".#.."
+        "....",
+    },
+};
+
+static const char TETROMINO_DISPLAY_CHARS[7] = {'I', 'J', 'L', 'O', 'S', 'T', 'Z'};
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
 static const uint32_t HOST_STATE_VERSION = 5U;
@@ -4114,6 +4296,9 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/video <url> [caption] - share a video link");
   session_send_system_line(ctx, "/audio <url> [caption] - share an audio clip");
   session_send_system_line(ctx, "/files <url> [caption] - share a downloadable file");
+  session_send_system_line(ctx, "/asciiart           - open the ASCII art composer (max 15 lines, 1/min)");
+  session_send_system_line(ctx,
+                           "/game <tetris|liargame> - start a minigame in the chat (use /suspend! or Ctrl+D to exit)");
   session_send_system_line(ctx, "Up/Down arrows           - scroll recent chat history");
   session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
   session_send_system_line(ctx,
@@ -4147,6 +4332,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx,
                            "/bbs [list|read|post|comment|regen|delete] - open the bulletin board system (see /bbs for details, finish "
                            SSH_CHATTER_BBS_TERMINATOR " to post)");
+  session_send_system_line(ctx, "/suspend!            - suspend the active game (Ctrl+D while playing)");
   session_send_system_line(ctx, "Regular messages are shared with everyone.");
 }
 
@@ -4204,8 +4390,32 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
   snprintf(normalized, sizeof(normalized), "%s", line);
   session_normalize_newlines(normalized);
 
+  if (ctx->asciiart_pending) {
+    session_asciiart_capture_line(ctx, normalized);
+    return;
+  }
+
   if (ctx->bbs_post_pending) {
     session_bbs_capture_body_line(ctx, normalized);
+    return;
+  }
+
+  if (ctx->game.active) {
+    if (strcmp(normalized, "/suspend!") == 0) {
+      session_game_suspend(ctx, "Game suspended.");
+      return;
+    }
+
+    if (normalized[0] == '/') {
+      session_send_system_line(ctx, "Finish the current game with /suspend! first.");
+      return;
+    }
+
+    if (ctx->game.type == SESSION_GAME_TETRIS) {
+      session_game_tetris_handle_line(ctx, normalized);
+    } else if (ctx->game.type == SESSION_GAME_LIARGAME) {
+      session_game_liar_handle_line(ctx, normalized);
+    }
     return;
   }
 
@@ -6796,6 +7006,201 @@ static void session_bbs_regen_post(session_ctx_t *ctx, uint64_t id) {
   session_bbs_render_post(ctx, &snapshot);
 }
 
+static void session_asciiart_reset(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  ctx->asciiart_pending = false;
+  ctx->asciiart_buffer[0] = '\0';
+  ctx->asciiart_length = 0U;
+  ctx->asciiart_line_count = 0U;
+}
+
+static bool session_asciiart_cooldown_active(session_ctx_t *ctx, struct timespec *now, long *remaining_seconds) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  struct timespec current;
+  if (clock_gettime(CLOCK_MONOTONIC, &current) != 0) {
+    current.tv_sec = time(NULL);
+    current.tv_nsec = 0L;
+  }
+
+  if (now != NULL) {
+    *now = current;
+  }
+
+  if (!ctx->asciiart_has_cooldown) {
+    if (remaining_seconds != NULL) {
+      *remaining_seconds = 0L;
+    }
+    return false;
+  }
+
+  struct timespec expiry = ctx->last_asciiart_post;
+  expiry.tv_sec += SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS;
+  if (timespec_compare(&current, &expiry) >= 0) {
+    ctx->asciiart_has_cooldown = false;
+    if (remaining_seconds != NULL) {
+      *remaining_seconds = 0L;
+    }
+    return false;
+  }
+
+  if (remaining_seconds != NULL) {
+    struct timespec diff = timespec_diff(&expiry, &current);
+    long seconds = diff.tv_sec;
+    if (diff.tv_nsec > 0L) {
+      ++seconds;
+    }
+    if (seconds < 0L) {
+      seconds = 0L;
+    }
+    *remaining_seconds = seconds;
+  }
+
+  return true;
+}
+
+static void session_asciiart_begin(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (ctx->asciiart_pending) {
+    session_send_system_line(ctx, "You are already composing ASCII art. Finish it with " SSH_CHATTER_ASCIIART_TERMINATOR ".");
+    return;
+  }
+
+  if (ctx->bbs_post_pending) {
+    session_send_system_line(ctx, "Finish your BBS draft before starting ASCII art.");
+    return;
+  }
+
+  struct timespec now;
+  long remaining = 0L;
+  if (session_asciiart_cooldown_active(ctx, &now, &remaining)) {
+    if (remaining < 1L) {
+      remaining = 1L;
+    }
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "You can share another ASCII art in %ld second%s.", remaining,
+             remaining == 1L ? "" : "s");
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  session_asciiart_reset(ctx);
+  ctx->asciiart_pending = true;
+
+  session_send_system_line(ctx, "ASCII art composer ready (max 15 lines).");
+  session_send_system_line(ctx,
+                           "Type " SSH_CHATTER_ASCIIART_TERMINATOR " on a line by itself or press Ctrl+S to finish.");
+  session_send_system_line(ctx, "Press Ctrl+A to cancel the draft.");
+}
+
+static void session_asciiart_commit(session_ctx_t *ctx) {
+  if (ctx == NULL || !ctx->asciiart_pending) {
+    return;
+  }
+
+  if (ctx->asciiart_length == 0U) {
+    session_asciiart_cancel(ctx, "ASCII art draft discarded.");
+    return;
+  }
+
+  if (ctx->owner == NULL) {
+    session_asciiart_reset(ctx);
+    return;
+  }
+
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+    now.tv_sec = time(NULL);
+    now.tv_nsec = 0L;
+  }
+
+  ctx->last_asciiart_post = now;
+  ctx->asciiart_has_cooldown = true;
+
+  chat_history_entry_t entry = {0};
+  if (!host_history_record_user(ctx->owner, ctx, ctx->asciiart_buffer, &entry)) {
+    session_asciiart_reset(ctx);
+    return;
+  }
+
+  session_send_history_entry(ctx, &entry);
+  chat_room_broadcast_entry(&ctx->owner->room, &entry, ctx);
+  host_notify_external_clients(ctx->owner, &entry);
+
+  ctx->last_message_time = now;
+  ctx->has_last_message_time = true;
+
+  session_asciiart_reset(ctx);
+}
+
+static void session_asciiart_cancel(session_ctx_t *ctx, const char *reason) {
+  if (ctx == NULL || !ctx->asciiart_pending) {
+    return;
+  }
+
+  session_asciiart_reset(ctx);
+  if (reason != NULL && reason[0] != '\0') {
+    session_send_system_line(ctx, reason);
+  }
+}
+
+static void session_asciiart_capture_line(session_ctx_t *ctx, const char *line) {
+  if (ctx == NULL || !ctx->asciiart_pending) {
+    return;
+  }
+
+  char trimmed[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(trimmed, sizeof(trimmed), "%s", line != NULL ? line : "");
+  trim_whitespace_inplace(trimmed);
+  if (strcmp(trimmed, SSH_CHATTER_ASCIIART_TERMINATOR) == 0) {
+    session_asciiart_commit(ctx);
+    return;
+  }
+
+  if (ctx->asciiart_line_count >= SSH_CHATTER_ASCIIART_MAX_LINES) {
+    session_send_system_line(ctx, "ASCII art line limit reached. Use the terminator to finish.");
+    return;
+  }
+
+  if (line == NULL) {
+    line = "";
+  }
+
+  size_t available = sizeof(ctx->asciiart_buffer) - ctx->asciiart_length - 1U;
+  if (available == 0U) {
+    session_send_system_line(ctx, "ASCII art buffer is full. Additional text ignored.");
+    return;
+  }
+
+  size_t line_length = strlen(line);
+  bool needs_newline = ctx->asciiart_length > 0U;
+  if (needs_newline) {
+    ctx->asciiart_buffer[ctx->asciiart_length++] = '\n';
+    available--;
+  }
+
+  if (line_length > available) {
+    line_length = available;
+    session_send_system_line(ctx, "Line truncated to fit within the ASCII art size limit.");
+  }
+
+  if (line_length > 0U) {
+    memcpy(ctx->asciiart_buffer + ctx->asciiart_length, line, line_length);
+    ctx->asciiart_length += line_length;
+  }
+
+  ctx->asciiart_buffer[ctx->asciiart_length] = '\0';
+  ctx->asciiart_line_count += 1U;
+}
+
 // Handle the /bbs command entry point.
 static void session_handle_bbs(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL || ctx->owner == NULL) {
@@ -6866,6 +7271,578 @@ static void session_handle_bbs(session_ctx_t *ctx, const char *arguments) {
   } else {
     session_send_system_line(ctx, "Unknown /bbs subcommand. Try /bbs for usage.");
   }
+}
+
+static void session_game_seed_rng(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (ctx->game.rng_seeded) {
+    return;
+  }
+
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+    ts.tv_sec = time(NULL);
+    ts.tv_nsec = 0L;
+  }
+
+  uint64_t seed = ((uint64_t)ts.tv_sec << 32) ^ (uint64_t)ts.tv_nsec ^ (uintptr_t)ctx ^ (uintptr_t)ctx->owner;
+  if (seed == 0U) {
+    seed = UINT64_C(0x9E3779B97F4A7C15);
+  }
+  ctx->game.rng_state = seed;
+  ctx->game.rng_seeded = true;
+}
+
+static uint32_t session_game_random(session_ctx_t *ctx) {
+  session_game_seed_rng(ctx);
+  uint64_t x = ctx->game.rng_state;
+  x ^= x >> 12;
+  x ^= x << 25;
+  x ^= x >> 27;
+  ctx->game.rng_state = x;
+  uint64_t result = x * UINT64_C(2685821657736338717);
+  return (uint32_t)(result >> 32);
+}
+
+static int session_game_random_range(session_ctx_t *ctx, int max) {
+  if (max <= 0) {
+    return 0;
+  }
+  return (int)(session_game_random(ctx) % (uint32_t)max);
+}
+
+static void session_game_tetris_reset(tetris_game_state_t *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  memset(state->board, 0, sizeof(state->board));
+  state->current_piece = -1;
+  state->rotation = 0;
+  state->row = 0;
+  state->column = 0;
+  state->next_piece = 0;
+  state->score = 0U;
+  state->lines_cleared = 0U;
+  state->game_over = false;
+  state->bag_index = 0U;
+  for (size_t idx = 0U; idx < 7U; ++idx) {
+    state->bag[idx] = (int)idx;
+  }
+}
+
+static void session_game_tetris_fill_bag(session_ctx_t *ctx) {
+  tetris_game_state_t *state = &ctx->game.tetris;
+  for (size_t idx = 0U; idx < 7U; ++idx) {
+    state->bag[idx] = (int)idx;
+  }
+  for (int idx = 6; idx > 0; --idx) {
+    int swap_index = session_game_random_range(ctx, idx + 1);
+    int temp = state->bag[idx];
+    state->bag[idx] = state->bag[swap_index];
+    state->bag[swap_index] = temp;
+  }
+  state->bag_index = 0U;
+}
+
+static int session_game_tetris_take_piece(session_ctx_t *ctx) {
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (state->bag_index >= 7U) {
+    session_game_tetris_fill_bag(ctx);
+  }
+  return state->bag[state->bag_index++];
+}
+
+static bool session_game_tetris_cell_occupied(int piece, int rotation, int row, int column) {
+  if (piece < 0 || piece >= 7) {
+    return false;
+  }
+  rotation = rotation & 3;
+  if (row < 0 || row >= SSH_CHATTER_TETROMINO_SIZE || column < 0 || column >= SSH_CHATTER_TETROMINO_SIZE) {
+    return false;
+  }
+  const char *shape = TETROMINO_SHAPES[piece][rotation];
+  char value = shape[row * SSH_CHATTER_TETROMINO_SIZE + column];
+  return value != '.' && value != '\0';
+}
+
+static bool session_game_tetris_position_valid(const tetris_game_state_t *state, int piece, int rotation, int row,
+                                              int column) {
+  if (state == NULL) {
+    return false;
+  }
+  for (int r = 0; r < SSH_CHATTER_TETROMINO_SIZE; ++r) {
+    for (int c = 0; c < SSH_CHATTER_TETROMINO_SIZE; ++c) {
+      if (!session_game_tetris_cell_occupied(piece, rotation, r, c)) {
+        continue;
+      }
+      int board_row = row + r;
+      int board_col = column + c;
+      if (board_col < 0 || board_col >= SSH_CHATTER_TETRIS_WIDTH) {
+        return false;
+      }
+      if (board_row >= SSH_CHATTER_TETRIS_HEIGHT) {
+        return false;
+      }
+      if (board_row < 0) {
+        continue;
+      }
+      if (state->board[board_row][board_col] != 0) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+static bool session_game_tetris_spawn_piece(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+  tetris_game_state_t *state = &ctx->game.tetris;
+  state->current_piece = state->next_piece;
+  state->rotation = 0;
+  state->row = 0;
+  state->column = (SSH_CHATTER_TETRIS_WIDTH / 2) - 2;
+  state->next_piece = session_game_tetris_take_piece(ctx);
+  if (!session_game_tetris_position_valid(state, state->current_piece, state->rotation, state->row, state->column)) {
+    state->game_over = true;
+    return false;
+  }
+  return true;
+}
+
+static bool session_game_tetris_move(session_ctx_t *ctx, int drow, int dcol) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
+    return false;
+  }
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (state->current_piece < 0) {
+    return false;
+  }
+  int new_row = state->row + drow;
+  int new_col = state->column + dcol;
+  if (!session_game_tetris_position_valid(state, state->current_piece, state->rotation, new_row, new_col)) {
+    return false;
+  }
+  state->row = new_row;
+  state->column = new_col;
+  return true;
+}
+
+static bool session_game_tetris_soft_drop(session_ctx_t *ctx) {
+  if (session_game_tetris_move(ctx, 1, 0)) {
+    return true;
+  }
+  session_game_tetris_lock_piece(ctx);
+  return false;
+}
+
+static bool session_game_tetris_rotate(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
+    return false;
+  }
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (state->current_piece < 0) {
+    return false;
+  }
+  int new_rotation = (state->rotation + 1) & 3;
+  if (!session_game_tetris_position_valid(state, state->current_piece, new_rotation, state->row, state->column)) {
+    return false;
+  }
+  state->rotation = new_rotation;
+  return true;
+}
+
+static void session_game_tetris_clear_lines(session_ctx_t *ctx, unsigned *cleared) {
+  if (ctx == NULL) {
+    if (cleared != NULL) {
+      *cleared = 0U;
+    }
+    return;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  unsigned removed = 0U;
+  for (int row = 0; row < SSH_CHATTER_TETRIS_HEIGHT; ++row) {
+    bool full = true;
+    for (int col = 0; col < SSH_CHATTER_TETRIS_WIDTH; ++col) {
+      if (state->board[row][col] == 0) {
+        full = false;
+        break;
+      }
+    }
+    if (!full) {
+      continue;
+    }
+    ++removed;
+    for (int move_row = row; move_row > 0; --move_row) {
+      memcpy(state->board[move_row], state->board[move_row - 1], sizeof(state->board[move_row]));
+    }
+    memset(state->board[0], 0, sizeof(state->board[0]));
+  }
+  if (cleared != NULL) {
+    *cleared = removed;
+  }
+}
+
+static void session_game_tetris_lock_piece(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
+    return;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (state->current_piece < 0) {
+    return;
+  }
+
+  for (int r = 0; r < SSH_CHATTER_TETROMINO_SIZE; ++r) {
+    for (int c = 0; c < SSH_CHATTER_TETROMINO_SIZE; ++c) {
+      if (!session_game_tetris_cell_occupied(state->current_piece, state->rotation, r, c)) {
+        continue;
+      }
+      int board_row = state->row + r;
+      int board_col = state->column + c;
+      if (board_row < 0 || board_row >= SSH_CHATTER_TETRIS_HEIGHT || board_col < 0 || board_col >= SSH_CHATTER_TETRIS_WIDTH) {
+        continue;
+      }
+      state->board[board_row][board_col] = state->current_piece + 1;
+    }
+  }
+
+  unsigned cleared = 0U;
+  session_game_tetris_clear_lines(ctx, &cleared);
+  if (cleared > 0U) {
+    state->lines_cleared += cleared;
+    state->score += cleared * 100U;
+  }
+
+  if (!session_game_tetris_spawn_piece(ctx)) {
+    state->game_over = true;
+  }
+}
+
+static void session_game_tetris_render(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
+    return;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  session_render_separator(ctx, "Tetris");
+
+  char header[SSH_CHATTER_MESSAGE_LIMIT];
+  char next_char = TETROMINO_DISPLAY_CHARS[state->next_piece % 7];
+  snprintf(header, sizeof(header), "Score: %u   Lines: %u   Next: %c", state->score, state->lines_cleared, next_char);
+  session_send_system_line(ctx, header);
+  session_send_system_line(ctx, "Controls: left, right, down, rotate, drop. Blank line = down.");
+
+  char border[SSH_CHATTER_TETRIS_WIDTH + 3];
+  border[0] = '+';
+  for (int col = 0; col < SSH_CHATTER_TETRIS_WIDTH; ++col) {
+    border[col + 1] = '-';
+  }
+  border[SSH_CHATTER_TETRIS_WIDTH + 1] = '+';
+  border[SSH_CHATTER_TETRIS_WIDTH + 2] = '\0';
+  session_send_system_line(ctx, border);
+
+  for (int row = 0; row < SSH_CHATTER_TETRIS_HEIGHT; ++row) {
+    char line_buffer[SSH_CHATTER_TETRIS_WIDTH + 3];
+    line_buffer[0] = '|';
+    for (int col = 0; col < SSH_CHATTER_TETRIS_WIDTH; ++col) {
+      char cell = ' ';
+      if (state->board[row][col] != 0) {
+        int index = state->board[row][col] - 1;
+        if (index < 0 || index >= 7) {
+          index = 0;
+        }
+        cell = TETROMINO_DISPLAY_CHARS[index];
+      } else if (!state->game_over && state->current_piece >= 0) {
+        int local_row = row - state->row;
+        int local_col = col - state->column;
+        if (local_row >= 0 && local_row < SSH_CHATTER_TETROMINO_SIZE && local_col >= 0 &&
+            local_col < SSH_CHATTER_TETROMINO_SIZE &&
+            session_game_tetris_cell_occupied(state->current_piece, state->rotation, local_row, local_col)) {
+          cell = TETROMINO_DISPLAY_CHARS[state->current_piece];
+        }
+      }
+      line_buffer[col + 1] = cell;
+    }
+    line_buffer[SSH_CHATTER_TETRIS_WIDTH + 1] = '|';
+    line_buffer[SSH_CHATTER_TETRIS_WIDTH + 2] = '\0';
+    session_send_system_line(ctx, line_buffer);
+  }
+
+  session_send_system_line(ctx, border);
+}
+
+static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+    return;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (state->game_over) {
+    session_game_suspend(ctx, "Game over!");
+    return;
+  }
+
+  char command[32];
+  if (line == NULL) {
+    command[0] = '\0';
+  } else {
+    size_t copy_len = strnlen(line, sizeof(command) - 1U);
+    memcpy(command, line, copy_len);
+    command[copy_len] = '\0';
+  }
+  trim_whitespace_inplace(command);
+  for (size_t idx = 0U; command[idx] != '\0'; ++idx) {
+    command[idx] = (char)tolower((unsigned char)command[idx]);
+  }
+
+  if (command[0] == '\0') {
+    session_game_tetris_soft_drop(ctx);
+    if (state->game_over) {
+      session_game_suspend(ctx, "Game over!");
+      return;
+    }
+    session_game_tetris_render(ctx);
+    return;
+  }
+
+  if (strcmp(command, "help") == 0) {
+    session_send_system_line(ctx, "Tetris controls: left, right, down, rotate, drop, help.");
+    return;
+  }
+
+  bool redraw = false;
+  if (strcmp(command, "left") == 0 || strcmp(command, "l") == 0) {
+    redraw = session_game_tetris_move(ctx, 0, -1);
+  } else if (strcmp(command, "right") == 0 || strcmp(command, "r") == 0) {
+    redraw = session_game_tetris_move(ctx, 0, 1);
+  } else if (strcmp(command, "down") == 0 || strcmp(command, "d") == 0) {
+    session_game_tetris_soft_drop(ctx);
+    redraw = true;
+  } else if (strcmp(command, "rotate") == 0 || strcmp(command, "cw") == 0) {
+    redraw = session_game_tetris_rotate(ctx);
+  } else if (strcmp(command, "drop") == 0) {
+    while (session_game_tetris_soft_drop(ctx)) {
+    }
+    redraw = true;
+  } else {
+    session_send_system_line(ctx, "Unknown Tetris command. Use left, right, down, rotate, drop, or help.");
+    return;
+  }
+
+  if (state->game_over) {
+    session_game_suspend(ctx, "Game over!");
+    return;
+  }
+
+  if (redraw) {
+    session_game_tetris_render(ctx);
+  }
+}
+
+static void session_game_start_tetris(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  session_game_tetris_reset(&ctx->game.tetris);
+  session_game_seed_rng(ctx);
+  session_game_tetris_fill_bag(ctx);
+  ctx->game.tetris.next_piece = session_game_tetris_take_piece(ctx);
+  ctx->game.type = SESSION_GAME_TETRIS;
+  ctx->game.active = true;
+  ctx->game.tetris.game_over = false;
+  if (!session_game_tetris_spawn_piece(ctx)) {
+    session_send_system_line(ctx, "Unable to start Tetris right now.");
+    ctx->game.active = false;
+    ctx->game.type = SESSION_GAME_NONE;
+    return;
+  }
+
+  session_send_system_line(ctx, "Tetris started. Use left/right/down/rotate/drop. Ctrl+D or /suspend! exits.");
+  session_game_tetris_render(ctx);
+}
+
+static void session_game_start_liargame(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  ctx->game.type = SESSION_GAME_LIARGAME;
+  ctx->game.active = true;
+  ctx->game.liar.round_number = 0U;
+  ctx->game.liar.score = 0U;
+  ctx->game.liar.awaiting_guess = false;
+  session_send_system_line(ctx, "Liar Game started. Guess which statement is the lie by typing 1, 2, or 3.");
+  session_game_liar_present_round(ctx);
+}
+
+static void session_game_liar_present_round(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_LIARGAME || !ctx->game.active) {
+    return;
+  }
+
+  size_t prompt_count = sizeof(LIAR_PROMPTS) / sizeof(LIAR_PROMPTS[0]);
+  if (prompt_count == 0U) {
+    session_game_suspend(ctx, "No prompts available for the liar game.");
+    return;
+  }
+
+  unsigned index = (unsigned)session_game_random_range(ctx, (int)prompt_count);
+  ctx->game.liar.current_prompt_index = index;
+  ctx->game.liar.liar_index = LIAR_PROMPTS[index].liar_index % 3U;
+  ctx->game.liar.round_number += 1U;
+  ctx->game.liar.awaiting_guess = true;
+
+  session_render_separator(ctx, "Liar Game");
+  char header[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(header, sizeof(header), "Round %u — which statement is the lie?", ctx->game.liar.round_number);
+  session_send_system_line(ctx, header);
+
+  const liar_prompt_t *prompt = &LIAR_PROMPTS[index];
+  for (int i = 0; i < 3; ++i) {
+    char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(line_buffer, sizeof(line_buffer), "%d. %s", i + 1, prompt->statements[i]);
+    session_send_system_line(ctx, line_buffer);
+  }
+  session_send_system_line(ctx, "Enter 1, 2, or 3 to choose. Type 'help' for options.");
+}
+
+static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_LIARGAME || !ctx->game.active) {
+    return;
+  }
+
+  liar_game_state_t *state = &ctx->game.liar;
+  char command[32];
+  if (line == NULL) {
+    command[0] = '\0';
+  } else {
+    size_t copy_len = strnlen(line, sizeof(command) - 1U);
+    memcpy(command, line, copy_len);
+    command[copy_len] = '\0';
+  }
+  trim_whitespace_inplace(command);
+  for (size_t idx = 0U; command[idx] != '\0'; ++idx) {
+    command[idx] = (char)tolower((unsigned char)command[idx]);
+  }
+
+  if (strcmp(command, "help") == 0) {
+    session_send_system_line(ctx, "Type 1, 2, or 3 to guess the lie. /suspend! exits the game.");
+    return;
+  }
+
+  if (command[0] == '\0') {
+    session_send_system_line(ctx, "Pick a statement number between 1 and 3.");
+    return;
+  }
+
+  if (!state->awaiting_guess) {
+    session_game_liar_present_round(ctx);
+    return;
+  }
+
+  char *endptr = NULL;
+  long value = strtol(command, &endptr, 10);
+  if (endptr == command || value < 1L || value > 3L) {
+    session_send_system_line(ctx, "Please enter 1, 2, or 3 to choose the lie.");
+    return;
+  }
+
+  unsigned guess = (unsigned)(value - 1L);
+  const liar_prompt_t *prompt = &LIAR_PROMPTS[state->current_prompt_index];
+  if (guess == state->liar_index) {
+    ++state->score;
+    session_send_system_line(ctx, "Correct! That statement was the lie.");
+  } else {
+    char reveal[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(reveal, sizeof(reveal), "Nope! The lie was #%u: %s", state->liar_index + 1U,
+             prompt->statements[state->liar_index]);
+    session_send_system_line(ctx, reveal);
+  }
+
+  state->awaiting_guess = false;
+  session_game_liar_present_round(ctx);
+}
+
+static void session_handle_game(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (ctx->game.active) {
+    session_send_system_line(ctx, "Finish the current game with /suspend! first.");
+    return;
+  }
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, "Usage: /game <tetris|liargame>");
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, "Usage: /game <tetris|liargame>");
+    return;
+  }
+
+  for (size_t idx = 0U; working[idx] != '\0'; ++idx) {
+    working[idx] = (char)tolower((unsigned char)working[idx]);
+  }
+
+  if (strcmp(working, "tetris") == 0) {
+    session_game_start_tetris(ctx);
+  } else if (strcmp(working, "liargame") == 0) {
+    session_game_start_liargame(ctx);
+  } else {
+    session_send_system_line(ctx, "Unknown game. Available options: tetris, liargame.");
+  }
+}
+
+static void session_game_suspend(session_ctx_t *ctx, const char *reason) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (!ctx->game.active) {
+    if (reason != NULL && reason[0] != '\0') {
+      session_send_system_line(ctx, reason);
+    } else {
+      session_send_system_line(ctx, "There is no active game to suspend.");
+    }
+    return;
+  }
+
+  if (reason != NULL && reason[0] != '\0') {
+    session_send_system_line(ctx, reason);
+  }
+
+  if (ctx->game.type == SESSION_GAME_TETRIS) {
+    char summary[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(summary, sizeof(summary), "Tetris final score: %u (lines cleared: %u).", ctx->game.tetris.score,
+             ctx->game.tetris.lines_cleared);
+    session_send_system_line(ctx, summary);
+    session_game_tetris_reset(&ctx->game.tetris);
+  } else if (ctx->game.type == SESSION_GAME_LIARGAME) {
+    char summary[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(summary, sizeof(summary), "Liar Game rounds played: %u, score: %u.", ctx->game.liar.round_number,
+             ctx->game.liar.score);
+    session_send_system_line(ctx, summary);
+    ctx->game.liar.awaiting_guess = false;
+    ctx->game.liar.round_number = 0U;
+    ctx->game.liar.score = 0U;
+  }
+
+  ctx->game.active = false;
+  ctx->game.type = SESSION_GAME_NONE;
 }
 
 static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count) {
@@ -7597,6 +8574,15 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
+  else if (session_parse_command(line, "/asciiart", &args)) {
+    if (*args != '\0') {
+      session_send_system_line(ctx, "Usage: /asciiart");
+    } else {
+      session_asciiart_begin(ctx);
+    }
+    return;
+  }
+
   else if (session_parse_command(line, "/motd", &args)) {
     if (*args != '\0') {
       session_send_system_line(ctx, "Usage: /motd");
@@ -7645,6 +8631,11 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
+  else if (session_parse_command(line, "/game", &args)) {
+    session_handle_game(ctx, args);
+    return;
+  }
+
   else if (session_parse_command(line, "/ban", &args)) {
     session_handle_ban(ctx, args);
     return;
@@ -7675,6 +8666,14 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
       ++arguments;
     }
     session_handle_palette(ctx, arguments);
+    return;
+  }
+  else if (strncmp(line, "/suspend!", 9) == 0) {
+    if (ctx->game.active) {
+      session_game_suspend(ctx, "Game suspended.");
+    } else {
+      session_game_suspend(ctx, NULL);
+    }
     return;
   }
   else if (strncmp(line, "/today", 6) == 0) {
@@ -8386,6 +9385,18 @@ static void session_reset_for_retry(session_ctx_t *ctx) {
   ctx->pending_bbs_body_length = 0U;
   ctx->pending_bbs_tag_count = 0U;
   memset(ctx->pending_bbs_tags, 0, sizeof(ctx->pending_bbs_tags));
+  session_asciiart_reset(ctx);
+  ctx->asciiart_has_cooldown = false;
+  ctx->last_asciiart_post.tv_sec = 0;
+  ctx->last_asciiart_post.tv_nsec = 0;
+  session_game_tetris_reset(&ctx->game.tetris);
+  ctx->game.liar.awaiting_guess = false;
+  ctx->game.liar.round_number = 0U;
+  ctx->game.liar.score = 0U;
+  ctx->game.active = false;
+  ctx->game.type = SESSION_GAME_NONE;
+  ctx->game.rng_seeded = false;
+  ctx->game.rng_state = 0U;
   ctx->input_history_count = 0U;
   ctx->input_history_position = -1;
   ctx->history_scroll_position = 0U;
@@ -8577,11 +9588,15 @@ static void *session_thread(void *arg) {
       }
 
       if (ch == 0x01) {
-        if (ctx->bbs_post_pending) {
+        if (ctx->bbs_post_pending || ctx->asciiart_pending) {
           ctx->input_buffer[ctx->input_length] = '\0';
           session_local_echo_char(ctx, '\n');
-          session_bbs_reset_pending_post(ctx);
-          session_send_system_line(ctx, "BBS draft canceled.");
+          if (ctx->bbs_post_pending) {
+            session_bbs_reset_pending_post(ctx);
+            session_send_system_line(ctx, "BBS draft canceled.");
+          } else {
+            session_asciiart_cancel(ctx, "ASCII art draft canceled.");
+          }
           session_clear_input(ctx);
           if (ctx->should_exit) {
             break;
@@ -8591,7 +9606,7 @@ static void *session_thread(void *arg) {
         continue;
       }
 
-      if (ch == 0x03 || ch == 0x04) {
+      if (ch == 0x03) {
         ctx->input_buffer[ctx->input_length] = '\0';
         session_local_echo_char(ctx, '\n');
         session_handle_exit(ctx);
@@ -8603,25 +9618,54 @@ static void *session_thread(void *arg) {
         continue;
       }
 
+      if (ch == 0x04) {
+        ctx->input_buffer[ctx->input_length] = '\0';
+        session_local_echo_char(ctx, '\n');
+        if (ctx->game.active) {
+          session_game_suspend(ctx, "Game suspended.");
+          session_clear_input(ctx);
+          if (ctx->should_exit) {
+            break;
+          }
+          session_render_prompt(ctx, false);
+        } else {
+          session_handle_exit(ctx);
+          session_clear_input(ctx);
+          if (ctx->should_exit) {
+            break;
+          }
+          session_render_prompt(ctx, false);
+        }
+        continue;
+      }
+
       if (ch == 0x13) {
-        if (ctx->bbs_post_pending) {
+        if (ctx->bbs_post_pending || ctx->asciiart_pending) {
           ctx->input_buffer[ctx->input_length] = '\0';
           bool had_body = ctx->input_length > 0U;
           if (had_body) {
             session_local_echo_char(ctx, '\n');
             session_history_record(ctx, ctx->input_buffer);
-            session_bbs_capture_body_line(ctx, ctx->input_buffer);
+            if (ctx->bbs_post_pending) {
+              session_bbs_capture_body_line(ctx, ctx->input_buffer);
+            } else {
+              session_asciiart_capture_line(ctx, ctx->input_buffer);
+            }
           } else {
             session_local_echo_char(ctx, '\n');
           }
 
-          const char *terminator = SSH_CHATTER_BBS_TERMINATOR;
+          const char *terminator = ctx->bbs_post_pending ? SSH_CHATTER_BBS_TERMINATOR : SSH_CHATTER_ASCIIART_TERMINATOR;
           for (const char *cursor = terminator; *cursor != '\0'; ++cursor) {
             session_local_echo_char(ctx, *cursor);
           }
           session_local_echo_char(ctx, '\n');
           session_history_record(ctx, terminator);
-          session_bbs_capture_body_line(ctx, terminator);
+          if (ctx->bbs_post_pending) {
+            session_bbs_capture_body_line(ctx, terminator);
+          } else {
+            session_asciiart_capture_line(ctx, terminator);
+          }
           session_clear_input(ctx);
           if (ctx->should_exit) {
             break;
