@@ -16,6 +16,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -48,6 +49,11 @@
 #define SSH_CHATTER_BBS_DEFAULT_TAG "general"
 #define SSH_CHATTER_BBS_TERMINATOR ">/__BBS_END>"
 #define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT 3U
+#define SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM "ssh-rsa"
+
+#ifndef MSG_DONTWAIT
+#define MSG_DONTWAIT 0
+#endif
 
 typedef struct {
   char question[256];
@@ -839,6 +845,244 @@ static void session_describe_peer(ssh_session session, char *buffer, size_t len)
 
   strncpy(buffer, host, len - 1U);
   buffer[len - 1U] = '\0';
+}
+
+typedef enum {
+  HOSTKEY_SUPPORT_UNKNOWN = 0,
+  HOSTKEY_SUPPORT_ACCEPTED,
+  HOSTKEY_SUPPORT_REJECTED,
+} hostkey_support_status_t;
+
+typedef struct {
+  hostkey_support_status_t status;
+  char offered_algorithms[256];
+} hostkey_probe_result_t;
+
+static bool hostkey_list_contains(const unsigned char *data, size_t data_len, const char *needle,
+                                 size_t needle_len) {
+  if (data == NULL || needle == NULL || needle_len == 0U) {
+    return false;
+  }
+
+  size_t position = 0U;
+  while (position < data_len) {
+    size_t token_end = position;
+    while (token_end < data_len && data[token_end] != ',') {
+      ++token_end;
+    }
+
+    const size_t token_length = token_end - position;
+    if (token_length == needle_len && memcmp(data + position, needle, needle_len) == 0) {
+      return true;
+    }
+
+    if (token_end >= data_len) {
+      break;
+    }
+
+    position = token_end + 1U;
+  }
+
+  return false;
+}
+
+static hostkey_probe_result_t session_probe_client_hostkey_algorithms(ssh_session session,
+                                                                      const char *required_algorithm) {
+  hostkey_probe_result_t result;
+  result.status = HOSTKEY_SUPPORT_UNKNOWN;
+  result.offered_algorithms[0] = '\0';
+
+  if (session == NULL || required_algorithm == NULL || required_algorithm[0] == '\0') {
+    return result;
+  }
+
+  const size_t required_length = strlen(required_algorithm);
+  if (required_length == 0U) {
+    return result;
+  }
+
+  const int socket_fd = ssh_get_fd(session);
+  if (socket_fd < 0) {
+    return result;
+  }
+
+  const size_t max_buffer_size = 65536U;
+  size_t buffer_size = 16384U;
+  unsigned char *buffer = malloc(buffer_size);
+  if (buffer == NULL) {
+    return result;
+  }
+
+  unsigned int attempts = 0U;
+  const unsigned int max_attempts = 5U;
+
+  while (attempts < max_attempts) {
+    struct pollfd poll_fd;
+    poll_fd.fd = socket_fd;
+    poll_fd.events = POLLIN;
+    poll_fd.revents = 0;
+
+    int poll_result = poll(&poll_fd, 1, 1000);
+    if (poll_result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      break;
+    }
+
+    if (poll_result == 0) {
+      ++attempts;
+      continue;
+    }
+
+    if ((poll_fd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+      break;
+    }
+
+    ssize_t peeked = recv(socket_fd, buffer, buffer_size, MSG_PEEK | MSG_DONTWAIT);
+    if (peeked < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      if (errno == EAGAIN
+#ifdef EWOULDBLOCK
+          || errno == EWOULDBLOCK
+#endif
+      ) {
+        ++attempts;
+        continue;
+      }
+      break;
+    }
+
+    if (peeked == 0) {
+      break;
+    }
+
+    size_t available = (size_t)peeked;
+    unsigned char *newline = memchr(buffer, '\n', available);
+    if (newline == NULL) {
+      if (available == buffer_size && buffer_size < max_buffer_size) {
+        size_t new_size = buffer_size * 2U;
+        if (new_size > max_buffer_size) {
+          new_size = max_buffer_size;
+        }
+        unsigned char *resized = realloc(buffer, new_size);
+        if (resized != NULL) {
+          buffer = resized;
+          buffer_size = new_size;
+          continue;
+        }
+      }
+      ++attempts;
+      continue;
+    }
+
+    size_t payload_offset = (size_t)(newline - buffer) + 1U;
+    while (payload_offset < available && (buffer[payload_offset] == '\r' || buffer[payload_offset] == '\n')) {
+      ++payload_offset;
+    }
+
+    if (available <= payload_offset || available - payload_offset < 5U) {
+      ++attempts;
+      continue;
+    }
+
+    const unsigned char *packet = buffer + payload_offset;
+    uint32_t packet_length = ((uint32_t)packet[0] << 24) | ((uint32_t)packet[1] << 16) |
+                             ((uint32_t)packet[2] << 8) | (uint32_t)packet[3];
+    if (packet_length == 0U) {
+      break;
+    }
+
+    size_t total_packet_size = 4U + (size_t)packet_length;
+    if (total_packet_size > available - payload_offset) {
+      if (payload_offset + total_packet_size > buffer_size && buffer_size < max_buffer_size) {
+        size_t new_size = buffer_size;
+        while (new_size < payload_offset + total_packet_size && new_size < max_buffer_size) {
+          new_size *= 2U;
+          if (new_size > max_buffer_size) {
+            new_size = max_buffer_size;
+          }
+        }
+        if (new_size > buffer_size) {
+          unsigned char *resized = realloc(buffer, new_size);
+          if (resized != NULL) {
+            buffer = resized;
+            buffer_size = new_size;
+            continue;
+          }
+        }
+      }
+      ++attempts;
+      continue;
+    }
+
+    unsigned int padding_length = packet[4];
+    if ((size_t)padding_length + 1U > packet_length) {
+      break;
+    }
+
+    size_t payload_length = (size_t)packet_length - (size_t)padding_length - 1U;
+    if (payload_length < 17U) {
+      break;
+    }
+
+    const unsigned char *payload = packet + 5;
+    if (payload[0] != 20U) {
+      break;
+    }
+
+    const unsigned char *cursor = payload + 17U;
+    size_t remaining = payload_length - 17U;
+    if (remaining < 4U) {
+      break;
+    }
+
+    uint32_t kex_names_len = ((uint32_t)cursor[0] << 24) | ((uint32_t)cursor[1] << 16) |
+                             ((uint32_t)cursor[2] << 8) | (uint32_t)cursor[3];
+    cursor += 4U;
+    if ((size_t)kex_names_len > remaining - 4U) {
+      break;
+    }
+
+    cursor += (size_t)kex_names_len;
+    remaining -= 4U + (size_t)kex_names_len;
+    if (remaining < 4U) {
+      break;
+    }
+
+    uint32_t hostkey_names_len = ((uint32_t)cursor[0] << 24) | ((uint32_t)cursor[1] << 16) |
+                                 ((uint32_t)cursor[2] << 8) | (uint32_t)cursor[3];
+    cursor += 4U;
+    if ((size_t)hostkey_names_len > remaining - 4U) {
+      break;
+    }
+
+    size_t hostkey_len = (size_t)hostkey_names_len;
+    const unsigned char *hostkey_data = cursor;
+
+    size_t copy_length = hostkey_len;
+    if (copy_length >= sizeof(result.offered_algorithms)) {
+      copy_length = sizeof(result.offered_algorithms) - 1U;
+    }
+    memcpy(result.offered_algorithms, hostkey_data, copy_length);
+    result.offered_algorithms[copy_length] = '\0';
+
+    if (hostkey_len == 0U) {
+      result.status = HOSTKEY_SUPPORT_REJECTED;
+    } else if (hostkey_list_contains(hostkey_data, hostkey_len, required_algorithm, required_length)) {
+      result.status = HOSTKEY_SUPPORT_ACCEPTED;
+    } else {
+      result.status = HOSTKEY_SUPPORT_REJECTED;
+    }
+
+    free(buffer);
+    return result;
+  }
+
+  free(buffer);
+  return result;
 }
 
 static bool session_is_private_ipv4(const unsigned char octets[4]) {
@@ -9169,6 +9413,29 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
           restart_listener = true;
           break;
         }
+        continue;
+      }
+
+      hostkey_probe_result_t hostkey_probe =
+          session_probe_client_hostkey_algorithms(session, SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM);
+      if (hostkey_probe.status == HOSTKEY_SUPPORT_REJECTED) {
+        char peer_address[NI_MAXHOST];
+        session_describe_peer(session, peer_address, sizeof(peer_address));
+        if (peer_address[0] == '\0') {
+          strncpy(peer_address, "unknown", sizeof(peer_address) - 1U);
+          peer_address[sizeof(peer_address) - 1U] = '\0';
+        }
+
+        if (hostkey_probe.offered_algorithms[0] != '\0') {
+          printf("[reject] client %s does not accept %s host key (client offered: %s)\n", peer_address,
+                 SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM, hostkey_probe.offered_algorithms);
+        } else {
+          printf("[reject] client %s does not accept %s host key\n", peer_address,
+                 SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM);
+        }
+
+        ssh_disconnect(session);
+        ssh_free(session);
         continue;
       }
 
