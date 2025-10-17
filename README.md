@@ -7,6 +7,7 @@ SSH-Chatter is a C reimplementation of the Go [`ssh-chat`](https://github.com/sh
 - Named poll management via `/vote` for multiple-choice polls (vote with `/1 <label>` or `/elect <label> <choice>`) plus `/vote-single` for classic single-choice runs, including graceful shutdown with `/vote @close <label>`.
 - Poll state persistence to `vote_state.dat` (overridable via `CHATTER_VOTE_FILE`) so active polls and their votes survive restarts.
 - `/bbs` command unlocking a retro bulletin board system with tags, comments, bumping, and a multi-line composer that ends on a `>/__BBS_END>` terminator.
+- `/asciiart` live composer with a 15-line limit, a one-minute cooldown, and keyboard shortcuts for cancelling with Ctrl+A and submitting with Ctrl+S or `>/__ARTWORK_END>`.
 - `/birthday` to register birthdays, `/soulmate` to find matching dates, `/grant <ip>` so LAN operators can delegate privileges by address, and `/revoke <ip>` so top LAN admins can reclaim them.
 - Chat UI refresh with a clean divider between history and input, instant input clearing after send, and a friendly "Wait for a moment..." banner with a playful loading bar before each join.
 - Story-driven captcha covering regional cat and dog ownership prompts.
@@ -168,6 +169,8 @@ sudo systemctl disable --now chatter.service
 - ChatGPT assistant with adaptive memory sourced from `/etc/ssh-chatter/chatter.env`.
 - Named polls with label-based voting, supporting multiple-choice `/vote` polls and single-choice `/vote-single` alternatives, including `/elect <label> <choice>` as a text-friendly voting shortcut.
 - Retro bulletin board system accessible through `/bbs` with tagging, comments, bumping, and an interactive composer that ends with `>/__BBS_END>`.
+- `/asciiart` editor with 15-line drafts, a one-minute posting cooldown, and Ctrl+A/Ctrl+S shortcuts.
+- `/game` hub featuring built-in `tetris` (transcoded from the original Soviet-era C implementation) and `liargame`, both suspendable via `/suspend!` or Ctrl+D.
 
 ### In progress / planned
 - Enforcing moderation commands beyond logging.

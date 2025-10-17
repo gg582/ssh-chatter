@@ -44,6 +44,11 @@
 #define SSH_CHATTER_BBS_COMMENT_LEN 512
 #define SSH_CHATTER_MAX_GRANTS 128
 #define SSH_CHATTER_JOIN_BAR_MAX 17
+#define SSH_CHATTER_ASCIIART_MAX_LINES 15
+#define SSH_CHATTER_ASCIIART_BUFFER_LEN 1024
+#define SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS 60
+#define SSH_CHATTER_TETRIS_WIDTH 10
+#define SSH_CHATTER_TETRIS_HEIGHT 20
 
 struct host;
 struct session_ctx;
@@ -108,6 +113,43 @@ typedef struct ssh_listener {
   ssh_bind handle;
 } ssh_listener_t;
 
+typedef enum session_game_type {
+  SESSION_GAME_NONE = 0,
+  SESSION_GAME_TETRIS,
+  SESSION_GAME_LIARGAME,
+} session_game_type_t;
+
+typedef struct tetris_game_state {
+  int board[SSH_CHATTER_TETRIS_HEIGHT][SSH_CHATTER_TETRIS_WIDTH];
+  int current_piece;
+  int rotation;
+  int row;
+  int column;
+  int next_piece;
+  unsigned score;
+  unsigned lines_cleared;
+  bool game_over;
+  int bag[7];
+  size_t bag_index;
+} tetris_game_state_t;
+
+typedef struct liar_game_state {
+  unsigned round_number;
+  unsigned score;
+  unsigned current_prompt_index;
+  unsigned liar_index;
+  bool awaiting_guess;
+} liar_game_state_t;
+
+typedef struct session_game_state {
+  bool active;
+  session_game_type_t type;
+  tetris_game_state_t tetris;
+  liar_game_state_t liar;
+  uint64_t rng_state;
+  bool rng_seeded;
+} session_game_state_t;
+
 typedef struct session_ctx {
   ssh_session session;
   ssh_channel channel;
@@ -154,6 +196,13 @@ typedef struct session_ctx {
   size_t pending_bbs_tag_count;
   char pending_bbs_body[SSH_CHATTER_BBS_BODY_LEN];
   size_t pending_bbs_body_length;
+  bool asciiart_pending;
+  char asciiart_buffer[SSH_CHATTER_ASCIIART_BUFFER_LEN];
+  size_t asciiart_length;
+  size_t asciiart_line_count;
+  bool asciiart_has_cooldown;
+  struct timespec last_asciiart_post;
+  session_game_state_t game;
 } session_ctx_t;
 
 typedef struct user_preference {
