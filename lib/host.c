@@ -552,6 +552,7 @@ static void session_bbs_capture_body_line(session_ctx_t *ctx, const char *line);
 static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments);
 static void session_bbs_regen_post(session_ctx_t *ctx, uint64_t id);
 static void session_bbs_delete(session_ctx_t *ctx, uint64_t id);
+static void session_bbs_reset_pending_post(session_ctx_t *ctx);
 static bbs_post_t *host_find_bbs_post_locked(host_t *host, uint64_t id);
 static bbs_post_t *host_allocate_bbs_post_locked(host_t *host);
 static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
@@ -8572,6 +8573,33 @@ static void *session_thread(void *arg) {
       const char ch = buffer[idx];
 
       if (session_consume_escape_sequence(ctx, ch)) {
+        continue;
+      }
+
+      if (ch == 0x01) {
+        if (ctx->bbs_post_pending) {
+          ctx->input_buffer[ctx->input_length] = '\0';
+          session_local_echo_char(ctx, '\n');
+          session_bbs_reset_pending_post(ctx);
+          session_send_system_line(ctx, "BBS draft canceled.");
+          session_clear_input(ctx);
+          if (ctx->should_exit) {
+            break;
+          }
+          session_render_prompt(ctx, false);
+        }
+        continue;
+      }
+
+      if (ch == 0x03 || ch == 0x04) {
+        ctx->input_buffer[ctx->input_length] = '\0';
+        session_local_echo_char(ctx, '\n');
+        session_handle_exit(ctx);
+        session_clear_input(ctx);
+        if (ctx->should_exit) {
+          break;
+        }
+        session_render_prompt(ctx, false);
         continue;
       }
 
