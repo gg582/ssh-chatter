@@ -2,6 +2,7 @@
 #define LIBSSH_LIBSSH_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,6 +35,9 @@ typedef enum {
   SSH_OK = 0,
   SSH_ERROR = -1
 } ssh_status_t;
+
+#define SSH_AGAIN -2
+#define SSH_EOF -127
 
 #define SSH_REQUEST_AUTH 1
 #define SSH_REQUEST_CHANNEL_OPEN 2
@@ -79,6 +83,7 @@ int ssh_message_channel_request_open_reply_accept_channel(ssh_message message,
 ssh_channel ssh_channel_new(ssh_session session);
 int ssh_channel_write(ssh_channel channel, const void *data, size_t len);
 int ssh_channel_read(ssh_channel channel, void *data, size_t len, int is_stderr);
+int ssh_channel_read_timeout(ssh_channel channel, void *data, uint32_t len, int is_stderr, int timeout_ms);
 int ssh_channel_send_eof(ssh_channel channel);
 int ssh_channel_close(ssh_channel channel);
 void ssh_channel_free(ssh_channel channel);

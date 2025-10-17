@@ -50,6 +50,8 @@ struct host;
 struct session_ctx;
 struct client_manager;
 struct webssh_client;
+struct translation_caption_job;
+struct translation_caption_result;
 
 typedef struct join_activity_entry {
   char ip[SSH_CHATTER_IP_LEN];
@@ -161,6 +163,17 @@ typedef struct session_ctx {
   bool input_translation_enabled;
   char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   char last_detected_input_language[SSH_CHATTER_LANG_NAME_LEN];
+  pthread_mutex_t translation_mutex;
+  pthread_cond_t translation_cond;
+  bool translation_mutex_initialized;
+  bool translation_cond_initialized;
+  bool translation_thread_started;
+  bool translation_thread_stop;
+  pthread_t translation_thread;
+  struct translation_caption_job *translation_pending_head;
+  struct translation_caption_job *translation_pending_tail;
+  struct translation_caption_result *translation_ready_head;
+  struct translation_caption_result *translation_ready_tail;
 } session_ctx_t;
 
 typedef struct user_preference {
