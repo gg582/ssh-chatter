@@ -2841,6 +2841,43 @@ static void session_send_line(session_ctx_t *ctx, const char *message) {
   ssh_channel_write(ctx->channel, bg, bg_len);
 }
 
+static size_t session_append_fragment(char *dest, size_t dest_size, size_t offset, const char *fragment) {
+  if (dest == NULL || dest_size == 0U) {
+    return offset;
+  }
+
+  if (offset >= dest_size) {
+    return dest_size > 0U ? dest_size - 1U : offset;
+  }
+
+  if (fragment == NULL) {
+    dest[offset] = '\0';
+    return offset;
+  }
+
+  const size_t fragment_len = strlen(fragment);
+  if (fragment_len == 0U) {
+    return offset;
+  }
+
+  if (offset >= dest_size - 1U) {
+    dest[dest_size - 1U] = '\0';
+    return dest_size - 1U;
+  }
+
+  size_t available = dest_size - offset - 1U;
+  if (fragment_len < available) {
+    memcpy(dest + offset, fragment, fragment_len);
+    offset += fragment_len;
+  } else {
+    memcpy(dest + offset, fragment, available);
+    offset += available;
+  }
+
+  dest[offset] = '\0';
+  return offset;
+}
+
 static void session_send_plain_line(session_ctx_t *ctx, const char *message) {
   if (ctx == NULL || ctx->channel == NULL || message == NULL) {
     return;
@@ -2858,9 +2895,58 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
 
-  char formatted[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(formatted, sizeof(formatted), "%s%s%s%s%s", bg, fg, bold, message, ANSI_RESET);
-  session_send_line(ctx, formatted);
+  if (message[0] == '\0') {
+    char formatted_empty[SSH_CHATTER_MESSAGE_LIMIT];
+    size_t offset = 0U;
+    offset = session_append_fragment(formatted_empty, sizeof(formatted_empty), offset, bg);
+    offset = session_append_fragment(formatted_empty, sizeof(formatted_empty), offset, fg);
+    offset = session_append_fragment(formatted_empty, sizeof(formatted_empty), offset, bold);
+    session_append_fragment(formatted_empty, sizeof(formatted_empty), offset, ANSI_RESET);
+    session_send_line(ctx, formatted_empty);
+    return;
+  }
+
+  const char *cursor = message;
+  for (;;) {
+    const char *newline = strchr(cursor, '\n');
+    size_t segment_length = newline != NULL ? (size_t)(newline - cursor) : strlen(cursor);
+    if (segment_length >= SSH_CHATTER_MESSAGE_LIMIT) {
+      segment_length = SSH_CHATTER_MESSAGE_LIMIT - 1U;
+    }
+
+    char segment[SSH_CHATTER_MESSAGE_LIMIT];
+    memcpy(segment, cursor, segment_length);
+    segment[segment_length] = '\0';
+
+    char formatted[SSH_CHATTER_MESSAGE_LIMIT];
+    size_t offset = 0U;
+    offset = session_append_fragment(formatted, sizeof(formatted), offset, bg);
+    offset = session_append_fragment(formatted, sizeof(formatted), offset, fg);
+    offset = session_append_fragment(formatted, sizeof(formatted), offset, bold);
+    offset = session_append_fragment(formatted, sizeof(formatted), offset, segment);
+    session_append_fragment(formatted, sizeof(formatted), offset, ANSI_RESET);
+    session_send_line(ctx, formatted);
+
+    if (newline == NULL) {
+      break;
+    }
+
+    cursor = newline + 1;
+    if (*cursor == '\r') {
+      ++cursor;
+    }
+
+    if (*cursor == '\0') {
+      char formatted_empty[SSH_CHATTER_MESSAGE_LIMIT];
+      size_t empty_offset = 0U;
+      empty_offset = session_append_fragment(formatted_empty, sizeof(formatted_empty), empty_offset, bg);
+      empty_offset = session_append_fragment(formatted_empty, sizeof(formatted_empty), empty_offset, fg);
+      empty_offset = session_append_fragment(formatted_empty, sizeof(formatted_empty), empty_offset, bold);
+      session_append_fragment(formatted_empty, sizeof(formatted_empty), empty_offset, ANSI_RESET);
+      session_send_line(ctx, formatted_empty);
+      break;
+    }
+  }
 }
 
 static void session_send_raw_text(session_ctx_t *ctx, const char *text) {
