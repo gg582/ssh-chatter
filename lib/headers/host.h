@@ -44,6 +44,7 @@
 #define SSH_CHATTER_BBS_COMMENT_LEN 512
 #define SSH_CHATTER_MAX_GRANTS 128
 #define SSH_CHATTER_JOIN_BAR_MAX 17
+#define SSH_CHATTER_LANG_NAME_LEN 64
 
 struct host;
 struct session_ctx;
@@ -154,6 +155,12 @@ typedef struct session_ctx {
   size_t pending_bbs_tag_count;
   char pending_bbs_body[SSH_CHATTER_BBS_BODY_LEN];
   size_t pending_bbs_body_length;
+  bool translation_enabled;
+  bool output_translation_enabled;
+  char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+  bool input_translation_enabled;
+  char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+  char last_detected_input_language[SSH_CHATTER_LANG_NAME_LEN];
 } session_ctx_t;
 
 typedef struct user_preference {
