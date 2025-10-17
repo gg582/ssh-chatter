@@ -59,7 +59,30 @@ Clone the repository and use the provided `Makefile`:
 make
 ```
 
-This produces an `ssh-chatter` binary in the repository root.  Clean intermediate artifacts with `make clean`.
+This produces an `ssh-chatter` binary in the repository root and a `libssh_chatter_backend.so` shared object that exposes the
+translation helpers for reuse in other applications.  Clean intermediate artifacts with `make clean`.
+
+### Using the shared translation backend
+
+The shared object reuses the server's C translation pipeline (including ANSI placeholder preservation) so other processes can
+obtain translations without spawning the full SSH host.  Link against `libssh_chatter_backend.so` and include
+`lib/headers/ssh_chatter_backend.h`:
+
+```c
+#include "lib/headers/ssh_chatter_backend.h"
+
+int main(void) {
+  char translated[4096];
+  char detected[64];
+
+  if (ssh_chatter_backend_translate_line("Hello, world!", "ko", translated, sizeof(translated), detected, sizeof(detected))) {
+    printf("Detected %s -> %s\n", detected, translated);
+  }
+}
+```
+
+Set `OPENAI_API_KEY` (and optionally `OPENAI_API_BASE`) in the environment so the helper can reach the OpenAI Responses API,
+mirroring the runtime requirements of the main daemon.
 
 ## Running the server manually
 
