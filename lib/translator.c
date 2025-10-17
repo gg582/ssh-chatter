@@ -442,6 +442,7 @@ bool translator_translate(const char *text, const char *target_language, char *t
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L); // prevent signal-based timeouts from hanging in worker threads
 
   CURLcode result = curl_easy_perform(curl);
   long status = 0;
