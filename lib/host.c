@@ -41,6 +41,7 @@
 #endif
 
 #define ANSI_CLEAR_LINE "\033[2K"
+#define ANSI_INSERT_LINE "\033[1L"
 
 #define SSH_CHATTER_MESSAGE_BOX_MAX_LINES 32U
 #define SSH_CHATTER_MESSAGE_BOX_PADDING 2U
@@ -415,6 +416,7 @@ static const char *lookup_color_code(const color_entry_t *entries, size_t entry_
 static bool parse_bool_token(const char *token, bool *value);
 static void session_apply_background_fill(session_ctx_t *ctx);
 static void session_write_rendered_line(session_ctx_t *ctx, const char *render_source);
+static void session_send_caption_line(session_ctx_t *ctx, const char *message);
 static void session_send_line(session_ctx_t *ctx, const char *message);
 static void session_send_plain_line(session_ctx_t *ctx, const char *message);
 static void session_send_system_line(session_ctx_t *ctx, const char *message);
@@ -441,6 +443,7 @@ static size_t host_history_total(host_t *host);
 static size_t host_history_copy_range(host_t *host, size_t start_index, chat_history_entry_t *buffer, size_t capacity);
 static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, chat_history_entry_t *entry);
 static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entry_t *entry, const session_ctx_t *from);
+static void chat_room_broadcast_caption(chat_room_t *room, const char *message);
 static bool host_history_apply_reaction(host_t *host, uint64_t message_id, size_t reaction_index, chat_history_entry_t *updated_entry);
 static bool chat_history_entry_build_reaction_summary(const chat_history_entry_t *entry, char *buffer, size_t length);
 static void session_send_private_message_line(session_ctx_t *ctx, const session_ctx_t *color_source,
@@ -1018,6 +1021,49 @@ static void chat_room_broadcast(chat_room_t *room, const char *message, const se
   free(targets);
 }
 
+static void chat_room_broadcast_caption(chat_room_t *room, const char *message) {
+  if (room == NULL || message == NULL) {
+    return;
+  }
+
+  session_ctx_t **targets = NULL;
+  size_t target_count = 0U;
+  size_t expected_targets = 0U;
+
+  pthread_mutex_lock(&room->lock);
+  expected_targets = room->member_count;
+  if (expected_targets > 0U) {
+    targets = calloc(expected_targets, sizeof(*targets));
+    if (targets != NULL) {
+      for (size_t idx = 0; idx < room->member_count; ++idx) {
+        session_ctx_t *member = room->members[idx];
+        if (member == NULL || member->channel == NULL) {
+          continue;
+        }
+        targets[target_count++] = member;
+      }
+    }
+  }
+  pthread_mutex_unlock(&room->lock);
+
+  if (targets == NULL && expected_targets > 0U) {
+    humanized_log_error("chat-room", "failed to allocate broadcast buffer", ENOMEM);
+    return;
+  }
+
+  for (size_t idx = 0; idx < target_count; ++idx) {
+    session_ctx_t *member = targets[idx];
+    session_send_caption_line(member, message);
+    if (member->history_scroll_position == 0U) {
+      session_refresh_input_line(member);
+    }
+  }
+
+  printf("[broadcast caption] %s\n", message);
+
+  free(targets);
+}
+
 static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entry_t *entry, const session_ctx_t *from) {
   if (room == NULL || entry == NULL) {
     return;
@@ -1097,7 +1143,7 @@ static void chat_room_broadcast_reaction_update(host_t *host, const chat_history
     snprintf(line, sizeof(line), "    ↳ reactions: %s", summary);
   }
 
-  chat_room_broadcast(&host->room, line, NULL);
+  chat_room_broadcast_caption(&host->room, line);
 }
 
 static bool host_history_reserve_locked(host_t *host, size_t min_capacity) {
@@ -2887,6 +2933,17 @@ static void session_write_rendered_line(session_ctx_t *ctx, const char *render_s
   ssh_channel_write(ctx->channel, bg, bg_len);
 }
 
+static void session_send_caption_line(session_ctx_t *ctx, const char *message) {
+  if (ctx == NULL || ctx->channel == NULL || message == NULL) {
+    return;
+  }
+
+  ssh_channel_write(ctx->channel, "\r", 1U);
+  ssh_channel_write(ctx->channel, ANSI_INSERT_LINE, sizeof(ANSI_INSERT_LINE) - 1U);
+
+  session_write_rendered_line(ctx, message);
+}
+
 // session_send_line writes a single line while preserving the session's
 // background color even when individual strings reset their ANSI attributes by
 // clearing the row with the palette tint before printing.
@@ -2900,19 +2957,17 @@ static void session_send_line(session_ctx_t *ctx, const char *message) {
   strncpy(buffer, message, SSH_CHATTER_MESSAGE_LIMIT);
   buffer[SSH_CHATTER_MESSAGE_LIMIT] = '\0';
 
-  bool has_translation = false;
-  char translated_line[SSH_CHATTER_TRANSLATION_WORKING_LEN];
-  if (ctx->translation_enabled &&
-      session_translate_output_line(ctx, buffer, translated_line, sizeof(translated_line))) {
-    has_translation = translated_line[0] != '\0';
-  }
-
   session_write_rendered_line(ctx, buffer);
 
-  if (has_translation) {
-    char annotated[SSH_CHATTER_TRANSLATION_WORKING_LEN + 8U];
-    snprintf(annotated, sizeof(annotated), "\342\206\223 %s", translated_line);
-    session_write_rendered_line(ctx, annotated);
+  if (ctx->translation_enabled && ctx->output_translation_enabled &&
+      ctx->output_translation_language[0] != '\0') {
+    char translated_line[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+    if (session_translate_output_line(ctx, buffer, translated_line, sizeof(translated_line)) &&
+        translated_line[0] != '\0') {
+      char annotated[SSH_CHATTER_TRANSLATION_WORKING_LEN + 32U];
+      snprintf(annotated, sizeof(annotated), "    \342\206\263 %s", translated_line);
+      session_send_caption_line(ctx, annotated);
+    }
   }
 }
 
@@ -2955,6 +3010,12 @@ static size_t session_append_fragment(char *dest, size_t dest_size, size_t offse
 
 static void session_send_plain_line(session_ctx_t *ctx, const char *message) {
   if (ctx == NULL || ctx->channel == NULL || message == NULL) {
+    return;
+  }
+
+  static const char kCaptionPrefix[] = "    \342\206\263";
+  if (strncmp(message, kCaptionPrefix, sizeof(kCaptionPrefix) - 1U) == 0) {
+    session_send_caption_line(ctx, message);
     return;
   }
 

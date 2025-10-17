@@ -7,7 +7,7 @@ if [[ -z "${GEMINI_API_KEY:-}" ]]; then
 fi
 
 BASE_URL="${GEMINI_API_BASE:-${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}}"
-MODEL="${GEMINI_MODEL:-gemini-2.5-flash}"
+MODEL="${GEMINI_MODEL:-gemini-1.5-flash}"
 
 URL_SUFFIX="models/${MODEL}:generateContent"
 if [[ "${BASE_URL}" != */ ]]; then

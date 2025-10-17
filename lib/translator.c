@@ -10,7 +10,7 @@
 
 #define TRANSLATOR_MAX_RESPONSE 65536
 #define TRANSLATOR_DEFAULT_BASE_URL "https://generativelanguage.googleapis.com/v1beta"
-#define TRANSLATOR_DEFAULT_MODEL "gemini-2.5-flash"
+#define TRANSLATOR_DEFAULT_MODEL "gemini-1.5-flash"
 
 typedef struct translator_buffer {
   char *data;
