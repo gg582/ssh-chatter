@@ -164,6 +164,8 @@ typedef struct session_ctx {
   bool input_translation_enabled;
   char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   char last_detected_input_language[SSH_CHATTER_LANG_NAME_LEN];
+  size_t translation_caption_spacing;
+  size_t translation_placeholder_active_lines;
   pthread_mutex_t translation_mutex;
   pthread_cond_t translation_cond;
   bool translation_mutex_initialized;
@@ -198,6 +200,7 @@ typedef struct user_preference {
   int last_poll_choice;
   bool has_birthday;
   char birthday[16];
+  uint8_t translation_caption_spacing;
   struct {
     char label[SSH_CHATTER_POLL_LABEL_LEN];
     uint64_t poll_id;

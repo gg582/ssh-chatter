@@ -419,6 +419,7 @@ static bool parse_bool_token(const char *token, bool *value);
 static void session_apply_background_fill(session_ctx_t *ctx);
 static void session_write_rendered_line(session_ctx_t *ctx, const char *render_source);
 static void session_send_caption_line(session_ctx_t *ctx, const char *message);
+static void session_render_caption_with_offset(session_ctx_t *ctx, const char *message, size_t move_up);
 static void session_send_line(session_ctx_t *ctx, const char *message);
 static void session_send_plain_line(session_ctx_t *ctx, const char *message);
 static void session_send_system_line(session_ctx_t *ctx, const char *message);
@@ -473,6 +474,7 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments);
 static void session_handle_translate(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_target_lang(session_ctx_t *ctx, const char *arguments);
+static void session_handle_chat_spacing(session_ctx_t *ctx, const char *arguments);
 static void session_handle_status(session_ctx_t *ctx, const char *arguments);
 static void session_handle_showstatus(session_ctx_t *ctx, const char *arguments);
 static void session_handle_weather(session_ctx_t *ctx, const char *arguments);
@@ -504,7 +506,8 @@ static bool timezone_resolve_identifier(const char *input, char *resolved, size_
 static const palette_descriptor_t *palette_find_descriptor(const char *name);
 static bool palette_apply_to_session(session_ctx_t *ctx, const palette_descriptor_t *descriptor);
 static void session_translation_flush_ready(session_ctx_t *ctx);
-static void session_translation_queue_caption(session_ctx_t *ctx, const char *message);
+static bool session_translation_queue_caption(session_ctx_t *ctx, const char *message, size_t placeholder_lines);
+static void session_translation_reserve_placeholders(session_ctx_t *ctx, size_t placeholder_lines);
 static void session_translation_clear_queue(session_ctx_t *ctx);
 static bool session_translation_worker_ensure(session_ctx_t *ctx);
 static void session_translation_worker_shutdown(session_ctx_t *ctx);
@@ -535,6 +538,7 @@ static bool session_is_captcha_exempt(const session_ctx_t *ctx);
 static void host_store_system_theme(host_t *host, const session_ctx_t *ctx);
 static void host_store_user_os(host_t *host, const session_ctx_t *ctx);
 static void host_store_birthday(host_t *host, const session_ctx_t *ctx, const char *birthday);
+static void host_store_chat_spacing(host_t *host, const session_ctx_t *ctx);
 static bool host_ip_has_grant_locked(host_t *host, const char *ip);
 static bool host_ip_has_grant(host_t *host, const char *ip);
 static bool host_add_operator_grant_locked(host_t *host, const char *ip);
@@ -1573,6 +1577,24 @@ static void host_store_birthday(host_t *host, const session_ctx_t *ctx, const ch
   pthread_mutex_unlock(&host->lock);
 }
 
+static void host_store_chat_spacing(host_t *host, const session_ctx_t *ctx) {
+  if (host == NULL || ctx == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  user_preference_t *pref = host_ensure_preference_locked(host, ctx->user.name);
+  if (pref != NULL) {
+    if (ctx->translation_caption_spacing > UINT8_MAX) {
+      pref->translation_caption_spacing = UINT8_MAX;
+    } else {
+      pref->translation_caption_spacing = (uint8_t)ctx->translation_caption_spacing;
+    }
+  }
+  host_state_save_locked(host);
+  pthread_mutex_unlock(&host->lock);
+}
+
 static bool host_ip_has_grant_locked(host_t *host, const char *ip) {
   if (host == NULL || ip == NULL || ip[0] == '\0') {
     return false;
@@ -1920,6 +1942,7 @@ static void host_state_save_locked(host_t *host) {
     serialized.last_poll_choice = pref->last_poll_choice;
     serialized.has_birthday = pref->has_birthday ? 1U : 0U;
     memset(serialized.reserved, 0, sizeof(serialized.reserved));
+    serialized.reserved[0] = pref->translation_caption_spacing;
     snprintf(serialized.birthday, sizeof(serialized.birthday), "%s", pref->birthday);
 
     if (fwrite(&serialized, sizeof(serialized), 1U, fp) != 1U) {
@@ -2360,6 +2383,7 @@ static void host_state_load(host_t *host) {
     pref->last_poll_choice = serialized.last_poll_choice;
     pref->has_birthday = serialized.has_birthday != 0U;
     snprintf(pref->birthday, sizeof(pref->birthday), "%s", serialized.birthday);
+    pref->translation_caption_spacing = serialized.reserved[0];
     ++host->preference_count;
   }
 
@@ -2819,6 +2843,10 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
     } else {
       ctx->birthday[0] = '\0';
     }
+    ctx->translation_caption_spacing = snapshot.translation_caption_spacing;
+    if (ctx->translation_caption_spacing > 8U) {
+      ctx->translation_caption_spacing = 8U;
+    }
   }
 
   session_force_dark_mode_foreground(ctx);
@@ -2838,10 +2866,13 @@ typedef struct translation_caption_job {
   translation_placeholder_t placeholders[SSH_CHATTER_MAX_TRANSLATION_PLACEHOLDERS];
   size_t placeholder_count;
   char target_language[SSH_CHATTER_LANG_NAME_LEN];
+  size_t placeholder_lines;
   struct translation_caption_job *next;
 } translation_caption_job_t;
 
 typedef struct translation_caption_result {
+  bool success;
+  size_t placeholder_lines;
   char translated[SSH_CHATTER_TRANSLATION_WORKING_LEN];
   struct translation_caption_result *next;
 } translation_caption_result_t;
@@ -2910,39 +2941,42 @@ static void session_translation_clear_queue(session_ctx_t *ctx) {
     free(ready);
     ready = next;
   }
+
+  ctx->translation_placeholder_active_lines = 0U;
 }
 
-static void session_translation_queue_caption(session_ctx_t *ctx, const char *message) {
+static bool session_translation_queue_caption(session_ctx_t *ctx, const char *message, size_t placeholder_lines) {
   if (ctx == NULL || message == NULL) {
-    return;
+    return false;
   }
 
   if (!ctx->translation_enabled || !ctx->output_translation_enabled ||
       ctx->output_translation_language[0] == '\0' || message[0] == '\0') {
-    return;
+    return false;
   }
 
   if (!session_translation_worker_ensure(ctx)) {
-    return;
+    return false;
   }
 
   translation_caption_job_t *job = calloc(1U, sizeof(*job));
   if (job == NULL) {
-    return;
+    return false;
   }
 
   size_t placeholder_count = 0U;
   if (!translation_prepare_text(message, job->sanitized, sizeof(job->sanitized), job->placeholders, &placeholder_count)) {
     free(job);
-    return;
+    return false;
   }
 
   if (job->sanitized[0] == '\0') {
     free(job);
-    return;
+    return false;
   }
 
   job->placeholder_count = placeholder_count;
+  job->placeholder_lines = placeholder_lines;
   snprintf(job->target_language, sizeof(job->target_language), "%s", ctx->output_translation_language);
 
   pthread_mutex_lock(&ctx->translation_mutex);
@@ -2955,6 +2989,24 @@ static void session_translation_queue_caption(session_ctx_t *ctx, const char *me
   ctx->translation_pending_tail = job;
   pthread_cond_signal(&ctx->translation_cond);
   pthread_mutex_unlock(&ctx->translation_mutex);
+
+  return true;
+}
+
+static void session_translation_reserve_placeholders(session_ctx_t *ctx, size_t placeholder_lines) {
+  if (ctx == NULL || ctx->channel == NULL || placeholder_lines == 0U) {
+    return;
+  }
+
+  for (size_t idx = 0U; idx < placeholder_lines; ++idx) {
+    session_write_rendered_line(ctx, "");
+  }
+
+  if (SIZE_MAX - ctx->translation_placeholder_active_lines < placeholder_lines) {
+    ctx->translation_placeholder_active_lines = SIZE_MAX;
+  } else {
+    ctx->translation_placeholder_active_lines += placeholder_lines;
+  }
 }
 
 static void session_translation_flush_ready(session_ctx_t *ctx) {
@@ -2980,12 +3032,32 @@ static void session_translation_flush_ready(session_ctx_t *ctx) {
   bool refreshed = false;
   while (ready != NULL) {
     translation_caption_result_t *next = ready->next;
+    size_t placeholder_lines = ready->placeholder_lines;
+    size_t move_up = 0U;
+    if (placeholder_lines > 0U && ctx->translation_placeholder_active_lines >= placeholder_lines) {
+      size_t remaining_after = ctx->translation_placeholder_active_lines - placeholder_lines;
+      move_up = remaining_after + 1U;
+    }
+
     if (translation_active) {
-      char annotated[SSH_CHATTER_TRANSLATION_WORKING_LEN + 32U];
-      snprintf(annotated, sizeof(annotated), "    \342\206\263 %s", ready->translated);
-      session_send_caption_line(ctx, annotated);
+      const char *body = ready->translated;
+      char annotated[SSH_CHATTER_TRANSLATION_WORKING_LEN + 64U];
+      if (body[0] == '\0') {
+        body = "translation unavailable.";
+      }
+      snprintf(annotated, sizeof(annotated), "    \342\206\263 %s", body);
+      session_render_caption_with_offset(ctx, annotated, move_up);
       refreshed = true;
     }
+
+    if (placeholder_lines > 0U) {
+      if (ctx->translation_placeholder_active_lines >= placeholder_lines) {
+        ctx->translation_placeholder_active_lines -= placeholder_lines;
+      } else {
+        ctx->translation_placeholder_active_lines = 0U;
+      }
+    }
+
     free(ready);
     ready = next;
   }
@@ -3062,27 +3134,52 @@ static void *session_translation_worker(void *arg) {
     char translated_body[SSH_CHATTER_TRANSLATION_WORKING_LEN];
     char restored[SSH_CHATTER_TRANSLATION_WORKING_LEN];
     char detected[SSH_CHATTER_LANG_NAME_LEN];
+    translated_body[0] = '\0';
+    restored[0] = '\0';
+    detected[0] = '\0';
+
     bool success = translator_translate(job->sanitized, job->target_language, translated_body, sizeof(translated_body),
                                         detected, sizeof(detected));
+    char failure_message[128];
+    failure_message[0] = '\0';
     if (success) {
       success = translation_restore_text(translated_body, restored, sizeof(restored), job->placeholders,
                                          job->placeholder_count);
+      if (!success) {
+        snprintf(failure_message, sizeof(failure_message), "⚠️ translation post-processing failed.");
+      }
+    } else {
+      const char *error = translator_last_error();
+      if (error != NULL && error[0] != '\0') {
+        snprintf(failure_message, sizeof(failure_message), "⚠️ translation failed: %s", error);
+      } else {
+        snprintf(failure_message, sizeof(failure_message), "⚠️ translation failed.");
+      }
     }
 
-    if (success) {
-      translation_caption_result_t *result = calloc(1U, sizeof(*result));
-      if (result != NULL) {
+    translation_caption_result_t *result = calloc(1U, sizeof(*result));
+    if (result != NULL) {
+      result->success = success;
+      result->placeholder_lines = job->placeholder_lines;
+      if (success) {
         snprintf(result->translated, sizeof(result->translated), "%s", restored);
-        pthread_mutex_lock(&ctx->translation_mutex);
-        result->next = NULL;
-        if (ctx->translation_ready_tail != NULL) {
-          ctx->translation_ready_tail->next = result;
-        } else {
-          ctx->translation_ready_head = result;
+      } else {
+        const char *payload = failure_message;
+        if (payload[0] == '\0') {
+          payload = "⚠️ translation unavailable.";
         }
-        ctx->translation_ready_tail = result;
-        pthread_mutex_unlock(&ctx->translation_mutex);
+        snprintf(result->translated, sizeof(result->translated), "%s", payload);
       }
+
+      pthread_mutex_lock(&ctx->translation_mutex);
+      result->next = NULL;
+      if (ctx->translation_ready_tail != NULL) {
+        ctx->translation_ready_tail->next = result;
+      } else {
+        ctx->translation_ready_head = result;
+      }
+      ctx->translation_ready_tail = result;
+      pthread_mutex_unlock(&ctx->translation_mutex);
     }
 
     free(job);
@@ -3176,6 +3273,29 @@ static void session_send_caption_line(session_ctx_t *ctx, const char *message) {
   session_write_rendered_line(ctx, message);
 }
 
+static void session_render_caption_with_offset(session_ctx_t *ctx, const char *message, size_t move_up) {
+  if (ctx == NULL || ctx->channel == NULL || message == NULL) {
+    return;
+  }
+
+  if (move_up == 0U) {
+    session_send_caption_line(ctx, message);
+    return;
+  }
+
+  ssh_channel_write(ctx->channel, "\033[s", 3U);
+
+  char command[32];
+  int written = snprintf(command, sizeof(command), "\033[%zuA", move_up);
+  if (written > 0 && (size_t)written < sizeof(command)) {
+    ssh_channel_write(ctx->channel, command, (size_t)written);
+  }
+
+  ssh_channel_write(ctx->channel, "\r", 1U);
+  session_write_rendered_line(ctx, message);
+  ssh_channel_write(ctx->channel, "\033[u", 3U);
+}
+
 // session_send_line writes a single line while preserving the session's
 // background color even when individual strings reset their ANSI attributes by
 // clearing the row with the palette tint before printing.
@@ -3191,7 +3311,23 @@ static void session_send_line(session_ctx_t *ctx, const char *message) {
 
   session_write_rendered_line(ctx, buffer);
 
-  session_translation_queue_caption(ctx, buffer);
+  size_t placeholder_lines = 0U;
+  const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
+                                 ctx->output_translation_language[0] != '\0' && buffer[0] != '\0';
+  if (translation_ready && !ctx->in_bbs_mode) {
+    size_t spacing = ctx->translation_caption_spacing;
+    if (spacing > 8U) {
+      spacing = 8U;
+    }
+    placeholder_lines = spacing + 1U;
+  }
+
+  if (session_translation_queue_caption(ctx, buffer, placeholder_lines)) {
+    if (placeholder_lines > 0U) {
+      session_translation_reserve_placeholders(ctx, placeholder_lines);
+    }
+  }
+
   session_translation_flush_ready(ctx);
 }
 
@@ -4484,6 +4620,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/set-target-lang <language|off> - translate your outgoing messages");
   session_send_system_line(ctx, "/weather <region> <city> - show the weather for a region and city");
   session_send_system_line(ctx, "/translate <on|off>    - enable or disable translation after configuring languages");
+  session_send_system_line(ctx, "/chat-spacing <0-5>    - reserve blank lines before translated captions in chat");
   session_send_system_line(ctx, "/palette <name>        - apply a predefined interface palette (/palette list)");
   session_send_system_line(ctx, "/today               - discover today's function (once per day)");
   session_send_system_line(ctx, "/date <timezone>     - view the server time in another timezone");
@@ -7669,6 +7806,52 @@ static void session_handle_set_target_lang(session_ctx_t *ctx, const char *argum
   }
 }
 
+static void session_handle_chat_spacing(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  static const char *kUsage = "Usage: /chat-spacing <0-5>";
+  char working[16];
+  if (arguments == NULL) {
+    working[0] = '\0';
+  } else {
+    snprintf(working, sizeof(working), "%s", arguments);
+  }
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char *endptr = NULL;
+  long value = strtol(working, &endptr, 10);
+  if (endptr == working || (endptr != NULL && *endptr != '\0') || value < 0L || value > 5L) {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  ctx->translation_caption_spacing = (size_t)value;
+
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  if (value == 0L) {
+    snprintf(message, sizeof(message),
+             "Translation captions will appear immediately without reserving extra blank lines.");
+  } else if (value == 1L) {
+    snprintf(message, sizeof(message),
+             "Translation captions will reserve 1 blank line before appearing in chat threads.");
+  } else {
+    snprintf(message, sizeof(message),
+             "Translation captions will reserve %ld blank lines before appearing in chat threads.", value);
+  }
+  session_send_system_line(ctx, message);
+
+  if (ctx->owner != NULL) {
+    host_store_chat_spacing(ctx->owner, ctx);
+  }
+}
+
 typedef struct session_weather_buffer {
   char *data;
   size_t length;
@@ -8470,6 +8653,10 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   }
   else if (session_parse_command(line, "/translate", &args)) {
     session_handle_translate(ctx, args);
+    return;
+  }
+  else if (session_parse_command(line, "/chat-spacing", &args)) {
+    session_handle_chat_spacing(ctx, args);
     return;
   }
   else if (strncmp(line, "/palette", 8) == 0) {

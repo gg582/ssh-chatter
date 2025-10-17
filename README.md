@@ -172,6 +172,10 @@ When translation is active the chat delivers each message immediately in its ori
 caption that contains the translated text once the Gemini response arrives.  Reaction summaries use the same caption styling so
 updates appear directly beneath the message they reference.
 
+If the inline caption inserts feel jarring you can reserve a small buffer of blank lines ahead of time with `/chat-spacing <0-5>`.
+The setting only affects live chat threads—bulletin board content continues to translate without reservation—so you can tune the
+spacing for your own session without impacting long-form posts.
+
 If you prefer to install without immediately starting the service, run the script with `SKIP_START=1`.
 
 Service management commands:
