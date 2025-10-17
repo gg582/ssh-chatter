@@ -7276,7 +7276,14 @@ static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *argume
   char detected[SSH_CHATTER_LANG_NAME_LEN];
   if (!translator_translate("Terminal messages will be translated for you.", working, preview, sizeof(preview), detected,
                             sizeof(detected))) {
-    session_send_system_line(ctx, "Failed to reach the translation service. Please try again later.");
+    const char *error = translator_last_error();
+    if (error != NULL && *error != '\0') {
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(message, sizeof(message), "Translation service error: %s", error);
+      session_send_system_line(ctx, message);
+    } else {
+      session_send_system_line(ctx, "Failed to reach the translation service. Please try again later.");
+    }
     return;
   }
 
@@ -7335,7 +7342,14 @@ static void session_handle_set_target_lang(session_ctx_t *ctx, const char *argum
   char detected[SSH_CHATTER_LANG_NAME_LEN];
   if (!translator_translate("Your messages will be translated before broadcasting.", working, preview, sizeof(preview),
                             detected, sizeof(detected))) {
-    session_send_system_line(ctx, "Failed to reach the translation service. Please try again later.");
+    const char *error = translator_last_error();
+    if (error != NULL && *error != '\0') {
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(message, sizeof(message), "Translation service error: %s", error);
+      session_send_system_line(ctx, message);
+    } else {
+      session_send_system_line(ctx, "Failed to reach the translation service. Please try again later.");
+    }
     return;
   }
 

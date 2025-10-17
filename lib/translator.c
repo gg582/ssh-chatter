@@ -2,6 +2,7 @@
 
 #include <curl/curl.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,7 @@
 
 #define TRANSLATOR_MAX_RESPONSE 65536
 #define TRANSLATOR_DEFAULT_BASE_URL "https://generativelanguage.googleapis.com/v1beta"
+#define TRANSLATOR_DEFAULT_MODEL "gemini-2.5-flash"
 
 typedef struct translator_buffer {
   char *data;
@@ -16,7 +18,30 @@ typedef struct translator_buffer {
 } translator_buffer_t;
 
 static pthread_mutex_t g_init_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_error_mutex = PTHREAD_MUTEX_INITIALIZER;
 static bool g_curl_initialised = false;
+static char g_last_error[256] = "";
+
+static void translator_set_error(const char *fmt, ...) {
+  pthread_mutex_lock(&g_error_mutex);
+  if (fmt == NULL) {
+    g_last_error[0] = '\0';
+  } else {
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(g_last_error, sizeof(g_last_error), fmt, args);
+    va_end(args);
+  }
+  pthread_mutex_unlock(&g_error_mutex);
+}
+
+const char *translator_last_error(void) {
+  static _Thread_local char snapshot[256];
+  pthread_mutex_lock(&g_error_mutex);
+  snprintf(snapshot, sizeof(snapshot), "%s", g_last_error);
+  pthread_mutex_unlock(&g_error_mutex);
+  return snapshot;
+}
 
 void translator_global_init(void) {
   pthread_mutex_lock(&g_init_mutex);
@@ -297,20 +322,30 @@ static char *translator_build_url(void) {
     base = TRANSLATOR_DEFAULT_BASE_URL;
   }
 
-  const char *model_path = "/models/gemini-2.0-flash:generateContent";
+  const char *model = getenv("GEMINI_MODEL");
+  if (model == NULL || model[0] == '\0') {
+    model = TRANSLATOR_DEFAULT_MODEL;
+  }
+
+  size_t base_len = strlen(base);
+  bool base_has_slash = (base_len > 0U && base[base_len - 1U] == '/');
+  const char *models_prefix = "models/";
+  size_t models_prefix_len = strlen(models_prefix);
+  size_t model_len = strlen(model);
+  const char *generate_suffix = ":generateContent";
   const char *api_key = getenv("GEMINI_API_KEY");
   if (api_key == NULL || api_key[0] == '\0') {
     return NULL;
   }
 
-  size_t total = strlen(base) + strlen(model_path) + strlen("?key=") + strlen(api_key) + 1U;
+  size_t total = base_len + (base_has_slash ? 0U : 1U) + models_prefix_len + model_len + strlen(generate_suffix) + strlen("?key=") + strlen(api_key) + 1U;
 
   char *url = malloc(total);
   if (url == NULL) {
     return NULL;
   }
 
-  snprintf(url, total, "%s%s?key=%s", base, model_path, api_key);
+  snprintf(url, total, "%s%s%s%s%s?key=%s", base, base_has_slash ? "" : "/", models_prefix, model, generate_suffix, api_key);
   return url;
 }
 
@@ -322,8 +357,11 @@ bool translator_translate(const char *text, const char *target_language, char *t
 
   translator_global_init();
 
+  translator_set_error(NULL);
+
   CURL *curl = curl_easy_init();
   if (curl == NULL) {
+    translator_set_error("Failed to initialise CURL.");
     return false;
   }
 
@@ -332,19 +370,33 @@ bool translator_translate(const char *text, const char *target_language, char *t
   char *escaped_target = translator_escape_string(target_language);
   char *api_url = translator_build_url();
   if (escaped_text == NULL || escaped_target == NULL || api_url == NULL) {
+    if (api_url == NULL) {
+      const char *api_key = getenv("GEMINI_API_KEY");
+      if (api_key == NULL || api_key[0] == '\0') {
+        translator_set_error("GEMINI_API_KEY is not configured.");
+      } else {
+        translator_set_error("Failed to build Gemini API URL.");
+      }
+    } else {
+      translator_set_error("Failed to prepare translation request payload.");
+    }
     goto cleanup;
   }
 
   static const char body_format[] =
       "{"
+        "\"system_instruction\":{"
+          "\"parts\":[{\"text\":\"You are a translation engine that detects the source language of text and translates it to a requested target language. Preserve tokens like [[ANSI0]] unchanged. Respond only with a JSON object containing keys detected_language and translation.\"}]"
+        "},"
         "\"contents\":["
           "{"
-            "\"role\":\"user\"," 
+            "\"role\":\"user\","
             "\"parts\":["
-              "{\"text\":\"You are a translation engine that detects the source language of text and translates it to a requested target language. Preserve tokens like [[ANSI0]] unchanged. Respond only with a JSON object containing keys detected_language and translation. Target language: %s. Text: %s\"}"
+              "{\"text\":\"Target language: %s\\nText: %s\"}"
             "]"
           "}"
-        "]"
+        "],"
+        "\"generationConfig\":{\"responseMimeType\":\"application/json\"}"
       "}";
 
   int computed = snprintf(NULL, 0, body_format, escaped_target, escaped_text);
@@ -367,7 +419,18 @@ bool translator_translate(const char *text, const char *target_language, char *t
   translator_buffer_t buffer = {0};
   struct curl_slist *headers = NULL;
   headers = curl_slist_append(headers, "Content-Type: application/json");
+  const char *api_key_header = getenv("GEMINI_API_KEY");
+  if (api_key_header != NULL && api_key_header[0] != '\0') {
+    size_t header_len = strlen("x-goog-api-key: ") + strlen(api_key_header) + 1U;
+    char *header_value = malloc(header_len);
+    if (header_value != NULL) {
+      snprintf(header_value, header_len, "x-goog-api-key: %s", api_key_header);
+      headers = curl_slist_append(headers, header_value);
+      free(header_value);
+    }
+  }
   if (headers == NULL) {
+    translator_set_error("Failed to prepare Gemini request headers.");
     goto cleanup_headers;
   }
 
@@ -384,12 +447,30 @@ bool translator_translate(const char *text, const char *target_language, char *t
   long status = 0;
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
 
-  if (result != CURLE_OK || status < 200L || status >= 300L || buffer.data == NULL) {
+  if (result != CURLE_OK) {
+    translator_set_error("Failed to contact Gemini API: %s", curl_easy_strerror(result));
+    goto cleanup_headers;
+  }
+
+  if (status < 200L || status >= 300L || buffer.data == NULL) {
+    char message[128];
+    message[0] = '\0';
+    if (buffer.data != NULL) {
+      (void)translator_extract_json_value(buffer.data, "\"message\"", message, sizeof(message));
+    }
+    if (message[0] != '\0') {
+      translator_set_error("Gemini API %ld: %s", status, message);
+    } else if (status != 0L) {
+      translator_set_error("Gemini API returned HTTP %ld.", status);
+    } else {
+      translator_set_error("Gemini API returned an empty response.");
+    }
     goto cleanup_headers;
   }
 
   char *payload = translator_extract_payload_text(buffer.data);
   if (payload == NULL) {
+    translator_set_error("Unable to parse Gemini translation payload.");
     goto cleanup_headers;
   }
 
@@ -405,6 +486,7 @@ bool translator_translate(const char *text, const char *target_language, char *t
   (void)translator_extract_json_value(payload, "\"detected_language\"", detected, sizeof(detected));
   if (!translator_extract_json_value(payload, "\"translation\"", translated, sizeof(translated))) {
     free(payload);
+    translator_set_error("Gemini response did not contain a translation field.");
     goto cleanup_headers;
   }
 
@@ -414,6 +496,7 @@ bool translator_translate(const char *text, const char *target_language, char *t
 
   snprintf(translation, translation_len, "%s", translated);
   success = true;
+  translator_set_error(NULL);
   free(payload);
 
 cleanup_headers:

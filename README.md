@@ -81,8 +81,7 @@ int main(void) {
 }
 ```
 
-Set `GEMINI_API_KEY` (and optionally `GEMINI_API_BASE`) in the environment so the helper can reach the Google Generative Language
-API, mirroring the runtime requirements of the main daemon.
+Set `GEMINI_API_KEY` (and optionally `GEMINI_API_BASE` or `GEMINI_MODEL`) in the environment so the helper can reach the Google Generative Language API, mirroring the runtime requirements of the main daemon.  You can run `./scripts/test_gemini_connection.sh` before launching the chat server to verify that the credentials allow outbound calls; the script prints the raw Gemini response so you can see whether the request succeeded.
 
 ## Running the server manually
 
@@ -166,6 +165,7 @@ Translation support now relies on the Google Gemini API.  Set the following in `
 
 - `GEMINI_API_KEY` – Secret API key used to authenticate translation requests.
 - `GEMINI_API_BASE` – Optional override for the API base URL (defaults to `https://generativelanguage.googleapis.com/v1beta`).
+- `GEMINI_MODEL` – Optional override for the Gemini model name (defaults to `gemini-2.5-flash`).
 
 If you prefer to install without immediately starting the service, run the script with `SKIP_START=1`.
 

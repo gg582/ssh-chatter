@@ -10,4 +10,6 @@ bool translator_translate(const char *text, const char *target_language,
                           char *translation, size_t translation_len,
                           char *detected_language, size_t detected_len);
 
+const char *translator_last_error(void);
+
 #endif
