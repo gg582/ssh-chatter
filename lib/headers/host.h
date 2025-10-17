@@ -45,6 +45,7 @@
 #define SSH_CHATTER_MAX_GRANTS 128
 #define SSH_CHATTER_JOIN_BAR_MAX 17
 #define SSH_CHATTER_LANG_NAME_LEN 64
+#define SSH_CHATTER_STATUS_LEN 128
 
 struct host;
 struct session_ctx;
@@ -174,6 +175,7 @@ typedef struct session_ctx {
   struct translation_caption_job *translation_pending_tail;
   struct translation_caption_result *translation_ready_head;
   struct translation_caption_result *translation_ready_tail;
+  char status_message[SSH_CHATTER_STATUS_LEN];
 } session_ctx_t;
 
 typedef struct user_preference {

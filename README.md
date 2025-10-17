@@ -11,6 +11,7 @@ SSH-Chatter is a C reimplementation of the Go [`ssh-chat`](https://github.com/sh
 - Chat UI refresh with a clean divider between history and input, instant input clearing after send, and a friendly "Wait for a moment..." banner with a playful loading bar before each join.
 - Story-driven captcha covering regional cat and dog ownership prompts.
 - Expanded nickname support for non-Latin characters plus `/ban` upgrades that accept raw IP addresses alongside usernames.
+- Profile status updates via `/status <message|clear>` and `/showstatus <username>`, plus `/weather <region> <city>` for quick global forecasts.
 
 # Preview
 

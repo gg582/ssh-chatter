@@ -9,6 +9,7 @@
 #include "translator.h"
 #include "translation_helpers.h"
 
+#include <curl/curl.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <dlfcn.h>
@@ -472,6 +473,9 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments);
 static void session_handle_translate(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_target_lang(session_ctx_t *ctx, const char *arguments);
+static void session_handle_status(session_ctx_t *ctx, const char *arguments);
+static void session_handle_showstatus(session_ctx_t *ctx, const char *arguments);
+static void session_handle_weather(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
 static void session_handle_kick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_usercount(session_ctx_t *ctx);
@@ -506,6 +510,7 @@ static bool session_translation_worker_ensure(session_ctx_t *ctx);
 static void session_translation_worker_shutdown(session_ctx_t *ctx);
 static void *session_translation_worker(void *arg);
 static bool session_argument_is_disable(const char *token);
+static bool session_fetch_weather_summary(const char *region, const char *city, char *summary, size_t summary_len);
 static void session_handle_poll(session_ctx_t *ctx, const char *arguments);
 static void session_handle_vote(session_ctx_t *ctx, size_t option_index);
 static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, const char *label);
@@ -4461,6 +4466,8 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/nick <name>          - change your display name");
   session_send_system_line(ctx, "/pm <username> <message> - send a private message");
   session_send_system_line(ctx, "/motd                - view the message of the day");
+  session_send_system_line(ctx, "/status <message|clear> - set your profile status");
+  session_send_system_line(ctx, "/showstatus <username> - view someone else's status");
   session_send_system_line(ctx, "/users               - announce the number of connected users");
   session_send_system_line(ctx, "/search <text>       - search for users whose name matches text");
   session_send_system_line(ctx, "/chat <message-id>   - show a past message by its identifier");
@@ -4475,6 +4482,7 @@ static void session_print_help(session_ctx_t *ctx) {
                            "be highlight or bold; use /systemcolor reset to restore defaults)");
   session_send_system_line(ctx, "/set-trans-lang <language|off> - translate terminal output to a target language");
   session_send_system_line(ctx, "/set-target-lang <language|off> - translate your outgoing messages");
+  session_send_system_line(ctx, "/weather <region> <city> - show the weather for a region and city");
   session_send_system_line(ctx, "/translate <on|off>    - enable or disable translation after configuring languages");
   session_send_system_line(ctx, "/palette <name>        - apply a predefined interface palette (/palette list)");
   session_send_system_line(ctx, "/today               - discover today's function (once per day)");
@@ -7661,6 +7669,228 @@ static void session_handle_set_target_lang(session_ctx_t *ctx, const char *argum
   }
 }
 
+typedef struct session_weather_buffer {
+  char *data;
+  size_t length;
+} session_weather_buffer_t;
+
+static size_t session_weather_write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
+  session_weather_buffer_t *buffer = (session_weather_buffer_t *)userp;
+  const size_t total = size * nmemb;
+  if (buffer == NULL || total == 0U) {
+    return 0U;
+  }
+
+  char *resized = realloc(buffer->data, buffer->length + total + 1U);
+  if (resized == NULL) {
+    return 0U;
+  }
+
+  buffer->data = resized;
+  memcpy(buffer->data + buffer->length, contents, total);
+  buffer->length += total;
+  buffer->data[buffer->length] = '\0';
+  return total;
+}
+
+static bool session_fetch_weather_summary(const char *region, const char *city, char *summary, size_t summary_len) {
+  if (region == NULL || city == NULL || summary == NULL || summary_len == 0U) {
+    return false;
+  }
+
+  CURL *curl = curl_easy_init();
+  if (curl == NULL) {
+    return false;
+  }
+
+  bool success = false;
+  session_weather_buffer_t buffer = {0};
+  char query[128];
+  snprintf(query, sizeof(query), "%s %s", region, city);
+
+  char *escaped = curl_easy_escape(curl, query, 0);
+  if (escaped == NULL) {
+    goto cleanup;
+  }
+
+  char url[512];
+  static const char *kFormat = "%25l:%20%25C,%20%25t";
+  int written = snprintf(url, sizeof(url), "https://wttr.in/%s?format=%s", escaped, kFormat);
+  curl_free(escaped);
+  if (written < 0 || (size_t)written >= sizeof(url)) {
+    goto cleanup;
+  }
+
+  curl_easy_setopt(curl, CURLOPT_URL, url);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, session_weather_write_callback);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
+
+  CURLcode result = curl_easy_perform(curl);
+  if (result != CURLE_OK) {
+    goto cleanup;
+  }
+
+  long status = 0;
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+  if (status < 200L || status >= 300L || buffer.data == NULL) {
+    goto cleanup;
+  }
+
+  char *trimmed = buffer.data;
+  while (*trimmed != '\0' && isspace((unsigned char)*trimmed)) {
+    ++trimmed;
+  }
+  size_t end = strlen(trimmed);
+  while (end > 0U && isspace((unsigned char)trimmed[end - 1U])) {
+    trimmed[--end] = '\0';
+  }
+
+  if (trimmed[0] == '\0') {
+    goto cleanup;
+  }
+
+  snprintf(summary, summary_len, "%s", trimmed);
+  success = true;
+
+cleanup:
+  free(buffer.data);
+  curl_easy_cleanup(curl);
+  return success;
+}
+
+static void session_handle_status(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  static const char *kUsage = "Usage: /status <message|clear>";
+  if (arguments == NULL || *arguments == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char working[SSH_CHATTER_STATUS_LEN];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  if (session_argument_is_disable(working) || strcasecmp(working, "clear") == 0) {
+    ctx->status_message[0] = '\0';
+    session_send_system_line(ctx, "Status cleared.");
+    return;
+  }
+
+  snprintf(ctx->status_message, sizeof(ctx->status_message), "%s", working);
+  session_send_system_line(ctx, "Status updated.");
+}
+
+static void session_handle_showstatus(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  static const char *kUsage = "Usage: /showstatus <username>";
+  if (arguments == NULL || *arguments == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char target_name[SSH_CHATTER_USERNAME_LEN];
+  snprintf(target_name, sizeof(target_name), "%s", arguments);
+  trim_whitespace_inplace(target_name);
+
+  if (target_name[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  session_ctx_t *target = chat_room_find_user(&ctx->owner->room, target_name);
+  if (target == NULL) {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "User '%s' is not connected.", target_name);
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  if (target->status_message[0] == '\0') {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "%s has not set a status.", target->user.name);
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(message, sizeof(message), "%s's status: %s", target->user.name, target->status_message);
+  session_send_system_line(ctx, message);
+}
+
+static void session_handle_weather(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  static const char *kUsage = "Usage: /weather <region> <city>";
+  if (arguments == NULL || *arguments == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  const char *cursor = arguments;
+  while (*cursor != '\0' && !isspace((unsigned char)*cursor)) {
+    ++cursor;
+  }
+
+  if (*cursor == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  size_t region_len = (size_t)(cursor - arguments);
+  char region[64];
+  if (region_len >= sizeof(region)) {
+    session_send_system_line(ctx, "Region name is too long.");
+    return;
+  }
+  memcpy(region, arguments, region_len);
+  region[region_len] = '\0';
+  trim_whitespace_inplace(region);
+
+  while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
+    ++cursor;
+  }
+
+  if (*cursor == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char city[64];
+  snprintf(city, sizeof(city), "%s", cursor);
+  trim_whitespace_inplace(city);
+
+  if (region[0] == '\0' || city[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char summary[256];
+  if (!session_fetch_weather_summary(region, city, summary, sizeof(summary))) {
+    session_send_system_line(ctx, "Failed to fetch weather information. Please try again later.");
+    return;
+  }
+
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(message, sizeof(message), "%s", summary);
+  session_send_system_line(ctx, message);
+}
+
 static void session_handle_translate(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL) {
     return;
@@ -8153,6 +8383,16 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
+  else if (session_parse_command(line, "/status", &args)) {
+    session_handle_status(ctx, args);
+    return;
+  }
+
+  else if (session_parse_command(line, "/showstatus", &args)) {
+    session_handle_showstatus(ctx, args);
+    return;
+  }
+
   else if (session_parse_command(line, "/users", &args)) {
     if (*args != '\0') {
       session_send_system_line(ctx, "Usage: /users");
@@ -8222,6 +8462,10 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   }
   else if (session_parse_command(line, "/set-target-lang", &args)) {
     session_handle_set_target_lang(ctx, args);
+    return;
+  }
+  else if (session_parse_command(line, "/weather", &args)) {
+    session_handle_weather(ctx, args);
     return;
   }
   else if (session_parse_command(line, "/translate", &args)) {
@@ -9134,7 +9378,13 @@ static void *session_thread(void *arg) {
     if (bytes_read == SSH_ERROR || bytes_read == SSH_EOF) {
       break;
     }
-    if (bytes_read <= 0) {
+    if (bytes_read == 0) {
+      if (ctx->channel != NULL && (ssh_channel_is_eof(ctx->channel) || !ssh_channel_is_open(ctx->channel))) {
+        break;
+      }
+      continue;
+    }
+    if (bytes_read < 0) {
       break;
     }
 
