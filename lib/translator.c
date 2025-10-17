@@ -7,7 +7,7 @@
 #include <string.h>
 
 #define TRANSLATOR_MAX_RESPONSE 65536
-#define TRANSLATOR_DEFAULT_BASE_URL "https://api.openai.com/v1"
+#define TRANSLATOR_DEFAULT_BASE_URL "https://generativelanguage.googleapis.com/v1beta"
 
 typedef struct translator_buffer {
   char *data;
@@ -117,15 +117,20 @@ static char *translator_extract_payload_text(const char *response) {
     return NULL;
   }
 
-  const char *type_marker = "\"type\":\"output_text\"";
-  const char *type_pos = strstr(response, type_marker);
-  if (type_pos == NULL) {
+  const char *candidates_marker = "\"candidates\"";
+  const char *candidates_pos = strstr(response, candidates_marker);
+  if (candidates_pos == NULL) {
     return NULL;
   }
 
   const char *text_marker = "\"text\":\"";
-  const char *text_pos = strstr(type_pos, text_marker);
+  const char *text_pos = strstr(candidates_pos, text_marker);
   if (text_pos == NULL) {
+    const char *error_marker = "\"message\":\"";
+    const char *error_pos = strstr(response, error_marker);
+    if (error_pos != NULL) {
+      fprintf(stderr, "API Error Message Found in Response.\n");
+    }
     return NULL;
   }
 
@@ -253,30 +258,28 @@ static bool translator_extract_json_value(const char *json, const char *key, cha
 }
 
 static char *translator_build_url(void) {
-  const char *base = getenv("OPENAI_API_BASE");
+  const char *base = getenv("GEMINI_API_BASE");
   if (base == NULL || base[0] == '\0') {
-    base = getenv("OPENAI_BASE_URL");
+    base = getenv("GEMINI_BASE_URL");
   }
   if (base == NULL || base[0] == '\0') {
     base = TRANSLATOR_DEFAULT_BASE_URL;
   }
 
-  size_t base_len = strlen(base);
-  const char *path = "responses";
-  bool append_slash = base_len == 0U || base[base_len - 1U] != '/';
-  size_t total = base_len + (append_slash ? 1U : 0U) + strlen(path) + 1U;
+  const char *model_path = "/models/gemini-2.0-flash:generateContent";
+  const char *api_key = getenv("GEMINI_API_KEY");
+  if (api_key == NULL || api_key[0] == '\0') {
+    return NULL;
+  }
+
+  size_t total = strlen(base) + strlen(model_path) + strlen("?key=") + strlen(api_key) + 1U;
 
   char *url = malloc(total);
   if (url == NULL) {
     return NULL;
   }
 
-  if (append_slash) {
-    snprintf(url, total, "%s/%s", base, path);
-  } else {
-    snprintf(url, total, "%s%s", base, path);
-  }
-
+  snprintf(url, total, "%s%s?key=%s", base, model_path, api_key);
   return url;
 }
 
@@ -287,11 +290,6 @@ bool translator_translate(const char *text, const char *target_language, char *t
   }
 
   translator_global_init();
-
-  const char *api_key = getenv("OPENAI_API_KEY");
-  if (api_key == NULL || api_key[0] == '\0') {
-    return false;
-  }
 
   CURL *curl = curl_easy_init();
   if (curl == NULL) {
@@ -306,16 +304,19 @@ bool translator_translate(const char *text, const char *target_language, char *t
     goto cleanup;
   }
 
-  static const char body_prefix[] = "{\"model\":\"gpt-4o-mini\",\"input\":[";
-  static const char body_system[] =
-      "{\"role\":\"system\",\"content\":[{\"type\":\"text\",\"text\":\"You are a translation engine that detects the source language of text and translates it to a requested target language. Preserve tokens like [[ANSI0]] unchanged.\"}]},";
-  static const char body_suffix[] = "]}";
   static const char body_format[] =
-      "%s%s"
-      "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Target language: %s\nRespond only with a JSON object containing keys detected_language and translation.\nText: %s\"}]}"
-      "%s";
+      "{"
+        "\"contents\":["
+          "{"
+            "\"role\":\"user\"," 
+            "\"parts\":["
+              "{\"text\":\"You are a translation engine that detects the source language of text and translates it to a requested target language. Preserve tokens like [[ANSI0]] unchanged. Respond only with a JSON object containing keys detected_language and translation. Target language: %s. Text: %s\"}"
+            "]"
+          "}"
+        "]"
+      "}";
 
-  int computed = snprintf(NULL, 0, body_format, body_prefix, body_system, escaped_target, escaped_text, body_suffix);
+  int computed = snprintf(NULL, 0, body_format, escaped_target, escaped_text);
   if (computed < 0) {
     goto cleanup;
   }
@@ -325,7 +326,7 @@ bool translator_translate(const char *text, const char *target_language, char *t
   if (body == NULL) {
     goto cleanup;
   }
-  int written = snprintf(body, body_len, body_format, body_prefix, body_system, escaped_target, escaped_text, body_suffix);
+  int written = snprintf(body, body_len, body_format, escaped_target, escaped_text);
   if (written < 0 || (size_t)written >= body_len) {
     free(body);
     body = NULL;
@@ -335,22 +336,6 @@ bool translator_translate(const char *text, const char *target_language, char *t
   translator_buffer_t buffer = {0};
   struct curl_slist *headers = NULL;
   headers = curl_slist_append(headers, "Content-Type: application/json");
-  if (headers == NULL) {
-    goto cleanup_headers;
-  }
-  size_t auth_len = strlen(api_key) + strlen("Authorization: Bearer ") + 1U;
-  char *auth_header = malloc(auth_len);
-  if (auth_header == NULL) {
-    goto cleanup_headers;
-  }
-  snprintf(auth_header, auth_len, "Authorization: Bearer %s", api_key);
-  headers = curl_slist_append(headers, auth_header);
-  free(auth_header);
-  if (headers == NULL) {
-    goto cleanup_headers;
-  }
-
-  headers = curl_slist_append(headers, "OpenAI-Beta: assistants=v2");
   if (headers == NULL) {
     goto cleanup_headers;
   }

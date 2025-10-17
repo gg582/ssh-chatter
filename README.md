@@ -81,8 +81,8 @@ int main(void) {
 }
 ```
 
-Set `OPENAI_API_KEY` (and optionally `OPENAI_API_BASE`) in the environment so the helper can reach the OpenAI Responses API,
-mirroring the runtime requirements of the main daemon.
+Set `GEMINI_API_KEY` (and optionally `GEMINI_API_BASE`) in the environment so the helper can reach the Google Generative Language
+API, mirroring the runtime requirements of the main daemon.
 
 ## Running the server manually
 
@@ -162,10 +162,10 @@ Supported environment variables include:
 - `CHATTER_EXTRA_ARGS` – Additional arguments appended to the `ssh-chatter` invocation.
 - `CHATTER_VOTE_FILE` – Path to the vote state file (default `vote_state.dat`).
 
-Translation support relies on the OpenAI Responses API.  Set the following in `chatter.env` (or the environment) to enable it:
+Translation support now relies on the Google Gemini API.  Set the following in `chatter.env` (or the environment) to enable it:
 
-- `OPENAI_API_KEY` – Secret API key used to authenticate translation requests.
-- `OPENAI_API_BASE` – Optional override for the API base URL (defaults to `https://api.openai.com/v1`).
+- `GEMINI_API_KEY` – Secret API key used to authenticate translation requests.
+- `GEMINI_API_BASE` – Optional override for the API base URL (defaults to `https://generativelanguage.googleapis.com/v1beta`).
 
 If you prefer to install without immediately starting the service, run the script with `SKIP_START=1`.
 
