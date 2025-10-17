@@ -58,7 +58,7 @@ static char *translator_escape_string(const char *input) {
     return NULL;
   }
 
-  size_t required = 1U; // null terminator
+  size_t required = 1U;
   for (const unsigned char *cursor = (const unsigned char *)input; *cursor != '\0'; ++cursor) {
     switch (*cursor) {
       case '\\':
@@ -116,63 +116,38 @@ static char *translator_extract_payload_text(const char *response) {
     return NULL;
   }
 
-  const char *type_marker = "\"type\":\"output_text\"";
-  const char *type_pos = strstr(response, type_marker);
-  if (type_pos == NULL) {
+  const char *content_marker = "\"content\":\"";
+  const char *content_pos = strstr(response, content_marker);
+  if (content_pos == NULL) {
     return NULL;
   }
 
-  const char *text_marker = "\"text\":\"";
-  const char *text_pos = strstr(type_pos, text_marker);
-  if (text_pos == NULL) {
-    return NULL;
-  }
-
-  text_pos += strlen(text_marker);
-  size_t capacity = strlen(text_pos) + 1U;
+  content_pos += strlen(content_marker);
+  
+  size_t out_idx = 0U;
+  bool escape = false;
+  
+  size_t capacity = strlen(content_pos) + 1U; 
   char *payload = malloc(capacity);
   if (payload == NULL) {
     return NULL;
   }
 
-  size_t out_idx = 0U;
-  bool escape = false;
-  for (const char *cursor = text_pos; *cursor != '\0'; ++cursor) {
+  for (const char *cursor = content_pos; *cursor != '\0'; ++cursor) {
     const char ch = *cursor;
+    
+    if (!escape && ch == '"') {
+      break; 
+    }
+    
     if (!escape && ch == '\\') {
       escape = true;
+      payload[out_idx++] = ch; 
       continue;
     }
-    if (!escape && ch == '"') {
-      break;
-    }
 
-    char decoded = ch;
-    if (escape) {
-      switch (ch) {
-        case 'n':
-          decoded = '\n';
-          break;
-        case 'r':
-          decoded = '\r';
-          break;
-        case 't':
-          decoded = '\t';
-          break;
-        case '\\':
-          decoded = '\\';
-          break;
-        case '"':
-          decoded = '"';
-          break;
-        default:
-          decoded = ch;
-          break;
-      }
-      escape = false;
-    }
-
-    payload[out_idx++] = decoded;
+    payload[out_idx++] = ch;
+    escape = false;
   }
 
   payload[out_idx] = '\0';
@@ -252,7 +227,7 @@ static bool translator_extract_json_value(const char *json, const char *key, cha
 }
 
 bool translator_translate(const char *text, const char *target_language, char *translation, size_t translation_len,
-                          char *detected_language, size_t detected_len) {
+                             char *detected_language, size_t detected_len) {
   if (text == NULL || target_language == NULL || translation == NULL || translation_len == 0U) {
     return false;
   }
@@ -276,22 +251,41 @@ bool translator_translate(const char *text, const char *target_language, char *t
     goto cleanup;
   }
 
-  static const char body_template[] =
-      "{"
-      "\"model\":\"gpt-5\"," 
-      "\"input\":["
-      "{\"role\":\"system\",\"content\":[{\"type\":\"text\",\"text\":\"You are a translation engine that detects "
-      "the source language of text and translates it to a requested target language. Preserve tokens like [[ANSI0]] unchanged.\"}]},"
-      "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Target language: %s\\nRespond only with a JSON object containing keys "
-      "detected_language and translation.\\nText: %s\"}]}]"
-      "}";
-
-  size_t body_len = strlen(body_template) + strlen(escaped_target) + strlen(escaped_text) + 1U;
+  int required_len = snprintf(
+    NULL, 0,
+    "{"
+      "\"model\":\"gpt-5\","
+      "\"messages\":["
+        "{\"role\":\"system\",\"content\":\"You are a translation engine that detects the source language of text and translates it to a requested target language. Preserve tokens like [[ANSI0]] unchanged.\"}"
+        ",{\"role\":\"user\",\"content\":\"Target language: %s\\nRespond only with a JSON object containing keys detected_language and translation.\\nText: %s\"}"
+      "]"
+    "}",
+    escaped_target,
+    escaped_text
+  );
+  
+  if (required_len < 0) {
+    return false;
+  }
+  
+  size_t body_len = (size_t)required_len + 1;
   char *body = malloc(body_len);
   if (body == NULL) {
     goto cleanup;
   }
-  snprintf(body, body_len, body_template, escaped_target, escaped_text);
+  
+  snprintf(
+    body, body_len,
+    "{"
+      "\"model\":\"gpt-5\","
+      "\"messages\":["
+        "{\"role\":\"system\",\"content\":\"You are a translation engine that detects the source language of text and translates it to a requested target language. Preserve tokens like [[ANSI0]] unchanged.\"}"
+        ",{\"role\":\"user\",\"content\":\"Target language: %s\\nRespond only with a JSON object containing keys detected_language and translation.\\nText: %s\"}"
+      "]"
+    "}",
+    escaped_target,
+    escaped_text
+  );
 
   translator_buffer_t buffer = {0};
   struct curl_slist *headers = NULL;
@@ -311,7 +305,7 @@ bool translator_translate(const char *text, const char *target_language, char *t
     goto cleanup_headers;
   }
 
-  curl_easy_setopt(curl, CURLOPT_URL, "https://api.openai.com/v1/responses");
+  curl_easy_setopt(curl, CURLOPT_URL, "https://api.openai.com/v1/chat/completions");
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
@@ -366,4 +360,3 @@ cleanup:
   curl_easy_cleanup(curl);
   return success;
 }
-
