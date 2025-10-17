@@ -183,7 +183,7 @@ Translation support now relies on the Google Gemini API.  Set the following in `
 
 - `GEMINI_API_KEY` – Secret API key used to authenticate translation requests.
 - `GEMINI_API_BASE` – Optional override for the API base URL (defaults to `https://generativelanguage.googleapis.com/v1beta`).
-- `GEMINI_MODEL` – Optional override for the Gemini model name (defaults to `gemini-1.5-flash`).
+- `GEMINI_MODEL` – Optional override for the Gemini model name (defaults to `gemini-2.5-flash`).
 
 When translation is active the chat delivers each message immediately in its original language and follows up with an indented
 caption that contains the translated text once the Gemini response arrives.  Reaction summaries use the same caption styling so
