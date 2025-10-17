@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #define TRANSLATOR_MAX_RESPONSE 65536
 #define TRANSLATOR_DEFAULT_BASE_URL "https://generativelanguage.googleapis.com/v1beta"
@@ -112,6 +113,18 @@ static char *translator_escape_string(const char *input) {
   return escaped;
 }
 
+static const char *translator_skip_whitespace(const char *cursor) {
+  if (cursor == NULL) {
+    return NULL;
+  }
+
+  while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
+    ++cursor;
+  }
+
+  return cursor;
+}
+
 static char *translator_extract_payload_text(const char *response) {
   if (response == NULL) {
     return NULL;
@@ -123,8 +136,27 @@ static char *translator_extract_payload_text(const char *response) {
     return NULL;
   }
 
-  const char *text_marker = "\"text\":\"";
+  const char *text_marker = "\"text\"";
   const char *text_pos = strstr(candidates_pos, text_marker);
+  while (text_pos != NULL) {
+    text_pos += strlen(text_marker);
+    text_pos = translator_skip_whitespace(text_pos);
+    if (text_pos == NULL || *text_pos != ':') {
+      text_pos = strstr(text_pos, text_marker);
+      continue;
+    }
+
+    ++text_pos;
+    text_pos = translator_skip_whitespace(text_pos);
+    if (text_pos == NULL || *text_pos != '"') {
+      text_pos = strstr(text_pos, text_marker);
+      continue;
+    }
+
+    ++text_pos;
+    break;
+  }
+
   if (text_pos == NULL) {
     const char *error_marker = "\"message\":\"";
     const char *error_pos = strstr(response, error_marker);
@@ -134,7 +166,6 @@ static char *translator_extract_payload_text(const char *response) {
     return NULL;
   }
 
-  text_pos += strlen(text_marker);
   size_t capacity = strlen(text_pos) + 1U;
   char *payload = malloc(capacity);
   if (payload == NULL) {
