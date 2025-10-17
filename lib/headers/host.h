@@ -46,6 +46,14 @@
 #define SSH_CHATTER_JOIN_BAR_MAX 17
 #define SSH_CHATTER_LANG_NAME_LEN 64
 #define SSH_CHATTER_STATUS_LEN 128
+#define SSH_CHATTER_ASCIIART_MAX_LINES 48
+#define SSH_CHATTER_ASCIIART_BUFFER_LEN 1024
+#define SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS 60
+#define SSH_CHATTER_TETRIS_WIDTH 10
+#define SSH_CHATTER_TETRIS_HEIGHT 20
+#define SSH_CHATTER_TETRIS_GRAVITY_THRESHOLD 5U
+#define SSH_CHATTER_TETRIS_GRAVITY_RATE 1U
+#define SSH_CHATTER_TETRIS_GRAVITY_INTERVAL_NS 100000000ULL
 
 struct host;
 struct session_ctx;
@@ -110,7 +118,56 @@ typedef struct auth_profile {
 
 typedef struct ssh_listener {
   ssh_bind handle;
+  unsigned int inplace_recoveries;
+  unsigned int restart_attempts;
+  struct timespec last_error_time;
 } ssh_listener_t;
+
+typedef enum session_game_type {
+  SESSION_GAME_NONE = 0,
+  SESSION_GAME_TETRIS,
+  SESSION_GAME_LIARGAME,
+} session_game_type_t;
+
+typedef struct tetris_game_state {
+  int board[SSH_CHATTER_TETRIS_HEIGHT][SSH_CHATTER_TETRIS_WIDTH];
+  int current_piece;
+  int rotation;
+  int row;
+  int column;
+  int next_piece;
+  unsigned score;
+  unsigned lines_cleared;
+  bool game_over;
+  int bag[7];
+  size_t bag_index;
+  unsigned gravity_counter;
+  unsigned gravity_threshold;
+  unsigned gravity_rate;
+  bool gravity_timer_initialized;
+  struct timespec gravity_timer_last;
+  uint64_t gravity_timer_accumulator_ns;
+  bool input_escape_active;
+  char input_escape_buffer[8];
+  size_t input_escape_length;
+} tetris_game_state_t;
+
+typedef struct liar_game_state {
+  unsigned round_number;
+  unsigned score;
+  unsigned current_prompt_index;
+  unsigned liar_index;
+  bool awaiting_guess;
+} liar_game_state_t;
+
+typedef struct session_game_state {
+  bool active;
+  session_game_type_t type;
+  tetris_game_state_t tetris;
+  liar_game_state_t liar;
+  uint64_t rng_state;
+  bool rng_seeded;
+} session_game_state_t;
 
 typedef struct session_ctx {
   ssh_session session;
@@ -142,6 +199,7 @@ typedef struct session_ctx {
   bool should_exit;
   bool username_conflict;
   bool has_joined_room;
+  unsigned int channel_error_retries;
   size_t history_scroll_position;
   struct timespec last_message_time;
   bool has_last_message_time;
@@ -178,6 +236,13 @@ typedef struct session_ctx {
   struct translation_caption_result *translation_ready_head;
   struct translation_caption_result *translation_ready_tail;
   char status_message[SSH_CHATTER_STATUS_LEN];
+  bool asciiart_pending;
+  char asciiart_buffer[SSH_CHATTER_ASCIIART_BUFFER_LEN];
+  size_t asciiart_length;
+  size_t asciiart_line_count;
+  bool asciiart_has_cooldown;
+  struct timespec last_asciiart_post;
+  session_game_state_t game;
 } session_ctx_t;
 
 typedef struct user_preference {
