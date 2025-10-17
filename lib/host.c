@@ -4573,7 +4573,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/video <url> [caption] - share a video link");
   session_send_system_line(ctx, "/audio <url> [caption] - share an audio clip");
   session_send_system_line(ctx, "/files <url> [caption] - share a downloadable file");
-  session_send_system_line(ctx, "/asciiart           - open the ASCII art composer (max 15 lines, 1/min)");
+  session_send_system_line(ctx, "/asciiart           - open the ASCII art composer (max 48 lines, 1/min)");
   session_send_system_line(ctx,
                            "/game <tetris|liargame> - start a minigame in the chat (use /suspend! or Ctrl+Z to exit)");
   session_send_system_line(ctx, "Up/Down arrows           - scroll recent chat history");
@@ -7372,7 +7372,7 @@ static void session_asciiart_begin(session_ctx_t *ctx) {
   session_asciiart_reset(ctx);
   ctx->asciiart_pending = true;
 
-  session_send_system_line(ctx, "ASCII art composer ready (max 15 lines).");
+  session_send_system_line(ctx, "ASCII art composer ready (max 48 lines).");
   session_send_system_line(ctx,
                            "Type " SSH_CHATTER_ASCIIART_TERMINATOR " on a line by itself or press Ctrl+S to finish.");
   session_send_system_line(ctx, "Press Ctrl+A to cancel the draft.");
@@ -10815,7 +10815,32 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       if (ssh_bind_accept(bind_handle, session) == SSH_ERROR) {
         const int accept_error = errno;
         const char *bind_error = ssh_get_error(bind_handle);
-        humanized_log_error("host", bind_error, accept_error != 0 ? accept_error : EIO);
+
+        if (accept_error != 0) {
+          char log_message[512];
+          const char *system_message = strerror(accept_error);
+
+          if (system_message != NULL && system_message[0] != '\0') {
+            if (bind_error != NULL && bind_error[0] != '\0' &&
+                !string_contains_case_insensitive(bind_error, system_message)) {
+              snprintf(log_message, sizeof(log_message), "Socket error: %s (%s)", system_message,
+                       bind_error);
+            } else {
+              snprintf(log_message, sizeof(log_message), "Socket error: %s", system_message);
+            }
+          } else if (bind_error != NULL && bind_error[0] != '\0') {
+            snprintf(log_message, sizeof(log_message), "Socket error (code %d): %s", accept_error,
+                     bind_error);
+          } else {
+            snprintf(log_message, sizeof(log_message), "Socket error (code %d)", accept_error);
+          }
+
+          humanized_log_error("host", log_message, accept_error);
+        } else if (bind_error != NULL && bind_error[0] != '\0') {
+          humanized_log_error("host", bind_error, EIO);
+        } else {
+          humanized_log_error("host", "Socket accept failed", EIO);
+        }
 
         bool fatal_socket_error = accept_error != 0;
         switch (accept_error) {
