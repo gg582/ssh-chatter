@@ -44,6 +44,8 @@
 #define SSH_CHATTER_BBS_COMMENT_LEN 512
 #define SSH_CHATTER_MAX_GRANTS 128
 #define SSH_CHATTER_JOIN_BAR_MAX 17
+#define SSH_CHATTER_LANG_NAME_LEN 64
+#define SSH_CHATTER_STATUS_LEN 128
 #define SSH_CHATTER_ASCIIART_MAX_LINES 48
 #define SSH_CHATTER_ASCIIART_BUFFER_LEN 1024
 #define SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS 60
@@ -57,6 +59,8 @@ struct host;
 struct session_ctx;
 struct client_manager;
 struct webssh_client;
+struct translation_caption_job;
+struct translation_caption_result;
 
 typedef struct join_activity_entry {
   char ip[SSH_CHATTER_IP_LEN];
@@ -212,6 +216,26 @@ typedef struct session_ctx {
   size_t pending_bbs_tag_count;
   char pending_bbs_body[SSH_CHATTER_BBS_BODY_LEN];
   size_t pending_bbs_body_length;
+  bool translation_enabled;
+  bool output_translation_enabled;
+  char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+  bool input_translation_enabled;
+  char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+  char last_detected_input_language[SSH_CHATTER_LANG_NAME_LEN];
+  size_t translation_caption_spacing;
+  size_t translation_placeholder_active_lines;
+  pthread_mutex_t translation_mutex;
+  pthread_cond_t translation_cond;
+  bool translation_mutex_initialized;
+  bool translation_cond_initialized;
+  bool translation_thread_started;
+  bool translation_thread_stop;
+  pthread_t translation_thread;
+  struct translation_caption_job *translation_pending_head;
+  struct translation_caption_job *translation_pending_tail;
+  struct translation_caption_result *translation_ready_head;
+  struct translation_caption_result *translation_ready_tail;
+  char status_message[SSH_CHATTER_STATUS_LEN];
   bool asciiart_pending;
   char asciiart_buffer[SSH_CHATTER_ASCIIART_BUFFER_LEN];
   size_t asciiart_length;
@@ -241,6 +265,12 @@ typedef struct user_preference {
   int last_poll_choice;
   bool has_birthday;
   char birthday[16];
+  uint8_t translation_caption_spacing;
+  bool translation_master_enabled;
+  bool output_translation_enabled;
+  bool input_translation_enabled;
+  char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+  char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   struct {
     char label[SSH_CHATTER_POLL_LABEL_LEN];
     uint64_t poll_id;

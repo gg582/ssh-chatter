@@ -12,7 +12,7 @@ SSH-Chatter is a C reimplementation of the Go [`ssh-chat`](https://github.com/sh
 - Chat UI refresh with a clean divider between history and input, instant input clearing after send, and a friendly "Wait for a moment..." banner with a playful loading bar before each join.
 - Story-driven captcha covering regional cat and dog ownership prompts.
 - Expanded nickname support for non-Latin characters plus `/ban` upgrades that accept raw IP addresses alongside usernames.
-- Listener resilience that tries in-place socket recovery before restarting, logging downtime events so existing games stay uninterrupted whenever possible.
+- Profile status updates via `/status <message|clear>` and `/showstatus <username>`, plus `/weather <region> <city>` for quick global forecasts.
 
 # Preview
 
@@ -30,6 +30,23 @@ The codebase is intentionally compact so new contributors can navigate it quickl
 | `lib/host.c`, `lib/headers/host.h` | Chat host implementation – session lifecycle, MOTD handling, and hooks for future message broadcast logic. |
 | `lib/headers/contexts` | Definitions for `session_ctx_t` and related structures that encapsulate per-connection state. |
 | `scripts/install_chatter_service.sh` | Convenience installer that builds the binary, installs it under `/usr/local/bin`, and wires up a `systemd` unit (`chatter.service`). |
+| `scripts/install_dependencies.sh` | Minimal package installer for build prerequisites on Debian/Ubuntu systems. |
+
+## Staying current with `main`
+
+The `work` branch regularly diverges from upstream development so larger features can
+incubate without interrupting production traffic. When it is time to synchronize with
+`main`, pull the latest tree and merge it locally before opening a pull request:
+
+```bash
+git fetch origin main
+git checkout work
+git merge --no-ff origin/main
+```
+
+Resolve any conflicts in place (the `lib/host.c` helper routines already mirror the
+layout used on `main`, so merges are typically straightforward) and run `make` to
+confirm the build still succeeds before pushing the result.
 
 ## Automation hooks
 
@@ -42,13 +59,14 @@ Building the project requires a POSIX environment with:
 - A C11 compatible compiler (e.g. `gcc` or `clang`)
 - `make`
 - `libssh` development headers and library (`libssh-dev` on Debian/Ubuntu)
+- `libcurl` development headers and library (`libcurl4-openssl-dev` on Debian/Ubuntu)
 - POSIX threads (usually supplied by the system `libpthread`)
 
 On Debian/Ubuntu the dependencies can be installed with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential libssh-dev
+sudo apt-get install build-essential libssh-dev libcurl4-openssl-dev
 ```
 
 ## Building from source
@@ -59,7 +77,29 @@ Clone the repository and use the provided `Makefile`:
 make
 ```
 
-This produces an `ssh-chatter` binary in the repository root.  Clean intermediate artifacts with `make clean`.
+This produces an `ssh-chatter` binary in the repository root and a `libssh_chatter_backend.so` shared object that exposes the
+translation helpers for reuse in other applications.  Clean intermediate artifacts with `make clean`.
+
+### Using the shared translation backend
+
+The shared object reuses the server's C translation pipeline (including ANSI placeholder preservation) so other processes can
+obtain translations without spawning the full SSH host.  Link against `libssh_chatter_backend.so` and include
+`lib/headers/ssh_chatter_backend.h`:
+
+```c
+#include "lib/headers/ssh_chatter_backend.h"
+
+int main(void) {
+  char translated[4096];
+  char detected[64];
+
+  if (ssh_chatter_backend_translate_line("Hello, world!", "ko", translated, sizeof(translated), detected, sizeof(detected))) {
+    printf("Detected %s -> %s\n", detected, translated);
+  }
+}
+```
+
+Set `GEMINI_API_KEY` (and optionally `GEMINI_API_BASE` or `GEMINI_MODEL`) in the environment so the helper can reach the Google Generative Language API, mirroring the runtime requirements of the main daemon.  You can run `./scripts/test_gemini_connection.sh` before launching the chat server to verify that the credentials allow outbound calls; the script prints the raw Gemini response so you can see whether the request succeeded.
 
 ## Running the server manually
 
@@ -138,6 +178,23 @@ Supported environment variables include:
 - `CHATTER_HOST_KEY_DIR` – Directory containing `ssh_host_rsa_key` (default `/var/lib/ssh-chatter`).
 - `CHATTER_EXTRA_ARGS` – Additional arguments appended to the `ssh-chatter` invocation.
 - `CHATTER_VOTE_FILE` – Path to the vote state file (default `vote_state.dat`).
+
+Translation support now relies on the Google Gemini API.  Set the following in `chatter.env` (or the environment) to enable it:
+
+- `GEMINI_API_KEY` – Secret API key used to authenticate translation requests.
+- `GEMINI_API_BASE` – Optional override for the API base URL (defaults to `https://generativelanguage.googleapis.com/v1beta`).
+- `GEMINI_MODEL` – Optional override for the Gemini model name (defaults to `gemini-1.5-flash`).
+
+When translation is active the chat delivers each message immediately in its original language and follows up with an indented
+caption that contains the translated text once the Gemini response arrives.  Reaction summaries use the same caption styling so
+updates appear directly beneath the message they reference.
+
+If the inline caption inserts feel jarring you can reserve a small buffer of blank lines ahead of time with `/chat-spacing <0-5>`.
+The setting only affects live chat threads—bulletin board content continues to translate without reservation—so you can tune the
+spacing for your own session without impacting long-form posts.
+
+Your translation toggle and language choices are saved in `chatter_state.dat`, so future sessions automatically restore the same
+configuration once you reconnect.
 
 If you prefer to install without immediately starting the service, run the script with `SKIP_START=1`.
 
