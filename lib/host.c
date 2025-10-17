@@ -52,6 +52,7 @@
 #define SSH_CHATTER_TETROMINO_SIZE 4
 #define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT 3U
 #define SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM "ssh-rsa"
+#define SESSION_CHANNEL_TIMEOUT (-2)
 
 #ifndef MSG_DONTWAIT
 #define MSG_DONTWAIT 0
@@ -573,6 +574,7 @@ static void session_asciiart_commit(session_ctx_t *ctx);
 static void session_asciiart_cancel(session_ctx_t *ctx, const char *reason);
 static void session_handle_game(session_ctx_t *ctx, const char *arguments);
 static void session_game_suspend(session_ctx_t *ctx, const char *reason);
+static int session_channel_read_poll(session_ctx_t *ctx, char *buffer, size_t length, int timeout_ms);
 static void session_game_seed_rng(session_ctx_t *ctx);
 static uint32_t session_game_random(session_ctx_t *ctx);
 static int session_game_random_range(session_ctx_t *ctx, int max);
@@ -583,10 +585,15 @@ static int session_game_tetris_take_piece(session_ctx_t *ctx);
 static bool session_game_tetris_spawn_piece(session_ctx_t *ctx);
 static bool session_game_tetris_cell_occupied(int piece, int rotation, int row, int column);
 static bool session_game_tetris_position_valid(const tetris_game_state_t *state, int piece, int rotation, int row,
-                                              int column);
+                                               int column);
 static bool session_game_tetris_move(session_ctx_t *ctx, int drow, int dcol);
 static bool session_game_tetris_soft_drop(session_ctx_t *ctx);
 static bool session_game_tetris_rotate(session_ctx_t *ctx);
+static bool session_game_tetris_apply_gravity(session_ctx_t *ctx, unsigned ticks);
+static bool session_game_tetris_update_timer(session_ctx_t *ctx, bool accelerate);
+static bool session_game_tetris_process_timeout(session_ctx_t *ctx);
+static bool session_game_tetris_process_action(session_ctx_t *ctx, int action);
+static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch);
 static void session_game_tetris_lock_piece(session_ctx_t *ctx);
 static void session_game_tetris_clear_lines(session_ctx_t *ctx, unsigned *cleared);
 static void session_game_tetris_render(session_ctx_t *ctx);
@@ -7576,6 +7583,16 @@ static void session_game_tetris_reset(tetris_game_state_t *state) {
   for (size_t idx = 0U; idx < 7U; ++idx) {
     state->bag[idx] = (int)idx;
   }
+  state->gravity_counter = 0U;
+  state->gravity_threshold = SSH_CHATTER_TETRIS_GRAVITY_THRESHOLD;
+  state->gravity_rate = SSH_CHATTER_TETRIS_GRAVITY_RATE;
+  state->gravity_timer_initialized = false;
+  state->gravity_timer_last.tv_sec = 0;
+  state->gravity_timer_last.tv_nsec = 0;
+  state->gravity_timer_accumulator_ns = 0U;
+  state->input_escape_active = false;
+  state->input_escape_length = 0U;
+  memset(state->input_escape_buffer, 0, sizeof(state->input_escape_buffer));
 }
 
 static void session_game_tetris_fill_bag(session_ctx_t *ctx) {
@@ -7651,6 +7668,11 @@ static bool session_game_tetris_spawn_piece(session_ctx_t *ctx) {
   state->rotation = 0;
   state->row = 0;
   state->column = (SSH_CHATTER_TETRIS_WIDTH / 2) - 2;
+  state->gravity_counter = 0U;
+  state->gravity_timer_initialized = false;
+  state->gravity_timer_accumulator_ns = 0U;
+  state->input_escape_active = false;
+  state->input_escape_length = 0U;
   state->next_piece = session_game_tetris_take_piece(ctx);
   if (!session_game_tetris_position_valid(state, state->current_piece, state->rotation, state->row, state->column)) {
     state->game_over = true;
@@ -7683,6 +7705,290 @@ static bool session_game_tetris_soft_drop(session_ctx_t *ctx) {
   }
   session_game_tetris_lock_piece(ctx);
   return false;
+}
+
+static bool session_game_tetris_apply_gravity(session_ctx_t *ctx, unsigned ticks) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+    return false;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (state->game_over || ticks == 0U) {
+    return false;
+  }
+
+  if (state->gravity_threshold == 0U) {
+    state->gravity_threshold = SSH_CHATTER_TETRIS_GRAVITY_THRESHOLD;
+  }
+
+  bool moved = false;
+  state->gravity_counter += ticks;
+  while (state->gravity_counter >= state->gravity_threshold) {
+    if (!session_game_tetris_soft_drop(ctx)) {
+      state->gravity_counter = 0U;
+      break;
+    }
+    moved = true;
+    state->gravity_counter -= state->gravity_threshold;
+    if (state->game_over) {
+      break;
+    }
+  }
+  return moved;
+}
+
+typedef enum {
+  TETRIS_INPUT_NONE = 0,
+  TETRIS_INPUT_MOVE_LEFT,
+  TETRIS_INPUT_MOVE_RIGHT,
+  TETRIS_INPUT_ROTATE,
+  TETRIS_INPUT_SOFT_DROP,
+  TETRIS_INPUT_HARD_DROP,
+} tetris_input_action_t;
+
+static bool session_game_tetris_update_timer(session_ctx_t *ctx, bool accelerate) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+    return false;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (state->game_over) {
+    return false;
+  }
+
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+    now.tv_sec = time(NULL);
+    now.tv_nsec = 0L;
+  }
+
+  if (!state->gravity_timer_initialized) {
+    state->gravity_timer_last = now;
+    state->gravity_timer_initialized = true;
+  } else {
+    struct timespec last = state->gravity_timer_last;
+    state->gravity_timer_last = now;
+
+    time_t sec_delta = now.tv_sec - last.tv_sec;
+    long nsec_delta = now.tv_nsec - last.tv_nsec;
+    if (nsec_delta < 0L) {
+      --sec_delta;
+      nsec_delta += 1000000000L;
+    }
+
+    if (sec_delta > 0 || nsec_delta > 0L) {
+      uint64_t elapsed_ns = (uint64_t)sec_delta * 1000000000ULL + (uint64_t)nsec_delta;
+      state->gravity_timer_accumulator_ns += elapsed_ns;
+    }
+  }
+
+  unsigned ticks = 0U;
+  while (state->gravity_timer_accumulator_ns >= SSH_CHATTER_TETRIS_GRAVITY_INTERVAL_NS) {
+    state->gravity_timer_accumulator_ns -= SSH_CHATTER_TETRIS_GRAVITY_INTERVAL_NS;
+    ticks += state->gravity_rate;
+  }
+
+  if (accelerate) {
+    ticks += state->gravity_rate + state->gravity_threshold;
+  }
+
+  if (ticks == 0U) {
+    return false;
+  }
+
+  return session_game_tetris_apply_gravity(ctx, ticks);
+}
+
+static bool session_game_tetris_process_timeout(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+    return false;
+  }
+
+  bool redraw = session_game_tetris_update_timer(ctx, false);
+  if (ctx->game.tetris.game_over) {
+    session_game_suspend(ctx, "Game over!");
+    return true;
+  }
+
+  if (redraw) {
+    session_game_tetris_render(ctx);
+  }
+  return redraw;
+}
+
+static bool session_game_tetris_process_action(session_ctx_t *ctx, int action_value) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+    return false;
+  }
+
+  tetris_input_action_t action = (tetris_input_action_t)action_value;
+  if (action == TETRIS_INPUT_NONE) {
+    return false;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  if (state->game_over) {
+    session_game_suspend(ctx, "Game over!");
+    return true;
+  }
+
+  bool redraw = session_game_tetris_update_timer(ctx, false);
+  if (state->game_over) {
+    session_game_suspend(ctx, "Game over!");
+    return true;
+  }
+
+  bool accelerate = false;
+  bool manual_drop = false;
+
+  switch (action) {
+    case TETRIS_INPUT_MOVE_LEFT:
+      if (session_game_tetris_move(ctx, 0, -1)) {
+        redraw = true;
+      }
+      break;
+    case TETRIS_INPUT_MOVE_RIGHT:
+      if (session_game_tetris_move(ctx, 0, 1)) {
+        redraw = true;
+      }
+      break;
+    case TETRIS_INPUT_ROTATE:
+      if (session_game_tetris_rotate(ctx)) {
+        redraw = true;
+      }
+      break;
+    case TETRIS_INPUT_SOFT_DROP:
+      accelerate = true;
+      break;
+    case TETRIS_INPUT_HARD_DROP:
+      while (session_game_tetris_soft_drop(ctx)) {
+        redraw = true;
+      }
+      manual_drop = true;
+      break;
+    case TETRIS_INPUT_NONE:
+    default:
+      break;
+  }
+
+  if (state->game_over) {
+    session_game_suspend(ctx, "Game over!");
+    return true;
+  }
+
+  if (accelerate) {
+    if (session_game_tetris_update_timer(ctx, true)) {
+      redraw = true;
+    }
+  } else if (!manual_drop) {
+    if (session_game_tetris_update_timer(ctx, false)) {
+      redraw = true;
+    }
+  }
+
+  if (state->game_over) {
+    session_game_suspend(ctx, "Game over!");
+    return true;
+  }
+
+  if (redraw) {
+    session_game_tetris_render(ctx);
+  }
+
+  return true;
+}
+
+static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+    return false;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+
+  if (ch == 0x01 || ch == 0x03 || ch == 0x04 || ch == 0x13) {
+    return false;
+  }
+
+  if (state->input_escape_active) {
+    if (state->input_escape_length < sizeof(state->input_escape_buffer)) {
+      state->input_escape_buffer[state->input_escape_length++] = ch;
+    }
+
+    if (state->input_escape_length == 2U && state->input_escape_buffer[1] == '[') {
+      return true;
+    }
+
+    if (state->input_escape_length >= 3U && state->input_escape_buffer[1] == '[') {
+      char final = state->input_escape_buffer[state->input_escape_length - 1U];
+      tetris_input_action_t action = TETRIS_INPUT_NONE;
+      if (final == 'A') {
+        action = TETRIS_INPUT_ROTATE;
+      } else if (final == 'B') {
+        action = TETRIS_INPUT_SOFT_DROP;
+      } else if (final == 'C') {
+        action = TETRIS_INPUT_MOVE_RIGHT;
+      } else if (final == 'D') {
+        action = TETRIS_INPUT_MOVE_LEFT;
+      }
+      state->input_escape_active = false;
+      state->input_escape_length = 0U;
+      if (action != TETRIS_INPUT_NONE) {
+        session_game_tetris_process_action(ctx, action);
+      }
+      return true;
+    }
+
+    state->input_escape_active = false;
+    state->input_escape_length = 0U;
+    return true;
+  }
+
+  if (ch == 0x1b) {
+    state->input_escape_active = true;
+    state->input_escape_length = 0U;
+    state->input_escape_buffer[state->input_escape_length++] = ch;
+    return true;
+  }
+
+  if (ch == '\r' || ch == '\n') {
+    return true;
+  }
+
+  if (ch == 0x12) {
+    session_game_tetris_process_action(ctx, TETRIS_INPUT_ROTATE);
+    return true;
+  }
+
+  unsigned char lowered = (unsigned char)ch;
+  if (lowered >= 'A' && lowered <= 'Z') {
+    lowered = (unsigned char)tolower(lowered);
+  }
+
+  switch (lowered) {
+    case 'a':
+      session_game_tetris_process_action(ctx, TETRIS_INPUT_MOVE_LEFT);
+      return true;
+    case 'd':
+      session_game_tetris_process_action(ctx, TETRIS_INPUT_MOVE_RIGHT);
+      return true;
+    case 'w':
+      session_game_tetris_process_action(ctx, TETRIS_INPUT_ROTATE);
+      return true;
+    case 's':
+      session_game_tetris_process_action(ctx, TETRIS_INPUT_SOFT_DROP);
+      return true;
+    case ' ':
+      session_game_tetris_process_action(ctx, TETRIS_INPUT_HARD_DROP);
+      return true;
+    default:
+      break;
+  }
+
+  if ((unsigned char)ch < 0x20U) {
+    return false;
+  }
+
+  return true;
 }
 
 static bool session_game_tetris_rotate(session_ctx_t *ctx) {
@@ -7781,7 +8087,7 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
   char next_char = TETROMINO_DISPLAY_CHARS[state->next_piece % 7];
   snprintf(header, sizeof(header), "Score: %u   Lines: %u   Next: %c", state->score, state->lines_cleared, next_char);
   session_send_system_line(ctx, header);
-  session_send_system_line(ctx, "Controls: left, right, down, rotate, drop. Blank line = down.");
+  session_send_system_line(ctx, "Controls: left, right, down, Ctrl+R rotate, drop. Blank line = down.");
 
   char border[SSH_CHATTER_TETRIS_WIDTH + 3];
   border[0] = '+';
@@ -7847,47 +8153,23 @@ static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line
   }
 
   if (command[0] == '\0') {
-    session_game_tetris_soft_drop(ctx);
-    if (state->game_over) {
-      session_game_suspend(ctx, "Game over!");
-      return;
-    }
-    session_game_tetris_render(ctx);
+    session_game_tetris_process_timeout(ctx);
     return;
   }
 
   if (strcmp(command, "help") == 0) {
-    session_send_system_line(ctx, "Tetris controls: left, right, down, rotate, drop, help.");
+    session_send_system_line(ctx,
+                             "Tetris controls: WASD or arrow keys move (W/Up rotate, S/Down soft drop, A/Left, D/Right),"
+                             " space for a hard drop, and Ctrl+R also rotates. Ctrl+D or /suspend! exits.");
     return;
   }
 
-  bool redraw = false;
-  if (strcmp(command, "left") == 0 || strcmp(command, "l") == 0) {
-    redraw = session_game_tetris_move(ctx, 0, -1);
-  } else if (strcmp(command, "right") == 0 || strcmp(command, "r") == 0) {
-    redraw = session_game_tetris_move(ctx, 0, 1);
-  } else if (strcmp(command, "down") == 0 || strcmp(command, "d") == 0) {
-    session_game_tetris_soft_drop(ctx);
-    redraw = true;
-  } else if (strcmp(command, "rotate") == 0 || strcmp(command, "cw") == 0) {
-    redraw = session_game_tetris_rotate(ctx);
-  } else if (strcmp(command, "drop") == 0) {
-    while (session_game_tetris_soft_drop(ctx)) {
-    }
-    redraw = true;
-  } else {
-    session_send_system_line(ctx, "Unknown Tetris command. Use left, right, down, rotate, drop, or help.");
+  if (strcmp(command, "drop") == 0) {
+    session_game_tetris_process_action(ctx, TETRIS_INPUT_HARD_DROP);
     return;
   }
 
-  if (state->game_over) {
-    session_game_suspend(ctx, "Game over!");
-    return;
-  }
-
-  if (redraw) {
-    session_game_tetris_render(ctx);
-  }
+  session_send_system_line(ctx, "Use WASD or the arrow keys for control. Type help for a summary.");
 }
 
 static void session_game_start_tetris(session_ctx_t *ctx) {
@@ -7909,7 +8191,9 @@ static void session_game_start_tetris(session_ctx_t *ctx) {
     return;
   }
 
-  session_send_system_line(ctx, "Tetris started. Use left/right/down/rotate/drop. Ctrl+D or /suspend! exits.");
+  session_send_system_line(ctx,
+                           "Tetris started. Pieces fall on their own — use WASD or the arrow keys (W/Up rotate, S/Down soft"
+                           " drop, A/Left, D/Right), space for a hard drop, and Ctrl+R to rotate. Ctrl+D or /suspend! exits.");
   session_game_tetris_render(ctx);
 }
 
@@ -8087,6 +8371,45 @@ static void session_game_suspend(session_ctx_t *ctx, const char *reason) {
 
   ctx->game.active = false;
   ctx->game.type = SESSION_GAME_NONE;
+}
+
+static int session_channel_read_poll(session_ctx_t *ctx, char *buffer, size_t length, int timeout_ms) {
+  if (ctx == NULL || ctx->channel == NULL || buffer == NULL || length == 0U) {
+    return SSH_ERROR;
+  }
+
+  int fd = ssh_get_fd(ctx->session);
+  if (fd < 0) {
+    return ssh_channel_read(ctx->channel, buffer, length, 0);
+  }
+
+  struct pollfd pfd;
+  pfd.fd = fd;
+  pfd.events = POLLIN;
+  pfd.revents = 0;
+
+  for (;;) {
+    int poll_result = poll(&pfd, 1, timeout_ms);
+    if (poll_result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return SSH_ERROR;
+    }
+    if (poll_result == 0) {
+      return SESSION_CHANNEL_TIMEOUT;
+    }
+    break;
+  }
+
+  if ((pfd.revents & POLLIN) == 0) {
+    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+      return 0;
+    }
+    return SESSION_CHANNEL_TIMEOUT;
+  }
+
+  return ssh_channel_read(ctx->channel, buffer, length, 0);
 }
 
 static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count) {
@@ -9818,14 +10141,32 @@ static void *session_thread(void *arg) {
   session_render_prompt(ctx, true);
 
   char buffer[SSH_CHATTER_MAX_INPUT_LEN];
+  const int poll_timeout_ms = 100;
   while (!ctx->should_exit) {
-    const int bytes_read = ssh_channel_read(ctx->channel, buffer, sizeof(buffer) - 1U, 0);
-    if (bytes_read <= 0) {
+    int read_result = session_channel_read_poll(ctx, buffer, sizeof(buffer) - 1U, poll_timeout_ms);
+    if (read_result == SSH_ERROR) {
       break;
     }
 
-    for (int idx = 0; idx < bytes_read; ++idx) {
+    if (read_result == SESSION_CHANNEL_TIMEOUT) {
+      if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS) {
+        session_game_tetris_process_timeout(ctx);
+      }
+      continue;
+    }
+
+    if (read_result == 0) {
+      break;
+    }
+
+    for (int idx = 0; idx < read_result; ++idx) {
       const char ch = buffer[idx];
+
+      if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS) {
+        if (session_game_tetris_process_raw_input(ctx, ch)) {
+          continue;
+        }
+      }
 
       if (session_consume_escape_sequence(ctx, ch)) {
         continue;
