@@ -3007,6 +3007,10 @@ static void session_translation_reserve_placeholders(session_ctx_t *ctx, size_t 
   } else {
     ctx->translation_placeholder_active_lines += placeholder_lines;
   }
+
+  if (ctx->history_scroll_position == 0U) {
+    session_refresh_input_line(ctx);
+  }
 }
 
 static void session_translation_flush_ready(session_ctx_t *ctx) {
