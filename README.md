@@ -31,6 +31,22 @@ The codebase is intentionally compact so new contributors can navigate it quickl
 | `scripts/install_chatter_service.sh` | Convenience installer that builds the binary, installs it under `/usr/local/bin`, and wires up a `systemd` unit (`chatter.service`). |
 | `scripts/install_dependencies.sh` | Minimal package installer for build prerequisites on Debian/Ubuntu systems. |
 
+## Staying current with `main`
+
+The `work` branch regularly diverges from upstream development so larger features can
+incubate without interrupting production traffic. When it is time to synchronize with
+`main`, pull the latest tree and merge it locally before opening a pull request:
+
+```bash
+git fetch origin main
+git checkout work
+git merge --no-ff origin/main
+```
+
+Resolve any conflicts in place (the `lib/host.c` helper routines already mirror the
+layout used on `main`, so merges are typically straightforward) and run `make` to
+confirm the build still succeeds before pushing the result.
+
 ## Automation hooks
 
 - `host_snapshot_last_captcha` exposes the most recently generated captcha prompt and answer along with a timestamp so external clients can pass challenges on behalf of unattended automation.
