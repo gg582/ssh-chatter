@@ -539,6 +539,7 @@ static void host_store_system_theme(host_t *host, const session_ctx_t *ctx);
 static void host_store_user_os(host_t *host, const session_ctx_t *ctx);
 static void host_store_birthday(host_t *host, const session_ctx_t *ctx, const char *birthday);
 static void host_store_chat_spacing(host_t *host, const session_ctx_t *ctx);
+static void host_store_translation_preferences(host_t *host, const session_ctx_t *ctx);
 static bool host_ip_has_grant_locked(host_t *host, const char *ip);
 static bool host_ip_has_grant(host_t *host, const char *ip);
 static bool host_add_operator_grant_locked(host_t *host, const char *ip);
@@ -585,7 +586,7 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post);
 static void host_update_last_captcha_prompt(host_t *host, const captcha_prompt_t *prompt);
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
-static const uint32_t HOST_STATE_VERSION = 5U;
+static const uint32_t HOST_STATE_VERSION = 6U;
 
 #define HOST_STATE_SOUND_ALIAS_LEN 32U
 
@@ -664,7 +665,7 @@ typedef struct host_state_preference_entry_v4 {
   int32_t last_poll_choice;
 } host_state_preference_entry_v4_t;
 
-typedef struct host_state_preference_entry {
+typedef struct host_state_preference_entry_v5 {
   uint8_t has_user_theme;
   uint8_t has_system_theme;
   uint8_t user_is_bold;
@@ -684,6 +685,34 @@ typedef struct host_state_preference_entry {
   uint8_t has_birthday;
   uint8_t reserved[3];
   char birthday[16];
+} host_state_preference_entry_v5_t;
+
+typedef struct host_state_preference_entry {
+  uint8_t has_user_theme;
+  uint8_t has_system_theme;
+  uint8_t user_is_bold;
+  uint8_t system_is_bold;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  char user_color_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char user_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_fg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_bg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char os_name[SSH_CHATTER_OS_NAME_LEN];
+  int32_t daily_year;
+  int32_t daily_yday;
+  char daily_function[64];
+  uint64_t last_poll_id;
+  int32_t last_poll_choice;
+  uint8_t has_birthday;
+  uint8_t translation_caption_spacing;
+  uint8_t translation_enabled;
+  uint8_t output_translation_enabled;
+  uint8_t input_translation_enabled;
+  uint8_t reserved[3];
+  char birthday[16];
+  char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+  char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
 } host_state_preference_entry_t;
 
 typedef struct host_state_grant_entry {
@@ -1595,6 +1624,26 @@ static void host_store_chat_spacing(host_t *host, const session_ctx_t *ctx) {
   pthread_mutex_unlock(&host->lock);
 }
 
+static void host_store_translation_preferences(host_t *host, const session_ctx_t *ctx) {
+  if (host == NULL || ctx == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  user_preference_t *pref = host_ensure_preference_locked(host, ctx->user.name);
+  if (pref != NULL) {
+    pref->translation_master_enabled = ctx->translation_enabled;
+    pref->output_translation_enabled = ctx->output_translation_enabled;
+    pref->input_translation_enabled = ctx->input_translation_enabled;
+    snprintf(pref->output_translation_language, sizeof(pref->output_translation_language), "%s",
+             ctx->output_translation_language);
+    snprintf(pref->input_translation_language, sizeof(pref->input_translation_language), "%s",
+             ctx->input_translation_language);
+  }
+  host_state_save_locked(host);
+  pthread_mutex_unlock(&host->lock);
+}
+
 static bool host_ip_has_grant_locked(host_t *host, const char *ip) {
   if (host == NULL || ip == NULL || ip[0] == '\0') {
     return false;
@@ -1941,9 +1990,16 @@ static void host_state_save_locked(host_t *host) {
     serialized.last_poll_id = pref->last_poll_id;
     serialized.last_poll_choice = pref->last_poll_choice;
     serialized.has_birthday = pref->has_birthday ? 1U : 0U;
+    serialized.translation_caption_spacing = pref->translation_caption_spacing;
+    serialized.translation_enabled = pref->translation_master_enabled ? 1U : 0U;
+    serialized.output_translation_enabled = pref->output_translation_enabled ? 1U : 0U;
+    serialized.input_translation_enabled = pref->input_translation_enabled ? 1U : 0U;
     memset(serialized.reserved, 0, sizeof(serialized.reserved));
-    serialized.reserved[0] = pref->translation_caption_spacing;
     snprintf(serialized.birthday, sizeof(serialized.birthday), "%s", pref->birthday);
+    snprintf(serialized.output_translation_language, sizeof(serialized.output_translation_language), "%s",
+             pref->output_translation_language);
+    snprintf(serialized.input_translation_language, sizeof(serialized.input_translation_language), "%s",
+             pref->input_translation_language);
 
     if (fwrite(&serialized, sizeof(serialized), 1U, fp) != 1U) {
       success = false;
@@ -2298,11 +2354,42 @@ static void host_state_load(host_t *host) {
 
   for (uint32_t idx = 0; success && idx < preference_count; ++idx) {
     host_state_preference_entry_t serialized = {0};
-    if (version >= 5U) {
+    if (version >= 6U) {
       if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
         success = false;
         break;
       }
+    } else if (version == 5U) {
+      host_state_preference_entry_v5_t legacy5 = {0};
+      if (fread(&legacy5, sizeof(legacy5), 1U, fp) != 1U) {
+        success = false;
+        break;
+      }
+      serialized.has_user_theme = legacy5.has_user_theme;
+      serialized.has_system_theme = legacy5.has_system_theme;
+      serialized.user_is_bold = legacy5.user_is_bold;
+      serialized.system_is_bold = legacy5.system_is_bold;
+      snprintf(serialized.username, sizeof(serialized.username), "%s", legacy5.username);
+      snprintf(serialized.user_color_name, sizeof(serialized.user_color_name), "%s", legacy5.user_color_name);
+      snprintf(serialized.user_highlight_name, sizeof(serialized.user_highlight_name), "%s", legacy5.user_highlight_name);
+      snprintf(serialized.system_fg_name, sizeof(serialized.system_fg_name), "%s", legacy5.system_fg_name);
+      snprintf(serialized.system_bg_name, sizeof(serialized.system_bg_name), "%s", legacy5.system_bg_name);
+      snprintf(serialized.system_highlight_name, sizeof(serialized.system_highlight_name), "%s",
+               legacy5.system_highlight_name);
+      snprintf(serialized.os_name, sizeof(serialized.os_name), "%s", legacy5.os_name);
+      serialized.daily_year = legacy5.daily_year;
+      serialized.daily_yday = legacy5.daily_yday;
+      snprintf(serialized.daily_function, sizeof(serialized.daily_function), "%s", legacy5.daily_function);
+      serialized.last_poll_id = legacy5.last_poll_id;
+      serialized.last_poll_choice = legacy5.last_poll_choice;
+      serialized.has_birthday = legacy5.has_birthday;
+      serialized.translation_caption_spacing = legacy5.reserved[0];
+      serialized.translation_enabled = 0U;
+      serialized.output_translation_enabled = 0U;
+      serialized.input_translation_enabled = 0U;
+      snprintf(serialized.birthday, sizeof(serialized.birthday), "%s", legacy5.birthday);
+      serialized.output_translation_language[0] = '\0';
+      serialized.input_translation_language[0] = '\0';
     } else if (version == 4U) {
       host_state_preference_entry_v4_t legacy4 = {0};
       if (fread(&legacy4, sizeof(legacy4), 1U, fp) != 1U) {
@@ -2327,8 +2414,13 @@ static void host_state_load(host_t *host) {
       serialized.last_poll_id = legacy4.last_poll_id;
       serialized.last_poll_choice = legacy4.last_poll_choice;
       serialized.has_birthday = 0U;
-      memset(serialized.reserved, 0, sizeof(serialized.reserved));
+      serialized.translation_caption_spacing = 0U;
+      serialized.translation_enabled = 0U;
+      serialized.output_translation_enabled = 0U;
+      serialized.input_translation_enabled = 0U;
       serialized.birthday[0] = '\0';
+      serialized.output_translation_language[0] = '\0';
+      serialized.input_translation_language[0] = '\0';
     } else {
       host_state_preference_entry_v3_t legacy = {0};
       if (fread(&legacy, sizeof(legacy), 1U, fp) != 1U) {
@@ -2353,8 +2445,13 @@ static void host_state_load(host_t *host) {
       serialized.last_poll_id = 0U;
       serialized.last_poll_choice = -1;
       serialized.has_birthday = 0U;
-      memset(serialized.reserved, 0, sizeof(serialized.reserved));
+      serialized.translation_caption_spacing = 0U;
+      serialized.translation_enabled = 0U;
+      serialized.output_translation_enabled = 0U;
+      serialized.input_translation_enabled = 0U;
       serialized.birthday[0] = '\0';
+      serialized.output_translation_language[0] = '\0';
+      serialized.input_translation_language[0] = '\0';
     }
 
     if (host->preference_count >= SSH_CHATTER_MAX_PREFERENCES) {
@@ -2383,7 +2480,14 @@ static void host_state_load(host_t *host) {
     pref->last_poll_choice = serialized.last_poll_choice;
     pref->has_birthday = serialized.has_birthday != 0U;
     snprintf(pref->birthday, sizeof(pref->birthday), "%s", serialized.birthday);
-    pref->translation_caption_spacing = serialized.reserved[0];
+    pref->translation_caption_spacing = serialized.translation_caption_spacing;
+    pref->translation_master_enabled = serialized.translation_enabled != 0U;
+    pref->output_translation_enabled = serialized.output_translation_enabled != 0U;
+    pref->input_translation_enabled = serialized.input_translation_enabled != 0U;
+    snprintf(pref->output_translation_language, sizeof(pref->output_translation_language), "%s",
+             serialized.output_translation_language);
+    snprintf(pref->input_translation_language, sizeof(pref->input_translation_language), "%s",
+             serialized.input_translation_language);
     ++host->preference_count;
   }
 
@@ -2847,6 +2951,13 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
     if (ctx->translation_caption_spacing > 8U) {
       ctx->translation_caption_spacing = 8U;
     }
+    ctx->translation_enabled = snapshot.translation_master_enabled;
+    ctx->output_translation_enabled = snapshot.output_translation_enabled;
+    snprintf(ctx->output_translation_language, sizeof(ctx->output_translation_language), "%s",
+             snapshot.output_translation_language);
+    ctx->input_translation_enabled = snapshot.input_translation_enabled;
+    snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s",
+             snapshot.input_translation_language);
   }
 
   session_force_dark_mode_foreground(ctx);
@@ -7699,6 +7810,9 @@ static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *argume
     ctx->output_translation_language[0] = '\0';
     session_translation_clear_queue(ctx);
     session_send_system_line(ctx, "Terminal translation disabled.");
+    if (ctx->owner != NULL) {
+      host_store_translation_preferences(ctx->owner, ctx);
+    }
     return;
   }
 
@@ -7741,6 +7855,9 @@ static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *argume
   if (!ctx->translation_enabled) {
     session_send_system_line(ctx, "Translation is currently disabled; enable it with /translate on.");
   }
+  if (ctx->owner != NULL) {
+    host_store_translation_preferences(ctx->owner, ctx);
+  }
 }
 
 static void session_handle_set_target_lang(session_ctx_t *ctx, const char *arguments) {
@@ -7766,6 +7883,9 @@ static void session_handle_set_target_lang(session_ctx_t *ctx, const char *argum
     ctx->input_translation_language[0] = '\0';
     ctx->last_detected_input_language[0] = '\0';
     session_send_system_line(ctx, "Outgoing message translation disabled.");
+    if (ctx->owner != NULL) {
+      host_store_translation_preferences(ctx->owner, ctx);
+    }
     return;
   }
 
@@ -7807,6 +7927,9 @@ static void session_handle_set_target_lang(session_ctx_t *ctx, const char *argum
   session_send_system_line(ctx, message);
   if (!ctx->translation_enabled) {
     session_send_system_line(ctx, "Translation is currently disabled; enable it with /translate on.");
+  }
+  if (ctx->owner != NULL) {
+    host_store_translation_preferences(ctx->owner, ctx);
   }
 }
 
@@ -8100,6 +8223,9 @@ static void session_handle_translate(session_ctx_t *ctx, const char *arguments) 
     ctx->translation_enabled = false;
     session_translation_clear_queue(ctx);
     session_send_system_line(ctx, "Translation disabled. New messages will be delivered without translation.");
+    if (ctx->owner != NULL) {
+      host_store_translation_preferences(ctx->owner, ctx);
+    }
     return;
   }
 
@@ -8119,6 +8245,9 @@ static void session_handle_translate(session_ctx_t *ctx, const char *arguments) 
   } else {
     session_translation_clear_queue(ctx);
     session_send_system_line(ctx, "Translation disabled. New messages will be delivered without translation.");
+  }
+  if (ctx->owner != NULL) {
+    host_store_translation_preferences(ctx->owner, ctx);
   }
 }
 

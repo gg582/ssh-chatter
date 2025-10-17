@@ -192,6 +192,9 @@ If the inline caption inserts feel jarring you can reserve a small buffer of bla
 The setting only affects live chat threads—bulletin board content continues to translate without reservation—so you can tune the
 spacing for your own session without impacting long-form posts.
 
+Your translation toggle and language choices are saved in `chatter_state.dat`, so future sessions automatically restore the same
+configuration once you reconnect.
+
 If you prefer to install without immediately starting the service, run the script with `SKIP_START=1`.
 
 Service management commands:

@@ -201,6 +201,11 @@ typedef struct user_preference {
   bool has_birthday;
   char birthday[16];
   uint8_t translation_caption_spacing;
+  bool translation_master_enabled;
+  bool output_translation_enabled;
+  bool input_translation_enabled;
+  char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+  char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   struct {
     char label[SSH_CHATTER_POLL_LABEL_LEN];
     uint64_t poll_id;
