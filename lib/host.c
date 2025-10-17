@@ -11296,63 +11296,66 @@ static void *session_thread(void *arg) {
   while (!ctx->should_exit) {
     session_translation_flush_ready(ctx);
 
-    const int bytes_read =
-        ssh_channel_read_timeout(ctx->channel, buffer, sizeof(buffer) - 1U, 0, 200);
-    if (bytes_read == SSH_AGAIN) {
+    int read_result = ssh_channel_read_timeout(ctx->channel, buffer, sizeof(buffer) - 1U, 0, 200);
+    if (read_result == SSH_AGAIN) {
       continue;
     }
-    if (bytes_read == SSH_ERROR || bytes_read == SSH_EOF) {
+    if (read_result == SSH_ERROR || read_result == SSH_EOF) {
       break;
     }
-    if (bytes_read == 0) {
+    if (read_result == 0) {
       if (ctx->channel != NULL && (ssh_channel_is_eof(ctx->channel) || !ssh_channel_is_open(ctx->channel))) {
         break;
       }
       continue;
     }
-    if (bytes_read < 0) {
 
-      int read_result = session_channel_read_poll(ctx, buffer, sizeof(buffer) - 1U, poll_timeout_ms);
-    if (read_result == SESSION_CHANNEL_TIMEOUT) {
-      ctx->channel_error_retries = 0U;
-      if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS) {
-        session_game_tetris_process_timeout(ctx);
-      }
-      continue;
-    }
-
-    if (read_result == SSH_ERROR) {
-      if (ctx->has_joined_room && ctx->channel_error_retries < SSH_CHATTER_CHANNEL_RECOVERY_LIMIT) {
-        ctx->channel_error_retries += 1U;
-        const char *error_message = ssh_get_error(ctx->session);
-        if (error_message == NULL || error_message[0] == '\0') {
-          error_message = "unknown channel error";
+    if (read_result < 0) {
+      read_result = session_channel_read_poll(ctx, buffer, sizeof(buffer) - 1U, poll_timeout_ms);
+      if (read_result == SESSION_CHANNEL_TIMEOUT) {
+        ctx->channel_error_retries = 0U;
+        if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS) {
+          session_game_tetris_process_timeout(ctx);
         }
-        printf("[session] channel read error for %s (attempt %u/%u): %s\n", ctx->user.name,
-               ctx->channel_error_retries, SSH_CHATTER_CHANNEL_RECOVERY_LIMIT, error_message);
-        struct timespec retry_delay = {
-            .tv_sec = 0,
-            .tv_nsec = SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS,
-        };
-        nanosleep(&retry_delay, NULL);
         continue;
       }
 
-      if (ctx->has_joined_room) {
-        const char *error_message = ssh_get_error(ctx->session);
-        if (error_message == NULL || error_message[0] == '\0') {
-          error_message = "unknown channel error";
+      if (read_result == SSH_ERROR) {
+        if (ctx->has_joined_room && ctx->channel_error_retries < SSH_CHATTER_CHANNEL_RECOVERY_LIMIT) {
+          ctx->channel_error_retries += 1U;
+          const char *error_message = ssh_get_error(ctx->session);
+          if (error_message == NULL || error_message[0] == '\0') {
+            error_message = "unknown channel error";
+          }
+          printf("[session] channel read error for %s (attempt %u/%u): %s\n", ctx->user.name,
+                 ctx->channel_error_retries, SSH_CHATTER_CHANNEL_RECOVERY_LIMIT, error_message);
+          struct timespec retry_delay = {
+              .tv_sec = 0,
+              .tv_nsec = SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS,
+          };
+          nanosleep(&retry_delay, NULL);
+          continue;
         }
-        printf("[session] channel read failure for %s after %u retries: %s\n", ctx->user.name,
-               ctx->channel_error_retries, error_message);
+
+        if (ctx->has_joined_room) {
+          const char *error_message = ssh_get_error(ctx->session);
+          if (error_message == NULL || error_message[0] == '\0') {
+            error_message = "unknown channel error";
+          }
+          printf("[session] channel read failure for %s after %u retries: %s\n", ctx->user.name,
+                 ctx->channel_error_retries, error_message);
+        }
+        break;
       }
-      break;
     }
 
     ctx->channel_error_retries = 0U;
 
     if (read_result == 0) {
       break;
+    }
+    if (read_result < 0) {
+      continue;
     }
 
     for (int idx = 0; idx < read_result; ++idx) {
@@ -11509,8 +11512,6 @@ static void *session_thread(void *arg) {
         ctx->input_buffer[ctx->input_length++] = ch;
         session_local_echo_char(ctx, ch);
       }
-    }
-
     }
 
     if (ctx->should_exit) {
