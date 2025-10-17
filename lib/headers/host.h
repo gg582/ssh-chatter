@@ -114,6 +114,9 @@ typedef struct auth_profile {
 
 typedef struct ssh_listener {
   ssh_bind handle;
+  unsigned int inplace_recoveries;
+  unsigned int restart_attempts;
+  struct timespec last_error_time;
 } ssh_listener_t;
 
 typedef enum session_game_type {
@@ -192,6 +195,7 @@ typedef struct session_ctx {
   bool should_exit;
   bool username_conflict;
   bool has_joined_room;
+  unsigned int channel_error_retries;
   size_t history_scroll_position;
   struct timespec last_message_time;
   bool has_last_message_time;

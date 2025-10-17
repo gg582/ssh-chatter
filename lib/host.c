@@ -53,6 +53,8 @@
 #define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT 3U
 #define SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM "ssh-rsa"
 #define SESSION_CHANNEL_TIMEOUT (-2)
+#define SSH_CHATTER_CHANNEL_RECOVERY_LIMIT 5U
+#define SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS 200000000L
 
 #ifndef MSG_DONTWAIT
 #define MSG_DONTWAIT 0
@@ -162,6 +164,30 @@ static struct timespec timespec_diff(const struct timespec *end, const struct ti
   result.tv_sec = sec;
   result.tv_nsec = nsec;
   return result;
+}
+
+static bool host_listener_attempt_recover(host_t *host, ssh_bind bind_handle, const char *address,
+                                          const char *bind_port) {
+  if (host == NULL || bind_handle == NULL) {
+    return false;
+  }
+
+  printf("[listener] attempting in-place recovery on %s:%s after socket error\n", address, bind_port);
+  ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDADDR, address);
+  ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDPORT_STR, bind_port);
+  if (ssh_bind_listen(bind_handle) == SSH_OK) {
+    host->listener.inplace_recoveries += 1U;
+    printf("[listener] listener recovered without restart (total in-place recoveries: %u)\n",
+           host->listener.inplace_recoveries);
+    return true;
+  }
+
+  const char *error_message = ssh_get_error(bind_handle);
+  if (error_message == NULL || error_message[0] == '\0') {
+    error_message = "unknown error";
+  }
+  printf("[listener] in-place recovery failed: %s\n", error_message);
+  return false;
 }
 
 static struct timespec timespec_add_ms(const struct timespec *start, long milliseconds) {
@@ -4549,7 +4575,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/files <url> [caption] - share a downloadable file");
   session_send_system_line(ctx, "/asciiart           - open the ASCII art composer (max 15 lines, 1/min)");
   session_send_system_line(ctx,
-                           "/game <tetris|liargame> - start a minigame in the chat (use /suspend! or Ctrl+D to exit)");
+                           "/game <tetris|liargame> - start a minigame in the chat (use /suspend! or Ctrl+Z to exit)");
   session_send_system_line(ctx, "Up/Down arrows           - scroll recent chat history");
   session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
   session_send_system_line(ctx,
@@ -4583,7 +4609,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx,
                            "/bbs [list|read|post|comment|regen|delete] - open the bulletin board system (see /bbs for details, finish "
                            SSH_CHATTER_BBS_TERMINATOR " to post)");
-  session_send_system_line(ctx, "/suspend!            - suspend the active game (Ctrl+D while playing)");
+  session_send_system_line(ctx, "/suspend!            - suspend the active game (Ctrl+Z while playing)");
   session_send_system_line(ctx, "Regular messages are shared with everyone.");
 }
 
@@ -7905,7 +7931,7 @@ static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch) {
 
   tetris_game_state_t *state = &ctx->game.tetris;
 
-  if (ch == 0x01 || ch == 0x03 || ch == 0x04 || ch == 0x13) {
+  if (ch == 0x01 || ch == 0x03 || ch == 0x1a || ch == 0x13) {
     return false;
   }
 
@@ -8160,7 +8186,7 @@ static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line
   if (strcmp(command, "help") == 0) {
     session_send_system_line(ctx,
                              "Tetris controls: WASD or arrow keys move (W/Up rotate, S/Down soft drop, A/Left, D/Right),"
-                             " space for a hard drop, and Ctrl+R also rotates. Ctrl+D or /suspend! exits.");
+                             " space for a hard drop, and Ctrl+R also rotates. Ctrl+Z or /suspend! exits.");
     return;
   }
 
@@ -8193,7 +8219,7 @@ static void session_game_start_tetris(session_ctx_t *ctx) {
 
   session_send_system_line(ctx,
                            "Tetris started. Pieces fall on their own — use WASD or the arrow keys (W/Up rotate, S/Down soft"
-                           " drop, A/Left, D/Right), space for a hard drop, and Ctrl+R to rotate. Ctrl+D or /suspend! exits.");
+                           " drop, A/Left, D/Right), space for a hard drop, and Ctrl+R to rotate. Ctrl+Z or /suspend! exits.");
   session_game_tetris_render(ctx);
 }
 
@@ -10144,16 +10170,43 @@ static void *session_thread(void *arg) {
   const int poll_timeout_ms = 100;
   while (!ctx->should_exit) {
     int read_result = session_channel_read_poll(ctx, buffer, sizeof(buffer) - 1U, poll_timeout_ms);
-    if (read_result == SSH_ERROR) {
-      break;
-    }
-
     if (read_result == SESSION_CHANNEL_TIMEOUT) {
+      ctx->channel_error_retries = 0U;
       if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS) {
         session_game_tetris_process_timeout(ctx);
       }
       continue;
     }
+
+    if (read_result == SSH_ERROR) {
+      if (ctx->has_joined_room && ctx->channel_error_retries < SSH_CHATTER_CHANNEL_RECOVERY_LIMIT) {
+        ctx->channel_error_retries += 1U;
+        const char *error_message = ssh_get_error(ctx->session);
+        if (error_message == NULL || error_message[0] == '\0') {
+          error_message = "unknown channel error";
+        }
+        printf("[session] channel read error for %s (attempt %u/%u): %s\n", ctx->user.name,
+               ctx->channel_error_retries, SSH_CHATTER_CHANNEL_RECOVERY_LIMIT, error_message);
+        struct timespec retry_delay = {
+            .tv_sec = 0,
+            .tv_nsec = SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS,
+        };
+        nanosleep(&retry_delay, NULL);
+        continue;
+      }
+
+      if (ctx->has_joined_room) {
+        const char *error_message = ssh_get_error(ctx->session);
+        if (error_message == NULL || error_message[0] == '\0') {
+          error_message = "unknown channel error";
+        }
+        printf("[session] channel read failure for %s after %u retries: %s\n", ctx->user.name,
+               ctx->channel_error_retries, error_message);
+      }
+      break;
+    }
+
+    ctx->channel_error_retries = 0U;
 
     if (read_result == 0) {
       break;
@@ -10203,7 +10256,7 @@ static void *session_thread(void *arg) {
         continue;
       }
 
-      if (ch == 0x04) {
+      if (ch == 0x1a) {
         ctx->input_buffer[ctx->input_length] = '\0';
         session_local_echo_char(ctx, '\n');
         if (ctx->game.active) {
@@ -10347,6 +10400,10 @@ void host_init(host_t *host, auth_profile_t *auth) {
 
   chat_room_init(&host->room);
   host->listener.handle = NULL;
+  host->listener.inplace_recoveries = 0U;
+  host->listener.restart_attempts = 0U;
+  host->listener.last_error_time.tv_sec = 0;
+  host->listener.last_error_time.tv_nsec = 0L;
   host->auth = auth;
   host->clients = NULL;
   host->web_client = NULL;
@@ -10743,6 +10800,8 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     }
 
     host->listener.handle = bind_handle;
+    host->listener.last_error_time.tv_sec = 0;
+    host->listener.last_error_time.tv_nsec = 0L;
     printf("[listener] listening on %s:%s\n", address, bind_port);
 
     bool restart_listener = false;
@@ -10794,7 +10853,13 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 
         ssh_free(session);
         if (fatal_socket_error) {
-          printf("[listener] restarting after listener socket error\n");
+          clock_gettime(CLOCK_MONOTONIC, &host->listener.last_error_time);
+          if (host_listener_attempt_recover(host, bind_handle, address, bind_port)) {
+            continue;
+          }
+          host->listener.restart_attempts += 1U;
+          printf("[listener] scheduling full listener restart after socket error (attempt %u)\n",
+                 host->listener.restart_attempts);
           restart_listener = true;
           break;
         }
@@ -10882,7 +10947,21 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         .tv_nsec = 0,
     };
     nanosleep(&backoff, NULL);
-    printf("[listener] attempting to restart listener after socket error\n");
+
+    if (host->listener.restart_attempts > 0U) {
+      printf("[listener] attempting full listener restart after socket error (attempt %u)\n",
+             host->listener.restart_attempts);
+    } else {
+      printf("[listener] attempting full listener restart after socket error\n");
+    }
+
+    if (host->listener.last_error_time.tv_sec != 0 || host->listener.last_error_time.tv_nsec != 0L) {
+      struct timespec now;
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      struct timespec elapsed = timespec_diff(&now, &host->listener.last_error_time);
+      double elapsed_seconds = (double)elapsed.tv_sec + (double)elapsed.tv_nsec / 1000000000.0;
+      printf("[listener] last fatal error occurred %.3f seconds ago\n", elapsed_seconds);
+    }
   }
 
   return 0;
