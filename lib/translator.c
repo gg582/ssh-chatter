@@ -7,6 +7,7 @@
 #include <string.h>
 
 #define TRANSLATOR_MAX_RESPONSE 65536
+#define TRANSLATOR_DEFAULT_BASE_URL "https://api.openai.com/v1"
 
 typedef struct translator_buffer {
   char *data;
@@ -251,6 +252,34 @@ static bool translator_extract_json_value(const char *json, const char *key, cha
   return true;
 }
 
+static char *translator_build_url(void) {
+  const char *base = getenv("OPENAI_API_BASE");
+  if (base == NULL || base[0] == '\0') {
+    base = getenv("OPENAI_BASE_URL");
+  }
+  if (base == NULL || base[0] == '\0') {
+    base = TRANSLATOR_DEFAULT_BASE_URL;
+  }
+
+  size_t base_len = strlen(base);
+  const char *path = "responses";
+  bool append_slash = base_len == 0U || base[base_len - 1U] != '/';
+  size_t total = base_len + (append_slash ? 1U : 0U) + strlen(path) + 1U;
+
+  char *url = malloc(total);
+  if (url == NULL) {
+    return NULL;
+  }
+
+  if (append_slash) {
+    snprintf(url, total, "%s/%s", base, path);
+  } else {
+    snprintf(url, total, "%s%s", base, path);
+  }
+
+  return url;
+}
+
 bool translator_translate(const char *text, const char *target_language, char *translation, size_t translation_len,
                           char *detected_language, size_t detected_len) {
   if (text == NULL || target_language == NULL || translation == NULL || translation_len == 0U) {
@@ -272,7 +301,8 @@ bool translator_translate(const char *text, const char *target_language, char *t
   bool success = false;
   char *escaped_text = translator_escape_string(text);
   char *escaped_target = translator_escape_string(target_language);
-  if (escaped_text == NULL || escaped_target == NULL) {
+  char *api_url = translator_build_url();
+  if (escaped_text == NULL || escaped_target == NULL || api_url == NULL) {
     goto cleanup;
   }
 
@@ -320,7 +350,12 @@ bool translator_translate(const char *text, const char *target_language, char *t
     goto cleanup_headers;
   }
 
-  curl_easy_setopt(curl, CURLOPT_URL, "https://api.openai.com/v1/responses");
+  headers = curl_slist_append(headers, "OpenAI-Beta: assistants=v2");
+  if (headers == NULL) {
+    goto cleanup_headers;
+  }
+
+  curl_easy_setopt(curl, CURLOPT_URL, api_url);
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
@@ -372,6 +407,7 @@ cleanup_headers:
 cleanup:
   free(escaped_text);
   free(escaped_target);
+  free(api_url);
   curl_easy_cleanup(curl);
   return success;
 }

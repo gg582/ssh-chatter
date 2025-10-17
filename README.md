@@ -28,6 +28,7 @@ The codebase is intentionally compact so new contributors can navigate it quickl
 | `lib/host.c`, `lib/headers/host.h` | Chat host implementation – session lifecycle, MOTD handling, and hooks for future message broadcast logic. |
 | `lib/headers/contexts` | Definitions for `session_ctx_t` and related structures that encapsulate per-connection state. |
 | `scripts/install_chatter_service.sh` | Convenience installer that builds the binary, installs it under `/usr/local/bin`, and wires up a `systemd` unit (`chatter.service`). |
+| `scripts/install_dependencies.sh` | Minimal package installer for build prerequisites on Debian/Ubuntu systems. |
 
 ## Automation hooks
 
@@ -40,13 +41,14 @@ Building the project requires a POSIX environment with:
 - A C11 compatible compiler (e.g. `gcc` or `clang`)
 - `make`
 - `libssh` development headers and library (`libssh-dev` on Debian/Ubuntu)
+- `libcurl` development headers and library (`libcurl4-openssl-dev` on Debian/Ubuntu)
 - POSIX threads (usually supplied by the system `libpthread`)
 
 On Debian/Ubuntu the dependencies can be installed with:
 
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential libssh-dev
+sudo apt-get install build-essential libssh-dev libcurl4-openssl-dev
 ```
 
 ## Building from source
@@ -136,6 +138,11 @@ Supported environment variables include:
 - `CHATTER_HOST_KEY_DIR` – Directory containing `ssh_host_rsa_key` (default `/var/lib/ssh-chatter`).
 - `CHATTER_EXTRA_ARGS` – Additional arguments appended to the `ssh-chatter` invocation.
 - `CHATTER_VOTE_FILE` – Path to the vote state file (default `vote_state.dat`).
+
+Translation support relies on the OpenAI Responses API.  Set the following in `chatter.env` (or the environment) to enable it:
+
+- `OPENAI_API_KEY` – Secret API key used to authenticate translation requests.
+- `OPENAI_API_BASE` – Optional override for the API base URL (defaults to `https://api.openai.com/v1`).
 
 If you prefer to install without immediately starting the service, run the script with `SKIP_START=1`.
 
