@@ -17,6 +17,8 @@
 #define TRANSLATOR_MAX_RESPONSE 1<<20
 #define TRANSLATOR_DEFAULT_BASE_URL "https://generativelanguage.googleapis.com/v1beta"
 #define TRANSLATOR_DEFAULT_MODEL "gemini-2.5"
+#define TRANSLATOR_CONNECT_TIMEOUT_MS 5000L
+#define TRANSLATOR_TOTAL_TIMEOUT_MS 15000L
 
 typedef struct translator_buffer {
   char *data;
@@ -677,6 +679,9 @@ static CURLcode translator_issue_gemini_request(CURL *curl, const char *url, con
   curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, translator_write_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, buffer);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, TRANSLATOR_CONNECT_TIMEOUT_MS);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, TRANSLATOR_TOTAL_TIMEOUT_MS);
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
   CURLcode result = curl_easy_perform(curl);
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status_out);
@@ -810,6 +815,9 @@ static CURLcode translator_issue_json_post(CURL *curl, const char *url, const ch
   curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, translator_write_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, buffer);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, TRANSLATOR_CONNECT_TIMEOUT_MS);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, TRANSLATOR_TOTAL_TIMEOUT_MS);
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
   CURLcode result = curl_easy_perform(curl);
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status_out);
