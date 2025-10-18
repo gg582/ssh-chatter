@@ -1130,7 +1130,10 @@ static bool translator_try_openrouter(const translator_candidate_t *candidate, c
           "{\"role\":\"system\",\"content\":\"%s\"}," \
           "{\"role\":\"user\",\"content\":\"Target language: %s\\nText: %s\"}" \
         "]," \
-        "\"temperature\":0" \
+        "\"temperature\":0," \
+        "\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"translation_response\"," \
+          "\"schema\":{\"type\":\"object\",\"properties\":{\"detected_language\":{\"type\":\"string\"}," \
+            "\"translation\":{\"type\":\"string\"}},\"required\":[\"detected_language\",\"translation\"],\"additionalProperties\":false}}}" \
       "}";
 
   int computed = snprintf(NULL, 0, chat_format, model_name, escaped_system, escaped_target, escaped_text);
@@ -1240,7 +1243,8 @@ static bool translator_try_openrouter(const translator_candidate_t *candidate, c
           translator_string_contains_case_insensitive(message, "model") ||
           translator_string_contains_case_insensitive(message, "overload") ||
           translator_string_contains_case_insensitive(message, "unavailable") ||
-          translator_string_contains_case_insensitive(message, "try again")) {
+          translator_string_contains_case_insensitive(message, "try again") ||
+          translator_string_contains_case_insensitive(message, "provider returned error")) {
         should_retry = true;
       }
     }
