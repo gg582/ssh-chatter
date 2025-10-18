@@ -9286,6 +9286,9 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
     return;
   }
 
+  bool previous_translation_suppress = ctx->translation_suppress_output;
+  ctx->translation_suppress_output = true;
+
   tetris_game_state_t *state = &ctx->game.tetris;
   session_render_separator(ctx, "Tetris");
 
@@ -9332,6 +9335,8 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
   }
 
   session_send_system_line(ctx, border);
+
+  ctx->translation_suppress_output = previous_translation_suppress;
 }
 
 static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line) {
@@ -9344,6 +9349,9 @@ static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line
     session_game_suspend(ctx, "Game over!");
     return;
   }
+
+  bool previous_translation_suppress = ctx->translation_suppress_output;
+  ctx->translation_suppress_output = true;
 
   char command[32];
   if (line == NULL) {
@@ -9360,22 +9368,25 @@ static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line
 
   if (command[0] == '\0') {
     session_game_tetris_process_timeout(ctx);
-    return;
+    goto cleanup;
   }
 
   if (strcmp(command, "help") == 0) {
     session_send_system_line(ctx,
                              "Tetris controls: WASD or arrow keys move (W/Up rotate, S/Down soft drop, A/Left, D/Right),"
                              " space for a hard drop, and Ctrl+R also rotates. Ctrl+Z or /suspend! exits.");
-    return;
+    goto cleanup;
   }
 
   if (strcmp(command, "drop") == 0) {
     session_game_tetris_process_action(ctx, TETRIS_INPUT_HARD_DROP);
-    return;
+    goto cleanup;
   }
 
   session_send_system_line(ctx, "Use WASD or the arrow keys for control. Type help for a summary.");
+
+cleanup:
+  ctx->translation_suppress_output = previous_translation_suppress;
 }
 
 static void session_game_start_tetris(session_ctx_t *ctx) {
@@ -9390,17 +9401,24 @@ static void session_game_start_tetris(session_ctx_t *ctx) {
   ctx->game.type = SESSION_GAME_TETRIS;
   ctx->game.active = true;
   ctx->game.tetris.game_over = false;
+  bool previous_translation_suppress = ctx->translation_suppress_output;
   if (!session_game_tetris_spawn_piece(ctx)) {
+    ctx->translation_suppress_output = true;
     session_send_system_line(ctx, "Unable to start Tetris right now.");
+    ctx->translation_suppress_output = previous_translation_suppress;
     ctx->game.active = false;
     ctx->game.type = SESSION_GAME_NONE;
     return;
   }
 
+  ctx->translation_suppress_output = true;
+
   session_send_system_line(ctx,
                            "Tetris started. Pieces fall on their own — use WASD or the arrow keys (W/Up rotate, S/Down soft"
                            " drop, A/Left, D/Right), space for a hard drop, and Ctrl+R to rotate. Ctrl+Z or /suspend! exits.");
   session_game_tetris_render(ctx);
+
+  ctx->translation_suppress_output = previous_translation_suppress;
 }
 
 static void session_game_start_liargame(session_ctx_t *ctx) {
