@@ -224,6 +224,7 @@ typedef struct session_ctx {
   char last_detected_input_language[SSH_CHATTER_LANG_NAME_LEN];
   size_t translation_caption_spacing;
   size_t translation_placeholder_active_lines;
+  bool translation_suppress_output;
   pthread_mutex_t translation_mutex;
   pthread_cond_t translation_cond;
   bool translation_mutex_initialized;
