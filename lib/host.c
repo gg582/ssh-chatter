@@ -466,6 +466,8 @@ static void session_send_line(session_ctx_t *ctx, const char *message);
 static void session_send_plain_line(session_ctx_t *ctx, const char *message);
 static void session_send_system_line(session_ctx_t *ctx, const char *message);
 static void session_send_raw_text(session_ctx_t *ctx, const char *text);
+static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text);
+static void session_send_system_lines_bulk(session_ctx_t *ctx, const char *const *lines, size_t line_count);
 static void session_render_banner(session_ctx_t *ctx);
 static void session_render_separator(session_ctx_t *ctx, const char *label);
 static void session_render_prompt(session_ctx_t *ctx, bool include_separator);
@@ -4989,6 +4991,96 @@ static void session_send_raw_text(session_ctx_t *ctx, const char *text) {
   }
 }
 
+static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text) {
+  if (ctx == NULL || text == NULL) {
+    return;
+  }
+
+  const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
+                                 ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode;
+
+  bool previous_suppress = ctx->translation_suppress_output;
+  if (translation_ready && !ctx->translation_suppress_output) {
+    ctx->translation_suppress_output = true;
+  }
+
+  session_send_raw_text(ctx, text);
+
+  ctx->translation_suppress_output = previous_suppress;
+
+  if (translation_ready && !previous_suppress && text[0] != '\0') {
+    session_translation_queue_block(ctx, text);
+    session_translation_flush_ready(ctx);
+  }
+}
+
+static void session_send_system_lines_bulk(session_ctx_t *ctx, const char *const *lines, size_t line_count) {
+  if (ctx == NULL || lines == NULL || line_count == 0U) {
+    return;
+  }
+
+  const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
+                                 ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode;
+
+  bool previous_suppress = ctx->translation_suppress_output;
+  if (translation_ready && !ctx->translation_suppress_output) {
+    ctx->translation_suppress_output = true;
+  }
+
+  char payload[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  payload[0] = '\0';
+  size_t offset = 0U;
+
+  for (size_t idx = 0U; idx < line_count; ++idx) {
+    const char *line = lines[idx] != NULL ? lines[idx] : "";
+    session_send_system_line(ctx, line);
+
+    if (translation_ready && !previous_suppress) {
+      size_t needed = strlen(line);
+      if (idx + 1U < line_count) {
+        ++needed;
+      }
+
+      if (needed >= sizeof(payload)) {
+        if (offset > 0U && payload[0] != '\0') {
+          payload[offset < sizeof(payload) ? offset : sizeof(payload) - 1U] = '\0';
+          session_translation_queue_block(ctx, payload);
+          session_translation_flush_ready(ctx);
+          payload[0] = '\0';
+          offset = 0U;
+        }
+
+        session_translation_queue_block(ctx, line);
+        session_translation_flush_ready(ctx);
+        continue;
+      }
+
+      if (offset > 0U && offset + needed >= sizeof(payload)) {
+        payload[offset < sizeof(payload) ? offset : sizeof(payload) - 1U] = '\0';
+        session_translation_queue_block(ctx, payload);
+        session_translation_flush_ready(ctx);
+        payload[0] = '\0';
+        offset = 0U;
+      }
+
+      offset = session_append_fragment(payload, sizeof(payload), offset, line);
+      if (idx + 1U < line_count) {
+        offset = session_append_fragment(payload, sizeof(payload), offset, "\n");
+      }
+    }
+  }
+
+  ctx->translation_suppress_output = previous_suppress;
+
+  if (translation_ready && !previous_suppress) {
+    if (offset > 0U && payload[0] != '\0') {
+      payload[offset < sizeof(payload) ? offset : sizeof(payload) - 1U] = '\0';
+      session_translation_queue_block(ctx, payload);
+    }
+    session_translation_flush_ready(ctx);
+  }
+}
+
 static void session_render_separator(session_ctx_t *ctx, const char *label) {
   if (ctx == NULL || label == NULL) {
     return;
@@ -6099,68 +6191,64 @@ static void session_print_help(session_ctx_t *ctx) {
     return;
   }
 
-  session_send_system_line(ctx, "Available commands:");
-  session_send_system_line(ctx, "/help                 - show this message");
-  session_send_system_line(ctx, "/exit                 - leave the chat");
-  session_send_system_line(ctx, "/nick <name>          - change your display name");
-  session_send_system_line(ctx, "/pm <username> <message> - send a private message");
-  session_send_system_line(ctx, "/motd                - view the message of the day");
-  session_send_system_line(ctx, "/status <message|clear> - set your profile status");
-  session_send_system_line(ctx, "/showstatus <username> - view someone else's status");
-  session_send_system_line(ctx, "/users               - announce the number of connected users");
-  session_send_system_line(ctx, "/search <text>       - search for users whose name matches text");
-  session_send_system_line(ctx, "/chat <message-id>   - show a past message by its identifier");
-  session_send_system_line(ctx, "/image <url> [caption] - share an image link");
-  session_send_system_line(ctx, "/video <url> [caption] - share a video link");
-  session_send_system_line(ctx, "/audio <url> [caption] - share an audio clip");
-  session_send_system_line(ctx, "/files <url> [caption] - share a downloadable file");
-  session_send_system_line(ctx, "/asciiart           - open the ASCII art composer (max 64 lines, 1/min)");
-  session_send_system_line(ctx,
-                           "/game <tetris|liargame> - start a minigame in the chat (use /suspend! or Ctrl+Z to exit)");
-  session_send_system_line(ctx, "Up/Down arrows           - scroll recent chat history");
-  session_send_system_line(ctx, "/color (text;highlight[;bold]) - style your handle");
-  session_send_system_line(ctx,
-                           "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may "
-                           "be highlight or bold; use /systemcolor reset to restore defaults)");
-  session_send_system_line(ctx, "/set-trans-lang <language|off> - translate terminal output to a target language");
-  session_send_system_line(ctx, "/set-target-lang <language|off> - translate your outgoing messages");
-  session_send_system_line(ctx, "/weather <region> <city> - show the weather for a region and city");
-  session_send_system_line(ctx, "/translate <on|off>    - enable or disable translation after configuring languages");
-  session_send_system_line(ctx, "/gemini <on|off>       - toggle Gemini provider (operator only)");
-  session_send_system_line(ctx, "/chat-spacing <0-5>    - reserve blank lines before translated captions in chat");
-  session_send_system_line(ctx, "/palette <name>        - apply a predefined interface palette (/palette list)");
-  session_send_system_line(ctx, "/today               - discover today's function (once per day)");
-  session_send_system_line(ctx, "/date <timezone>     - view the server time in another timezone");
-  session_send_system_line(ctx, "/os <name>           - record the operating system you use");
-  session_send_system_line(ctx, "/getos <username>    - look up someone else's recorded operating system");
-  session_send_system_line(ctx, "/birthday YYYY-MM-DD - register your birthday");
-  session_send_system_line(ctx, "/soulmate            - list users sharing your birthday");
-  session_send_system_line(ctx, "/pair                - list users sharing your recorded OS");
-  session_send_system_line(ctx, "/connected           - privately list everyone connected");
-  session_send_system_line(ctx, "/grant <ip>          - grant operator access to an IP (LAN only)");
-  session_send_system_line(ctx, "/revoke <ip>         - revoke an IP's operator access (LAN top admin)");
-  session_send_system_line(ctx, "/poll <question>|<option...> - start or view a poll");
-  session_send_system_line(ctx,
-                           "/vote <label> <question>|<option...> - start or inspect a multiple-choice named poll (use /vote "
-                           "@close <label> to end it)");
-  session_send_system_line(ctx,
-                           "/vote-single <label> <question>|<option...> - start or inspect a single-choice named poll");
-  session_send_system_line(ctx, "/elect <label> <choice> - vote in a named poll by label");
-  session_send_system_line(ctx, "/poke <username>      - send a bell to call a user");
-  session_send_system_line(ctx, "/kick <username>      - disconnect a user (operator only)");
-  session_send_system_line(ctx, "/ban <username>       - ban a user (operator only)");
-  session_send_system_line(ctx, "/banlist             - list active bans (operator only)");
-  session_send_system_line(ctx, "/block <user|ip>      - hide messages from a user or IP locally (/block list to review)");
-  session_send_system_line(ctx, "/unblock <target|all> - remove a local block entry");
-  session_send_system_line(ctx, "/pardon <user|ip>     - remove a ban (operator only)");
-  session_send_system_line(ctx,
-                           "/good|/sad|/cool|/angry|/checked|/love|/wtf <id> - react to a message by number");
-  session_send_system_line(ctx, "/1 .. /5             - vote for an option in the active poll");
-  session_send_system_line(ctx,
-                           "/bbs [list|read|post|comment|regen|delete] - open the bulletin board system (see /bbs for details, finish "
-                           SSH_CHATTER_BBS_TERMINATOR " to post)");
-  session_send_system_line(ctx, "/suspend!            - suspend the active game (Ctrl+Z while playing)");
-  session_send_system_line(ctx, "Regular messages are shared with everyone.");
+  static const char *kHelpLines[] = {
+      "Available commands:",
+      "/help                 - show this message",
+      "/exit                 - leave the chat",
+      "/nick <name>          - change your display name",
+      "/pm <username> <message> - send a private message",
+      "/motd                - view the message of the day",
+      "/status <message|clear> - set your profile status",
+      "/showstatus <username> - view someone else's status",
+      "/users               - announce the number of connected users",
+      "/search <text>       - search for users whose name matches text",
+      "/chat <message-id>   - show a past message by its identifier",
+      "/image <url> [caption] - share an image link",
+      "/video <url> [caption] - share a video link",
+      "/audio <url> [caption] - share an audio clip",
+      "/files <url> [caption] - share a downloadable file",
+      "/asciiart           - open the ASCII art composer (max 64 lines, 1/min)",
+      "/game <tetris|liargame> - start a minigame in the chat (use /suspend! or Ctrl+Z to exit)",
+      "Up/Down arrows           - scroll recent chat history",
+      "/color (text;highlight[;bold]) - style your handle",
+      "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may be highlight or bold; use /systemcolor reset to restore defaults)",
+      "/set-trans-lang <language|off> - translate terminal output to a target language",
+      "/set-target-lang <language|off> - translate your outgoing messages",
+      "/weather <region> <city> - show the weather for a region and city",
+      "/translate <on|off>    - enable or disable translation after configuring languages",
+      "/gemini <on|off>       - toggle Gemini provider (operator only)",
+      "/chat-spacing <0-5>    - reserve blank lines before translated captions in chat",
+      "/palette <name>        - apply a predefined interface palette (/palette list)",
+      "/today               - discover today's function (once per day)",
+      "/date <timezone>     - view the server time in another timezone",
+      "/os <name>           - record the operating system you use",
+      "/getos <username>    - look up someone else's recorded operating system",
+      "/birthday YYYY-MM-DD - register your birthday",
+      "/soulmate            - list users sharing your birthday",
+      "/pair                - list users sharing your recorded OS",
+      "/connected           - privately list everyone connected",
+      "/grant <ip>          - grant operator access to an IP (LAN only)",
+      "/revoke <ip>         - revoke an IP's operator access (LAN top admin)",
+      "/poll <question>|<option...> - start or view a poll",
+      "/vote <label> <question>|<option...> - start or inspect a multiple-choice named poll (use /vote @close <label> to end it)",
+      "/vote-single <label> <question>|<option...> - start or inspect a single-choice named poll",
+      "/elect <label> <choice> - vote in a named poll by label",
+      "/poke <username>      - send a bell to call a user",
+      "/kick <username>      - disconnect a user (operator only)",
+      "/ban <username>       - ban a user (operator only)",
+      "/banlist             - list active bans (operator only)",
+      "/block <user|ip>      - hide messages from a user or IP locally (/block list to review)",
+      "/unblock <target|all> - remove a local block entry",
+      "/pardon <user|ip>     - remove a ban (operator only)",
+      "/good|/sad|/cool|/angry|/checked|/love|/wtf <id> - react to a message by number",
+      "/1 .. /5             - vote for an option in the active poll",
+      "/bbs [list|read|post|comment|regen|delete] - open the bulletin board system (see /bbs for details, finish "
+      SSH_CHATTER_BBS_TERMINATOR " to post)",
+      "/suspend!            - suspend the active game (Ctrl+Z while playing)",
+      "Regular messages are shared with everyone.",
+  };
+
+  session_send_system_lines_bulk(ctx, kHelpLines, sizeof(kHelpLines) / sizeof(kHelpLines[0]));
 }
 
 static bool session_line_is_exit_command(const char *line) {
@@ -10632,7 +10720,7 @@ static void session_handle_motd(session_ctx_t *ctx) {
     return;
   }
 
-  session_send_raw_text(ctx, motd);
+  session_send_raw_text_bulk(ctx, motd);
 }
 
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments) {
