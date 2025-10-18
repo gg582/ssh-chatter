@@ -12823,6 +12823,11 @@ static bool session_parse_command(const char *line, const char *command, const c
   size_t command_len = strlen(command);
 
   if (strncmp(line, command, command_len) == 0) {
+    const char boundary = line[command_len];
+    if (boundary != '\0' && boundary != ' ' && boundary != '\t') {
+      return false;
+    }
+
     const char *args = line + command_len;
 
     while (*args == ' ' || *args == '\t') {
