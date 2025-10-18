@@ -486,6 +486,8 @@ static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entr
 static void chat_room_broadcast_caption(chat_room_t *room, const char *message);
 static bool host_history_apply_reaction(host_t *host, uint64_t message_id, size_t reaction_index, chat_history_entry_t *updated_entry);
 static bool chat_history_entry_build_reaction_summary(const chat_history_entry_t *entry, char *buffer, size_t length);
+static bool session_queue_private_message_translation(session_ctx_t *ctx, const char *label,
+                                                      const char *message);
 static void session_send_private_message_line(session_ctx_t *ctx, const session_ctx_t *color_source,
                                               const char *label, const char *message);
 static session_ctx_t *chat_room_find_user(chat_room_t *room, const char *username);
@@ -5423,6 +5425,29 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
   return ch == 0x1b;
 }
 
+static bool session_queue_private_message_translation(session_ctx_t *ctx, const char *label, const char *message) {
+  if (ctx == NULL || label == NULL || message == NULL) {
+    return false;
+  }
+
+  if (!ctx->translation_enabled || !ctx->output_translation_enabled || ctx->output_translation_language[0] == '\0') {
+    return false;
+  }
+
+  char payload[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  size_t offset = 0U;
+  offset = session_append_fragment(payload, sizeof(payload), offset, label);
+  offset = session_append_fragment(payload, sizeof(payload), offset, ": ");
+  offset = session_append_fragment(payload, sizeof(payload), offset, message);
+  payload[offset < sizeof(payload) ? offset : sizeof(payload) - 1U] = '\0';
+
+  if (payload[0] == '\0') {
+    return false;
+  }
+
+  return session_translation_queue_caption(ctx, payload, 0U);
+}
+
 static void session_send_private_message_line(session_ctx_t *ctx, const session_ctx_t *color_source, const char *label,
                                               const char *message) {
   if (ctx == NULL || ctx->channel == NULL || color_source == NULL || label == NULL || message == NULL) {
@@ -5433,9 +5458,46 @@ static void session_send_private_message_line(session_ctx_t *ctx, const session_
   const char *color = color_source->user_color_code != NULL ? color_source->user_color_code : "";
   const char *bold = color_source->user_is_bold ? ANSI_BOLD : "";
 
-  char line[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(line, sizeof(line), "%s%s%s[%s]%s %s", highlight, bold, color, label, ANSI_RESET, message);
-  session_send_line(ctx, line);
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", message);
+
+  char stripped[SSH_CHATTER_MESSAGE_LIMIT];
+  bool user_suppress = translation_strip_no_translate_prefix(working, stripped, sizeof(stripped));
+  const char *render_message = user_suppress ? stripped : working;
+
+  bool translation_ready = !user_suppress && ctx->translation_enabled && ctx->output_translation_enabled &&
+                           ctx->output_translation_language[0] != '\0' && render_message[0] != '\0';
+
+  bool queued_translation = false;
+  if (translation_ready) {
+    queued_translation = session_queue_private_message_translation(ctx, label, render_message);
+  }
+
+  char line[SSH_CHATTER_MESSAGE_LIMIT + 64U];
+  snprintf(line, sizeof(line), "%s%s%s[%s]%s %s", highlight, bold, color, label, ANSI_RESET, render_message);
+
+  if (queued_translation) {
+    char decorated[sizeof(line) + 4U];
+    int decorated_written = snprintf(decorated, sizeof(decorated), "@nt %s", line);
+    if (decorated_written > 0 && (size_t)decorated_written < sizeof(decorated)) {
+      session_send_line(ctx, decorated);
+    } else {
+      session_send_line(ctx, line);
+    }
+    session_translation_flush_ready(ctx);
+  } else {
+    if (user_suppress) {
+      char decorated[sizeof(line) + 4U];
+      int decorated_written = snprintf(decorated, sizeof(decorated), "@nt %s", line);
+      if (decorated_written > 0 && (size_t)decorated_written < sizeof(decorated)) {
+        session_send_line(ctx, decorated);
+      } else {
+        session_send_line(ctx, line);
+      }
+    } else {
+      session_send_line(ctx, line);
+    }
+  }
 
   if (ctx != color_source && ctx->history_scroll_position == 0U) {
     session_refresh_input_line(ctx);
@@ -8406,6 +8468,9 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post) 
     return;
   }
 
+  bool previous_bbs_mode = ctx->in_bbs_mode;
+  ctx->in_bbs_mode = true;
+
   char header[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(header, sizeof(header), "BBS Post #%" PRIu64, post->id);
   session_render_separator(ctx, header);
@@ -8493,6 +8558,8 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post) 
   session_render_separator(ctx, "End");
 
   session_bbs_queue_translation(ctx, post);
+
+  ctx->in_bbs_mode = previous_bbs_mode;
 }
 
 // Show the BBS dashboard and mark the session as being in BBS mode.
@@ -8690,8 +8757,13 @@ static void session_bbs_commit_pending_post(session_ctx_t *ctx) {
 
   session_bbs_reset_pending_post(ctx);
 
+  bool previous_bbs_mode = ctx->in_bbs_mode;
+  ctx->in_bbs_mode = true;
+
   session_send_system_line(ctx, "Post created.");
   session_bbs_render_post(ctx, &snapshot);
+
+  ctx->in_bbs_mode = previous_bbs_mode;
 }
 
 static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
