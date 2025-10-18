@@ -42,6 +42,15 @@ bool ssh_chatter_backend_translate_line(const char *message, const char *target_
     return false;
   }
 
+  char stripped[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  if (translation_strip_no_translate_prefix(message, stripped, sizeof(stripped))) {
+    backend_copy_string(translated, translated_len, stripped);
+    if (detected_language != NULL && detected_len > 0U) {
+      detected_language[0] = '\0';
+    }
+    return true;
+  }
+
   ssh_chatter_backend_init();
 
   translation_placeholder_t placeholders[SSH_CHATTER_MAX_TRANSLATION_PLACEHOLDERS];

@@ -552,6 +552,8 @@ static void *session_translation_worker(void *arg);
 static void session_translation_queue_block(session_ctx_t *ctx, const char *text);
 static void session_translation_normalize_output(char *text);
 static bool session_argument_is_disable(const char *token);
+static void session_language_normalize(const char *input, char *normalized, size_t length);
+static bool session_language_equals(const char *lhs, const char *rhs);
 static bool session_fetch_weather_summary(const char *region, const char *city, char *summary, size_t summary_len);
 static void session_handle_poll(session_ctx_t *ctx, const char *arguments);
 static void session_handle_vote(session_ctx_t *ctx, size_t option_index);
@@ -3438,6 +3440,55 @@ static bool session_argument_is_disable(const char *token) {
          strcasecmp(token, "stop") == 0;
 }
 
+static void session_language_normalize(const char *input, char *normalized, size_t length) {
+  if (normalized == NULL || length == 0U) {
+    return;
+  }
+
+  normalized[0] = '\0';
+  if (input == NULL) {
+    return;
+  }
+
+  size_t out_idx = 0U;
+  for (size_t idx = 0U; input[idx] != '\0'; ++idx) {
+    unsigned char ch = (unsigned char)input[idx];
+    if (isspace(ch)) {
+      continue;
+    }
+
+    char lowered = (char)tolower(ch);
+    if (lowered == '_') {
+      lowered = '-';
+    }
+
+    if (out_idx + 1U >= length) {
+      break;
+    }
+
+    normalized[out_idx++] = lowered;
+  }
+
+  if (out_idx < length) {
+    normalized[out_idx] = '\0';
+  } else {
+    normalized[length - 1U] = '\0';
+  }
+}
+
+static bool session_language_equals(const char *lhs, const char *rhs) {
+  if (lhs == NULL || rhs == NULL) {
+    return false;
+  }
+
+  char normalized_lhs[SSH_CHATTER_LANG_NAME_LEN];
+  char normalized_rhs[SSH_CHATTER_LANG_NAME_LEN];
+  session_language_normalize(lhs, normalized_lhs, sizeof(normalized_lhs));
+  session_language_normalize(rhs, normalized_rhs, sizeof(normalized_rhs));
+
+  return strcmp(normalized_lhs, normalized_rhs) == 0;
+}
+
 typedef enum translation_job_type {
   TRANSLATION_JOB_CAPTION = 0,
   TRANSLATION_JOB_INPUT,
@@ -3541,6 +3592,11 @@ static void session_translation_clear_queue(session_ctx_t *ctx) {
 
 static bool session_translation_queue_caption(session_ctx_t *ctx, const char *message, size_t placeholder_lines) {
   if (ctx == NULL || message == NULL) {
+    return false;
+  }
+
+  char stripped[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  if (translation_strip_no_translate_prefix(message, stripped, sizeof(stripped))) {
     return false;
   }
 
@@ -4345,12 +4401,16 @@ static void session_send_line(session_ctx_t *ctx, const char *message) {
   strncpy(buffer, message, SSH_CHATTER_MESSAGE_LIMIT);
   buffer[SSH_CHATTER_MESSAGE_LIMIT] = '\0';
 
-  session_write_rendered_line(ctx, buffer);
+  char stripped[SSH_CHATTER_MESSAGE_LIMIT + 1U];
+  bool suppress_translation = translation_strip_no_translate_prefix(buffer, stripped, sizeof(stripped));
+  const char *render_text = suppress_translation ? stripped : buffer;
+
+  session_write_rendered_line(ctx, render_text);
 
   size_t placeholder_lines = 0U;
-  const bool translation_ready = !ctx->translation_suppress_output && ctx->translation_enabled &&
+  const bool translation_ready = !suppress_translation && !ctx->translation_suppress_output && ctx->translation_enabled &&
                                  ctx->output_translation_enabled && ctx->output_translation_language[0] != '\0' &&
-                                 buffer[0] != '\0';
+                                 render_text[0] != '\0';
   if (translation_ready && !ctx->in_bbs_mode) {
     size_t spacing = ctx->translation_caption_spacing;
     if (spacing > 8U) {
@@ -4359,7 +4419,7 @@ static void session_send_line(session_ctx_t *ctx, const char *message) {
     placeholder_lines = spacing + 1U;
   }
 
-  if (translation_ready && session_translation_queue_caption(ctx, buffer, placeholder_lines)) {
+  if (translation_ready && session_translation_queue_caption(ctx, render_text, placeholder_lines)) {
     if (placeholder_lines > 0U) {
       session_translation_reserve_placeholders(ctx, placeholder_lines);
     }
@@ -5797,6 +5857,13 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
     return;
   }
 
+  bool translation_bypass = false;
+  char bypass_buffer[SSH_CHATTER_MAX_INPUT_LEN];
+  if (translation_strip_no_translate_prefix(normalized, bypass_buffer, sizeof(bypass_buffer))) {
+    translation_bypass = true;
+    snprintf(normalized, sizeof(normalized), "%s", bypass_buffer);
+  }
+
   if (normalized[0] == '\0') {
     return;
   }
@@ -5811,7 +5878,7 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  if (normalized[0] == '/') {
+  if (!translation_bypass && normalized[0] == '/') {
     session_dispatch_command(ctx, normalized);
     return;
   }
@@ -5843,7 +5910,8 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
   ctx->last_message_time = now;
   ctx->has_last_message_time = true;
 
-  if (ctx->translation_enabled && ctx->input_translation_enabled && ctx->input_translation_language[0] != '\0') {
+  if (!translation_bypass && ctx->translation_enabled && ctx->input_translation_enabled &&
+      ctx->input_translation_language[0] != '\0') {
     if (session_translation_queue_input(ctx, normalized)) {
       return;
     }
@@ -9955,6 +10023,24 @@ static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *argume
     return;
   }
 
+  if (session_language_equals(ctx->output_translation_language, working)) {
+    snprintf(ctx->output_translation_language, sizeof(ctx->output_translation_language), "%s", working);
+    ctx->output_translation_enabled = true;
+    session_translation_clear_queue(ctx);
+
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "Terminal output will continue to be translated to %s.",
+             ctx->output_translation_language);
+    session_send_system_line(ctx, message);
+    if (!ctx->translation_enabled) {
+      session_send_system_line(ctx, "Translation is currently disabled; enable it with /translate on.");
+    }
+    if (ctx->owner != NULL) {
+      host_store_translation_preferences(ctx->owner, ctx);
+    }
+    return;
+  }
+
   char preview[SSH_CHATTER_MESSAGE_LIMIT];
   char detected[SSH_CHATTER_LANG_NAME_LEN];
   if (!translator_translate("Terminal messages will be translated for you.", working, preview, sizeof(preview), detected,
@@ -10022,6 +10108,24 @@ static void session_handle_set_target_lang(session_ctx_t *ctx, const char *argum
     ctx->input_translation_language[0] = '\0';
     ctx->last_detected_input_language[0] = '\0';
     session_send_system_line(ctx, "Outgoing message translation disabled.");
+    if (ctx->owner != NULL) {
+      host_store_translation_preferences(ctx->owner, ctx);
+    }
+    return;
+  }
+
+  if (session_language_equals(ctx->input_translation_language, working)) {
+    snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s", working);
+    ctx->input_translation_enabled = true;
+    ctx->last_detected_input_language[0] = '\0';
+
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "Outgoing messages will continue to be translated to %s.",
+             ctx->input_translation_language);
+    session_send_system_line(ctx, message);
+    if (!ctx->translation_enabled) {
+      session_send_system_line(ctx, "Translation is currently disabled; enable it with /translate on.");
+    }
     if (ctx->owner != NULL) {
       host_store_translation_preferences(ctx->owner, ctx);
     }
