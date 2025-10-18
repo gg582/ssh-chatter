@@ -470,6 +470,8 @@ static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text);
 static void session_send_system_lines_bulk(session_ctx_t *ctx, const char *const *lines, size_t line_count);
 static void session_render_banner(session_ctx_t *ctx);
 static void session_render_separator(session_ctx_t *ctx, const char *label);
+static void session_clear_screen(session_ctx_t *ctx);
+static void session_bbs_prepare_canvas(session_ctx_t *ctx);
 static void session_render_prompt(session_ctx_t *ctx, bool include_separator);
 static void session_refresh_input_line(session_ctx_t *ctx);
 static void session_set_input_text(session_ctx_t *ctx, const char *text);
@@ -658,7 +660,7 @@ static bbs_post_t *host_find_bbs_post_locked(host_t *host, uint64_t id);
 static bbs_post_t *host_allocate_bbs_post_locked(host_t *host);
 static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
 static void session_bbs_queue_translation(session_ctx_t *ctx, const bbs_post_t *post);
-static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post);
+static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, const char *notice);
 static bool session_asciiart_cooldown_active(session_ctx_t *ctx, struct timespec *now, long *remaining_seconds);
 static void session_asciiart_reset(session_ctx_t *ctx);
 static void session_asciiart_begin(session_ctx_t *ctx);
@@ -5810,6 +5812,24 @@ static void session_render_separator(session_ctx_t *ctx, const char *label) {
   session_send_line(ctx, line);
 }
 
+static void session_clear_screen(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->channel == NULL) {
+    return;
+  }
+
+  static const char kClearSequence[] = "\033[2J\033[H";
+  ssh_channel_write(ctx->channel, kClearSequence, sizeof(kClearSequence) - 1U);
+}
+
+static void session_bbs_prepare_canvas(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  session_clear_screen(ctx);
+  session_apply_background_fill(ctx);
+}
+
 static void session_render_banner(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return;
@@ -9513,14 +9533,21 @@ static void session_bbs_queue_translation(session_ctx_t *ctx, const bbs_post_t *
 }
 
 // Render an ASCII framed view of a post, including metadata and comments.
-static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post) {
+static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, const char *notice) {
   if (ctx == NULL || post == NULL || !post->in_use) {
     return;
   }
 
+  session_bbs_prepare_canvas(ctx);
+
   char header[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(header, sizeof(header), "BBS Post #%" PRIu64, post->id);
   session_render_separator(ctx, header);
+
+  if (notice != NULL && notice[0] != '\0') {
+    session_send_system_line(ctx, notice);
+    session_send_system_line(ctx, "");
+  }
 
   char created_buffer[32];
   char bumped_buffer[32];
@@ -9602,7 +9629,13 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post) 
     session_send_system_line(ctx, "");
   }
 
-  session_render_separator(ctx, "End");
+  session_send_system_line(ctx, "");
+  session_render_separator(ctx, "Write a comment");
+  char reply_instruction[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(reply_instruction, sizeof(reply_instruction),
+           "Reply with /bbs comment %" PRIu64 "|<message> (or /bbs exit to leave this view).", post->id);
+  session_send_system_line(ctx, reply_instruction);
+  session_send_system_line(ctx, "Need a new thread? Use /bbs post <title>[|tags...] instead.");
 
   session_bbs_queue_translation(ctx, post);
 }
@@ -9613,6 +9646,7 @@ static void session_bbs_show_dashboard(session_ctx_t *ctx) {
     return;
   }
   ctx->in_bbs_mode = true;
+  session_bbs_prepare_canvas(ctx);
   session_render_separator(ctx, "BBS Dashboard");
   session_send_system_line(ctx,
                            "Commands: list, read <id>, post <title> [tags...], comment <id>|<text>, regen <id>, delete <id>, exit");
@@ -9739,7 +9773,7 @@ static void session_bbs_read(session_ctx_t *ctx, uint64_t id) {
     return;
   }
 
-  session_bbs_render_post(ctx, &snapshot);
+  session_bbs_render_post(ctx, &snapshot, NULL);
 }
 
 // Create a new post using the provided argument format.
@@ -9802,8 +9836,7 @@ static void session_bbs_commit_pending_post(session_ctx_t *ctx) {
 
   session_bbs_reset_pending_post(ctx);
 
-  session_send_system_line(ctx, "Post created.");
-  session_bbs_render_post(ctx, &snapshot);
+  session_bbs_render_post(ctx, &snapshot, "Post created.");
 }
 
 static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
@@ -10085,8 +10118,7 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   host_bbs_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 
-  session_send_system_line(ctx, "Comment added.");
-  session_bbs_render_post(ctx, &snapshot);
+  session_bbs_render_post(ctx, &snapshot, "Comment added.");
 }
 
 static void session_bbs_delete(session_ctx_t *ctx, uint64_t id) {
@@ -10143,8 +10175,7 @@ static void session_bbs_regen_post(session_ctx_t *ctx, uint64_t id) {
   host_bbs_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 
-  session_send_system_line(ctx, "Post bumped to the top.");
-  session_bbs_render_post(ctx, &snapshot);
+  session_bbs_render_post(ctx, &snapshot, "Post bumped to the top.");
 }
 
 static void session_asciiart_reset(session_ctx_t *ctx) {
@@ -10383,6 +10414,7 @@ static void session_handle_bbs(session_ctx_t *ctx, const char *arguments) {
   ctx->in_bbs_mode = true;
 
   if (strcmp(command, "list") == 0) {
+    session_bbs_prepare_canvas(ctx);
     session_bbs_list(ctx);
   } else if (strcmp(command, "read") == 0) {
     if (rest == NULL || rest[0] == '\0') {
