@@ -531,6 +531,7 @@ static void session_handle_status(session_ctx_t *ctx, const char *arguments);
 static void session_handle_showstatus(session_ctx_t *ctx, const char *arguments);
 static void session_handle_weather(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
+static void session_handle_ban_list(session_ctx_t *ctx, const char *arguments);
 static void session_handle_kick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_usercount(session_ctx_t *ctx);
 static bool host_username_reserved(host_t *host, const char *username);
@@ -6148,6 +6149,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/poke <username>      - send a bell to call a user");
   session_send_system_line(ctx, "/kick <username>      - disconnect a user (operator only)");
   session_send_system_line(ctx, "/ban <username>       - ban a user (operator only)");
+  session_send_system_line(ctx, "/banlist             - list active bans (operator only)");
   session_send_system_line(ctx, "/block <user|ip>      - hide messages from a user or IP locally (/block list to review)");
   session_send_system_line(ctx, "/unblock <target|all> - remove a local block entry");
   session_send_system_line(ctx, "/pardon <user|ip>     - remove a ban (operator only)");
@@ -6432,6 +6434,74 @@ static void session_handle_ban(session_ctx_t *ctx, const char *arguments) {
     target->should_exit = true;
     ssh_channel_send_eof(target->channel);
     ssh_channel_close(target->channel);
+  }
+}
+
+static void session_handle_ban_list(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (!ctx->user.is_operator) {
+    session_send_system_line(ctx, "You are not allowed to view the ban list.");
+    return;
+  }
+
+  if (arguments != NULL) {
+    while (*arguments != '\0' && isspace((unsigned char)*arguments)) {
+      ++arguments;
+    }
+    if (*arguments != '\0') {
+      session_send_system_line(ctx, "Usage: /banlist");
+      return;
+    }
+  }
+
+  host_t *host = ctx->owner;
+  if (host == NULL) {
+    session_send_system_line(ctx, "Host unavailable.");
+    return;
+  }
+
+  typedef struct ban_snapshot {
+    char username[SSH_CHATTER_USERNAME_LEN];
+    char ip[SSH_CHATTER_IP_LEN];
+  } ban_snapshot_t;
+
+  ban_snapshot_t entries[SSH_CHATTER_MAX_BANS];
+  size_t entry_count = 0U;
+
+  pthread_mutex_lock(&host->lock);
+  entry_count = host->ban_count;
+  if (entry_count > SSH_CHATTER_MAX_BANS) {
+    entry_count = SSH_CHATTER_MAX_BANS;
+  }
+  for (size_t idx = 0U; idx < entry_count; ++idx) {
+    snprintf(entries[idx].username, sizeof(entries[idx].username), "%s", host->bans[idx].username);
+    snprintf(entries[idx].ip, sizeof(entries[idx].ip), "%s", host->bans[idx].ip);
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (entry_count == 0U) {
+    session_send_system_line(ctx, "No active bans.");
+    return;
+  }
+
+  session_send_system_line(ctx, "Active bans:");
+  for (size_t idx = 0U; idx < entry_count; ++idx) {
+    const char *username = entries[idx].username;
+    const char *ip = entries[idx].ip;
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    if (username[0] != '\0' && ip[0] != '\0') {
+      snprintf(message, sizeof(message), "%zu. user: %s, ip: %s", idx + 1U, username, ip);
+    } else if (username[0] != '\0') {
+      snprintf(message, sizeof(message), "%zu. user: %s", idx + 1U, username);
+    } else if (ip[0] != '\0') {
+      snprintf(message, sizeof(message), "%zu. ip: %s", idx + 1U, ip);
+    } else {
+      snprintf(message, sizeof(message), "%zu. <empty>", idx + 1U);
+    }
+    session_send_system_line(ctx, message);
   }
 }
 
@@ -11811,6 +11881,11 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
 
   else if (session_parse_command(line, "/game", &args)) {
     session_handle_game(ctx, args);
+    return;
+  }
+
+  else if (session_parse_command(line, "/banlist", &args)) {
+    session_handle_ban_list(ctx, args);
     return;
   }
 
