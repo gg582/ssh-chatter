@@ -55,6 +55,8 @@
 #define SSH_CHATTER_TETRIS_GRAVITY_THRESHOLD 5U
 #define SSH_CHATTER_TETRIS_GRAVITY_RATE 1U
 #define SSH_CHATTER_TETRIS_GRAVITY_INTERVAL_NS 100000000ULL
+#define SSH_CHATTER_TETRIS_LINES_PER_ROUND 10U
+#define SSH_CHATTER_TETRIS_MAX_ROUNDS 3U
 
 struct host;
 struct session_ctx;
@@ -162,6 +164,8 @@ typedef struct tetris_game_state {
   bool gravity_timer_initialized;
   struct timespec gravity_timer_last;
   uint64_t gravity_timer_accumulator_ns;
+  unsigned round;
+  unsigned next_round_line_goal;
   bool input_escape_active;
   char input_escape_buffer[8];
   size_t input_escape_length;

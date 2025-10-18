@@ -650,6 +650,8 @@ static uint32_t session_game_random(session_ctx_t *ctx);
 static int session_game_random_range(session_ctx_t *ctx, int max);
 static void session_game_start_tetris(session_ctx_t *ctx);
 static void session_game_tetris_reset(tetris_game_state_t *state);
+static void session_game_tetris_apply_round_settings(tetris_game_state_t *state);
+static void session_game_tetris_handle_round_progress(session_ctx_t *ctx);
 static void session_game_tetris_fill_bag(session_ctx_t *ctx);
 static int session_game_tetris_take_piece(session_ctx_t *ctx);
 static bool session_game_tetris_spawn_piece(session_ctx_t *ctx);
@@ -9358,15 +9360,47 @@ static void session_game_tetris_reset(tetris_game_state_t *state) {
     state->bag[idx] = (int)idx;
   }
   state->gravity_counter = 0U;
-  state->gravity_threshold = SSH_CHATTER_TETRIS_GRAVITY_THRESHOLD;
   state->gravity_rate = SSH_CHATTER_TETRIS_GRAVITY_RATE;
   state->gravity_timer_initialized = false;
   state->gravity_timer_last.tv_sec = 0;
   state->gravity_timer_last.tv_nsec = 0;
   state->gravity_timer_accumulator_ns = 0U;
+  state->round = 1U;
+  state->next_round_line_goal = SSH_CHATTER_TETRIS_LINES_PER_ROUND;
+  session_game_tetris_apply_round_settings(state);
   state->input_escape_active = false;
   state->input_escape_length = 0U;
   memset(state->input_escape_buffer, 0, sizeof(state->input_escape_buffer));
+}
+
+static void session_game_tetris_apply_round_settings(tetris_game_state_t *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  if (state->round == 0U) {
+    state->round = 1U;
+  }
+
+  unsigned reduction = state->round > 0U ? state->round - 1U : 0U;
+  unsigned base_threshold = SSH_CHATTER_TETRIS_GRAVITY_THRESHOLD;
+  unsigned threshold = base_threshold;
+  if (reduction >= base_threshold) {
+    threshold = 1U;
+  } else {
+    threshold = base_threshold - reduction;
+  }
+
+  if (threshold == 0U) {
+    threshold = 1U;
+  }
+
+  state->gravity_threshold = threshold;
+  state->gravity_counter = 0U;
+  state->gravity_timer_initialized = false;
+  state->gravity_timer_last.tv_sec = 0;
+  state->gravity_timer_last.tv_nsec = 0;
+  state->gravity_timer_accumulator_ns = 0U;
 }
 
 static void session_game_tetris_fill_bag(session_ctx_t *ctx) {
@@ -9813,6 +9847,30 @@ static void session_game_tetris_clear_lines(session_ctx_t *ctx, unsigned *cleare
   }
 }
 
+static void session_game_tetris_handle_round_progress(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
+    return;
+  }
+
+  tetris_game_state_t *state = &ctx->game.tetris;
+  while (state->round < SSH_CHATTER_TETRIS_MAX_ROUNDS && state->lines_cleared >= state->next_round_line_goal) {
+    state->round += 1U;
+    state->next_round_line_goal += SSH_CHATTER_TETRIS_LINES_PER_ROUND;
+    session_game_tetris_apply_round_settings(state);
+
+    char announcement[SSH_CHATTER_MESSAGE_LIMIT];
+    if (state->round >= SSH_CHATTER_TETRIS_MAX_ROUNDS) {
+      snprintf(announcement, sizeof(announcement), "Round %u reached! Gravity is at maximum speed.", state->round);
+    } else {
+      snprintf(announcement, sizeof(announcement), "Round %u reached! Blocks will fall faster.", state->round);
+    }
+    bool previous_translation_suppress = ctx->translation_suppress_output;
+    ctx->translation_suppress_output = true;
+    session_send_system_line(ctx, announcement);
+    ctx->translation_suppress_output = previous_translation_suppress;
+  }
+}
+
 static void session_game_tetris_lock_piece(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
     return;
@@ -9842,6 +9900,7 @@ static void session_game_tetris_lock_piece(session_ctx_t *ctx) {
   if (cleared > 0U) {
     state->lines_cleared += cleared;
     state->score += cleared * 100U;
+    session_game_tetris_handle_round_progress(ctx);
   }
 
   if (!session_game_tetris_spawn_piece(ctx)) {
@@ -9862,7 +9921,17 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];
   char next_char = TETROMINO_DISPLAY_CHARS[state->next_piece % 7];
-  snprintf(header, sizeof(header), "Score: %u   Lines: %u   Next: %c", state->score, state->lines_cleared, next_char);
+  if (state->round < SSH_CHATTER_TETRIS_MAX_ROUNDS) {
+    unsigned lines_remaining = 0U;
+    if (state->next_round_line_goal > state->lines_cleared) {
+      lines_remaining = state->next_round_line_goal - state->lines_cleared;
+    }
+    snprintf(header, sizeof(header), "Score: %u   Lines: %u   Round: %u/%u (next in %u)   Next: %c", state->score,
+             state->lines_cleared, state->round, SSH_CHATTER_TETRIS_MAX_ROUNDS, lines_remaining, next_char);
+  } else {
+    snprintf(header, sizeof(header), "Score: %u   Lines: %u   Round: %u/%u (max speed)   Next: %c", state->score,
+             state->lines_cleared, state->round, SSH_CHATTER_TETRIS_MAX_ROUNDS, next_char);
+  }
   session_send_system_line(ctx, header);
   session_send_system_line(ctx, "Controls: left, right, down, Ctrl+R rotate, drop. Blank line = down.");
 
@@ -9984,6 +10053,10 @@ static void session_game_start_tetris(session_ctx_t *ctx) {
   session_send_system_line(ctx,
                            "Tetris started. Pieces fall on their own — use WASD or the arrow keys (W/Up rotate, S/Down soft"
                            " drop, A/Left, D/Right), space for a hard drop, and Ctrl+R to rotate. Ctrl+Z or /suspend! exits.");
+  char round_message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(round_message, sizeof(round_message), "Round 1/%u: Clear %u lines to reach the next round.",
+           SSH_CHATTER_TETRIS_MAX_ROUNDS, SSH_CHATTER_TETRIS_LINES_PER_ROUND);
+  session_send_system_line(ctx, round_message);
   session_game_tetris_render(ctx);
 
   ctx->translation_suppress_output = previous_translation_suppress;
@@ -12495,6 +12568,9 @@ static void *session_thread(void *arg) {
     if (read_result == 0) {
       if (ctx->channel != NULL && (ssh_channel_is_eof(ctx->channel) || !ssh_channel_is_open(ctx->channel))) {
         break;
+      }
+      if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS) {
+        session_game_tetris_process_timeout(ctx);
       }
       continue;
     }
