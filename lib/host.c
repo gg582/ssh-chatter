@@ -5984,7 +5984,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/video <url> [caption] - share a video link");
   session_send_system_line(ctx, "/audio <url> [caption] - share an audio clip");
   session_send_system_line(ctx, "/files <url> [caption] - share a downloadable file");
-  session_send_system_line(ctx, "/asciiart           - open the ASCII art composer (max 48 lines, 1/min)");
+  session_send_system_line(ctx, "/asciiart           - open the ASCII art composer (max 64 lines, 1/min)");
   session_send_system_line(ctx,
                            "/game <tetris|liargame> - start a minigame in the chat (use /suspend! or Ctrl+Z to exit)");
   session_send_system_line(ctx, "Up/Down arrows           - scroll recent chat history");
@@ -9124,7 +9124,7 @@ static void session_asciiart_begin(session_ctx_t *ctx) {
   session_asciiart_reset(ctx);
   ctx->asciiart_pending = true;
 
-  session_send_system_line(ctx, "ASCII art composer ready (max 48 lines).");
+  session_send_system_line(ctx, "ASCII art composer ready (max 64 lines).");
   session_send_system_line(ctx,
                            "Type " SSH_CHATTER_ASCIIART_TERMINATOR " on a line by itself or press Ctrl+S to finish.");
   session_send_system_line(ctx, "Press Ctrl+A to cancel the draft.");
