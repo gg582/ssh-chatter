@@ -549,6 +549,9 @@ static void session_translation_clear_queue(session_ctx_t *ctx);
 static bool session_translation_worker_ensure(session_ctx_t *ctx);
 static void session_translation_worker_shutdown(session_ctx_t *ctx);
 static void *session_translation_worker(void *arg);
+static size_t session_translation_count_lines(const char *text);
+static void session_translation_queue_block(session_ctx_t *ctx, const char *text);
+static void session_translation_normalize_output(char *text);
 static bool session_argument_is_disable(const char *token);
 static bool session_fetch_weather_summary(const char *region, const char *city, char *summary, size_t summary_len);
 static void session_handle_poll(session_ctx_t *ctx, const char *arguments);
@@ -3587,6 +3590,88 @@ static void session_translation_reserve_placeholders(session_ctx_t *ctx, size_t 
   }
 }
 
+static size_t session_translation_count_lines(const char *text) {
+  if (text == NULL || text[0] == '\0') {
+    return 0U;
+  }
+
+  size_t lines = 0U;
+  const char *cursor = text;
+  for (;;) {
+    ++lines;
+    const char *newline = strchr(cursor, '\n');
+    if (newline == NULL) {
+      break;
+    }
+
+    cursor = newline + 1;
+    if (*cursor == '\r') {
+      ++cursor;
+    }
+
+    if (*cursor == '\0') {
+      ++lines;
+      break;
+    }
+  }
+
+  return lines;
+}
+
+static void session_translation_queue_block(session_ctx_t *ctx, const char *text) {
+  if (ctx == NULL || text == NULL || text[0] == '\0') {
+    return;
+  }
+
+  size_t lines = session_translation_count_lines(text);
+  if (lines == 0U) {
+    lines = 1U;
+  }
+
+  size_t spacing = ctx->translation_caption_spacing;
+  if (spacing > 8U) {
+    spacing = 8U;
+  }
+
+  size_t placeholder_lines = lines + spacing;
+  if (session_translation_queue_caption(ctx, text, placeholder_lines)) {
+    if (placeholder_lines > 0U) {
+      session_translation_reserve_placeholders(ctx, placeholder_lines);
+    }
+  }
+}
+
+static void session_translation_normalize_output(char *text) {
+  if (text == NULL) {
+    return;
+  }
+
+  size_t length = strlen(text);
+  size_t idx = 0U;
+  while (idx < length) {
+    char ch = text[idx];
+    if ((ch == 'u' || ch == 'U') && idx + 4U < length && text[idx + 1U] == '0' && text[idx + 2U] == '0' &&
+        text[idx + 3U] == '3' && (text[idx + 4U] == 'c' || text[idx + 4U] == 'C' || text[idx + 4U] == 'e' ||
+                                   text[idx + 4U] == 'E')) {
+      char replacement = (text[idx + 4U] == 'c' || text[idx + 4U] == 'C') ? '<' : '>';
+      size_t remove_start = idx;
+      if (remove_start > 0U && text[remove_start - 1U] == '\\') {
+        --remove_start;
+      }
+
+      size_t remove_end = idx + 5U;
+      size_t removed = remove_end - remove_start;
+      text[remove_start] = replacement;
+      memmove(text + remove_start + 1U, text + remove_end, length - remove_end + 1U);
+      length -= (removed - 1U);
+      idx = remove_start + 1U;
+      continue;
+    }
+
+    ++idx;
+  }
+}
+
 static void session_translation_flush_ready(session_ctx_t *ctx) {
   if (ctx == NULL || !ctx->translation_mutex_initialized) {
     return;
@@ -3619,13 +3704,35 @@ static void session_translation_flush_ready(session_ctx_t *ctx) {
 
     if (translation_active) {
       const char *body = ready->translated;
-      char annotated[SSH_CHATTER_TRANSLATION_WORKING_LEN + 64U];
       if (body[0] == '\0') {
         body = "translation unavailable.";
       }
-      snprintf(annotated, sizeof(annotated), "    \342\206\263 %s", body);
-      session_render_caption_with_offset(ctx, annotated, move_up);
-      refreshed = true;
+
+      const char *line_cursor = body;
+      size_t line_index = 0U;
+      while (line_cursor != NULL) {
+        const char *line_end = strchr(line_cursor, '\n');
+        size_t line_length = (line_end != NULL) ? (size_t)(line_end - line_cursor) : strlen(line_cursor);
+        if (line_length >= SSH_CHATTER_TRANSLATION_WORKING_LEN) {
+          line_length = SSH_CHATTER_TRANSLATION_WORKING_LEN - 1U;
+        }
+
+        char line_fragment[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+        memcpy(line_fragment, line_cursor, line_length);
+        line_fragment[line_length] = '\0';
+
+        char annotated[SSH_CHATTER_TRANSLATION_WORKING_LEN + 64U];
+        snprintf(annotated, sizeof(annotated), "    \342\206\263 %s", line_fragment);
+        session_render_caption_with_offset(ctx, annotated, line_index == 0U ? move_up : 0U);
+        refreshed = true;
+
+        if (line_end == NULL) {
+          break;
+        }
+
+        line_cursor = line_end + 1;
+        ++line_index;
+      }
     }
 
     if (placeholder_lines > 0U) {
@@ -3701,6 +3808,7 @@ static void session_translation_publish_result(session_ctx_t *ctx, const transla
   }
 
   snprintf(result->translated, sizeof(result->translated), "%s", message);
+  session_translation_normalize_output(result->translated);
 
   pthread_mutex_lock(&ctx->translation_mutex);
   result->next = NULL;
@@ -4124,8 +4232,9 @@ static void session_send_line(session_ctx_t *ctx, const char *message) {
   session_write_rendered_line(ctx, buffer);
 
   size_t placeholder_lines = 0U;
-  const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
-                                 ctx->output_translation_language[0] != '\0' && buffer[0] != '\0';
+  const bool translation_ready = !ctx->translation_suppress_output && ctx->translation_enabled &&
+                                 ctx->output_translation_enabled && ctx->output_translation_language[0] != '\0' &&
+                                 buffer[0] != '\0';
   if (translation_ready && !ctx->in_bbs_mode) {
     size_t spacing = ctx->translation_caption_spacing;
     if (spacing > 8U) {
@@ -4134,7 +4243,7 @@ static void session_send_line(session_ctx_t *ctx, const char *message) {
     placeholder_lines = spacing + 1U;
   }
 
-  if (session_translation_queue_caption(ctx, buffer, placeholder_lines)) {
+  if (translation_ready && session_translation_queue_caption(ctx, buffer, placeholder_lines)) {
     if (placeholder_lines > 0U) {
       session_translation_reserve_placeholders(ctx, placeholder_lines);
     }
@@ -4214,6 +4323,16 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
     return;
   }
 
+  const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
+                                 ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode;
+  const bool multiline_message = strchr(message, '\n') != NULL;
+  bool translation_block = false;
+  bool previous_suppress = ctx->translation_suppress_output;
+  if (translation_ready && multiline_message && !ctx->translation_suppress_output) {
+    translation_block = true;
+    ctx->translation_suppress_output = true;
+  }
+
   const char *cursor = message;
   for (;;) {
     const char *newline = strchr(cursor, '\n');
@@ -4255,6 +4374,17 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
       break;
     }
   }
+
+  if (translation_block) {
+    ctx->translation_suppress_output = previous_suppress;
+    if (!ctx->translation_suppress_output) {
+      session_translation_queue_block(ctx, message);
+      session_translation_flush_ready(ctx);
+    }
+    return;
+  }
+
+  ctx->translation_suppress_output = previous_suppress;
 }
 
 static void session_send_raw_text(session_ctx_t *ctx, const char *text) {

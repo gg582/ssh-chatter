@@ -30,8 +30,8 @@ static bool g_curl_initialised = false;
 static char g_last_error[256] = "";
 static struct timespec g_next_allowed_request = {0, 0};
 
-#define TRANSLATOR_RATE_LIMIT_INTERVAL_NS 400000000L
-#define TRANSLATOR_RATE_LIMIT_PENALTY_NS 1200000000L
+#define TRANSLATOR_RATE_LIMIT_INTERVAL_NS 800000000L
+#define TRANSLATOR_RATE_LIMIT_PENALTY_NS 3000000000L
 
 static struct timespec translator_timespec_now(void) {
   struct timespec now = {0, 0};
