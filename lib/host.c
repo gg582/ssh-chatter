@@ -582,6 +582,7 @@ static bool session_translation_worker_ensure(session_ctx_t *ctx);
 static void session_translation_worker_shutdown(session_ctx_t *ctx);
 static void *session_translation_worker(void *arg);
 static void session_translation_queue_block(session_ctx_t *ctx, const char *text);
+static bool session_translation_queue_private_message(session_ctx_t *ctx, session_ctx_t *target, const char *message);
 static void session_translation_normalize_output(char *text);
 static void host_handle_translation_quota_exhausted(host_t *host);
 static void session_handle_translation_quota_exhausted(session_ctx_t *ctx, const char *error_detail);
@@ -4036,6 +4037,7 @@ static bool session_language_equals(const char *lhs, const char *rhs) {
 typedef enum translation_job_type {
   TRANSLATION_JOB_CAPTION = 0,
   TRANSLATION_JOB_INPUT,
+  TRANSLATION_JOB_PRIVATE_MESSAGE,
 } translation_job_type_t;
 
 typedef struct translation_job {
@@ -4052,6 +4054,12 @@ typedef struct translation_job {
     struct {
       char original[SSH_CHATTER_TRANSLATION_WORKING_LEN];
     } input;
+    struct {
+      char original[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+      char target_name[SSH_CHATTER_USERNAME_LEN];
+      char to_target_label[SSH_CHATTER_MESSAGE_LIMIT];
+      char to_sender_label[SSH_CHATTER_MESSAGE_LIMIT];
+    } pm;
   } data;
 } translation_job_t;
 
@@ -4063,6 +4071,9 @@ typedef struct translation_result {
   char detected_language[SSH_CHATTER_LANG_NAME_LEN];
   char original[SSH_CHATTER_TRANSLATION_WORKING_LEN];
   char error_message[128];
+  char pm_target_name[SSH_CHATTER_USERNAME_LEN];
+  char pm_to_target_label[SSH_CHATTER_MESSAGE_LIMIT];
+  char pm_to_sender_label[SSH_CHATTER_MESSAGE_LIMIT];
   struct translation_result *next;
 } translation_result_t;
 
@@ -4219,6 +4230,47 @@ static void session_translation_queue_block(session_ctx_t *ctx, const char *text
   }
 
   (void)session_translation_queue_caption(ctx, text, 0U);
+}
+
+static bool session_translation_queue_private_message(session_ctx_t *ctx, session_ctx_t *target, const char *message) {
+  if (ctx == NULL || target == NULL || message == NULL) {
+    return false;
+  }
+
+  if (!ctx->translation_enabled || !ctx->input_translation_enabled || ctx->input_translation_language[0] == '\0' ||
+      message[0] == '\0') {
+    return false;
+  }
+
+  if (!session_translation_worker_ensure(ctx)) {
+    return false;
+  }
+
+  translation_job_t *job = calloc(1U, sizeof(*job));
+  if (job == NULL) {
+    return false;
+  }
+
+  job->type = TRANSLATION_JOB_PRIVATE_MESSAGE;
+  job->placeholder_lines = 0U;
+  snprintf(job->target_language, sizeof(job->target_language), "%s", ctx->input_translation_language);
+  snprintf(job->data.pm.original, sizeof(job->data.pm.original), "%s", message);
+  snprintf(job->data.pm.target_name, sizeof(job->data.pm.target_name), "%s", target->user.name);
+  snprintf(job->data.pm.to_target_label, sizeof(job->data.pm.to_target_label), "%s -> you", ctx->user.name);
+  snprintf(job->data.pm.to_sender_label, sizeof(job->data.pm.to_sender_label), "you -> %s", target->user.name);
+
+  pthread_mutex_lock(&ctx->translation_mutex);
+  job->next = NULL;
+  if (ctx->translation_pending_tail != NULL) {
+    ctx->translation_pending_tail->next = job;
+  } else {
+    ctx->translation_pending_head = job;
+  }
+  ctx->translation_pending_tail = job;
+  pthread_cond_signal(&ctx->translation_cond);
+  pthread_mutex_unlock(&ctx->translation_mutex);
+
+  return true;
 }
 
 static bool session_translation_queue_input(session_ctx_t *ctx, const char *text) {
@@ -4431,6 +4483,44 @@ static void session_translation_flush_ready(session_ctx_t *ctx) {
       continue;
     }
 
+    if (ready->type == TRANSLATION_JOB_PRIVATE_MESSAGE) {
+      session_ctx_t *target = NULL;
+      if (ctx->owner != NULL && ready->pm_target_name[0] != '\0') {
+        target = chat_room_find_user(&ctx->owner->room, ready->pm_target_name);
+      }
+
+      if (ready->success) {
+        if (target != NULL) {
+          session_send_private_message_line(target, ctx, ready->pm_to_target_label, ready->translated);
+        } else if (ready->pm_target_name[0] != '\0') {
+          char notice[SSH_CHATTER_MESSAGE_LIMIT];
+          snprintf(notice, sizeof(notice), "User '%s' disconnected before your private message was delivered.",
+                   ready->pm_target_name);
+          session_send_system_line(ctx, notice);
+        }
+        session_send_private_message_line(ctx, ctx, ready->pm_to_sender_label, ready->translated);
+      } else {
+        const char *error_message = ready->error_message[0] != '\0'
+                                        ? ready->error_message
+                                        : "Translation failed; sending your original message.";
+        session_send_system_line(ctx, error_message);
+        if (target != NULL) {
+          session_send_private_message_line(target, ctx, ready->pm_to_target_label, ready->original);
+        } else if (ready->pm_target_name[0] != '\0') {
+          char notice[SSH_CHATTER_MESSAGE_LIMIT];
+          snprintf(notice, sizeof(notice), "User '%s' disconnected before your private message was delivered.",
+                   ready->pm_target_name);
+          session_send_system_line(ctx, notice);
+        }
+        session_send_private_message_line(ctx, ctx, ready->pm_to_sender_label, ready->original);
+      }
+
+      refreshed = true;
+      free(ready);
+      ready = next;
+      continue;
+    }
+
     size_t placeholder_lines = ready->placeholder_lines;
     size_t move_up = 0U;
     if (placeholder_lines > 0U && ctx->translation_placeholder_active_lines >= placeholder_lines) {
@@ -4554,6 +4644,23 @@ static void session_translation_publish_result(session_ctx_t *ctx, const transla
       result->error_message[0] = '\0';
     }
     session_translation_normalize_output(result->translated);
+  } else if (job->type == TRANSLATION_JOB_PRIVATE_MESSAGE) {
+    snprintf(result->original, sizeof(result->original), "%s", job->data.pm.original);
+    if (payload != NULL) {
+      snprintf(result->translated, sizeof(result->translated), "%s", payload);
+    } else {
+      result->translated[0] = '\0';
+    }
+    if (error_message != NULL) {
+      snprintf(result->error_message, sizeof(result->error_message), "%s", error_message);
+    } else {
+      result->error_message[0] = '\0';
+    }
+    result->detected_language[0] = '\0';
+    snprintf(result->pm_target_name, sizeof(result->pm_target_name), "%s", job->data.pm.target_name);
+    snprintf(result->pm_to_target_label, sizeof(result->pm_to_target_label), "%s", job->data.pm.to_target_label);
+    snprintf(result->pm_to_sender_label, sizeof(result->pm_to_sender_label), "%s", job->data.pm.to_sender_label);
+    session_translation_normalize_output(result->translated);
   } else {
     const char *message = payload;
     if (message == NULL || message[0] == '\0') {
@@ -4592,20 +4699,26 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
     return;
   }
 
-  if (job->type == TRANSLATION_JOB_INPUT) {
+  if (job->type == TRANSLATION_JOB_INPUT || job->type == TRANSLATION_JOB_PRIVATE_MESSAGE) {
     char translated_body[SSH_CHATTER_TRANSLATION_WORKING_LEN];
     char detected_language[SSH_CHATTER_LANG_NAME_LEN];
     translated_body[0] = '\0';
     detected_language[0] = '\0';
 
-    if (translator_translate_with_cancel(job->data.input.original, job->target_language, translated_body,
-                                         sizeof(translated_body), detected_language, sizeof(detected_language),
-                                         &ctx->translation_thread_stop)) {
+    const bool is_private_message = (job->type == TRANSLATION_JOB_PRIVATE_MESSAGE);
+    const char *source_text =
+        is_private_message ? job->data.pm.original : job->data.input.original;
+    char *detected_target = is_private_message ? NULL : detected_language;
+    size_t detected_length = is_private_message ? 0U : sizeof(detected_language);
+
+    if (translator_translate_with_cancel(source_text, job->target_language, translated_body, sizeof(translated_body),
+                                         detected_target, detected_length, &ctx->translation_thread_stop)) {
       if (ctx->translation_thread_stop) {
         free(job);
         return;
       }
-      session_translation_publish_result(ctx, job, translated_body, detected_language, NULL, true);
+      session_translation_publish_result(ctx, job, translated_body,
+                                         is_private_message ? NULL : detected_language, NULL, true);
     } else {
       const char *error = translator_last_error();
       char message[128];
@@ -7631,15 +7744,33 @@ static void session_handle_pm(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  printf("[pm] %s -> %s: %s\n", ctx->user.name, target->user.name, message);
+  char prepared[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(prepared, sizeof(prepared), "%s", message);
+
+  char stripped[SSH_CHATTER_MESSAGE_LIMIT];
+  bool translation_bypass = translation_strip_no_translate_prefix(prepared, stripped, sizeof(stripped));
+  const char *deliver_body = translation_bypass ? stripped : prepared;
+
+  printf("[pm] %s -> %s: %s\n", ctx->user.name, target->user.name, deliver_body);
 
   char to_target_label[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(to_target_label, sizeof(to_target_label), "%s -> you", ctx->user.name);
-  session_send_private_message_line(target, ctx, to_target_label, message);
 
   char to_sender_label[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(to_sender_label, sizeof(to_sender_label), "you -> %s", target->user.name);
-  session_send_private_message_line(ctx, ctx, to_sender_label, message);
+
+  bool attempt_translation = !translation_bypass && ctx->translation_enabled && ctx->input_translation_enabled &&
+                             ctx->input_translation_language[0] != '\0';
+
+  if (attempt_translation) {
+    if (session_translation_queue_private_message(ctx, target, deliver_body)) {
+      return;
+    }
+    session_send_system_line(ctx, "Translation unavailable; sending your original message.");
+  }
+
+  session_send_private_message_line(target, ctx, to_target_label, deliver_body);
+  session_send_private_message_line(ctx, ctx, to_sender_label, deliver_body);
 }
 
 static bool username_contains(const char *username, const char *needle) {
