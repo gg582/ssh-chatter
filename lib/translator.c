@@ -14,7 +14,7 @@
 #include <ctype.h>
 #include <time.h>
 
-#define TRANSLATOR_MAX_RESPONSE 65536
+#define TRANSLATOR_MAX_RESPONSE 1<<20
 #define TRANSLATOR_DEFAULT_BASE_URL "https://generativelanguage.googleapis.com/v1beta"
 #define TRANSLATOR_DEFAULT_MODEL "gemini-2.5"
 
@@ -123,15 +123,6 @@ static struct timespec translator_timespec_diff(const struct timespec *end, cons
   }
 
   return result;
-}
-
-static size_t translator_random_next(size_t *state, size_t limit) {
-  if (state == NULL || limit == 0U) {
-    return 0U;
-  }
-
-  *state = (*state * 1103515245UL) + 12345UL;
-  return (*state >> 16) % limit;
 }
 
 static void translator_rate_limit_wait(void) {
@@ -1283,51 +1274,13 @@ static size_t translator_prepare_candidates(translator_candidate_t *candidates, 
   }
 
   static const char *gemini_defaults[] = {
-      "gemini-2.5",
-      "gemini-2.5-lite",
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite",
   };
 
   for (size_t idx = 0U; idx < sizeof(gemini_defaults) / sizeof(gemini_defaults[0]) && count < capacity; ++idx) {
     (void)translator_add_candidate(candidates, &count, capacity, TRANSLATOR_PROVIDER_GEMINI, gemini_defaults[idx]);
-  }
-
-  static const char *openrouter_priority[] = {
-      "microsoft/mai-ds-r1:free",
-      "openai/gpt-oss-20b:free",
-      "google/gemma-3-27b-it:free",
-
-  };
-
-  for (size_t idx = 0U; idx < sizeof(openrouter_priority) / sizeof(openrouter_priority[0]) && count < capacity; ++idx) {
-    (void)translator_add_candidate(candidates, &count, capacity, TRANSLATOR_PROVIDER_OPENROUTER,
-                                   openrouter_priority[idx]);
-  }
-
-  static const char *openrouter_random_pool[] = {
-      "mistralai/mistral-nemo:free",
-      "mistralai/mixtral-8x7b-instruct:free",
-      "mistralai/mistral-small-3.2-24b-instruct:free",
-  };
-
-  const size_t random_count = sizeof(openrouter_random_pool) / sizeof(openrouter_random_pool[0]);
-  size_t order[random_count];
-  for (size_t idx = 0U; idx < random_count; ++idx) {
-    order[idx] = idx;
-  }
-
-  struct timespec now = translator_timespec_now();
-  size_t rng_state = (size_t)now.tv_nsec ^ ((size_t)now.tv_sec << 21);
-  for (size_t remaining = random_count; remaining > 1U; --remaining) {
-    size_t chosen = translator_random_next(&rng_state, remaining);
-    size_t swap_idx = remaining - 1U;
-    size_t tmp = order[swap_idx];
-    order[swap_idx] = order[chosen];
-    order[chosen] = tmp;
-  }
-
-  for (size_t idx = 0U; idx < random_count && count < capacity; ++idx) {
-    const char *model = openrouter_random_pool[order[idx]];
-    (void)translator_add_candidate(candidates, &count, capacity, TRANSLATOR_PROVIDER_OPENROUTER, model);
   }
 
   return count;
