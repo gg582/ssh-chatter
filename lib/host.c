@@ -63,6 +63,11 @@
 #define SSH_CHATTER_TRANSLATION_SEGMENT_GUARD 32U
 #define SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS 150000000L
 
+static const char kTranslationQuotaNotice[] =
+    "⚠️ Translation quota exhausted. Translation features are temporarily disabled.";
+static const char kTranslationQuotaSystemMessage[] =
+    "Translation quota exhausted. Translation has been disabled. Try again later.";
+
 #ifndef MSG_DONTWAIT
 #define MSG_DONTWAIT 0
 #endif
@@ -518,6 +523,7 @@ static void session_handle_motd(session_ctx_t *ctx);
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments);
 static void session_handle_palette(session_ctx_t *ctx, const char *arguments);
 static void session_handle_translate(session_ctx_t *ctx, const char *arguments);
+static void session_handle_gemini(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_target_lang(session_ctx_t *ctx, const char *arguments);
 static void session_handle_chat_spacing(session_ctx_t *ctx, const char *arguments);
@@ -560,6 +566,8 @@ static void session_translation_worker_shutdown(session_ctx_t *ctx);
 static void *session_translation_worker(void *arg);
 static void session_translation_queue_block(session_ctx_t *ctx, const char *text);
 static void session_translation_normalize_output(char *text);
+static void host_handle_translation_quota_exhausted(host_t *host);
+static void session_handle_translation_quota_exhausted(session_ctx_t *ctx, const char *error_detail);
 static bool session_argument_is_disable(const char *token);
 static void session_language_normalize(const char *input, char *normalized, size_t length);
 static bool session_language_equals(const char *lhs, const char *rhs);
@@ -3752,6 +3760,105 @@ static void session_translation_normalize_output(char *text) {
   }
 }
 
+static void host_handle_translation_quota_exhausted(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  bool already_marked = false;
+  pthread_mutex_lock(&host->lock);
+  if (host->translation_quota_exhausted) {
+    already_marked = true;
+  } else {
+    host->translation_quota_exhausted = true;
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (already_marked) {
+    return;
+  }
+
+  const char *motd_path = "/etc/ssh-chatter/motd";
+  char existing[8192];
+  existing[0] = '\0';
+  size_t existing_len = 0U;
+
+  FILE *motd_file = fopen(motd_path, "rb");
+  if (motd_file != NULL) {
+    existing_len = fread(existing, 1U, sizeof(existing) - 1U, motd_file);
+    if (ferror(motd_file)) {
+      const int read_error = errno;
+      humanized_log_error("host", "failed to read motd file", read_error);
+      existing_len = 0U;
+      existing[0] = '\0';
+    }
+    existing[existing_len] = '\0';
+    if (fclose(motd_file) != 0) {
+      const int close_error = errno;
+      humanized_log_error("host", "failed to close motd file", close_error);
+    }
+  }
+
+  const char *existing_start = existing;
+  while (*existing_start == '\n' || *existing_start == '\r') {
+    ++existing_start;
+  }
+
+  if (strncmp(existing_start, kTranslationQuotaNotice, strlen(kTranslationQuotaNotice)) == 0) {
+    (void)host_try_load_motd_from_path(host, motd_path);
+    return;
+  }
+
+  FILE *out = fopen(motd_path, "wb");
+  if (out == NULL) {
+    const int write_error = errno != 0 ? errno : EIO;
+    humanized_log_error("host", "failed to update motd file", write_error);
+    return;
+  }
+
+  (void)fprintf(out, "%s\n", kTranslationQuotaNotice);
+  if (existing[0] != '\0') {
+    fputc('\n', out);
+    (void)fwrite(existing, 1U, existing_len, out);
+  }
+
+  if (fclose(out) != 0) {
+    const int close_error = errno;
+    humanized_log_error("host", "failed to close motd file", close_error);
+  }
+
+  (void)host_try_load_motd_from_path(host, motd_path);
+}
+
+static void session_handle_translation_quota_exhausted(session_ctx_t *ctx, const char *error_detail) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  host_handle_translation_quota_exhausted(ctx->owner);
+
+  const bool was_enabled = ctx->translation_enabled || ctx->output_translation_enabled ||
+                           ctx->input_translation_enabled;
+  ctx->translation_enabled = false;
+  ctx->output_translation_enabled = false;
+  ctx->input_translation_enabled = false;
+
+  if (was_enabled) {
+    host_store_translation_preferences(ctx->owner, ctx);
+  }
+
+  if (!ctx->translation_quota_notified) {
+    char message[256];
+    if (error_detail != NULL && error_detail[0] != '\0') {
+      (void)snprintf(message, sizeof(message), "%s (%s)", kTranslationQuotaSystemMessage, error_detail);
+    } else {
+      (void)snprintf(message, sizeof(message), "%s", kTranslationQuotaSystemMessage);
+    }
+    session_send_system_line(ctx, message);
+    ctx->translation_quota_notified = true;
+  }
+}
+
 static void session_translation_flush_ready(session_ctx_t *ctx) {
   if (ctx == NULL || !ctx->translation_mutex_initialized) {
     return;
@@ -3963,7 +4070,17 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
     } else {
       const char *error = translator_last_error();
       char message[128];
-      if (error != NULL && error[0] != '\0') {
+      const bool quota_failure = translator_last_error_was_quota();
+      if (quota_failure) {
+        if (error != NULL && error[0] != '\0') {
+          snprintf(message, sizeof(message),
+                   "⚠️ translation unavailable (quota exhausted: %s); sending your original message.", error);
+        } else {
+          snprintf(message, sizeof(message),
+                   "⚠️ translation unavailable (quota exhausted); sending your original message.");
+        }
+        session_handle_translation_quota_exhausted(ctx, error);
+      } else if (error != NULL && error[0] != '\0') {
         snprintf(message, sizeof(message), "Translation failed (%s); sending your original message.", error);
       } else {
         snprintf(message, sizeof(message), "Translation failed; sending your original message.");
@@ -3989,6 +4106,18 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
     if (!translator_translate(job->data.caption.sanitized, job->target_language, translated_body, sizeof(translated_body),
                               NULL, 0U)) {
       const char *error = translator_last_error();
+      const bool quota_failure = translator_last_error_was_quota();
+      if (quota_failure) {
+        if (error != NULL && error[0] != '\0') {
+          snprintf(failure_message, sizeof(failure_message),
+                   "⚠️ translation unavailable (quota exhausted: %s)", error);
+        } else {
+          snprintf(failure_message, sizeof(failure_message), "⚠️ translation unavailable (quota exhausted).");
+        }
+        session_handle_translation_quota_exhausted(ctx, error);
+        break;
+      }
+
       if (error != NULL && error[0] != '\0') {
         snprintf(failure_message, sizeof(failure_message), "⚠️ translation failed: %s", error);
       } else {
@@ -5996,6 +6125,7 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/set-target-lang <language|off> - translate your outgoing messages");
   session_send_system_line(ctx, "/weather <region> <city> - show the weather for a region and city");
   session_send_system_line(ctx, "/translate <on|off>    - enable or disable translation after configuring languages");
+  session_send_system_line(ctx, "/gemini <on|off>       - toggle Gemini provider (operator only)");
   session_send_system_line(ctx, "/chat-spacing <0-5>    - reserve blank lines before translated captions in chat");
   session_send_system_line(ctx, "/palette <name>        - apply a predefined interface palette (/palette list)");
   session_send_system_line(ctx, "/today               - discover today's function (once per day)");
@@ -11039,6 +11169,7 @@ static void session_handle_translate(session_ctx_t *ctx, const char *arguments) 
 
   if (session_argument_is_disable(working)) {
     ctx->translation_enabled = false;
+    ctx->translation_quota_notified = false;
     session_translation_clear_queue(ctx);
     session_send_system_line(ctx, "Translation disabled. New messages will be delivered without translation.");
     if (ctx->owner != NULL) {
@@ -11058,6 +11189,7 @@ static void session_handle_translate(session_ctx_t *ctx, const char *arguments) 
   }
 
   ctx->translation_enabled = enabled;
+  ctx->translation_quota_notified = false;
   if (enabled) {
     session_send_system_line(ctx, "Translation enabled. Configure directions with /set-trans-lang or /set-target-lang.");
   } else {
@@ -11067,6 +11199,99 @@ static void session_handle_translate(session_ctx_t *ctx, const char *arguments) 
   if (ctx->owner != NULL) {
     host_store_translation_preferences(ctx->owner, ctx);
   }
+}
+
+static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
+    session_send_system_line(ctx, "Only operators may manage Gemini translation.");
+    return;
+  }
+
+  const char *cursor = arguments;
+  while (cursor != NULL && (*cursor == ' ' || *cursor == '\t')) {
+    ++cursor;
+  }
+
+  char token[16];
+  token[0] = '\0';
+  if (cursor != NULL && *cursor != '\0') {
+    size_t length = 0U;
+    while (cursor[length] != '\0' && !isspace((unsigned char)cursor[length]) && length + 1U < sizeof(token)) {
+      token[length] = cursor[length];
+      ++length;
+    }
+    token[length] = '\0';
+  }
+
+  if (token[0] == '\0') {
+    bool enabled = translator_is_gemini_enabled();
+    bool manual = translator_is_gemini_manually_disabled();
+    struct timespec remaining = {0, 0};
+    bool cooldown_active = translator_gemini_backoff_remaining(&remaining);
+
+    char status_line[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(status_line, sizeof(status_line), "Gemini translation is currently %s.", enabled ? "enabled" : "disabled");
+    session_send_system_line(ctx, status_line);
+
+    if (manual) {
+      session_send_system_line(ctx, "Gemini usage is manually disabled. Use /gemini on to re-enable it.");
+    }
+
+    if (cooldown_active) {
+      long long seconds = remaining.tv_sec;
+      if (remaining.tv_nsec > 0L) {
+        ++seconds;
+      }
+      long long hours = seconds / 3600LL;
+      long long minutes = (seconds % 3600LL) / 60LL;
+      long long secs = seconds % 60LL;
+
+      char cooldown_line[SSH_CHATTER_MESSAGE_LIMIT];
+      if (hours > 0) {
+        snprintf(cooldown_line, sizeof(cooldown_line),
+                 "Automatic Gemini cooldown ends in %lldh %lldm %llds.", hours, minutes, secs);
+      } else if (minutes > 0) {
+        snprintf(cooldown_line, sizeof(cooldown_line),
+                 "Automatic Gemini cooldown ends in %lldm %llds.", minutes, secs);
+      } else {
+        snprintf(cooldown_line, sizeof(cooldown_line),
+                 "Automatic Gemini cooldown ends in %lld seconds.", secs > 0 ? secs : 1LL);
+      }
+      session_send_system_line(ctx, cooldown_line);
+    }
+
+    session_send_system_line(ctx, "Usage: /gemini <on|off>");
+    return;
+  }
+
+  if (strcasecmp(token, "on") == 0) {
+    translator_set_gemini_enabled(true);
+    session_send_system_line(ctx, "Gemini translation enabled. Ollama fallback remains available.");
+
+    char notice[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(notice, sizeof(notice), "* [%s] enabled Gemini translation; Ollama fallback remains available.",
+             ctx->user.name);
+    host_history_record_system(ctx->owner, notice);
+    chat_room_broadcast(&ctx->owner->room, notice, NULL);
+    return;
+  }
+
+  if (strcasecmp(token, "off") == 0) {
+    translator_set_gemini_enabled(false);
+    session_send_system_line(ctx, "Gemini translation disabled. Using Ollama gemma2:2b only.");
+
+    char notice[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(notice, sizeof(notice), "* [%s] disabled Gemini translation; using Ollama fallback only.", ctx->user.name);
+    host_history_record_system(ctx->owner, notice);
+    chat_room_broadcast(&ctx->owner->room, notice, NULL);
+    return;
+  }
+
+  session_send_system_line(ctx, "Usage: /gemini <on|off>");
 }
 
 static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
@@ -11635,6 +11860,10 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   }
   else if (session_parse_command(line, "/translate", &args)) {
     session_handle_translate(ctx, args);
+    return;
+  }
+  else if (session_parse_command(line, "/gemini", &args)) {
+    session_handle_gemini(ctx, args);
     return;
   }
   else if (session_parse_command(line, "/chat-spacing", &args)) {
@@ -12859,6 +13088,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   "\033[1G============================================\n");
 
 
+  host->translation_quota_exhausted = false;
   host->connection_count = 0U;
   host->history = NULL;
   host->history_count = 0U;
