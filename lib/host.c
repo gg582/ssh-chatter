@@ -7914,7 +7914,7 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post) 
 
   const bool translation_active = ctx->translation_enabled && ctx->output_translation_enabled &&
                                   ctx->output_translation_language[0] != '\0';
-  if (translation_active) {
+  if (translation_active && post->comment_count > 0U) {
     session_send_system_line(ctx, "");
   }
 
