@@ -493,6 +493,16 @@ static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entr
 static void chat_room_broadcast_caption(chat_room_t *room, const char *message);
 static bool host_history_apply_reaction(host_t *host, uint64_t message_id, size_t reaction_index, chat_history_entry_t *updated_entry);
 static bool chat_history_entry_build_reaction_summary(const chat_history_entry_t *entry, char *buffer, size_t length);
+static void host_ban_resolve_path(host_t *host);
+static void host_ban_state_save_locked(host_t *host);
+static void host_ban_state_load(host_t *host);
+static void host_reply_state_resolve_path(host_t *host);
+static void host_reply_state_save_locked(host_t *host);
+static void host_reply_state_load(host_t *host);
+static bool host_replies_find_entry_by_id(host_t *host, uint64_t reply_id, chat_reply_entry_t *entry);
+static bool host_replies_commit_entry(host_t *host, chat_reply_entry_t *entry, chat_reply_entry_t *stored_entry);
+static void session_send_reply_tree(session_ctx_t *ctx, uint64_t parent_message_id, uint64_t parent_reply_id, size_t depth);
+static void host_broadcast_reply(host_t *host, const chat_reply_entry_t *entry);
 static void session_send_private_message_line(session_ctx_t *ctx, const session_ctx_t *color_source,
                                               const char *label, const char *message);
 static session_ctx_t *chat_room_find_user(chat_room_t *room, const char *username);
@@ -518,6 +528,7 @@ static bool session_blocklist_add(session_ctx_t *ctx, const char *ip, const char
                                   bool *already_present);
 static bool session_blocklist_remove(session_ctx_t *ctx, const char *token);
 static void session_blocklist_show(session_ctx_t *ctx);
+static void session_handle_reply(session_ctx_t *ctx, const char *arguments);
 static void session_handle_block(session_ctx_t *ctx, const char *arguments);
 static void session_handle_unblock(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pm(session_ctx_t *ctx, const char *arguments);
@@ -967,6 +978,39 @@ typedef struct host_state_preference_entry {
   char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
 } host_state_preference_entry_t;
+
+static const uint32_t BAN_STATE_MAGIC = 0x5348424eU; /* 'SHBN' */
+static const uint32_t BAN_STATE_VERSION = 1U;
+
+typedef struct ban_state_header {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t entry_count;
+} ban_state_header_t;
+
+typedef struct ban_state_entry {
+  char username[SSH_CHATTER_USERNAME_LEN];
+  char ip[SSH_CHATTER_IP_LEN];
+} ban_state_entry_t;
+
+static const uint32_t REPLY_STATE_MAGIC = 0x53485250U; /* 'SHRP' */
+static const uint32_t REPLY_STATE_VERSION = 1U;
+
+typedef struct reply_state_header {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t entry_count;
+  uint64_t next_reply_id;
+} reply_state_header_t;
+
+typedef struct reply_state_entry {
+  uint64_t reply_id;
+  uint64_t parent_message_id;
+  uint64_t parent_reply_id;
+  int64_t created_at;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+} reply_state_entry_t;
 
 typedef struct host_state_grant_entry {
   char ip[SSH_CHATTER_IP_LEN];
@@ -1680,6 +1724,21 @@ static void chat_room_broadcast_reaction_update(host_t *host, const chat_history
   chat_room_broadcast_caption(&host->room, line);
 }
 
+static void host_broadcast_reply(host_t *host, const chat_reply_entry_t *entry) {
+  if (host == NULL || entry == NULL) {
+    return;
+  }
+
+  const char *target_prefix = (entry->parent_reply_id == 0U) ? "#" : "r#";
+  uint64_t target_id = (entry->parent_reply_id == 0U) ? entry->parent_message_id : entry->parent_reply_id;
+
+  char line[SSH_CHATTER_MESSAGE_LIMIT + 160];
+  snprintf(line, sizeof(line), "↳ [r#%" PRIu64 " → %s%" PRIu64 "] %s: %s", entry->reply_id, target_prefix, target_id,
+           entry->username, entry->message);
+
+  chat_room_broadcast(&host->room, line, NULL);
+}
+
 static bool host_history_reserve_locked(host_t *host, size_t min_capacity) {
   if (host == NULL) {
     return false;
@@ -1805,6 +1864,32 @@ static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, cha
   return found;
 }
 
+static bool host_replies_find_entry_by_id(host_t *host, uint64_t reply_id, chat_reply_entry_t *entry) {
+  if (host == NULL || entry == NULL || reply_id == 0U) {
+    return false;
+  }
+
+  bool found = false;
+
+  pthread_mutex_lock(&host->lock);
+  for (size_t idx = 0U; idx < host->reply_count; ++idx) {
+    const chat_reply_entry_t *candidate = &host->replies[idx];
+    if (!candidate->in_use) {
+      continue;
+    }
+    if (candidate->reply_id != reply_id) {
+      continue;
+    }
+
+    *entry = *candidate;
+    found = true;
+    break;
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  return found;
+}
+
 static void chat_history_entry_prepare_user(chat_history_entry_t *entry, const session_ctx_t *from, const char *message) {
   if (entry == NULL || from == NULL) {
     return;
@@ -1853,6 +1938,49 @@ static bool host_history_commit_entry(host_t *host, chat_history_entry_t *entry,
 
   pthread_mutex_unlock(&host->lock);
   return true;
+}
+
+static bool host_replies_commit_entry(host_t *host, chat_reply_entry_t *entry, chat_reply_entry_t *stored_entry) {
+  if (host == NULL || entry == NULL) {
+    return false;
+  }
+
+  bool committed = false;
+
+  pthread_mutex_lock(&host->lock);
+  if (host->reply_count >= SSH_CHATTER_MAX_REPLIES) {
+    pthread_mutex_unlock(&host->lock);
+    return false;
+  }
+
+  uint64_t assigned_id = host->next_reply_id;
+  if (assigned_id == 0U || assigned_id == UINT64_MAX) {
+    assigned_id = (uint64_t)host->reply_count + 1U;
+  }
+
+  entry->reply_id = assigned_id;
+  if (assigned_id < UINT64_MAX) {
+    host->next_reply_id = assigned_id + 1U;
+  } else {
+    host->next_reply_id = assigned_id;
+  }
+
+  entry->in_use = true;
+
+  size_t slot = host->reply_count;
+  host->replies[slot] = *entry;
+  host->reply_count = slot + 1U;
+
+  host_reply_state_save_locked(host);
+
+  if (stored_entry != NULL) {
+    *stored_entry = host->replies[slot];
+  }
+
+  committed = true;
+
+  pthread_mutex_unlock(&host->lock);
+  return committed;
 }
 
 static void host_notify_external_clients(host_t *host, const chat_history_entry_t *entry) {
@@ -2389,6 +2517,40 @@ static void host_vote_resolve_path(host_t *host) {
   }
 }
 
+static void host_ban_resolve_path(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  const char *ban_path = getenv("CHATTER_BAN_FILE");
+  if (ban_path == NULL || ban_path[0] == '\0') {
+    ban_path = "ban_state.dat";
+  }
+
+  int written = snprintf(host->ban_state_file_path, sizeof(host->ban_state_file_path), "%s", ban_path);
+  if (written < 0 || (size_t)written >= sizeof(host->ban_state_file_path)) {
+    humanized_log_error("host", "ban state file path is too long", ENAMETOOLONG);
+    host->ban_state_file_path[0] = '\0';
+  }
+}
+
+static void host_reply_state_resolve_path(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  const char *reply_path = getenv("CHATTER_REPLY_FILE");
+  if (reply_path == NULL || reply_path[0] == '\0') {
+    reply_path = "reply_state.dat";
+  }
+
+  int written = snprintf(host->reply_state_file_path, sizeof(host->reply_state_file_path), "%s", reply_path);
+  if (written < 0 || (size_t)written >= sizeof(host->reply_state_file_path)) {
+    humanized_log_error("host", "reply state file path is too long", ENAMETOOLONG);
+    host->reply_state_file_path[0] = '\0';
+  }
+}
+
 static void host_state_save_locked(host_t *host) {
   if (host == NULL) {
     return;
@@ -2530,6 +2692,188 @@ static void host_state_save_locked(host_t *host) {
 
   if (rename(temp_path, host->state_file_path) != 0) {
     humanized_log_error("host", "failed to update state file", errno);
+    unlink(temp_path);
+  }
+}
+
+static void host_ban_state_save_locked(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->ban_state_file_path[0] == '\0') {
+    return;
+  }
+
+  char temp_path[PATH_MAX];
+  int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp", host->ban_state_file_path);
+  if (written < 0 || (size_t)written >= sizeof(temp_path)) {
+    humanized_log_error("host", "ban state file path is too long", ENAMETOOLONG);
+    return;
+  }
+
+  FILE *fp = fopen(temp_path, "wb");
+  if (fp == NULL) {
+    humanized_log_error("host", "failed to open ban state file", errno);
+    return;
+  }
+
+  ban_state_header_t header = {0};
+  header.magic = BAN_STATE_MAGIC;
+  header.version = BAN_STATE_VERSION;
+  header.entry_count = (uint32_t)host->ban_count;
+
+  bool success = fwrite(&header, sizeof(header), 1U, fp) == 1U;
+  int write_error = 0;
+  if (!success && errno != 0) {
+    write_error = errno;
+  }
+
+  for (size_t idx = 0U; success && idx < host->ban_count; ++idx) {
+    ban_state_entry_t entry = {0};
+    snprintf(entry.username, sizeof(entry.username), "%s", host->bans[idx].username);
+    snprintf(entry.ip, sizeof(entry.ip), "%s", host->bans[idx].ip);
+    if (fwrite(&entry, sizeof(entry), 1U, fp) != 1U) {
+      success = false;
+      if (errno != 0) {
+        write_error = errno;
+      }
+      break;
+    }
+  }
+
+  if (success && fflush(fp) != 0) {
+    success = false;
+    if (errno != 0) {
+      write_error = errno;
+    }
+  }
+
+  if (success) {
+    int fd = fileno(fp);
+    if (fd >= 0 && fsync(fd) != 0) {
+      success = false;
+      if (errno != 0) {
+        write_error = errno;
+      }
+    }
+  }
+
+  if (fclose(fp) != 0) {
+    success = false;
+    if (errno != 0) {
+      write_error = errno;
+    }
+  }
+
+  if (!success) {
+    humanized_log_error("host", "failed to write ban state file", write_error != 0 ? write_error : EIO);
+    unlink(temp_path);
+    return;
+  }
+
+  if (rename(temp_path, host->ban_state_file_path) != 0) {
+    humanized_log_error("host", "failed to update ban state file", errno);
+    unlink(temp_path);
+  }
+}
+
+static void host_reply_state_save_locked(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->reply_state_file_path[0] == '\0') {
+    return;
+  }
+
+  char temp_path[PATH_MAX];
+  int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp", host->reply_state_file_path);
+  if (written < 0 || (size_t)written >= sizeof(temp_path)) {
+    humanized_log_error("host", "reply state file path is too long", ENAMETOOLONG);
+    return;
+  }
+
+  FILE *fp = fopen(temp_path, "wb");
+  if (fp == NULL) {
+    humanized_log_error("host", "failed to open reply state file", errno);
+    return;
+  }
+
+  size_t stored_count = 0U;
+  for (size_t idx = 0U; idx < host->reply_count; ++idx) {
+    if (host->replies[idx].in_use) {
+      ++stored_count;
+    }
+  }
+
+  reply_state_header_t header = {0};
+  header.magic = REPLY_STATE_MAGIC;
+  header.version = REPLY_STATE_VERSION;
+  header.entry_count = (uint32_t)stored_count;
+  header.next_reply_id = host->next_reply_id;
+
+  bool success = fwrite(&header, sizeof(header), 1U, fp) == 1U;
+  int write_error = 0;
+  if (!success && errno != 0) {
+    write_error = errno;
+  }
+
+  for (size_t idx = 0U; success && idx < host->reply_count; ++idx) {
+    const chat_reply_entry_t *reply = &host->replies[idx];
+    if (!reply->in_use) {
+      continue;
+    }
+
+    reply_state_entry_t serialized = {0};
+    serialized.reply_id = reply->reply_id;
+    serialized.parent_message_id = reply->parent_message_id;
+    serialized.parent_reply_id = reply->parent_reply_id;
+    serialized.created_at = (int64_t)reply->created_at;
+    snprintf(serialized.username, sizeof(serialized.username), "%s", reply->username);
+    snprintf(serialized.message, sizeof(serialized.message), "%s", reply->message);
+
+    if (fwrite(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+      success = false;
+      if (errno != 0) {
+        write_error = errno;
+      }
+      break;
+    }
+  }
+
+  if (success && fflush(fp) != 0) {
+    success = false;
+    if (errno != 0) {
+      write_error = errno;
+    }
+  }
+
+  if (success) {
+    int fd = fileno(fp);
+    if (fd >= 0 && fsync(fd) != 0) {
+      success = false;
+      if (errno != 0) {
+        write_error = errno;
+      }
+    }
+  }
+
+  if (fclose(fp) != 0) {
+    success = false;
+    if (errno != 0) {
+      write_error = errno;
+    }
+  }
+
+  if (!success) {
+    humanized_log_error("host", "failed to write reply state file", write_error != 0 ? write_error : EIO);
+    unlink(temp_path);
+    return;
+  }
+
+  if (rename(temp_path, host->reply_state_file_path) != 0) {
+    humanized_log_error("host", "failed to update reply state file", errno);
     unlink(temp_path);
   }
 }
@@ -3107,6 +3451,181 @@ static void host_vote_state_load(host_t *host) {
 
   pthread_mutex_unlock(&host->lock);
   fclose(fp);
+}
+
+static void host_ban_state_load(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->ban_state_file_path[0] == '\0') {
+    return;
+  }
+
+  FILE *fp = fopen(host->ban_state_file_path, "rb");
+  if (fp == NULL) {
+    return;
+  }
+
+  ban_state_header_t header = {0};
+  if (fread(&header, sizeof(header), 1U, fp) != 1U) {
+    fclose(fp);
+    return;
+  }
+
+  if (header.magic != BAN_STATE_MAGIC || header.version == 0U || header.version > BAN_STATE_VERSION) {
+    fclose(fp);
+    return;
+  }
+
+  uint32_t entry_count = header.entry_count;
+  ban_state_entry_t *entries = NULL;
+  if (entry_count > 0U) {
+    entries = calloc(entry_count, sizeof(*entries));
+    if (entries == NULL) {
+      fclose(fp);
+      humanized_log_error("host", "failed to allocate ban state buffer", ENOMEM);
+      return;
+    }
+  }
+
+  bool success = true;
+  int read_error = 0;
+  for (uint32_t idx = 0U; idx < entry_count; ++idx) {
+    if (fread(&entries[idx], sizeof(entries[idx]), 1U, fp) != 1U) {
+      success = false;
+      if (errno != 0) {
+        read_error = errno;
+      }
+      break;
+    }
+  }
+
+  fclose(fp);
+
+  if (!success) {
+    humanized_log_error("host", "failed to read ban state file", read_error != 0 ? read_error : EIO);
+    free(entries);
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  memset(host->bans, 0, sizeof(host->bans));
+  host->ban_count = 0U;
+  for (uint32_t idx = 0U; idx < entry_count; ++idx) {
+    if (host->ban_count >= SSH_CHATTER_MAX_BANS) {
+      break;
+    }
+    snprintf(host->bans[host->ban_count].username, sizeof(host->bans[host->ban_count].username), "%s",
+             entries[idx].username);
+    snprintf(host->bans[host->ban_count].ip, sizeof(host->bans[host->ban_count].ip), "%s", entries[idx].ip);
+    ++host->ban_count;
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  free(entries);
+}
+
+static void host_reply_state_load(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->reply_state_file_path[0] == '\0') {
+    return;
+  }
+
+  FILE *fp = fopen(host->reply_state_file_path, "rb");
+  if (fp == NULL) {
+    return;
+  }
+
+  reply_state_header_t header = {0};
+  if (fread(&header, sizeof(header), 1U, fp) != 1U) {
+    fclose(fp);
+    return;
+  }
+
+  if (header.magic != REPLY_STATE_MAGIC || header.version == 0U || header.version > REPLY_STATE_VERSION) {
+    fclose(fp);
+    return;
+  }
+
+  uint32_t entry_count = header.entry_count;
+  reply_state_entry_t *entries = NULL;
+  if (entry_count > 0U) {
+    entries = calloc(entry_count, sizeof(*entries));
+    if (entries == NULL) {
+      fclose(fp);
+      humanized_log_error("host", "failed to allocate reply state buffer", ENOMEM);
+      return;
+    }
+  }
+
+  bool success = true;
+  int read_error = 0;
+  for (uint32_t idx = 0U; idx < entry_count; ++idx) {
+    if (fread(&entries[idx], sizeof(entries[idx]), 1U, fp) != 1U) {
+      success = false;
+      if (errno != 0) {
+        read_error = errno;
+      }
+      break;
+    }
+  }
+
+  fclose(fp);
+
+  if (!success) {
+    humanized_log_error("host", "failed to read reply state file", read_error != 0 ? read_error : EIO);
+    free(entries);
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  memset(host->replies, 0, sizeof(host->replies));
+  host->reply_count = 0U;
+  host->next_reply_id = header.next_reply_id != 0U ? header.next_reply_id : 1U;
+  uint64_t max_reply_id = 0U;
+
+  for (uint32_t idx = 0U; idx < entry_count; ++idx) {
+    if (host->reply_count >= SSH_CHATTER_MAX_REPLIES) {
+      if (entries[idx].reply_id > max_reply_id) {
+        max_reply_id = entries[idx].reply_id;
+      }
+      continue;
+    }
+
+    chat_reply_entry_t *slot = &host->replies[host->reply_count];
+    memset(slot, 0, sizeof(*slot));
+    slot->in_use = true;
+    slot->reply_id = entries[idx].reply_id != 0U ? entries[idx].reply_id : (uint64_t)(host->reply_count + 1U);
+    if (slot->reply_id > max_reply_id) {
+      max_reply_id = slot->reply_id;
+    }
+    slot->parent_message_id = entries[idx].parent_message_id;
+    slot->parent_reply_id = entries[idx].parent_reply_id;
+    slot->created_at = (time_t)entries[idx].created_at;
+    snprintf(slot->username, sizeof(slot->username), "%s", entries[idx].username);
+    snprintf(slot->message, sizeof(slot->message), "%s", entries[idx].message);
+    ++host->reply_count;
+  }
+
+  if (host->next_reply_id <= max_reply_id) {
+    if (max_reply_id == UINT64_MAX) {
+      host->next_reply_id = UINT64_MAX;
+    } else {
+      host->next_reply_id = max_reply_id + 1U;
+    }
+  }
+
+  if (host->next_reply_id == 0U) {
+    host->next_reply_id = (uint64_t)host->reply_count + 1U;
+  }
+
+  pthread_mutex_unlock(&host->lock);
+
+  free(entries);
 }
 
 static void host_bbs_resolve_path(host_t *host) {
@@ -4066,19 +4585,33 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
     return;
   }
 
+  if (ctx->translation_thread_stop) {
+    free(job);
+    return;
+  }
+
   if (job->type == TRANSLATION_JOB_INPUT) {
     char translated_body[SSH_CHATTER_TRANSLATION_WORKING_LEN];
     char detected_language[SSH_CHATTER_LANG_NAME_LEN];
     translated_body[0] = '\0';
     detected_language[0] = '\0';
 
-    if (translator_translate(job->data.input.original, job->target_language, translated_body, sizeof(translated_body),
-                             detected_language, sizeof(detected_language))) {
+    if (translator_translate_with_cancel(job->data.input.original, job->target_language, translated_body,
+                                         sizeof(translated_body), detected_language, sizeof(detected_language),
+                                         &ctx->translation_thread_stop)) {
+      if (ctx->translation_thread_stop) {
+        free(job);
+        return;
+      }
       session_translation_publish_result(ctx, job, translated_body, detected_language, NULL, true);
     } else {
       const char *error = translator_last_error();
       char message[128];
       const bool quota_failure = translator_last_error_was_quota();
+      if (ctx->translation_thread_stop) {
+        free(job);
+        return;
+      }
       if (quota_failure) {
         if (error != NULL && error[0] != '\0') {
           snprintf(message, sizeof(message),
@@ -4092,6 +4625,10 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
         snprintf(message, sizeof(message), "Translation failed (%s); sending your original message.", error);
       } else {
         snprintf(message, sizeof(message), "Translation failed; sending your original message.");
+      }
+      if (ctx->translation_thread_stop) {
+        free(job);
+        return;
       }
       session_translation_publish_result(ctx, job, NULL, NULL, message, false);
     }
@@ -4111,10 +4648,19 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
   for (int attempt = 0; attempt < max_attempts && !success; ++attempt) {
     translated_body[0] = '\0';
 
-    if (!translator_translate(job->data.caption.sanitized, job->target_language, translated_body, sizeof(translated_body),
-                              NULL, 0U)) {
+    if (ctx->translation_thread_stop) {
+      free(job);
+      return;
+    }
+
+    if (!translator_translate_with_cancel(job->data.caption.sanitized, job->target_language, translated_body,
+                                          sizeof(translated_body), NULL, 0U, &ctx->translation_thread_stop)) {
       const char *error = translator_last_error();
       const bool quota_failure = translator_last_error_was_quota();
+      if (ctx->translation_thread_stop) {
+        free(job);
+        return;
+      }
       if (quota_failure) {
         if (error != NULL && error[0] != '\0') {
           snprintf(failure_message, sizeof(failure_message),
@@ -4153,6 +4699,11 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
     snprintf(failure_message, sizeof(failure_message), "⚠️ translation unavailable.");
   }
 
+  if (ctx->translation_thread_stop) {
+    free(job);
+    return;
+  }
+
   if (success) {
     session_translation_publish_result(ctx, job, restored, NULL, NULL, true);
   } else {
@@ -4171,6 +4722,16 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
     return false;
   }
 
+  if (ctx->translation_thread_stop) {
+    for (size_t idx = 0U; idx < job_count; ++idx) {
+      if (jobs[idx] != NULL) {
+        free(jobs[idx]);
+        jobs[idx] = NULL;
+      }
+    }
+    return true;
+  }
+
   char *combined = calloc(SSH_CHATTER_TRANSLATION_BATCH_BUFFER, sizeof(char));
   char *translated = calloc(SSH_CHATTER_TRANSLATION_BATCH_BUFFER, sizeof(char));
   if (combined == NULL || translated == NULL) {
@@ -4181,6 +4742,17 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
 
   size_t offset = 0U;
   for (size_t idx = 0U; idx < job_count; ++idx) {
+    if (ctx->translation_thread_stop) {
+      for (size_t release = idx; release < job_count; ++release) {
+        if (jobs[release] != NULL) {
+          free(jobs[release]);
+          jobs[release] = NULL;
+        }
+      }
+      free(combined);
+      free(translated);
+      return true;
+    }
     if (jobs[idx] == NULL || jobs[idx]->type != TRANSLATION_JOB_CAPTION) {
       free(combined);
       free(translated);
@@ -4211,10 +4783,35 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
   }
   combined[offset] = '\0';
 
-  if (!translator_translate(combined, jobs[0]->target_language, translated, SSH_CHATTER_TRANSLATION_BATCH_BUFFER, NULL, 0U)) {
+  if (!translator_translate_with_cancel(combined, jobs[0]->target_language, translated,
+                                        SSH_CHATTER_TRANSLATION_BATCH_BUFFER, NULL, 0U,
+                                        &ctx->translation_thread_stop)) {
+    if (ctx->translation_thread_stop) {
+      for (size_t idx = 0U; idx < job_count; ++idx) {
+        if (jobs[idx] != NULL) {
+          free(jobs[idx]);
+          jobs[idx] = NULL;
+        }
+      }
+      free(combined);
+      free(translated);
+      return true;
+    }
     free(combined);
     free(translated);
     return false;
+  }
+
+  if (ctx->translation_thread_stop) {
+    for (size_t idx = 0U; idx < job_count; ++idx) {
+      if (jobs[idx] != NULL) {
+        free(jobs[idx]);
+        jobs[idx] = NULL;
+      }
+    }
+    free(combined);
+    free(translated);
+    return true;
   }
 
   char *segment_starts[SSH_CHATTER_TRANSLATION_BATCH_MAX] = {0};
@@ -4300,6 +4897,18 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
       free(translated);
       return false;
     }
+  }
+
+  if (ctx->translation_thread_stop) {
+    for (size_t idx = 0U; idx < job_count; ++idx) {
+      if (jobs[idx] != NULL) {
+        free(jobs[idx]);
+        jobs[idx] = NULL;
+      }
+    }
+    free(combined);
+    free(translated);
+    return true;
   }
 
   for (size_t idx = 0U; idx < job_count; ++idx) {
@@ -4625,6 +5234,77 @@ static void session_send_plain_line(session_ctx_t *ctx, const char *message) {
   }
 
   session_send_line(ctx, message);
+}
+
+static void session_send_reply_tree(session_ctx_t *ctx, uint64_t parent_message_id, uint64_t parent_reply_id, size_t depth) {
+  if (ctx == NULL || ctx->owner == NULL || parent_message_id == 0U) {
+    return;
+  }
+
+  if (depth > 32U) {
+    return;
+  }
+
+  host_t *host = ctx->owner;
+
+  size_t match_count = 0U;
+  pthread_mutex_lock(&host->lock);
+  for (size_t idx = 0U; idx < host->reply_count; ++idx) {
+    const chat_reply_entry_t *candidate = &host->replies[idx];
+    if (!candidate->in_use) {
+      continue;
+    }
+    if (candidate->parent_message_id == parent_message_id && candidate->parent_reply_id == parent_reply_id) {
+      ++match_count;
+    }
+  }
+
+  if (match_count == 0U) {
+    pthread_mutex_unlock(&host->lock);
+    return;
+  }
+
+  chat_reply_entry_t *snapshot = calloc(match_count, sizeof(*snapshot));
+  if (snapshot == NULL) {
+    pthread_mutex_unlock(&host->lock);
+    return;
+  }
+
+  size_t copy_idx = 0U;
+  for (size_t idx = 0U; idx < host->reply_count && copy_idx < match_count; ++idx) {
+    const chat_reply_entry_t *candidate = &host->replies[idx];
+    if (!candidate->in_use) {
+      continue;
+    }
+    if (candidate->parent_message_id == parent_message_id && candidate->parent_reply_id == parent_reply_id) {
+      snapshot[copy_idx++] = *candidate;
+    }
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  for (size_t idx = 0U; idx < copy_idx; ++idx) {
+    const chat_reply_entry_t *reply = &snapshot[idx];
+
+    size_t indent_len = depth * 4U;
+    char indent[128];
+    if (indent_len >= sizeof(indent)) {
+      indent_len = sizeof(indent) - 1U;
+    }
+    memset(indent, ' ', indent_len);
+    indent[indent_len] = '\0';
+
+    const char *target_prefix = (reply->parent_reply_id == 0U) ? "#" : "r#";
+    uint64_t target_id = (reply->parent_reply_id == 0U) ? reply->parent_message_id : reply->parent_reply_id;
+
+    char line[SSH_CHATTER_MESSAGE_LIMIT + 160];
+    snprintf(line, sizeof(line), "%s↳ [r#%" PRIu64 " → %s%" PRIu64 "] %s: %s", indent, reply->reply_id, target_prefix,
+             target_id, reply->username, reply->message);
+    session_send_plain_line(ctx, line);
+
+    session_send_reply_tree(ctx, parent_message_id, reply->reply_id, depth + 1U);
+  }
+
+  free(snapshot);
 }
 
 static bool host_lookup_member_ip(host_t *host, const char *username, char *ip, size_t length) {
@@ -5730,6 +6410,10 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
       char hint[SSH_CHATTER_MESSAGE_LIMIT];
       session_send_plain_line(ctx, hint);
     }
+
+    if (entry->message_id > 0U) {
+      session_send_reply_tree(ctx, entry->message_id, 0U, 1U);
+    }
   } else {
     session_send_system_line(ctx, entry->message);
   }
@@ -6211,6 +6895,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/users               - announce the number of connected users",
       "/search <text>       - search for users whose name matches text",
       "/chat <message-id>   - show a past message by its identifier",
+      "/reply <message-id|r<reply-id>> <text> - reply to a message or reply",
       "/image <url> [caption] - share an image link",
       "/video <url> [caption] - share a video link",
       "/audio <url> [caption] - share an audio clip",
@@ -7086,6 +7771,136 @@ static void session_handle_chat_lookup(session_ctx_t *ctx, const char *arguments
   snprintf(header, sizeof(header), "Message #%" PRIu64 ":", message_id);
   session_send_system_line(ctx, header);
   session_send_history_entry(ctx, &entry);
+  session_send_reply_tree(ctx, entry.message_id, 0U, 1U);
+}
+
+static void session_handle_reply(session_ctx_t *ctx, const char *arguments) {
+  static const char *kUsage = "Usage: /reply <message-id|r<reply-id>> <text>";
+
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char *saveptr = NULL;
+  char *target = strtok_r(working, " \t", &saveptr);
+  if (target == NULL) {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char *text = NULL;
+  if (saveptr != NULL) {
+    text = saveptr;
+    while (*text == ' ' || *text == '\t') {
+      ++text;
+    }
+  }
+
+  if (text == NULL || *text == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  bool targeting_reply = false;
+  if (*target == '#') {
+    ++target;
+  }
+  if (*target == 'r' || *target == 'R') {
+    targeting_reply = true;
+    ++target;
+  }
+
+  if (*target == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char *endptr = NULL;
+  unsigned long long parsed = strtoull(target, &endptr, 10);
+  if (parsed == 0ULL || (endptr != NULL && *endptr != '\0')) {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  uint64_t identifier = (uint64_t)parsed;
+
+  chat_reply_entry_t parent_reply = {0};
+  uint64_t parent_reply_id = 0U;
+  uint64_t parent_message_id = 0U;
+
+  if (targeting_reply) {
+    if (!host_replies_find_entry_by_id(ctx->owner, identifier, &parent_reply)) {
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(message, sizeof(message), "Reply r#%" PRIu64 " was not found.", identifier);
+      session_send_system_line(ctx, message);
+      return;
+    }
+    parent_message_id = parent_reply.parent_message_id;
+    parent_reply_id = parent_reply.reply_id;
+  } else {
+    chat_history_entry_t parent_entry = {0};
+    if (host_history_find_entry_by_id(ctx->owner, identifier, &parent_entry)) {
+      parent_message_id = parent_entry.message_id;
+    } else if (host_replies_find_entry_by_id(ctx->owner, identifier, &parent_reply)) {
+      parent_message_id = parent_reply.parent_message_id;
+      parent_reply_id = parent_reply.reply_id;
+    } else {
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(message, sizeof(message), "Message or reply #%" PRIu64 " was not found.", identifier);
+      session_send_system_line(ctx, message);
+      return;
+    }
+  }
+
+  if (parent_message_id == 0U) {
+    session_send_system_line(ctx, "Unable to determine reply target.");
+    return;
+  }
+
+  char normalized[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(normalized, sizeof(normalized), "%s", text);
+  session_normalize_newlines(normalized);
+  trim_whitespace_inplace(normalized);
+  for (size_t idx = 0U; normalized[idx] != '\0'; ++idx) {
+    if (normalized[idx] == '\n') {
+      normalized[idx] = ' ';
+    }
+  }
+  trim_whitespace_inplace(normalized);
+
+  if (normalized[0] == '\0') {
+    session_send_system_line(ctx, "Reply text cannot be empty.");
+    return;
+  }
+
+  chat_reply_entry_t entry = {0};
+  entry.parent_message_id = parent_message_id;
+  entry.parent_reply_id = parent_reply_id;
+  entry.created_at = time(NULL);
+  snprintf(entry.username, sizeof(entry.username), "%s", ctx->user.name);
+  snprintf(entry.message, sizeof(entry.message), "%s", normalized);
+
+  chat_reply_entry_t stored = {0};
+  if (!host_replies_commit_entry(ctx->owner, &entry, &stored)) {
+    session_send_system_line(ctx, "Unable to record reply.");
+    return;
+  }
+
+  host_broadcast_reply(ctx->owner, &stored);
 }
 
 static void session_handle_image(session_ctx_t *ctx, const char *arguments) {
@@ -11673,6 +12488,7 @@ static void session_handle_exit(session_ctx_t *ctx) {
   }
 
   ctx->should_exit = true;
+  ctx->exit_status = EXIT_SUCCESS;
   session_send_system_line(ctx, "Disconnecting... bye!");
 
   if (ctx->translation_mutex_initialized) {
@@ -11940,6 +12756,8 @@ static bool host_add_ban_entry(host_t *host, const char *username, const char *i
   ++host->ban_count;
   added = true;
 
+  host_ban_state_save_locked(host);
+
   pthread_mutex_unlock(&host->lock);
   return added;
 }
@@ -11960,6 +12778,7 @@ static bool host_remove_ban_entry(host_t *host, const char *token) {
       memset(&host->bans[host->ban_count - 1U], 0, sizeof(host->bans[host->ban_count - 1U]));
       --host->ban_count;
       removed = true;
+      host_ban_state_save_locked(host);
       break;
     }
   }
@@ -12051,6 +12870,11 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
 
   else if (session_parse_command(line, "/chat", &args)) {
     session_handle_chat_lookup(ctx, args);
+    return;
+  }
+
+  else if (session_parse_command(line, "/reply", &args)) {
+    session_handle_reply(ctx, args);
     return;
   }
 
@@ -12920,6 +13744,9 @@ static void session_cleanup(session_ctx_t *ctx) {
   }
 
   session_translation_worker_shutdown(ctx);
+  if (ctx->channel != NULL) {
+    ssh_channel_request_send_exit_status(ctx->channel, ctx->exit_status);
+  }
   session_close_channel(ctx);
 
   if (ctx->session != NULL) {
@@ -12937,6 +13764,7 @@ static void *session_thread(void *arg) {
     return NULL;
   }
 
+  ctx->exit_status = EXIT_FAILURE;
   session_apply_theme_defaults(ctx);
 
   bool authenticated = false;
@@ -13347,6 +14175,9 @@ void host_init(host_t *host, auth_profile_t *auth) {
   }
   host->ban_count = 0U;
   memset(host->bans, 0, sizeof(host->bans));
+  memset(host->replies, 0, sizeof(host->replies));
+  host->reply_count = 0U;
+  host->next_reply_id = 1U;
   snprintf(host->version, sizeof(host->version), "ssh-chatter (C, rolling release)");
   snprintf(host->motd, sizeof(host->motd),
   "Welcome to ssh-chat!\n"
@@ -13376,6 +14207,10 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_bbs_resolve_path(host);
   host->vote_state_file_path[0] = '\0';
   host_vote_resolve_path(host);
+  host->ban_state_file_path[0] = '\0';
+  host_ban_resolve_path(host);
+  host->reply_state_file_path[0] = '\0';
+  host_reply_state_resolve_path(host);
   pthread_mutex_init(&host->lock, NULL);
   poll_state_reset(&host->poll);
   for (size_t idx = 0U; idx < SSH_CHATTER_MAX_NAMED_POLLS; ++idx) {
@@ -13421,6 +14256,8 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_state_load(host);
   host_vote_state_load(host);
   host_bbs_state_load(host);
+  host_ban_state_load(host);
+  host_reply_state_load(host);
 
   host->clients = client_manager_create(host);
   if (host->clients == NULL) {

@@ -57,6 +57,7 @@
 #define SSH_CHATTER_TETRIS_GRAVITY_INTERVAL_NS 100000000ULL
 #define SSH_CHATTER_TETRIS_LINES_PER_ROUND 10U
 #define SSH_CHATTER_TETRIS_MAX_ROUNDS 3U
+#define SSH_CHATTER_MAX_REPLIES 1024
 
 struct host;
 struct session_ctx;
@@ -112,6 +113,16 @@ typedef struct chat_history_entry {
   char attachment_caption[SSH_CHATTER_ATTACHMENT_CAPTION_LEN];
   uint32_t reaction_counts[SSH_CHATTER_REACTION_KIND_COUNT];
 } chat_history_entry_t;
+
+typedef struct chat_reply_entry {
+  bool in_use;
+  uint64_t reply_id;
+  uint64_t parent_message_id;
+  uint64_t parent_reply_id;
+  time_t created_at;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+} chat_reply_entry_t;
 
 typedef struct session_block_entry {
   bool in_use;
@@ -215,6 +226,7 @@ typedef struct session_ctx {
   char system_fg_name[SSH_CHATTER_COLOR_NAME_LEN];
   char system_bg_name[SSH_CHATTER_COLOR_NAME_LEN];
   char system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  int exit_status;
   bool should_exit;
   bool username_conflict;
   bool has_joined_room;
@@ -372,12 +384,17 @@ typedef struct host {
   size_t history_count;
   size_t history_capacity;
   uint64_t next_message_id;
+  chat_reply_entry_t replies[SSH_CHATTER_MAX_REPLIES];
+  size_t reply_count;
+  uint64_t next_reply_id;
   user_preference_t preferences[SSH_CHATTER_MAX_PREFERENCES];
   size_t preference_count;
   pthread_mutex_t lock;
   char state_file_path[PATH_MAX];
   char bbs_state_file_path[PATH_MAX];
   char vote_state_file_path[PATH_MAX];
+  char ban_state_file_path[PATH_MAX];
+  char reply_state_file_path[PATH_MAX];
   poll_state_t poll;
   named_poll_state_t named_polls[SSH_CHATTER_MAX_NAMED_POLLS];
   size_t named_poll_count;

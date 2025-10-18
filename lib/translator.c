@@ -177,6 +177,55 @@ static void translator_rate_limit_penalize(long status) {
   translator_rate_limit_penalise_until(&penalty_until);
 }
 
+static bool translator_cancel_requested(const volatile bool *flag) {
+  return flag != NULL && *flag;
+}
+
+static int translator_progress_abort(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal,
+                                     curl_off_t ulnow) {
+  (void)dltotal;
+  (void)dlnow;
+  (void)ultotal;
+  (void)ulnow;
+  return translator_cancel_requested((const volatile bool *)clientp) ? 1 : 0;
+}
+
+#if LIBCURL_VERSION_NUM < 0x072000
+static int translator_progress_abort_legacy(void *clientp, double dltotal, double dlnow, double ultotal, double ulnow) {
+  (void)dltotal;
+  (void)dlnow;
+  (void)ultotal;
+  (void)ulnow;
+  return translator_cancel_requested((const volatile bool *)clientp) ? 1 : 0;
+}
+#endif
+
+static void translator_configure_cancel_callback(CURL *curl, const volatile bool *cancel_flag) {
+  if (curl == NULL) {
+    return;
+  }
+
+  if (cancel_flag != NULL) {
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+#if LIBCURL_VERSION_NUM >= 0x072000
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, translator_progress_abort);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, (void *)cancel_flag);
+#else
+    curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, translator_progress_abort_legacy);
+    curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, (void *)cancel_flag);
+#endif
+  } else {
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
+#if LIBCURL_VERSION_NUM >= 0x072000
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, NULL);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, NULL);
+#else
+    curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, NULL);
+    curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, NULL);
+#endif
+  }
+}
+
 static void translator_clear_gemini_backoff_locked(void) {
   g_gemini_disabled_until.tv_sec = 0;
   g_gemini_disabled_until.tv_nsec = 0;
@@ -815,7 +864,8 @@ static char *translator_build_ollama_url(const char *base) {
 }
 
 static CURLcode translator_issue_gemini_request(CURL *curl, const char *url, const char *api_key, const char *body,
-                                                bool stream_mode, translator_buffer_t *buffer, long *status) {
+                                                bool stream_mode, const volatile bool *cancel_flag,
+                                                translator_buffer_t *buffer, long *status) {
   if (curl == NULL || url == NULL || body == NULL || buffer == NULL) {
     return CURLE_FAILED_INIT;
   }
@@ -843,6 +893,10 @@ static CURLcode translator_issue_gemini_request(CURL *curl, const char *url, con
   }
 
   translator_rate_limit_wait();
+  if (translator_cancel_requested(cancel_flag)) {
+    curl_slist_free_all(headers);
+    return CURLE_ABORTED_BY_CALLBACK;
+  }
   curl_easy_setopt(curl, CURLOPT_URL, url);
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
@@ -852,6 +906,7 @@ static CURLcode translator_issue_gemini_request(CURL *curl, const char *url, con
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, TRANSLATOR_CONNECT_TIMEOUT_MS);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, TRANSLATOR_TOTAL_TIMEOUT_MS);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  translator_configure_cancel_callback(curl, cancel_flag);
 
   CURLcode result = curl_easy_perform(curl);
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status_out);
@@ -901,7 +956,7 @@ static bool translator_handle_payload(const char *response, char *translation, s
 
 static CURLcode translator_issue_json_post(CURL *curl, const char *url, const char *body, const char *auth_header_name,
                                            const char *auth_header_value, const char *const *extra_headers,
-                                           translator_buffer_t *buffer, long *status) {
+                                           const volatile bool *cancel_flag, translator_buffer_t *buffer, long *status) {
   if (curl == NULL || url == NULL || body == NULL || buffer == NULL) {
     return CURLE_FAILED_INIT;
   }
@@ -939,6 +994,12 @@ static CURLcode translator_issue_json_post(CURL *curl, const char *url, const ch
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, TRANSLATOR_CONNECT_TIMEOUT_MS);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, TRANSLATOR_TOTAL_TIMEOUT_MS);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  translator_configure_cancel_callback(curl, cancel_flag);
+
+  if (translator_cancel_requested(cancel_flag)) {
+    curl_slist_free_all(headers);
+    return CURLE_ABORTED_BY_CALLBACK;
+  }
 
   CURLcode result = curl_easy_perform(curl);
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status_out);
@@ -1018,7 +1079,8 @@ static bool translator_add_candidate(translator_candidate_t *candidates, size_t 
 
 static bool translator_try_gemini(const translator_candidate_t *candidate, const char *text,
                                   const char *target_language, char *translation, size_t translation_len,
-                                  char *detected_language, size_t detected_len, bool *retryable) {
+                                  char *detected_language, size_t detected_len, const volatile bool *cancel_flag,
+                                  bool *retryable) {
   if (retryable != NULL) {
     *retryable = false;
   }
@@ -1037,6 +1099,11 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
     if (retryable != NULL) {
       *retryable = true;
     }
+    return false;
+  }
+
+  if (translator_cancel_requested(cancel_flag)) {
+    translator_set_error("Translation canceled.");
     return false;
   }
 
@@ -1145,26 +1212,35 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
   bool success = false;
   bool attempted_request = false;
   bool request_failed = false;
+  bool cancelled = false;
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
   if (stream_url != NULL) {
     long stream_status = 0L;
-    CURLcode stream_result = translator_issue_gemini_request(curl, stream_url, api_key, body, true, &stream_buffer, &stream_status);
-    if (stream_result == CURLE_OK && stream_status >= 200L && stream_status < 300L && stream_buffer.data != NULL) {
+    CURLcode stream_result =
+        translator_issue_gemini_request(curl, stream_url, api_key, body, true, cancel_flag, &stream_buffer, &stream_status);
+    if (stream_result == CURLE_ABORTED_BY_CALLBACK || translator_cancel_requested(cancel_flag)) {
+      cancelled = true;
+      translator_set_error("Translation canceled.");
+    } else if (stream_result == CURLE_OK && stream_status >= 200L && stream_status < 300L && stream_buffer.data != NULL) {
       if (translator_handle_payload(stream_buffer.data, translation, translation_len, detected_language, detected_len)) {
         success = true;
       }
     }
   }
 
-  if (!success && api_url != NULL) {
+  if (!success && !cancelled && api_url != NULL) {
     attempted_request = true;
     translator_set_error(NULL);
     long status = 0L;
-    CURLcode result = translator_issue_gemini_request(curl, api_url, api_key, body, false, &buffer, &status);
-    if (result != CURLE_OK) {
+    CURLcode result =
+        translator_issue_gemini_request(curl, api_url, api_key, body, false, cancel_flag, &buffer, &status);
+    if (result == CURLE_ABORTED_BY_CALLBACK || translator_cancel_requested(cancel_flag)) {
+      cancelled = true;
+      translator_set_error("Translation canceled.");
+    } else if (result != CURLE_OK) {
       translator_set_error("Failed to contact Gemini API: %s", curl_easy_strerror(result));
       if (retryable != NULL) {
         *retryable = true;
@@ -1207,7 +1283,7 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
 
   if (success) {
     translator_clear_gemini_backoff();
-  } else if (attempted_request && request_failed) {
+  } else if (!cancelled && attempted_request && request_failed) {
     translator_schedule_gemini_backoff_ns(TRANSLATOR_GEMINI_DISABLE_DURATION_NS);
   }
 
@@ -1223,7 +1299,8 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
 
 static bool translator_try_ollama(const translator_candidate_t *candidate, const char *text,
                                   const char *target_language, char *translation, size_t translation_len,
-                                  char *detected_language, size_t detected_len, bool *retryable) {
+                                  char *detected_language, size_t detected_len, const volatile bool *cancel_flag,
+                                  bool *retryable) {
   if (retryable != NULL) {
     *retryable = false;
   }
@@ -1235,6 +1312,11 @@ static bool translator_try_ollama(const translator_candidate_t *candidate, const
 
   if (translation == NULL || translation_len == 0U || text == NULL || target_language == NULL) {
     translator_set_error("Invalid translation request.");
+    return false;
+  }
+
+  if (translator_cancel_requested(cancel_flag)) {
+    translator_set_error("Translation canceled.");
     return false;
   }
 
@@ -1323,11 +1405,13 @@ static bool translator_try_ollama(const translator_candidate_t *candidate, const
 
   translator_buffer_t buffer = {0};
   long status = 0L;
-  CURLcode result = translator_issue_json_post(curl, url, body, NULL, NULL, NULL, &buffer, &status);
+  CURLcode result = translator_issue_json_post(curl, url, body, NULL, NULL, NULL, cancel_flag, &buffer, &status);
   free(url);
 
   bool success = false;
-  if (result != CURLE_OK) {
+  if (result == CURLE_ABORTED_BY_CALLBACK || translator_cancel_requested(cancel_flag)) {
+    translator_set_error("Translation canceled.");
+  } else if (result != CURLE_OK) {
     translator_set_error("Failed to contact Ollama API: %s", curl_easy_strerror(result));
     if (retryable != NULL) {
       *retryable = true;
@@ -1415,8 +1499,9 @@ static size_t translator_prepare_candidates(translator_candidate_t *candidates, 
   return count;
 }
 
-bool translator_translate(const char *text, const char *target_language, char *translation, size_t translation_len,
-                          char *detected_language, size_t detected_len) {
+static bool translator_translate_internal(const char *text, const char *target_language, char *translation,
+                                          size_t translation_len, char *detected_language, size_t detected_len,
+                                          const volatile bool *cancel_flag) {
   if (text == NULL || target_language == NULL || translation == NULL || translation_len == 0U) {
     return false;
   }
@@ -1435,14 +1520,18 @@ bool translator_translate(const char *text, const char *target_language, char *t
   for (size_t idx = 0U; idx < candidate_count; ++idx) {
     bool retryable = false;
     bool success = false;
+    if (translator_cancel_requested(cancel_flag)) {
+      translator_set_error("Translation canceled.");
+      return false;
+    }
     switch (candidates[idx].provider) {
       case TRANSLATOR_PROVIDER_GEMINI:
         success = translator_try_gemini(&candidates[idx], text, target_language, translation, translation_len,
-                                        detected_language, detected_len, &retryable);
+                                        detected_language, detected_len, cancel_flag, &retryable);
         break;
       case TRANSLATOR_PROVIDER_OLLAMA:
         success = translator_try_ollama(&candidates[idx], text, target_language, translation, translation_len,
-                                        detected_language, detected_len, &retryable);
+                                        detected_language, detected_len, cancel_flag, &retryable);
         break;
     }
 
@@ -1460,5 +1549,18 @@ bool translator_translate(const char *text, const char *target_language, char *t
   }
 
   return false;
+}
+
+bool translator_translate_with_cancel(const char *text, const char *target_language, char *translation,
+                                      size_t translation_len, char *detected_language, size_t detected_len,
+                                      const volatile bool *cancel_flag) {
+  return translator_translate_internal(text, target_language, translation, translation_len, detected_language, detected_len,
+                                       cancel_flag);
+}
+
+bool translator_translate(const char *text, const char *target_language, char *translation, size_t translation_len,
+                          char *detected_language, size_t detected_len) {
+  return translator_translate_internal(text, target_language, translation, translation_len, detected_language, detected_len,
+                                       NULL);
 }
 
