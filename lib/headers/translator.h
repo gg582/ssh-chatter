@@ -19,5 +19,6 @@ void translator_set_gemini_enabled(bool enabled);
 bool translator_is_gemini_enabled(void);
 bool translator_is_gemini_manually_disabled(void);
 bool translator_gemini_backoff_remaining(struct timespec *remaining);
+bool translator_is_ollama_only(void);
 
 #endif

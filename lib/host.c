@@ -3692,6 +3692,10 @@ static void session_translation_queue_block(session_ctx_t *ctx, const char *text
     return;
   }
 
+  if (translator_is_ollama_only()) {
+    return;
+  }
+
   (void)session_translation_queue_caption(ctx, text, 0U);
 }
 
@@ -4895,7 +4899,8 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
   }
 
   const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
-                                 ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode;
+                                 ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode &&
+                                 !translator_is_ollama_only();
   const bool multiline_message = strchr(message, '\n') != NULL;
   bool translation_block = false;
   bool previous_suppress = ctx->translation_suppress_output;
@@ -4997,7 +5002,8 @@ static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text) {
   }
 
   const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
-                                 ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode;
+                                 ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode &&
+                                 !translator_is_ollama_only();
 
   bool previous_suppress = ctx->translation_suppress_output;
   if (translation_ready && !ctx->translation_suppress_output) {
@@ -5020,7 +5026,8 @@ static void session_send_system_lines_bulk(session_ctx_t *ctx, const char *const
   }
 
   const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
-                                 ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode;
+                                 ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode &&
+                                 !translator_is_ollama_only();
 
   bool previous_suppress = ctx->translation_suppress_output;
   if (translation_ready && !ctx->translation_suppress_output) {
@@ -11441,9 +11448,11 @@ static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
   if (strcasecmp(token, "off") == 0) {
     translator_set_gemini_enabled(false);
     session_send_system_line(ctx, "Gemini translation disabled. Using Ollama gemma2:2b only.");
+    session_send_system_line(ctx, "While Gemini is off, only chat messages and BBS posts will be translated.");
 
     char notice[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(notice, sizeof(notice), "* [%s] disabled Gemini translation; using Ollama fallback only.", ctx->user.name);
+    snprintf(notice, sizeof(notice),
+             "* [%s] disabled Gemini translation; using Ollama fallback only (chat and BBS posts).", ctx->user.name);
     host_history_record_system(ctx->owner, notice);
     chat_room_broadcast(&ctx->owner->room, notice, NULL);
     return;

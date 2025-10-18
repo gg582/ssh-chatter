@@ -271,6 +271,19 @@ bool translator_gemini_backoff_remaining(struct timespec *remaining) {
   return active;
 }
 
+bool translator_is_ollama_only(void) {
+  if (!translator_is_gemini_enabled()) {
+    return true;
+  }
+
+  const char *api_key = getenv("GEMINI_API_KEY");
+  if (api_key == NULL || api_key[0] == '\0') {
+    return true;
+  }
+
+  return false;
+}
+
 static size_t translator_utf8_encode(uint32_t codepoint, char *output, size_t max_len) {
   if (output == NULL || max_len == 0U) {
     return 0U;
