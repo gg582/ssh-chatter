@@ -155,90 +155,101 @@ static char *translator_extract_payload_text(const char *response) {
     return NULL;
   }
 
-  const char *candidates_marker = "\"candidates\"";
-  const char *candidates_pos = strstr(response, candidates_marker);
-  if (candidates_pos == NULL) {
-    return NULL;
-  }
-
   const char *text_marker = "\"text\"";
-  const char *text_pos = strstr(candidates_pos, text_marker);
-  while (text_pos != NULL) {
-    text_pos += strlen(text_marker);
-    text_pos = translator_skip_whitespace(text_pos);
-    if (text_pos == NULL || *text_pos != ':') {
-      text_pos = strstr(text_pos, text_marker);
+  const size_t text_marker_len = strlen(text_marker);
+  const char *cursor = response;
+  char *latest_payload = NULL;
+
+  while ((cursor = strstr(cursor, text_marker)) != NULL) {
+    const char *value_start = cursor + text_marker_len;
+    value_start = translator_skip_whitespace(value_start);
+    if (value_start == NULL || *value_start != ':') {
+      cursor += text_marker_len;
       continue;
     }
 
-    ++text_pos;
-    text_pos = translator_skip_whitespace(text_pos);
-    if (text_pos == NULL || *text_pos != '"') {
-      text_pos = strstr(text_pos, text_marker);
+    ++value_start;
+    value_start = translator_skip_whitespace(value_start);
+    if (value_start == NULL || *value_start != '"') {
+      cursor += text_marker_len;
       continue;
     }
 
-    ++text_pos;
-    break;
+    ++value_start;
+
+    size_t capacity = strlen(value_start) + 1U;
+    char *candidate = malloc(capacity);
+    if (candidate == NULL) {
+      free(latest_payload);
+      return NULL;
+    }
+
+    size_t out_idx = 0U;
+    bool escape = false;
+    const char *scan = value_start;
+    for (; *scan != '\0'; ++scan) {
+      char ch = *scan;
+      if (!escape && ch == '\\') {
+        escape = true;
+        continue;
+      }
+      if (!escape && ch == '"') {
+        break;
+      }
+
+      char decoded = ch;
+      if (escape) {
+        switch (ch) {
+          case 'n':
+            decoded = '\n';
+            break;
+          case 'r':
+            decoded = '\r';
+            break;
+          case 't':
+            decoded = '\t';
+            break;
+          case '\\':
+            decoded = '\\';
+            break;
+          case '"':
+            decoded = '"';
+            break;
+          default:
+            decoded = ch;
+            break;
+        }
+        escape = false;
+      }
+
+      candidate[out_idx++] = decoded;
+    }
+
+    candidate[out_idx] = '\0';
+
+    if (candidate[0] == '{' && strstr(candidate, "\"translation\"") != NULL) {
+      free(latest_payload);
+      latest_payload = candidate;
+    } else {
+      free(candidate);
+    }
+
+    if (*scan == '\0') {
+      break;
+    }
+
+    cursor = scan + 1;
   }
 
-  if (text_pos == NULL) {
+  if (latest_payload == NULL) {
     const char *error_marker = "\"message\":\"";
     const char *error_pos = strstr(response, error_marker);
     if (error_pos != NULL) {
       fprintf(stderr, "API Error Message Found in Response.\n");
     }
-    return NULL;
   }
 
-  size_t capacity = strlen(text_pos) + 1U;
-  char *payload = malloc(capacity);
-  if (payload == NULL) {
-    return NULL;
-  }
-
-  size_t out_idx = 0U;
-  bool escape = false;
-  for (const char *cursor = text_pos; *cursor != '\0'; ++cursor) {
-    const char ch = *cursor;
-    if (!escape && ch == '\\') {
-      escape = true;
-      continue;
-    }
-    if (!escape && ch == '"') {
-      break;
-    }
-
-    char decoded = ch;
-    if (escape) {
-      switch (ch) {
-        case 'n':
-          decoded = '\n';
-          break;
-        case 'r':
-          decoded = '\r';
-          break;
-        case 't':
-          decoded = '\t';
-          break;
-        case '\\':
-          decoded = '\\';
-          break;
-        case '"':
-          decoded = '"';
-          break;
-        default:
-          decoded = ch;
-          break;
-      }
-      escape = false;
-    }
-
-    payload[out_idx++] = decoded;
-  }
-
-  payload[out_idx] = '\0';
-  return payload;
+  return latest_payload;
 }
 
 static bool translator_extract_json_value(const char *json, const char *key, char *dest, size_t dest_len) {
