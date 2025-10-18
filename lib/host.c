@@ -10487,6 +10487,15 @@ static void session_handle_exit(session_ctx_t *ctx) {
 
   ctx->should_exit = true;
   session_send_system_line(ctx, "Disconnecting... bye!");
+
+  if (ctx->translation_mutex_initialized) {
+    pthread_mutex_lock(&ctx->translation_mutex);
+    ctx->translation_thread_stop = true;
+    pthread_cond_broadcast(&ctx->translation_cond);
+    pthread_mutex_unlock(&ctx->translation_mutex);
+  }
+  session_translation_clear_queue(ctx);
+
   if (ctx->channel != NULL) {
     ssh_channel_send_eof(ctx->channel);
   }

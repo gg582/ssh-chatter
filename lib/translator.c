@@ -775,7 +775,8 @@ static bool translator_handle_chat_payload(const char *response, char *translati
 }
 
 static CURLcode translator_issue_json_post(CURL *curl, const char *url, const char *body, const char *auth_header_name,
-                                           const char *auth_header_value, translator_buffer_t *buffer, long *status) {
+                                           const char *auth_header_value, const char *const *extra_headers,
+                                           translator_buffer_t *buffer, long *status) {
   if (curl == NULL || url == NULL || body == NULL || buffer == NULL) {
     return CURLE_FAILED_INIT;
   }
@@ -795,6 +796,12 @@ static CURLcode translator_issue_json_post(CURL *curl, const char *url, const ch
       snprintf(header_value, header_len, "%s: %s", auth_header_name, auth_header_value);
       headers = curl_slist_append(headers, header_value);
       free(header_value);
+    }
+  }
+
+  if (extra_headers != NULL) {
+    for (size_t idx = 0U; extra_headers[idx] != NULL; ++idx) {
+      headers = curl_slist_append(headers, extra_headers[idx]);
     }
   }
 
@@ -1161,8 +1168,36 @@ static bool translator_try_openrouter(const translator_candidate_t *candidate, c
     snprintf(auth_value, auth_len, "Bearer %s", api_key);
   }
 
+  const char *site_url = getenv("OPENROUTER_SITE_URL");
+  if (site_url == NULL || site_url[0] == '\0') {
+    site_url = "https://github.com/yj-an/ssh-chatter";
+  }
+  const char *site_name = getenv("OPENROUTER_SITE_NAME");
+  if (site_name == NULL || site_name[0] == '\0') {
+    site_name = "ssh-chatter translator";
+  }
+
+  char referer_header[256];
+  char title_header[256];
+  referer_header[0] = '\0';
+  title_header[0] = '\0';
+  (void)snprintf(referer_header, sizeof(referer_header), "HTTP-Referer: %s", site_url);
+  (void)snprintf(title_header, sizeof(title_header), "X-Title: %s", site_name);
+
+  const char *extra_headers[3];
+  size_t header_count = 0U;
+  if (referer_header[0] != '\0') {
+    extra_headers[header_count++] = referer_header;
+  }
+  if (title_header[0] != '\0') {
+    extra_headers[header_count++] = title_header;
+  }
+  extra_headers[header_count] = NULL;
+
+  const char *const *header_list = header_count > 0U ? extra_headers : NULL;
+
   CURLcode result = translator_issue_json_post(curl, "https://openrouter.ai/api/v1/chat/completions", body, "Authorization",
-                                               auth_value, &buffer, &status);
+                                               auth_value, header_list, &buffer, &status);
   free(auth_value);
 
   if (result != CURLE_OK) {
@@ -1171,12 +1206,38 @@ static bool translator_try_openrouter(const translator_candidate_t *candidate, c
       *retryable = true;
     }
   } else if (status < 200L || status >= 300L || buffer.data == NULL) {
-    if (status == 429L || status == 503L || status == 401L || status == 403L) {
-      if (retryable != NULL) {
-        *retryable = true;
+    char message[256];
+    message[0] = '\0';
+    if (buffer.data != NULL) {
+      (void)translator_extract_json_value(buffer.data, "\"message\"", message, sizeof(message));
+      if (message[0] == '\0') {
+        (void)translator_extract_json_value(buffer.data, "\"error\":{\"message\"", message, sizeof(message));
       }
     }
-    translator_set_error("OpenRouter (%s) returned HTTP %ld.", model_name, status);
+
+    bool should_retry = status == 429L || status == 503L || status == 401L || status == 403L;
+    if (!should_retry && status == 400L) {
+      if (translator_string_contains_case_insensitive(message, "quota") ||
+          translator_string_contains_case_insensitive(message, "limit") ||
+          translator_string_contains_case_insensitive(message, "model") ||
+          translator_string_contains_case_insensitive(message, "overload") ||
+          translator_string_contains_case_insensitive(message, "unavailable") ||
+          translator_string_contains_case_insensitive(message, "try again")) {
+        should_retry = true;
+      }
+    }
+
+    if (retryable != NULL && should_retry) {
+      *retryable = true;
+    }
+
+    if (message[0] != '\0') {
+      translator_set_error("OpenRouter (%s) HTTP %ld: %s", model_name, status, message);
+    } else if (status != 0L) {
+      translator_set_error("OpenRouter (%s) returned HTTP %ld.", model_name, status);
+    } else {
+      translator_set_error("OpenRouter (%s) returned an empty response.", model_name);
+    }
   } else if (translator_handle_chat_payload(buffer.data, translation, translation_len, detected_language, detected_len)) {
     success = true;
   }
@@ -1285,7 +1346,7 @@ static bool translator_try_chatgpt(const translator_candidate_t *candidate, cons
   }
 
   CURLcode result = translator_issue_json_post(curl, "https://api.openai.com/v1/chat/completions", body, "Authorization",
-                                               auth_value, &buffer, &status);
+                                               auth_value, NULL, &buffer, &status);
   free(auth_value);
 
   if (result != CURLE_OK) {
@@ -1331,8 +1392,8 @@ static size_t translator_prepare_candidates(translator_candidate_t *candidates, 
   } defaults[] = {
       {TRANSLATOR_PROVIDER_GEMINI, "gemini-2.5"},
       {TRANSLATOR_PROVIDER_GEMINI, "gemini-2.5-lite"},
-      {TRANSLATOR_PROVIDER_OPENROUTER, "google/gemini-2.5"},
-      {TRANSLATOR_PROVIDER_OPENROUTER, "google/gemini-2.5-lite"},
+      {TRANSLATOR_PROVIDER_OPENROUTER, "openai/gpt-oss-20b:free"},
+      {TRANSLATOR_PROVIDER_OPENROUTER, "deepseek/deepseek-r1-0528-qwen3-8b:free"},
       {TRANSLATOR_PROVIDER_OPENAI, "gpt-5"},
   };
 
