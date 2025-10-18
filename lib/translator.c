@@ -1392,8 +1392,8 @@ static size_t translator_prepare_candidates(translator_candidate_t *candidates, 
   } defaults[] = {
       {TRANSLATOR_PROVIDER_GEMINI, "gemini-2.5"},
       {TRANSLATOR_PROVIDER_GEMINI, "gemini-2.5-lite"},
-      {TRANSLATOR_PROVIDER_OPENROUTER, "openai/gpt-oss-20b:free"},
-      {TRANSLATOR_PROVIDER_OPENROUTER, "deepseek/deepseek-r1-0528-qwen3-8b:free"},
+      {TRANSLATOR_PROVIDER_OPENROUTER, "google/gemini-2.5"},
+      {TRANSLATOR_PROVIDER_OPENROUTER, "google/gemini-2.5-lite"},
       {TRANSLATOR_PROVIDER_OPENAI, "gpt-5"},
   };
 
