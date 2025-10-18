@@ -155,90 +155,101 @@ static char *translator_extract_payload_text(const char *response) {
     return NULL;
   }
 
-  const char *candidates_marker = "\"candidates\"";
-  const char *candidates_pos = strstr(response, candidates_marker);
-  if (candidates_pos == NULL) {
-    return NULL;
-  }
-
   const char *text_marker = "\"text\"";
-  const char *text_pos = strstr(candidates_pos, text_marker);
-  while (text_pos != NULL) {
-    text_pos += strlen(text_marker);
-    text_pos = translator_skip_whitespace(text_pos);
-    if (text_pos == NULL || *text_pos != ':') {
-      text_pos = strstr(text_pos, text_marker);
+  const size_t text_marker_len = strlen(text_marker);
+  const char *cursor = response;
+  char *latest_payload = NULL;
+
+  while ((cursor = strstr(cursor, text_marker)) != NULL) {
+    const char *value_start = cursor + text_marker_len;
+    value_start = translator_skip_whitespace(value_start);
+    if (value_start == NULL || *value_start != ':') {
+      cursor += text_marker_len;
       continue;
     }
 
-    ++text_pos;
-    text_pos = translator_skip_whitespace(text_pos);
-    if (text_pos == NULL || *text_pos != '"') {
-      text_pos = strstr(text_pos, text_marker);
+    ++value_start;
+    value_start = translator_skip_whitespace(value_start);
+    if (value_start == NULL || *value_start != '"') {
+      cursor += text_marker_len;
       continue;
     }
 
-    ++text_pos;
-    break;
+    ++value_start;
+
+    size_t capacity = strlen(value_start) + 1U;
+    char *candidate = malloc(capacity);
+    if (candidate == NULL) {
+      free(latest_payload);
+      return NULL;
+    }
+
+    size_t out_idx = 0U;
+    bool escape = false;
+    const char *scan = value_start;
+    for (; *scan != '\0'; ++scan) {
+      char ch = *scan;
+      if (!escape && ch == '\\') {
+        escape = true;
+        continue;
+      }
+      if (!escape && ch == '"') {
+        break;
+      }
+
+      char decoded = ch;
+      if (escape) {
+        switch (ch) {
+          case 'n':
+            decoded = '\n';
+            break;
+          case 'r':
+            decoded = '\r';
+            break;
+          case 't':
+            decoded = '\t';
+            break;
+          case '\\':
+            decoded = '\\';
+            break;
+          case '"':
+            decoded = '"';
+            break;
+          default:
+            decoded = ch;
+            break;
+        }
+        escape = false;
+      }
+
+      candidate[out_idx++] = decoded;
+    }
+
+    candidate[out_idx] = '\0';
+
+    if (candidate[0] == '{' && strstr(candidate, "\"translation\"") != NULL) {
+      free(latest_payload);
+      latest_payload = candidate;
+    } else {
+      free(candidate);
+    }
+
+    if (*scan == '\0') {
+      break;
+    }
+
+    cursor = scan + 1;
   }
 
-  if (text_pos == NULL) {
+  if (latest_payload == NULL) {
     const char *error_marker = "\"message\":\"";
     const char *error_pos = strstr(response, error_marker);
     if (error_pos != NULL) {
       fprintf(stderr, "API Error Message Found in Response.\n");
     }
-    return NULL;
   }
 
-  size_t capacity = strlen(text_pos) + 1U;
-  char *payload = malloc(capacity);
-  if (payload == NULL) {
-    return NULL;
-  }
-
-  size_t out_idx = 0U;
-  bool escape = false;
-  for (const char *cursor = text_pos; *cursor != '\0'; ++cursor) {
-    const char ch = *cursor;
-    if (!escape && ch == '\\') {
-      escape = true;
-      continue;
-    }
-    if (!escape && ch == '"') {
-      break;
-    }
-
-    char decoded = ch;
-    if (escape) {
-      switch (ch) {
-        case 'n':
-          decoded = '\n';
-          break;
-        case 'r':
-          decoded = '\r';
-          break;
-        case 't':
-          decoded = '\t';
-          break;
-        case '\\':
-          decoded = '\\';
-          break;
-        case '"':
-          decoded = '"';
-          break;
-        default:
-          decoded = ch;
-          break;
-      }
-      escape = false;
-    }
-
-    payload[out_idx++] = decoded;
-  }
-
-  payload[out_idx] = '\0';
-  return payload;
+  return latest_payload;
 }
 
 static bool translator_extract_json_value(const char *json, const char *key, char *dest, size_t dest_len) {
@@ -313,7 +324,7 @@ static bool translator_extract_json_value(const char *json, const char *key, cha
   return true;
 }
 
-static char *translator_build_url(void) {
+static char *translator_build_url(bool stream_mode) {
   const char *base = getenv("GEMINI_API_BASE");
   if (base == NULL || base[0] == '\0') {
     base = getenv("GEMINI_BASE_URL");
@@ -332,21 +343,102 @@ static char *translator_build_url(void) {
   const char *models_prefix = "models/";
   size_t models_prefix_len = strlen(models_prefix);
   size_t model_len = strlen(model);
-  const char *generate_suffix = ":generateContent";
+  const char *suffix = stream_mode ? ":streamGenerateContent" : ":generateContent";
+  const char *query_prefix = stream_mode ? "?alt=sse&key=" : "?key=";
   const char *api_key = getenv("GEMINI_API_KEY");
   if (api_key == NULL || api_key[0] == '\0') {
     return NULL;
   }
 
-  size_t total = base_len + (base_has_slash ? 0U : 1U) + models_prefix_len + model_len + strlen(generate_suffix) + strlen("?key=") + strlen(api_key) + 1U;
+  size_t total = base_len + (base_has_slash ? 0U : 1U) + models_prefix_len + model_len + strlen(suffix) + strlen(query_prefix) + strlen(api_key) + 1U;
 
   char *url = malloc(total);
   if (url == NULL) {
     return NULL;
   }
 
-  snprintf(url, total, "%s%s%s%s%s?key=%s", base, base_has_slash ? "" : "/", models_prefix, model, generate_suffix, api_key);
+  snprintf(url, total, "%s%s%s%s%s%s%s", base, base_has_slash ? "" : "/", models_prefix, model, suffix, query_prefix, api_key);
   return url;
+}
+
+static CURLcode translator_issue_request(CURL *curl, const char *url, const char *body, bool stream_mode,
+                                         translator_buffer_t *buffer, long *status) {
+  if (curl == NULL || url == NULL || body == NULL || buffer == NULL) {
+    return CURLE_FAILED_INIT;
+  }
+
+  buffer->data = NULL;
+  buffer->length = 0U;
+
+  struct curl_slist *headers = NULL;
+  headers = curl_slist_append(headers, "Content-Type: application/json");
+  if (stream_mode) {
+    headers = curl_slist_append(headers, "Accept: text/event-stream");
+  }
+
+  const char *api_key_header = getenv("GEMINI_API_KEY");
+  if (api_key_header != NULL && api_key_header[0] != '\0') {
+    size_t header_len = strlen("x-goog-api-key: ") + strlen(api_key_header) + 1U;
+    char *header_value = malloc(header_len);
+    if (header_value != NULL) {
+      snprintf(header_value, header_len, "x-goog-api-key: %s", api_key_header);
+      headers = curl_slist_append(headers, header_value);
+      free(header_value);
+    }
+  }
+
+  curl_easy_setopt(curl, CURLOPT_URL, url);
+  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, translator_write_callback);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, buffer);
+
+  CURLcode result = curl_easy_perform(curl);
+  if (status != NULL) {
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status);
+  }
+
+  curl_slist_free_all(headers);
+  return result;
+}
+
+static bool translator_handle_payload(const char *response, char *translation, size_t translation_len,
+                                      char *detected_language, size_t detected_len) {
+  if (response == NULL || translation == NULL || translation_len == 0U) {
+    return false;
+  }
+
+  char *payload = translator_extract_payload_text(response);
+  if (payload == NULL) {
+    translator_set_error("Unable to parse Gemini translation payload.");
+    return false;
+  }
+
+  if (detected_language != NULL && detected_len > 0U) {
+    detected_language[0] = '\0';
+  }
+
+  char detected[64];
+  char translated[TRANSLATOR_MAX_RESPONSE];
+  detected[0] = '\0';
+  translated[0] = '\0';
+
+  (void)translator_extract_json_value(payload, "\"detected_language\"", detected, sizeof(detected));
+  if (!translator_extract_json_value(payload, "\"translation\"", translated, sizeof(translated))) {
+    free(payload);
+    translator_set_error("Gemini response did not contain a translation field.");
+    return false;
+  }
+
+  if (detected_language != NULL && detected_len > 0U) {
+    snprintf(detected_language, detected_len, "%s", detected);
+  }
+
+  snprintf(translation, translation_len, "%s", translated);
+  translator_set_error(NULL);
+  free(payload);
+  return true;
 }
 
 bool translator_translate(const char *text, const char *target_language, char *translation, size_t translation_len,
@@ -368,9 +460,10 @@ bool translator_translate(const char *text, const char *target_language, char *t
   bool success = false;
   char *escaped_text = translator_escape_string(text);
   char *escaped_target = translator_escape_string(target_language);
-  char *api_url = translator_build_url();
-  if (escaped_text == NULL || escaped_target == NULL || api_url == NULL) {
-    if (api_url == NULL) {
+  char *api_url = translator_build_url(false);
+  char *stream_url = translator_build_url(true);
+  if (escaped_text == NULL || escaped_target == NULL || (api_url == NULL && stream_url == NULL)) {
+    if (api_url == NULL && stream_url == NULL) {
       const char *api_key = getenv("GEMINI_API_KEY");
       if (api_key == NULL || api_key[0] == '\0') {
         translator_set_error("GEMINI_API_KEY is not configured.");
@@ -386,7 +479,7 @@ bool translator_translate(const char *text, const char *target_language, char *t
   static const char body_format[] =
       "{"
         "\"system_instruction\":{"
-          "\"parts\":[{\"text\":\"You are a translation engine that detects the source language of text and translates it to a requested target language. Preserve tokens like [[ANSI0]] unchanged. Respond only with a JSON object containing keys detected_language and translation.\"}]"
+          "\"parts\":[{\"text\":\"You are a translation engine that detects the source language of text and translates it to a requested target language. Preserve tokens like [[ANSI0]] or [[SEG00]] unchanged. Respond only with a JSON object containing keys detected_language and translation.\"}]"
         "},"
         "\"contents\":["
           "{"
@@ -417,97 +510,53 @@ bool translator_translate(const char *text, const char *target_language, char *t
   }
 
   translator_buffer_t buffer = {0};
-  struct curl_slist *headers = NULL;
-  headers = curl_slist_append(headers, "Content-Type: application/json");
-  const char *api_key_header = getenv("GEMINI_API_KEY");
-  if (api_key_header != NULL && api_key_header[0] != '\0') {
-    size_t header_len = strlen("x-goog-api-key: ") + strlen(api_key_header) + 1U;
-    char *header_value = malloc(header_len);
-    if (header_value != NULL) {
-      snprintf(header_value, header_len, "x-goog-api-key: %s", api_key_header);
-      headers = curl_slist_append(headers, header_value);
-      free(header_value);
-    }
-  }
-  if (headers == NULL) {
-    translator_set_error("Failed to prepare Gemini request headers.");
-    goto cleanup_headers;
-  }
-
-  curl_easy_setopt(curl, CURLOPT_URL, api_url);
-  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-  curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
-  curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, translator_write_callback);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
+  translator_buffer_t stream_buffer = {0};
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L); // prevent signal-based timeouts from hanging in worker threads
+  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
-  CURLcode result = curl_easy_perform(curl);
-  long status = 0;
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-
-  if (result != CURLE_OK) {
-    translator_set_error("Failed to contact Gemini API: %s", curl_easy_strerror(result));
-    goto cleanup_headers;
-  }
-
-  if (status < 200L || status >= 300L || buffer.data == NULL) {
-    char message[128];
-    message[0] = '\0';
-    if (buffer.data != NULL) {
-      (void)translator_extract_json_value(buffer.data, "\"message\"", message, sizeof(message));
+  if (stream_url != NULL) {
+    long stream_status = 0;
+    CURLcode stream_result = translator_issue_request(curl, stream_url, body, true, &stream_buffer, &stream_status);
+    if (stream_result == CURLE_OK && stream_status >= 200L && stream_status < 300L && stream_buffer.data != NULL) {
+      if (translator_handle_payload(stream_buffer.data, translation, translation_len, detected_language, detected_len)) {
+        success = true;
+      }
     }
-    if (message[0] != '\0') {
-      translator_set_error("Gemini API %ld: %s", status, message);
-    } else if (status != 0L) {
-      translator_set_error("Gemini API returned HTTP %ld.", status);
-    } else {
-      translator_set_error("Gemini API returned an empty response.");
+  }
+
+  if (!success && api_url != NULL) {
+    translator_set_error(NULL);
+    long status = 0;
+    CURLcode result = translator_issue_request(curl, api_url, body, false, &buffer, &status);
+    if (result != CURLE_OK) {
+      translator_set_error("Failed to contact Gemini API: %s", curl_easy_strerror(result));
+    } else if (status < 200L || status >= 300L || buffer.data == NULL) {
+      char message[128];
+      message[0] = '\0';
+      if (buffer.data != NULL) {
+        (void)translator_extract_json_value(buffer.data, "\"message\"", message, sizeof(message));
+      }
+      if (message[0] != '\0') {
+        translator_set_error("Gemini API %ld: %s", status, message);
+      } else if (status != 0L) {
+        translator_set_error("Gemini API returned HTTP %ld.", status);
+      } else {
+        translator_set_error("Gemini API returned an empty response.");
+      }
+    } else if (translator_handle_payload(buffer.data, translation, translation_len, detected_language, detected_len)) {
+      success = true;
     }
-    goto cleanup_headers;
   }
 
-  char *payload = translator_extract_payload_text(buffer.data);
-  if (payload == NULL) {
-    translator_set_error("Unable to parse Gemini translation payload.");
-    goto cleanup_headers;
-  }
-
-  if (detected_language != NULL && detected_len > 0U) {
-    detected_language[0] = '\0';
-  }
-
-  char detected[64];
-  char translated[TRANSLATOR_MAX_RESPONSE];
-  detected[0] = '\0';
-  translated[0] = '\0';
-
-  (void)translator_extract_json_value(payload, "\"detected_language\"", detected, sizeof(detected));
-  if (!translator_extract_json_value(payload, "\"translation\"", translated, sizeof(translated))) {
-    free(payload);
-    translator_set_error("Gemini response did not contain a translation field.");
-    goto cleanup_headers;
-  }
-
-  if (detected_language != NULL && detected_len > 0U) {
-    snprintf(detected_language, detected_len, "%s", detected);
-  }
-
-  snprintf(translation, translation_len, "%s", translated);
-  success = true;
-  translator_set_error(NULL);
-  free(payload);
-
-cleanup_headers:
-  curl_slist_free_all(headers);
+  free(stream_buffer.data);
   free(buffer.data);
   free(body);
 cleanup:
   free(escaped_text);
   free(escaped_target);
   free(api_url);
+  free(stream_url);
   curl_easy_cleanup(curl);
   return success;
 }
