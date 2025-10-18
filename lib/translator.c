@@ -27,7 +27,6 @@ typedef struct translator_buffer {
 
 typedef enum translator_provider {
   TRANSLATOR_PROVIDER_GEMINI,
-  TRANSLATOR_PROVIDER_OPENROUTER,
   TRANSLATOR_PROVIDER_OLLAMA,
 } translator_provider_t;
 
@@ -865,55 +864,6 @@ static bool translator_handle_payload(const char *response, char *translation, s
   return true;
 }
 
-static bool translator_extract_chat_content(const char *response, char *content, size_t content_len) {
-  if (response == NULL || content == NULL || content_len == 0U) {
-    return false;
-  }
-
-  const char *assistant = strstr(response, "\"role\":\"assistant\"");
-  const char *search_start = assistant != NULL ? assistant : response;
-  const char *content_key = "\"content\":\"";
-  const char *content_pos = strstr(search_start, content_key);
-  if (content_pos == NULL) {
-    return false;
-  }
-
-  content_pos += strlen(content_key);
-  const char *after_value = NULL;
-  if (!translator_decode_json_string(content_pos, content, content_len, &after_value)) {
-    return false;
-  }
-
-  return true;
-}
-
-static bool translator_handle_chat_payload(const char *response, char *translation, size_t translation_len,
-                                           char *detected_language, size_t detected_len) {
-  if (response == NULL || translation == NULL || translation_len == 0U) {
-    return false;
-  }
-
-  char content[TRANSLATOR_MAX_RESPONSE];
-  content[0] = '\0';
-  if (!translator_extract_chat_content(response, content, sizeof(content))) {
-    translator_set_error("Chat completion response did not contain assistant content.");
-    return false;
-  }
-
-  if (detected_language != NULL && detected_len > 0U) {
-    detected_language[0] = '\0';
-    (void)translator_extract_json_value(content, "\"detected_language\"", detected_language, detected_len);
-  }
-
-  if (!translator_extract_json_value(content, "\"translation\"", translation, translation_len)) {
-    translator_set_error("Chat completion response did not include a translation field.");
-    return false;
-  }
-
-  translator_set_error(NULL);
-  return true;
-}
-
 static CURLcode translator_issue_json_post(CURL *curl, const char *url, const char *body, const char *auth_header_name,
                                            const char *auth_header_value, const char *const *extra_headers,
                                            translator_buffer_t *buffer, long *status) {
@@ -976,10 +926,6 @@ static bool translator_candidate_configure(translator_candidate_t *candidate, tr
       api_key = getenv("GEMINI_API_KEY");
       api_key_name = "GEMINI_API_KEY";
       break;
-    case TRANSLATOR_PROVIDER_OPENROUTER:
-      api_key = getenv("OPENROUTER_API_KEY");
-      api_key_name = "OPENROUTER_API_KEY";
-      break;
     case TRANSLATOR_PROVIDER_OLLAMA:
       api_key = NULL;
       api_key_name = NULL;
@@ -989,7 +935,7 @@ static bool translator_candidate_configure(translator_candidate_t *candidate, tr
       break;
   }
 
-  if (api_key == NULL || api_key[0] == '\0') {
+  if ((api_key == NULL || api_key[0] == '\0') && provider != TRANSLATOR_PROVIDER_OLLAMA) {
     return false;
   }
 
@@ -1051,7 +997,7 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
   }
 
   const char *api_key = candidate->api_key;
-  if (api_key == NULL || api_key[0] == '\0') {
+  if ((api_key == NULL || api_key[0] == '\0')) {
     translator_set_error("GEMINI_API_KEY is not configured.");
     if (retryable != NULL) {
       *retryable = true;
@@ -1235,206 +1181,6 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
   free(body);
   free(api_url);
   free(stream_url);
-  curl_easy_cleanup(curl);
-
-  return success;
-}
-
-static bool translator_try_openrouter(const translator_candidate_t *candidate, const char *text,
-                                      const char *target_language, char *translation, size_t translation_len,
-                                      char *detected_language, size_t detected_len, bool *retryable) {
-  if (retryable != NULL) {
-    *retryable = false;
-  }
-
-  if (candidate == NULL) {
-    translator_set_error("OpenRouter provider is not configured.");
-    if (retryable != NULL) {
-      *retryable = true;
-    }
-    return false;
-  }
-
-  const char *api_key = candidate->api_key;
-  const char *key_name = candidate->api_key_name != NULL ? candidate->api_key_name : "OPENROUTER_API_KEY";
-  if (api_key == NULL || api_key[0] == '\0') {
-    translator_set_error("%s is not configured.", key_name);
-    if (retryable != NULL) {
-      *retryable = true;
-    }
-    return false;
-  }
-
-  const char *model_name = candidate->model != NULL && candidate->model[0] != '\0' ? candidate->model : "google/gemini-2.5";
-
-  char *escaped_text = translator_escape_string(text);
-  char *escaped_target = translator_escape_string(target_language);
-  const char *system_prompt =
-      "You are a translation engine that detects the source language of text and translates it to a requested target language. "
-      "Preserve tokens like [[ANSI0]] or [[SEG00]] unchanged. Respond only with a JSON object containing keys detected_language "
-      "and translation.";
-  char *escaped_system = translator_escape_string(system_prompt);
-  if (escaped_text == NULL || escaped_target == NULL || escaped_system == NULL) {
-    translator_set_error("Failed to prepare translation request payload.");
-    free(escaped_text);
-    free(escaped_target);
-    free(escaped_system);
-    if (retryable != NULL) {
-      *retryable = false;
-    }
-    return false;
-  }
-
-  static const char chat_format[] =
-      "{" \
-        "\"model\":\"%s\"," \
-        "\"messages\":[" \
-          "{\"role\":\"system\",\"content\":\"%s\"}," \
-          "{\"role\":\"user\",\"content\":\"Target language: %s\\nText: %s\"}" \
-        "]," \
-        "\"temperature\":0," \
-        "\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"translation_response\"," \
-          "\"schema\":{\"type\":\"object\",\"properties\":{\"detected_language\":{\"type\":\"string\"}," \
-            "\"translation\":{\"type\":\"string\"}},\"required\":[\"detected_language\",\"translation\"],\"additionalProperties\":false}}}" \
-      "}";
-
-  int computed = snprintf(NULL, 0, chat_format, model_name, escaped_system, escaped_target, escaped_text);
-  if (computed < 0) {
-    translator_set_error("Failed to prepare translation request payload.");
-    free(escaped_text);
-    free(escaped_target);
-    free(escaped_system);
-    if (retryable != NULL) {
-      *retryable = false;
-    }
-    return false;
-  }
-
-  size_t body_len = (size_t)computed + 1U;
-  char *body = malloc(body_len);
-  if (body == NULL) {
-    translator_set_error("Failed to prepare translation request payload.");
-    free(escaped_text);
-    free(escaped_target);
-    free(escaped_system);
-    if (retryable != NULL) {
-      *retryable = false;
-    }
-    return false;
-  }
-
-  snprintf(body, body_len, chat_format, model_name, escaped_system, escaped_target, escaped_text);
-  free(escaped_text);
-  free(escaped_target);
-  free(escaped_system);
-
-  CURL *curl = curl_easy_init();
-  if (curl == NULL) {
-    free(body);
-    translator_set_error("Failed to initialise CURL.");
-    if (retryable != NULL) {
-      *retryable = false;
-    }
-    return false;
-  }
-
-  translator_buffer_t buffer = {0};
-  bool success = false;
-  long status = 0L;
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
-  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-
-  size_t auth_len = strlen("Bearer ") + strlen(api_key) + 1U;
-  char *auth_value = malloc(auth_len);
-  if (auth_value != NULL) {
-    snprintf(auth_value, auth_len, "Bearer %s", api_key);
-  }
-
-  const char *site_url = getenv("OPENROUTER_SITE_URL");
-  if (site_url == NULL || site_url[0] == '\0') {
-    site_url = "https://github.com/yj-an/ssh-chatter";
-  }
-  const char *site_name = getenv("OPENROUTER_SITE_NAME");
-  if (site_name == NULL || site_name[0] == '\0') {
-    site_name = "ssh-chatter translator";
-  }
-
-  char referer_header[256];
-  char title_header[256];
-  referer_header[0] = '\0';
-  title_header[0] = '\0';
-  (void)snprintf(referer_header, sizeof(referer_header), "HTTP-Referer: %s", site_url);
-  (void)snprintf(title_header, sizeof(title_header), "X-Title: %s", site_name);
-
-  const char *extra_headers[3];
-  size_t header_count = 0U;
-  if (referer_header[0] != '\0') {
-    extra_headers[header_count++] = referer_header;
-  }
-  if (title_header[0] != '\0') {
-    extra_headers[header_count++] = title_header;
-  }
-  extra_headers[header_count] = NULL;
-
-  const char *const *header_list = header_count > 0U ? extra_headers : NULL;
-
-  CURLcode result = translator_issue_json_post(curl, "https://openrouter.ai/api/v1/chat/completions", body, "Authorization",
-                                               auth_value, header_list, &buffer, &status);
-  free(auth_value);
-
-  if (result != CURLE_OK) {
-    translator_set_error("Failed to contact OpenRouter API: %s", curl_easy_strerror(result));
-    if (retryable != NULL) {
-      *retryable = true;
-    }
-  } else if (status < 200L || status >= 300L || buffer.data == NULL) {
-    char message[256];
-    message[0] = '\0';
-    if (buffer.data != NULL) {
-      (void)translator_extract_json_value(buffer.data, "\"message\"", message, sizeof(message));
-      if (message[0] == '\0') {
-        (void)translator_extract_json_value(buffer.data, "\"error\":{\"message\"", message, sizeof(message));
-      }
-    }
-
-    bool should_retry = status == 429L || status == 503L || status == 401L || status == 403L;
-    const bool quota_like = status == 429L || status == 403L ||
-                            translator_string_contains_case_insensitive(message, "quota") ||
-                            translator_string_contains_case_insensitive(message, "limit") ||
-                            translator_string_contains_case_insensitive(message, "exhaust");
-    if (!should_retry && status == 400L) {
-      if (translator_string_contains_case_insensitive(message, "quota") ||
-          translator_string_contains_case_insensitive(message, "limit") ||
-          translator_string_contains_case_insensitive(message, "model") ||
-          translator_string_contains_case_insensitive(message, "overload") ||
-          translator_string_contains_case_insensitive(message, "unavailable") ||
-          translator_string_contains_case_insensitive(message, "try again") ||
-          translator_string_contains_case_insensitive(message, "provider returned error")) {
-        should_retry = true;
-      }
-    }
-
-    if (retryable != NULL && should_retry) {
-      *retryable = true;
-    }
-
-    if (message[0] != '\0') {
-      translator_set_error("OpenRouter (%s) HTTP %ld: %s", model_name, status, message);
-    } else if (status != 0L) {
-      translator_set_error("OpenRouter (%s) returned HTTP %ld.", model_name, status);
-    } else {
-      translator_set_error("OpenRouter (%s) returned an empty response.", model_name);
-    }
-    if (quota_like) {
-      translator_mark_quota_exhausted();
-    }
-  } else if (translator_handle_chat_payload(buffer.data, translation, translation_len, detected_language, detected_len)) {
-    success = true;
-  }
-
-  free(buffer.data);
-  free(body);
   curl_easy_cleanup(curl);
 
   return success;
@@ -1658,10 +1404,6 @@ bool translator_translate(const char *text, const char *target_language, char *t
       case TRANSLATOR_PROVIDER_GEMINI:
         success = translator_try_gemini(&candidates[idx], text, target_language, translation, translation_len,
                                         detected_language, detected_len, &retryable);
-        break;
-      case TRANSLATOR_PROVIDER_OPENROUTER:
-        success = translator_try_openrouter(&candidates[idx], text, target_language, translation, translation_len,
-                                            detected_language, detected_len, &retryable);
         break;
       case TRANSLATOR_PROVIDER_OLLAMA:
         success = translator_try_ollama(&candidates[idx], text, target_language, translation, translation_len,
