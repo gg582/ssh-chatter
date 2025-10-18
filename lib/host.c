@@ -61,6 +61,7 @@
 #define SSH_CHATTER_CHANNEL_RECOVERY_LIMIT 5U
 #define SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS 200000000L
 #define SSH_CHATTER_TRANSLATION_SEGMENT_GUARD 32U
+#define SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS 150000000L
 
 #ifndef MSG_DONTWAIT
 #define MSG_DONTWAIT 0
@@ -3944,6 +3945,19 @@ static void *session_translation_worker(void *arg) {
     }
 
     size_t estimate = strlen(batch[0]->sanitized) + SSH_CHATTER_TRANSLATION_SEGMENT_GUARD;
+
+    if (batch_count == 1U) {
+      bool delay_needed = false;
+      pthread_mutex_lock(&ctx->translation_mutex);
+      if (!ctx->translation_thread_stop && ctx->translation_pending_head == NULL) {
+        delay_needed = true;
+      }
+      pthread_mutex_unlock(&ctx->translation_mutex);
+
+      if (delay_needed) {
+        struct timespec aggregation_delay = {.tv_sec = 0, .tv_nsec = SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS};
+        nanosleep(&aggregation_delay, NULL);
+      }
 
     pthread_mutex_lock(&ctx->translation_mutex);
     while (batch_count < SSH_CHATTER_TRANSLATION_BATCH_MAX && ctx->translation_pending_head != NULL) {

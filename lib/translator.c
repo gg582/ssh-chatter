@@ -1,12 +1,18 @@
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "headers/translator.h"
 
 #include <curl/curl.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
 
 #define TRANSLATOR_MAX_RESPONSE 65536
 #define TRANSLATOR_DEFAULT_BASE_URL "https://generativelanguage.googleapis.com/v1beta"
@@ -19,8 +25,328 @@ typedef struct translator_buffer {
 
 static pthread_mutex_t g_init_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_error_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_rate_mutex = PTHREAD_MUTEX_INITIALIZER;
 static bool g_curl_initialised = false;
 static char g_last_error[256] = "";
+static struct timespec g_next_allowed_request = {0, 0};
+
+#define TRANSLATOR_RATE_LIMIT_INTERVAL_NS 400000000L
+#define TRANSLATOR_RATE_LIMIT_PENALTY_NS 1200000000L
+
+static struct timespec translator_timespec_now(void) {
+  struct timespec now = {0, 0};
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return now;
+}
+
+static int translator_timespec_compare(const struct timespec *a, const struct timespec *b) {
+  if (a == NULL || b == NULL) {
+    return 0;
+  }
+
+  if (a->tv_sec != b->tv_sec) {
+    return (a->tv_sec < b->tv_sec) ? -1 : 1;
+  }
+
+  if (a->tv_nsec != b->tv_nsec) {
+    return (a->tv_nsec < b->tv_nsec) ? -1 : 1;
+  }
+
+  return 0;
+}
+
+static struct timespec translator_timespec_add_ns(const struct timespec *base, long nanoseconds) {
+  struct timespec result = {0, 0};
+  if (base != NULL) {
+    result = *base;
+  }
+
+  long seconds = nanoseconds / 1000000000L;
+  long remainder = nanoseconds % 1000000000L;
+  if (remainder < 0) {
+    --seconds;
+    remainder += 1000000000L;
+  }
+
+  result.tv_sec += seconds;
+  result.tv_nsec += remainder;
+  if (result.tv_nsec >= 1000000000L) {
+    ++result.tv_sec;
+    result.tv_nsec -= 1000000000L;
+  }
+
+  if (result.tv_nsec < 0) {
+    --result.tv_sec;
+    result.tv_nsec += 1000000000L;
+  }
+
+  if (result.tv_sec < 0) {
+    result.tv_sec = 0;
+    result.tv_nsec = 0;
+  }
+
+  return result;
+}
+
+static struct timespec translator_timespec_diff(const struct timespec *end, const struct timespec *start) {
+  struct timespec result = {0, 0};
+  if (end == NULL || start == NULL) {
+    return result;
+  }
+
+  if (translator_timespec_compare(end, start) <= 0) {
+    return result;
+  }
+
+  result.tv_sec = end->tv_sec - start->tv_sec;
+  result.tv_nsec = end->tv_nsec - start->tv_nsec;
+  if (result.tv_nsec < 0) {
+    --result.tv_sec;
+    result.tv_nsec += 1000000000L;
+  }
+
+  if (result.tv_sec < 0) {
+    result.tv_sec = 0;
+    result.tv_nsec = 0;
+  }
+
+  return result;
+}
+
+static void translator_rate_limit_wait(void) {
+  for (;;) {
+    pthread_mutex_lock(&g_rate_mutex);
+    struct timespec now = translator_timespec_now();
+    if (g_next_allowed_request.tv_sec == 0 && g_next_allowed_request.tv_nsec == 0) {
+      g_next_allowed_request = translator_timespec_add_ns(&now, TRANSLATOR_RATE_LIMIT_INTERVAL_NS);
+      pthread_mutex_unlock(&g_rate_mutex);
+      return;
+    }
+
+    if (translator_timespec_compare(&now, &g_next_allowed_request) >= 0) {
+      g_next_allowed_request = translator_timespec_add_ns(&now, TRANSLATOR_RATE_LIMIT_INTERVAL_NS);
+      pthread_mutex_unlock(&g_rate_mutex);
+      return;
+    }
+
+    struct timespec wait_time = translator_timespec_diff(&g_next_allowed_request, &now);
+    pthread_mutex_unlock(&g_rate_mutex);
+    nanosleep(&wait_time, NULL);
+  }
+}
+
+static void translator_rate_limit_penalise_until(const struct timespec *until) {
+  if (until == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&g_rate_mutex);
+  if (translator_timespec_compare(until, &g_next_allowed_request) > 0) {
+    g_next_allowed_request = *until;
+  }
+  pthread_mutex_unlock(&g_rate_mutex);
+}
+
+static void translator_rate_limit_penalize(long status) {
+  if (status != 429L) {
+    return;
+  }
+
+  struct timespec now = translator_timespec_now();
+  struct timespec penalty_until = translator_timespec_add_ns(&now, TRANSLATOR_RATE_LIMIT_PENALTY_NS);
+  translator_rate_limit_penalise_until(&penalty_until);
+}
+
+static size_t translator_utf8_encode(uint32_t codepoint, char *output, size_t max_len) {
+  if (output == NULL || max_len == 0U) {
+    return 0U;
+  }
+
+  if (codepoint <= 0x7FU) {
+    if (max_len < 1U) {
+      return 0U;
+    }
+    output[0] = (char)codepoint;
+    return 1U;
+  }
+
+  if (codepoint <= 0x7FFU) {
+    if (max_len < 2U) {
+      return 0U;
+    }
+    output[0] = (char)(0xC0 | (codepoint >> 6));
+    output[1] = (char)(0x80 | (codepoint & 0x3FU));
+    return 2U;
+  }
+
+  if (codepoint <= 0xFFFFU) {
+    if (max_len < 3U) {
+      return 0U;
+    }
+    output[0] = (char)(0xE0 | (codepoint >> 12));
+    output[1] = (char)(0x80 | ((codepoint >> 6) & 0x3FU));
+    output[2] = (char)(0x80 | (codepoint & 0x3FU));
+    return 3U;
+  }
+
+  if (codepoint <= 0x10FFFFU) {
+    if (max_len < 4U) {
+      return 0U;
+    }
+    output[0] = (char)(0xF0 | (codepoint >> 18));
+    output[1] = (char)(0x80 | ((codepoint >> 12) & 0x3FU));
+    output[2] = (char)(0x80 | ((codepoint >> 6) & 0x3FU));
+    output[3] = (char)(0x80 | (codepoint & 0x3FU));
+    return 4U;
+  }
+
+  return 0U;
+}
+
+static bool translator_parse_hex4(const char *input, uint32_t *value) {
+  if (input == NULL || value == NULL) {
+    return false;
+  }
+
+  uint32_t result = 0U;
+  for (size_t idx = 0U; idx < 4U; ++idx) {
+    char ch = input[idx];
+    if (ch == '\0') {
+      return false;
+    }
+    result <<= 4U;
+    if (ch >= '0' && ch <= '9') {
+      result |= (uint32_t)(ch - '0');
+    } else if (ch >= 'a' && ch <= 'f') {
+      result |= (uint32_t)(10 + (ch - 'a'));
+    } else if (ch >= 'A' && ch <= 'F') {
+      result |= (uint32_t)(10 + (ch - 'A'));
+    } else {
+      return false;
+    }
+  }
+
+  *value = result;
+  return true;
+}
+
+static bool translator_decode_json_string(const char *input, char *output, size_t output_len, const char **end_out) {
+  if (input == NULL || output == NULL || output_len == 0U) {
+    return false;
+  }
+
+  size_t out_idx = 0U;
+  const char *cursor = input;
+
+  while (*cursor != '\0') {
+    char ch = *cursor++;
+    if (ch == '"') {
+      if (out_idx >= output_len) {
+        output[output_len - 1U] = '\0';
+      } else {
+        output[out_idx] = '\0';
+      }
+      if (end_out != NULL) {
+        *end_out = cursor;
+      }
+      return true;
+    }
+
+    if (ch == '\\') {
+      char next = *cursor++;
+      if (next == '\0') {
+        break;
+      }
+
+      switch (next) {
+        case '"':
+        case '\\':
+        case '/':
+        case 'b':
+        case 'f':
+        case 'n':
+        case 'r':
+        case 't': {
+          char decoded = next;
+          switch (next) {
+            case 'b':
+              decoded = '\b';
+              break;
+            case 'f':
+              decoded = '\f';
+              break;
+            case 'n':
+              decoded = '\n';
+              break;
+            case 'r':
+              decoded = '\r';
+              break;
+            case 't':
+              decoded = '\t';
+              break;
+            default:
+              break;
+          }
+
+          if (out_idx + 1U >= output_len) {
+            return false;
+          }
+          output[out_idx++] = decoded;
+          break;
+        }
+        case 'u': {
+          uint32_t codepoint = 0U;
+          if (!translator_parse_hex4(cursor, &codepoint)) {
+            return false;
+          }
+          cursor += 4U;
+
+          if (codepoint >= 0xD800U && codepoint <= 0xDBFFU) {
+            if (cursor[0] == '\\' && cursor[1] == 'u') {
+              uint32_t low = 0U;
+              if (!translator_parse_hex4(cursor + 2U, &low)) {
+                return false;
+              }
+              cursor += 6U;
+              if (low >= 0xDC00U && low <= 0xDFFFU) {
+                codepoint = 0x10000U + (((codepoint - 0xD800U) << 10U) | (low - 0xDC00U));
+              } else {
+                codepoint = 0xFFFD;
+              }
+            } else {
+              codepoint = 0xFFFD;
+            }
+          } else if (codepoint >= 0xDC00U && codepoint <= 0xDFFFU) {
+            codepoint = 0xFFFD;
+          }
+
+          char encoded[4];
+          size_t encoded_len = translator_utf8_encode(codepoint, encoded, sizeof(encoded));
+          if (encoded_len == 0U || out_idx + encoded_len >= output_len) {
+            return false;
+          }
+          memcpy(output + out_idx, encoded, encoded_len);
+          out_idx += encoded_len;
+          break;
+        }
+        default:
+          if (out_idx + 1U >= output_len) {
+            return false;
+          }
+          output[out_idx++] = next;
+          break;
+      }
+      continue;
+    }
+
+    if (out_idx + 1U >= output_len) {
+      return false;
+    }
+    output[out_idx++] = ch;
+  }
+
+  return false;
+}
 
 static void translator_set_error(const char *fmt, ...) {
   pthread_mutex_lock(&g_error_mutex);
@@ -184,48 +510,12 @@ static char *translator_extract_payload_text(const char *response) {
       return NULL;
     }
 
-    size_t out_idx = 0U;
-    bool escape = false;
-    const char *scan = value_start;
-    for (; *scan != '\0'; ++scan) {
-      char ch = *scan;
-      if (!escape && ch == '\\') {
-        escape = true;
-        continue;
-      }
-      if (!escape && ch == '"') {
-        break;
-      }
-
-      char decoded = ch;
-      if (escape) {
-        switch (ch) {
-          case 'n':
-            decoded = '\n';
-            break;
-          case 'r':
-            decoded = '\r';
-            break;
-          case 't':
-            decoded = '\t';
-            break;
-          case '\\':
-            decoded = '\\';
-            break;
-          case '"':
-            decoded = '"';
-            break;
-          default:
-            decoded = ch;
-            break;
-        }
-        escape = false;
-      }
-
-      candidate[out_idx++] = decoded;
+    const char *after_string = NULL;
+    if (!translator_decode_json_string(value_start, candidate, capacity, &after_string)) {
+      free(candidate);
+      free(latest_payload);
+      return NULL;
     }
-
-    candidate[out_idx] = '\0';
 
     if (candidate[0] == '{' && strstr(candidate, "\"translation\"") != NULL) {
       free(latest_payload);
@@ -234,11 +524,11 @@ static char *translator_extract_payload_text(const char *response) {
       free(candidate);
     }
 
-    if (*scan == '\0') {
+    if (after_string == NULL) {
       break;
     }
 
-    cursor = scan + 1;
+    cursor = after_string;
   }
 
   if (latest_payload == NULL) {
@@ -273,52 +563,10 @@ static bool translator_extract_json_value(const char *json, const char *key, cha
   }
 
   ++key_pos;
-  size_t offset = 0U;
-  bool escape = false;
-  for (const char *cursor = key_pos; *cursor != '\0'; ++cursor) {
-    char ch = *cursor;
-    if (!escape && ch == '\\') {
-      escape = true;
-      continue;
-    }
-    if (!escape && ch == '"') {
-      break;
-    }
-
-    char decoded = ch;
-    if (escape) {
-      switch (ch) {
-        case 'n':
-          decoded = '\n';
-          break;
-        case 'r':
-          decoded = '\r';
-          break;
-        case 't':
-          decoded = '\t';
-          break;
-        case '\\':
-          decoded = '\\';
-          break;
-        case '"':
-          decoded = '"';
-          break;
-        default:
-          decoded = ch;
-          break;
-      }
-      escape = false;
-    }
-
-    if (offset + 1U < dest_len) {
-      dest[offset++] = decoded;
-    }
-  }
-
-  if (offset >= dest_len) {
-    dest[dest_len - 1U] = '\0';
-  } else {
-    dest[offset] = '\0';
+  const char *after_value = NULL;
+  if (!translator_decode_json_string(key_pos, dest, dest_len, &after_value)) {
+    dest[0] = '\0';
+    return false;
   }
 
   return true;
@@ -370,6 +618,9 @@ static CURLcode translator_issue_request(CURL *curl, const char *url, const char
   buffer->data = NULL;
   buffer->length = 0U;
 
+  long local_status = 0L;
+  long *status_out = status != NULL ? status : &local_status;
+
   struct curl_slist *headers = NULL;
   headers = curl_slist_append(headers, "Content-Type: application/json");
   if (stream_mode) {
@@ -387,6 +638,7 @@ static CURLcode translator_issue_request(CURL *curl, const char *url, const char
     }
   }
 
+  translator_rate_limit_wait();
   curl_easy_setopt(curl, CURLOPT_URL, url);
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
@@ -395,9 +647,8 @@ static CURLcode translator_issue_request(CURL *curl, const char *url, const char
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, buffer);
 
   CURLcode result = curl_easy_perform(curl);
-  if (status != NULL) {
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status);
-  }
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status_out);
+  translator_rate_limit_penalize(*status_out);
 
   curl_slist_free_all(headers);
   return result;
