@@ -88,6 +88,7 @@ int ssh_channel_is_open(ssh_channel channel);
 int ssh_channel_is_closed(ssh_channel channel);
 int ssh_channel_is_eof(ssh_channel channel);
 int ssh_channel_send_eof(ssh_channel channel);
+int ssh_channel_request_send_exit_status(ssh_channel channel, int exit_status);
 int ssh_channel_close(ssh_channel channel);
 void ssh_channel_free(ssh_channel channel);
 

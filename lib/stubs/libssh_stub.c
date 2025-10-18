@@ -117,6 +117,12 @@ int ssh_channel_send_eof(ssh_channel channel) {
   return SSH_OK;
 }
 
+int ssh_channel_request_send_exit_status(ssh_channel channel, int exit_status) {
+  (void)channel;
+  (void)exit_status;
+  return SSH_OK;
+}
+
 int ssh_channel_close(ssh_channel channel) {
   (void)channel;
   return SSH_OK;

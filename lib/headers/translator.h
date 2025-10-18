@@ -11,6 +11,11 @@ bool translator_translate(const char *text, const char *target_language,
                           char *translation, size_t translation_len,
                           char *detected_language, size_t detected_len);
 
+bool translator_translate_with_cancel(const char *text, const char *target_language,
+                                      char *translation, size_t translation_len,
+                                      char *detected_language, size_t detected_len,
+                                      const volatile bool *cancel_flag);
+
 const char *translator_last_error(void);
 
 bool translator_last_error_was_quota(void);
