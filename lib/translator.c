@@ -930,7 +930,7 @@ static bool translator_candidate_configure(translator_candidate_t *candidate, tr
       api_key = NULL;
       api_key_name = NULL;
       if (model == NULL || model[0] == '\0') {
-        model = "gemma2:2b";
+        model = "zongwei/gemma3-translator:1b";
       }
       break;
   }
