@@ -504,6 +504,15 @@ static void session_apply_saved_preferences(session_ctx_t *ctx);
 static void session_dispatch_command(session_ctx_t *ctx, const char *line);
 static void session_handle_exit(session_ctx_t *ctx);
 static void session_handle_nick(session_ctx_t *ctx, const char *arguments);
+static bool session_detect_provider_ip(const char *ip, char *label, size_t length);
+static bool host_lookup_member_ip(host_t *host, const char *username, char *ip, size_t length);
+static bool session_should_hide_entry(session_ctx_t *ctx, const chat_history_entry_t *entry);
+static bool session_blocklist_add(session_ctx_t *ctx, const char *ip, const char *username, bool ip_wide,
+                                  bool *already_present);
+static bool session_blocklist_remove(session_ctx_t *ctx, const char *token);
+static void session_blocklist_show(session_ctx_t *ctx);
+static void session_handle_block(session_ctx_t *ctx, const char *arguments);
+static void session_handle_unblock(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pm(session_ctx_t *ctx, const char *arguments);
 static void session_handle_motd(session_ctx_t *ctx);
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments);
@@ -4479,6 +4488,258 @@ static void session_send_plain_line(session_ctx_t *ctx, const char *message) {
   session_send_line(ctx, message);
 }
 
+static bool host_lookup_member_ip(host_t *host, const char *username, char *ip, size_t length) {
+  if (host == NULL || username == NULL || ip == NULL || length == 0U) {
+    return false;
+  }
+
+  session_ctx_t *member = chat_room_find_user(&host->room, username);
+  if (member == NULL || member->client_ip[0] == '\0') {
+    return false;
+  }
+
+  snprintf(ip, length, "%s", member->client_ip);
+  return true;
+}
+
+static bool session_detect_provider_ip(const char *ip, char *label, size_t length) {
+  if (label != NULL && length > 0U) {
+    label[0] = '\0';
+  }
+
+  if (ip == NULL || ip[0] == '\0' || label == NULL || length == 0U) {
+    return false;
+  }
+
+  typedef struct provider_prefix {
+    const char *prefix;
+    const char *label;
+  } provider_prefix_t;
+
+  static const provider_prefix_t kProviderPrefixes[] = {
+      {"39.7.", "Korean ISP"},       {"58.120.", "Korean ISP"}, {"59.0.", "Korean ISP"},
+      {"61.32.", "Korean ISP"},      {"211.36.", "Korean ISP"}, {"218.144.", "Korean ISP"},
+      {"73.", "US ISP"},             {"96.", "US ISP"},         {"107.", "US ISP"},
+      {"174.", "US ISP"},            {"2600:", "US ISP"},       {"2604:", "US ISP"},
+      {"2605:", "US ISP"},           {"2607:", "US ISP"},       {"2609:", "US ISP"},
+      {"24.114.", "Canadian ISP"},   {"142.", "Canadian ISP"}, {"2603:", "Canadian ISP"},
+      {"185.", "EU ISP"},            {"195.", "EU ISP"},       {"2a00:", "EU ISP"},
+      {"2a02:", "EU ISP"},           {"2a03:", "EU ISP"},      {"2a09:", "EU ISP"},
+      {"5.18.", "Russian ISP"},      {"37.", "Russian ISP"},   {"91.", "Russian ISP"},
+      {"36.", "Chinese ISP"},        {"42.", "Chinese ISP"},   {"139.", "Chinese ISP"},
+      {"2408:", "Chinese ISP"},      {"2409:", "Chinese ISP"}, {"49.", "Indian ISP"},
+      {"103.", "Indian ISP"},        {"106.", "Indian ISP"},   {"2405:", "Indian ISP"},
+      {"2406:", "Indian ISP"},       {"100.64.", "Carrier-grade NAT"}};
+
+  for (size_t idx = 0U; idx < sizeof(kProviderPrefixes) / sizeof(kProviderPrefixes[0]); ++idx) {
+    const provider_prefix_t *entry = &kProviderPrefixes[idx];
+    size_t prefix_len = strlen(entry->prefix);
+    if (strncasecmp(ip, entry->prefix, prefix_len) == 0) {
+      snprintf(label, length, "%s", entry->label);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool session_blocklist_add(session_ctx_t *ctx, const char *ip, const char *username, bool ip_wide,
+                                  bool *already_present) {
+  if (ctx == NULL) {
+    if (already_present != NULL) {
+      *already_present = false;
+    }
+    return false;
+  }
+
+  if (already_present != NULL) {
+    *already_present = false;
+  }
+
+  char normalized_ip[SSH_CHATTER_IP_LEN] = {0};
+  char normalized_user[SSH_CHATTER_USERNAME_LEN] = {0};
+
+  if (ip != NULL && ip[0] != '\0') {
+    snprintf(normalized_ip, sizeof(normalized_ip), "%s", ip);
+  }
+
+  if (username != NULL && username[0] != '\0') {
+    snprintf(normalized_user, sizeof(normalized_user), "%s", username);
+  }
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_BLOCKED; ++idx) {
+    session_block_entry_t *entry = &ctx->block_entries[idx];
+    if (!entry->in_use) {
+      continue;
+    }
+
+    if (ip_wide) {
+      if (normalized_ip[0] != '\0' && strncmp(entry->ip, normalized_ip, SSH_CHATTER_IP_LEN) == 0) {
+        if (already_present != NULL) {
+          *already_present = true;
+        }
+        return false;
+      }
+    } else {
+      if (normalized_user[0] != '\0' && strncmp(entry->username, normalized_user, SSH_CHATTER_USERNAME_LEN) == 0 &&
+          !entry->ip_wide) {
+        if (already_present != NULL) {
+          *already_present = true;
+        }
+        return false;
+      }
+    }
+  }
+
+  size_t free_index = SSH_CHATTER_MAX_BLOCKED;
+  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_BLOCKED; ++idx) {
+    if (!ctx->block_entries[idx].in_use) {
+      free_index = idx;
+      break;
+    }
+  }
+
+  if (free_index >= SSH_CHATTER_MAX_BLOCKED) {
+    return false;
+  }
+
+  session_block_entry_t *slot = &ctx->block_entries[free_index];
+  memset(slot, 0, sizeof(*slot));
+  slot->in_use = true;
+  slot->ip_wide = ip_wide;
+  if (normalized_ip[0] != '\0') {
+    snprintf(slot->ip, sizeof(slot->ip), "%s", normalized_ip);
+  }
+  if (normalized_user[0] != '\0') {
+    snprintf(slot->username, sizeof(slot->username), "%s", normalized_user);
+  }
+
+  if (ctx->block_entry_count < SSH_CHATTER_MAX_BLOCKED) {
+    ctx->block_entry_count += 1U;
+  }
+
+  return true;
+}
+
+static bool session_blocklist_remove(session_ctx_t *ctx, const char *token) {
+  if (ctx == NULL || token == NULL || token[0] == '\0') {
+    return false;
+  }
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_BLOCKED; ++idx) {
+    session_block_entry_t *entry = &ctx->block_entries[idx];
+    if (!entry->in_use) {
+      continue;
+    }
+
+    if ((entry->ip[0] != '\0' && strncmp(entry->ip, token, SSH_CHATTER_IP_LEN) == 0) ||
+        (entry->username[0] != '\0' && strncmp(entry->username, token, SSH_CHATTER_USERNAME_LEN) == 0)) {
+      memset(entry, 0, sizeof(*entry));
+      if (ctx->block_entry_count > 0U) {
+        ctx->block_entry_count -= 1U;
+      }
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void session_blocklist_show(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (ctx->block_entry_count == 0U) {
+    session_send_system_line(ctx, "No blocked users or IPs.");
+    return;
+  }
+
+  session_send_system_line(ctx, "Blocked targets:");
+  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_BLOCKED; ++idx) {
+    const session_block_entry_t *entry = &ctx->block_entries[idx];
+    if (!entry->in_use) {
+      continue;
+    }
+
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    if (entry->ip_wide && entry->ip[0] != '\0') {
+      if (entry->username[0] != '\0') {
+        snprintf(line, sizeof(line), "- %s (all users from this IP, originally [%s])", entry->ip, entry->username);
+      } else {
+        snprintf(line, sizeof(line), "- %s (all users from this IP)", entry->ip);
+      }
+    } else if (entry->username[0] != '\0') {
+      if (entry->ip[0] != '\0') {
+        snprintf(line, sizeof(line), "- [%s] (only this user, IP %s)", entry->username, entry->ip);
+      } else {
+        snprintf(line, sizeof(line), "- [%s]", entry->username);
+      }
+    } else {
+      snprintf(line, sizeof(line), "- entry #%zu", idx + 1U);
+    }
+    session_send_system_line(ctx, line);
+  }
+}
+
+static bool session_should_hide_entry(session_ctx_t *ctx, const chat_history_entry_t *entry) {
+  if (ctx == NULL || entry == NULL) {
+    return false;
+  }
+
+  if (!entry->is_user_message) {
+    return false;
+  }
+
+  if (ctx->block_entry_count == 0U) {
+    return false;
+  }
+
+  if (strncmp(entry->username, ctx->user.name, SSH_CHATTER_USERNAME_LEN) == 0) {
+    return false;
+  }
+
+  char entry_ip[SSH_CHATTER_IP_LEN] = {0};
+  if (ctx->owner != NULL) {
+    host_lookup_member_ip(ctx->owner, entry->username, entry_ip, sizeof(entry_ip));
+  }
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_BLOCKED; ++idx) {
+    const session_block_entry_t *block = &ctx->block_entries[idx];
+    if (!block->in_use) {
+      continue;
+    }
+
+    bool ip_match = false;
+    bool user_match = false;
+
+    if (block->ip[0] != '\0' && entry_ip[0] != '\0' &&
+        strncmp(block->ip, entry_ip, SSH_CHATTER_IP_LEN) == 0) {
+      ip_match = true;
+    }
+
+    if (block->username[0] != '\0' &&
+        strncmp(block->username, entry->username, SSH_CHATTER_USERNAME_LEN) == 0) {
+      user_match = true;
+    }
+
+    if (block->ip_wide) {
+      if (ip_match) {
+        return true;
+      }
+      if (!ip_match && entry_ip[0] == '\0' && user_match) {
+        return true;
+      }
+    } else {
+      if (user_match) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 static void session_send_system_line(session_ctx_t *ctx, const char *message) {
   if (ctx == NULL || ctx->channel == NULL || message == NULL) {
     return;
@@ -4698,38 +4959,24 @@ static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
   const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
 
-  if (hl[0] != '\0') {
-    ssh_channel_write(ctx->channel, hl, strlen(hl));
+  char prompt[128];
+  size_t offset = 0U;
+  offset = session_append_fragment(prompt, sizeof(prompt), offset, hl);
+  offset = session_append_fragment(prompt, sizeof(prompt), offset, fg);
+  offset = session_append_fragment(prompt, sizeof(prompt), offset, bold);
+  offset = session_append_fragment(prompt, sizeof(prompt), offset, "│ > ");
+  offset = session_append_fragment(prompt, sizeof(prompt), offset, ANSI_RESET);
+  if (bg[0] != '\0') {
+    offset = session_append_fragment(prompt, sizeof(prompt), offset, bg);
   }
   if (fg[0] != '\0') {
-    ssh_channel_write(ctx->channel, fg, strlen(fg));
+    offset = session_append_fragment(prompt, sizeof(prompt), offset, fg);
   }
   if (bold[0] != '\0') {
-    ssh_channel_write(ctx->channel, bold, strlen(bold));
-  }
-  const char pipe_symbol[] = "│";
-  ssh_channel_write(ctx->channel, pipe_symbol, sizeof(pipe_symbol) - 1U);
-
-  ssh_channel_write(ctx->channel, ANSI_RESET, strlen(ANSI_RESET));
-  if (bg[0] != '\0') {
-    ssh_channel_write(ctx->channel, bg, strlen(bg));
-  }
-  ssh_channel_write(ctx->channel, " ", 1U);
-  if (fg[0] != '\0') {
-    ssh_channel_write(ctx->channel, fg, strlen(fg));
-  }
-  if (bold[0] != '\0') {
-    ssh_channel_write(ctx->channel, bold, strlen(bold));
-  }
-  ssh_channel_write(ctx->channel, "> ", 2U);
-  ssh_channel_write(ctx->channel, ANSI_RESET, strlen(ANSI_RESET));
-  if (bg[0] != '\0') {
-    ssh_channel_write(ctx->channel, bg, strlen(bg));
-  }
-  if (fg[0] != '\0') {
-    ssh_channel_write(ctx->channel, fg, strlen(fg));
+    offset = session_append_fragment(prompt, sizeof(prompt), offset, bold);
   }
 
+  ssh_channel_write(ctx->channel, prompt, offset);
   if (ctx->input_length > 0U) {
     ssh_channel_write(ctx->channel, ctx->input_buffer, ctx->input_length);
   }
@@ -5196,6 +5443,10 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
     return;
   }
 
+  if (session_should_hide_entry(ctx, entry)) {
+    return;
+  }
+
   if (entry->is_user_message) {
     const char *highlight = entry->user_highlight_code != NULL ? entry->user_highlight_code : "";
     const char *color = entry->user_color_code != NULL ? entry->user_color_code : "";
@@ -5213,10 +5464,10 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
 
     char header[SSH_CHATTER_MESSAGE_LIMIT + 128];
     if (entry->message_id > 0U) {
-      snprintf(header, sizeof(header), "[#%" PRIu64 "] %s%s%s%s%s %s", entry->message_id, highlight, bold, color,
+      snprintf(header, sizeof(header), "[#%" PRIu64 "] %s%s%s[%s]%s %s", entry->message_id, highlight, bold, color,
                entry->username, ANSI_RESET, message_text);
     } else {
-      snprintf(header, sizeof(header), "%s%s%s%s%s %s", highlight, bold, color, entry->username, ANSI_RESET,
+      snprintf(header, sizeof(header), "%s%s%s[%s]%s %s", highlight, bold, color, entry->username, ANSI_RESET,
                message_text);
     }
     session_send_plain_line(ctx, header);
@@ -5763,6 +6014,8 @@ static void session_print_help(session_ctx_t *ctx) {
   session_send_system_line(ctx, "/poke <username>      - send a bell to call a user");
   session_send_system_line(ctx, "/kick <username>      - disconnect a user (operator only)");
   session_send_system_line(ctx, "/ban <username>       - ban a user (operator only)");
+  session_send_system_line(ctx, "/block <user|ip>      - hide messages from a user or IP locally (/block list to review)");
+  session_send_system_line(ctx, "/unblock <target|all> - remove a local block entry");
   session_send_system_line(ctx, "/pardon <user|ip>     - remove a ban (operator only)");
   session_send_system_line(ctx,
                            "/good|/sad|/cool|/angry|/checked|/love|/wtf <id> - react to a message by number");
@@ -6065,6 +6318,253 @@ static void session_handle_poke(session_ctx_t *ctx, const char *arguments) {
   printf("[poke] %s pokes %s\n", ctx->user.name, target->user.name);
   ssh_channel_write(target->channel, "\a", 1U);
   session_send_system_line(ctx, "Poke sent.");
+}
+
+static void session_handle_block(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  static const char *kUsage = "Usage: /block <username|ip|list|confirm <username> <only|ip>>";
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  if (strcasecmp(working, "list") == 0) {
+    session_blocklist_show(ctx);
+    return;
+  }
+
+  if (strncasecmp(working, "confirm", 7) == 0 &&
+      (working[7] == '\0' || isspace((unsigned char)working[7]))) {
+    char *cursor = working + 7;
+    while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
+      ++cursor;
+    }
+
+    if (*cursor == '\0') {
+      session_send_system_line(ctx, kUsage);
+      return;
+    }
+
+    char username[SSH_CHATTER_USERNAME_LEN];
+    size_t name_len = 0U;
+    while (*cursor != '\0' && !isspace((unsigned char)*cursor) && name_len + 1U < sizeof(username)) {
+      username[name_len++] = *cursor++;
+    }
+    username[name_len] = '\0';
+
+    while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
+      ++cursor;
+    }
+
+    if (*cursor == '\0') {
+      session_send_system_line(ctx, kUsage);
+      return;
+    }
+
+    char mode[16];
+    size_t mode_len = 0U;
+    while (*cursor != '\0' && !isspace((unsigned char)*cursor) && mode_len + 1U < sizeof(mode)) {
+      mode[mode_len++] = *cursor++;
+    }
+    mode[mode_len] = '\0';
+
+    if (!ctx->block_pending.active) {
+      session_send_system_line(ctx, "No provider block is awaiting confirmation.");
+      return;
+    }
+
+    if (strncmp(ctx->block_pending.username, username, SSH_CHATTER_USERNAME_LEN) != 0) {
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(message, sizeof(message), "Pending block is for [%s], not [%s].", ctx->block_pending.username, username);
+      session_send_system_line(ctx, message);
+      return;
+    }
+
+    bool block_ip = false;
+    if (strcasecmp(mode, "ip") == 0 || strcasecmp(mode, "all") == 0 || strcasecmp(mode, "full") == 0) {
+      block_ip = true;
+    } else if (strcasecmp(mode, "only") == 0 || strcasecmp(mode, "user") == 0 || strcasecmp(mode, "name") == 0) {
+      block_ip = false;
+    } else {
+      session_send_system_line(ctx, kUsage);
+      return;
+    }
+
+    bool already_present = false;
+    if (!session_blocklist_add(ctx, ctx->block_pending.ip, ctx->block_pending.username, block_ip, &already_present)) {
+      if (already_present) {
+        session_send_system_line(ctx, "That target is already blocked.");
+      } else {
+        session_send_system_line(ctx, "Unable to add block entry (limit reached?).");
+      }
+    } else {
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      if (block_ip) {
+        snprintf(message, sizeof(message), "Blocking all users from %.63s.", ctx->block_pending.ip);
+      } else {
+        snprintf(message, sizeof(message), "Blocking [%.23s] only (IP %.63s).", ctx->block_pending.username,
+                 ctx->block_pending.ip);
+      }
+      session_send_system_line(ctx, message);
+    }
+
+    ctx->block_pending.active = false;
+    ctx->block_pending.username[0] = '\0';
+    ctx->block_pending.ip[0] = '\0';
+    ctx->block_pending.provider_label[0] = '\0';
+    return;
+  }
+
+  unsigned char inet_buffer[sizeof(struct in6_addr)];
+  if (inet_pton(AF_INET, working, inet_buffer) == 1 || inet_pton(AF_INET6, working, inet_buffer) == 1) {
+    bool already_present = false;
+    char label[64];
+    bool provider = session_detect_provider_ip(working, label, sizeof(label));
+    if (!session_blocklist_add(ctx, working, "", true, &already_present)) {
+      if (already_present) {
+        session_send_system_line(ctx, "That IP is already blocked.");
+      } else {
+        session_send_system_line(ctx, "Unable to add block entry (limit reached?).");
+      }
+    } else {
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(message, sizeof(message), "Blocking all users from %.256s.", working);
+      session_send_system_line(ctx, message);
+      if (provider && label[0] != '\0') {
+        char warning[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(warning, sizeof(warning),
+                 "Warning: %.256s is flagged as %.63s; other people may also be hidden.", working, label);
+        session_send_system_line(ctx, warning);
+      }
+    }
+    return;
+  }
+
+  if (ctx->owner == NULL) {
+    session_send_system_line(ctx, "Block list unavailable right now.");
+    return;
+  }
+
+  session_ctx_t *target = chat_room_find_user(&ctx->owner->room, working);
+  if (target == NULL) {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "User '%.256s' is not connected.", working);
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  if (target == ctx) {
+    session_send_system_line(ctx, "You do not need to block yourself.");
+    return;
+  }
+
+  if (target->client_ip[0] == '\0') {
+    session_send_system_line(ctx, "Unable to identify that user's IP address right now.");
+    return;
+  }
+
+  char label[64];
+  if (session_detect_provider_ip(target->client_ip, label, sizeof(label))) {
+    memset(&ctx->block_pending, 0, sizeof(ctx->block_pending));
+    ctx->block_pending.active = true;
+    snprintf(ctx->block_pending.username, sizeof(ctx->block_pending.username), "%s", target->user.name);
+    snprintf(ctx->block_pending.ip, sizeof(ctx->block_pending.ip), "%s", target->client_ip);
+    snprintf(ctx->block_pending.provider_label, sizeof(ctx->block_pending.provider_label), "%.31s", label);
+
+    char warning[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(warning, sizeof(warning), "%.63s appears to belong to %.63s.", target->client_ip, label);
+    session_send_system_line(ctx, warning);
+
+    char prompt[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(prompt, sizeof(prompt),
+             "Use /block confirm %.23s only to hide just [%.23s] or /block confirm %.23s ip to hide everyone from that IP.",
+             target->user.name, target->user.name, target->user.name);
+    session_send_system_line(ctx, prompt);
+    return;
+  }
+
+  bool already_present = false;
+  if (!session_blocklist_add(ctx, target->client_ip, target->user.name, true, &already_present)) {
+    if (already_present) {
+      session_send_system_line(ctx, "That address is already blocked.");
+    } else {
+      session_send_system_line(ctx, "Unable to add block entry (limit reached?).");
+    }
+  } else {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "Blocking all users from %.63s (triggered by [%.23s]).", target->client_ip,
+             target->user.name);
+    session_send_system_line(ctx, message);
+  }
+}
+
+static void session_handle_unblock(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  static const char *kUsage = "Usage: /unblock <username|ip|all>";
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  if (strcasecmp(working, "all") == 0) {
+    size_t removed = 0U;
+    for (size_t idx = 0U; idx < SSH_CHATTER_MAX_BLOCKED; ++idx) {
+      if (ctx->block_entries[idx].in_use) {
+        memset(&ctx->block_entries[idx], 0, sizeof(ctx->block_entries[idx]));
+        ++removed;
+      }
+    }
+    ctx->block_entry_count = 0U;
+    ctx->block_pending.active = false;
+    ctx->block_pending.username[0] = '\0';
+    ctx->block_pending.ip[0] = '\0';
+    ctx->block_pending.provider_label[0] = '\0';
+
+    if (removed == 0U) {
+      session_send_system_line(ctx, "No blocked entries to remove.");
+    } else {
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(message, sizeof(message), "Removed %zu blocked entr%s.", removed, removed == 1U ? "y" : "ies");
+      session_send_system_line(ctx, message);
+    }
+    return;
+  }
+
+  if (session_blocklist_remove(ctx, working)) {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "Removed block for %.256s.", working);
+    session_send_system_line(ctx, message);
+  } else {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "No block entry matched '%.256s'.", working);
+    session_send_system_line(ctx, message);
+  }
 }
 
 static void session_handle_pm(session_ctx_t *ctx, const char *arguments) {
@@ -11016,6 +11516,14 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
 
   else if (session_parse_command(line, "/ban", &args)) {
     session_handle_ban(ctx, args);
+    return;
+  }
+  else if (session_parse_command(line, "/block", &args)) {
+    session_handle_block(ctx, args);
+    return;
+  }
+  else if (session_parse_command(line, "/unblock", &args)) {
+    session_handle_unblock(ctx, args);
     return;
   }
 

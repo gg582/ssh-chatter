@@ -43,6 +43,7 @@
 #define SSH_CHATTER_BBS_MAX_COMMENTS 64
 #define SSH_CHATTER_BBS_COMMENT_LEN 512
 #define SSH_CHATTER_MAX_GRANTS 128
+#define SSH_CHATTER_MAX_BLOCKED 64
 #define SSH_CHATTER_JOIN_BAR_MAX 17
 #define SSH_CHATTER_LANG_NAME_LEN 64
 #define SSH_CHATTER_STATUS_LEN 128
@@ -109,6 +110,20 @@ typedef struct chat_history_entry {
   char attachment_caption[SSH_CHATTER_ATTACHMENT_CAPTION_LEN];
   uint32_t reaction_counts[SSH_CHATTER_REACTION_KIND_COUNT];
 } chat_history_entry_t;
+
+typedef struct session_block_entry {
+  bool in_use;
+  char ip[SSH_CHATTER_IP_LEN];
+  char username[SSH_CHATTER_USERNAME_LEN];
+  bool ip_wide;
+} session_block_entry_t;
+
+typedef struct session_block_prompt {
+  bool active;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  char ip[SSH_CHATTER_IP_LEN];
+  char provider_label[32];
+} session_block_prompt_t;
 
 typedef struct auth_profile {
   bool is_banned;
@@ -244,6 +259,9 @@ typedef struct session_ctx {
   bool asciiart_has_cooldown;
   struct timespec last_asciiart_post;
   session_game_state_t game;
+  session_block_entry_t block_entries[SSH_CHATTER_MAX_BLOCKED];
+  size_t block_entry_count;
+  session_block_prompt_t block_pending;
 } session_ctx_t;
 
 typedef struct user_preference {
