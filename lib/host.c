@@ -60,6 +60,8 @@
 #define SESSION_CHANNEL_TIMEOUT (-2)
 #define SSH_CHATTER_CHANNEL_RECOVERY_LIMIT 5U
 #define SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS 200000000L
+#define SSH_CHATTER_TRANSLATION_SEGMENT_GUARD 32U
+#define SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS 150000000L
 
 #ifndef MSG_DONTWAIT
 #define MSG_DONTWAIT 0
@@ -618,6 +620,7 @@ static void session_bbs_reset_pending_post(session_ctx_t *ctx);
 static bbs_post_t *host_find_bbs_post_locked(host_t *host, uint64_t id);
 static bbs_post_t *host_allocate_bbs_post_locked(host_t *host);
 static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
+static void session_bbs_queue_translation(session_ctx_t *ctx, const bbs_post_t *post);
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post);
 static bool session_asciiart_cooldown_active(session_ctx_t *ctx, struct timespec *now, long *remaining_seconds);
 static void session_asciiart_reset(session_ctx_t *ctx);
@@ -3674,6 +3677,238 @@ static void session_translation_worker_shutdown(session_ctx_t *ctx) {
   ctx->translation_thread_stop = false;
 }
 
+static void session_translation_publish_result(session_ctx_t *ctx, const translation_caption_job_t *job,
+                                               const char *payload, bool success) {
+  if (ctx == NULL || job == NULL) {
+    return;
+  }
+
+  translation_caption_result_t *result = calloc(1U, sizeof(*result));
+  if (result == NULL) {
+    return;
+  }
+
+  result->success = success;
+  result->placeholder_lines = job->placeholder_lines;
+
+  const char *message = payload;
+  if (message == NULL || message[0] == '\0') {
+    if (success) {
+      message = "";
+    } else {
+      message = "⚠️ translation unavailable.";
+    }
+  }
+
+  snprintf(result->translated, sizeof(result->translated), "%s", message);
+
+  pthread_mutex_lock(&ctx->translation_mutex);
+  result->next = NULL;
+  if (ctx->translation_ready_tail != NULL) {
+    ctx->translation_ready_tail->next = result;
+  } else {
+    ctx->translation_ready_head = result;
+  }
+  ctx->translation_ready_tail = result;
+  pthread_mutex_unlock(&ctx->translation_mutex);
+}
+
+static void session_translation_process_single_job(session_ctx_t *ctx, translation_caption_job_t *job) {
+  if (ctx == NULL || job == NULL) {
+    return;
+  }
+
+  char translated_body[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  char restored[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  translated_body[0] = '\0';
+  restored[0] = '\0';
+
+  bool success = false;
+  char failure_message[128];
+  failure_message[0] = '\0';
+  const int max_attempts = 3;
+  for (int attempt = 0; attempt < max_attempts && !success; ++attempt) {
+    translated_body[0] = '\0';
+
+    if (!translator_translate(job->sanitized, job->target_language, translated_body, sizeof(translated_body), NULL, 0U)) {
+      const char *error = translator_last_error();
+      if (error != NULL && error[0] != '\0') {
+        snprintf(failure_message, sizeof(failure_message), "⚠️ translation failed: %s", error);
+      } else {
+        snprintf(failure_message, sizeof(failure_message), "⚠️ translation failed.");
+      }
+
+      if (attempt + 1 < max_attempts) {
+        struct timespec retry_delay = {.tv_sec = 1, .tv_nsec = 0L};
+        nanosleep(&retry_delay, NULL);
+      }
+      continue;
+    }
+
+    if (!translation_restore_text(translated_body, restored, sizeof(restored), job->placeholders,
+                                  job->placeholder_count)) {
+      snprintf(failure_message, sizeof(failure_message), "⚠️ translation post-processing failed.");
+      break;
+    }
+
+    success = true;
+    failure_message[0] = '\0';
+  }
+
+  if (!success && failure_message[0] == '\0') {
+    snprintf(failure_message, sizeof(failure_message), "⚠️ translation unavailable.");
+  }
+
+  if (success) {
+    session_translation_publish_result(ctx, job, restored, true);
+  } else {
+    session_translation_publish_result(ctx, job, failure_message, false);
+  }
+
+  free(job);
+}
+
+static bool session_translation_process_batch(session_ctx_t *ctx, translation_caption_job_t **jobs,
+                                              size_t job_count) {
+  if (ctx == NULL || jobs == NULL || job_count == 0U) {
+    return false;
+  }
+
+  char *combined = calloc(SSH_CHATTER_TRANSLATION_BATCH_BUFFER, sizeof(char));
+  char *translated = calloc(SSH_CHATTER_TRANSLATION_BATCH_BUFFER, sizeof(char));
+  if (combined == NULL || translated == NULL) {
+    free(combined);
+    free(translated);
+    return false;
+  }
+
+  size_t offset = 0U;
+  for (size_t idx = 0U; idx < job_count; ++idx) {
+    char marker[32];
+    int marker_len = snprintf(marker, sizeof(marker), "[[SEG%02zu]]\n", idx);
+    if (marker_len < 0) {
+      free(combined);
+      free(translated);
+      return false;
+    }
+
+    size_t marker_size = (size_t)marker_len;
+    size_t text_len = strlen(jobs[idx]->sanitized);
+    if (offset + marker_size + text_len + 1U > SSH_CHATTER_TRANSLATION_BATCH_BUFFER) {
+      free(combined);
+      free(translated);
+      return false;
+    }
+
+    memcpy(combined + offset, marker, marker_size);
+    offset += marker_size;
+    memcpy(combined + offset, jobs[idx]->sanitized, text_len);
+    offset += text_len;
+    combined[offset++] = '\n';
+  }
+  combined[offset] = '\0';
+
+  if (!translator_translate(combined, jobs[0]->target_language, translated, SSH_CHATTER_TRANSLATION_BATCH_BUFFER, NULL, 0U)) {
+    free(combined);
+    free(translated);
+    return false;
+  }
+
+  char *segment_starts[SSH_CHATTER_TRANSLATION_BATCH_MAX] = {0};
+  char *segment_ends[SSH_CHATTER_TRANSLATION_BATCH_MAX] = {0};
+
+  char *search_cursor = translated;
+  for (size_t idx = 0U; idx < job_count; ++idx) {
+    char marker[32];
+    int marker_len = snprintf(marker, sizeof(marker), "[[SEG%02zu]]", idx);
+    if (marker_len < 0) {
+      free(combined);
+      free(translated);
+      return false;
+    }
+
+    char *marker_pos = strstr(search_cursor, marker);
+    if (marker_pos == NULL) {
+      free(combined);
+      free(translated);
+      return false;
+    }
+
+    char *start = marker_pos + (size_t)marker_len;
+    while (*start == '\r' || *start == '\n') {
+      ++start;
+    }
+
+    segment_starts[idx] = start;
+    search_cursor = start;
+  }
+
+  for (size_t idx = 0U; idx + 1U < job_count; ++idx) {
+    char marker[32];
+    int marker_len = snprintf(marker, sizeof(marker), "[[SEG%02zu]]", idx + 1U);
+    if (marker_len < 0) {
+      free(combined);
+      free(translated);
+      return false;
+    }
+
+    char *next_pos = strstr(segment_starts[idx], marker);
+    if (next_pos == NULL) {
+      free(combined);
+      free(translated);
+      return false;
+    }
+
+    char *end = next_pos;
+    while (end > segment_starts[idx] && (end[-1] == '\r' || end[-1] == '\n')) {
+      --end;
+    }
+    segment_ends[idx] = end;
+  }
+
+  char *last_end = translated + strlen(translated);
+  while (last_end > segment_starts[job_count - 1U] && (last_end[-1] == '\r' || last_end[-1] == '\n')) {
+    --last_end;
+  }
+  segment_ends[job_count - 1U] = last_end;
+
+  char restored_segments[SSH_CHATTER_TRANSLATION_BATCH_MAX][SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  for (size_t idx = 0U; idx < job_count; ++idx) {
+    if (segment_starts[idx] == NULL || segment_ends[idx] == NULL || segment_ends[idx] < segment_starts[idx]) {
+      free(combined);
+      free(translated);
+      return false;
+    }
+
+    size_t segment_len = (size_t)(segment_ends[idx] - segment_starts[idx]);
+    if (segment_len + 1U > SSH_CHATTER_TRANSLATION_WORKING_LEN) {
+      free(combined);
+      free(translated);
+      return false;
+    }
+
+    char segment_buffer[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+    memcpy(segment_buffer, segment_starts[idx], segment_len);
+    segment_buffer[segment_len] = '\0';
+
+    if (!translation_restore_text(segment_buffer, restored_segments[idx], sizeof(restored_segments[idx]),
+                                  jobs[idx]->placeholders, jobs[idx]->placeholder_count)) {
+      free(combined);
+      free(translated);
+      return false;
+    }
+  }
+
+  for (size_t idx = 0U; idx < job_count; ++idx) {
+    session_translation_publish_result(ctx, jobs[idx], restored_segments[idx], true);
+    free(jobs[idx]);
+  }
+
+  free(combined);
+  free(translated);
+  return true;
+}
+
 static void *session_translation_worker(void *arg) {
   session_ctx_t *ctx = (session_ctx_t *)arg;
   if (ctx == NULL) {
@@ -3681,7 +3916,8 @@ static void *session_translation_worker(void *arg) {
   }
 
   for (;;) {
-    translation_caption_job_t *job = NULL;
+    translation_caption_job_t *batch[SSH_CHATTER_TRANSLATION_BATCH_MAX] = {0};
+    size_t batch_count = 0U;
 
     pthread_mutex_lock(&ctx->translation_mutex);
     while (!ctx->translation_thread_stop && ctx->translation_pending_head == NULL) {
@@ -3693,71 +3929,73 @@ static void *session_translation_worker(void *arg) {
       break;
     }
 
-    job = ctx->translation_pending_head;
+    translation_caption_job_t *job = ctx->translation_pending_head;
     if (job != NULL) {
       ctx->translation_pending_head = job->next;
       if (ctx->translation_pending_head == NULL) {
         ctx->translation_pending_tail = NULL;
       }
+      job->next = NULL;
+      batch[batch_count++] = job;
     }
     pthread_mutex_unlock(&ctx->translation_mutex);
 
-    if (job == NULL) {
+    if (batch_count == 0U) {
       continue;
     }
 
-    char translated_body[SSH_CHATTER_TRANSLATION_WORKING_LEN];
-    char restored[SSH_CHATTER_TRANSLATION_WORKING_LEN];
-    char detected[SSH_CHATTER_LANG_NAME_LEN];
-    translated_body[0] = '\0';
-    restored[0] = '\0';
-    detected[0] = '\0';
+    size_t estimate = strlen(batch[0]->sanitized) + SSH_CHATTER_TRANSLATION_SEGMENT_GUARD;
 
-    bool success = translator_translate(job->sanitized, job->target_language, translated_body, sizeof(translated_body),
-                                        detected, sizeof(detected));
-    char failure_message[128];
-    failure_message[0] = '\0';
-    if (success) {
-      success = translation_restore_text(translated_body, restored, sizeof(restored), job->placeholders,
-                                         job->placeholder_count);
-      if (!success) {
-        snprintf(failure_message, sizeof(failure_message), "⚠️ translation post-processing failed.");
-      }
-    } else {
-      const char *error = translator_last_error();
-      if (error != NULL && error[0] != '\0') {
-        snprintf(failure_message, sizeof(failure_message), "⚠️ translation failed: %s", error);
-      } else {
-        snprintf(failure_message, sizeof(failure_message), "⚠️ translation failed.");
-      }
-    }
-
-    translation_caption_result_t *result = calloc(1U, sizeof(*result));
-    if (result != NULL) {
-      result->success = success;
-      result->placeholder_lines = job->placeholder_lines;
-      if (success) {
-        snprintf(result->translated, sizeof(result->translated), "%s", restored);
-      } else {
-        const char *payload = failure_message;
-        if (payload[0] == '\0') {
-          payload = "⚠️ translation unavailable.";
-        }
-        snprintf(result->translated, sizeof(result->translated), "%s", payload);
-      }
-
+    if (batch_count == 1U) {
+      bool delay_needed = false;
       pthread_mutex_lock(&ctx->translation_mutex);
-      result->next = NULL;
-      if (ctx->translation_ready_tail != NULL) {
-        ctx->translation_ready_tail->next = result;
-      } else {
-        ctx->translation_ready_head = result;
+      if (!ctx->translation_thread_stop && ctx->translation_pending_head == NULL) {
+        delay_needed = true;
       }
-      ctx->translation_ready_tail = result;
       pthread_mutex_unlock(&ctx->translation_mutex);
+
+      if (delay_needed) {
+        struct timespec aggregation_delay = {.tv_sec = 0, .tv_nsec = SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS};
+        nanosleep(&aggregation_delay, NULL);
+      }
     }
 
-    free(job);
+    pthread_mutex_lock(&ctx->translation_mutex);
+    while (batch_count < SSH_CHATTER_TRANSLATION_BATCH_MAX && ctx->translation_pending_head != NULL) {
+      translation_caption_job_t *candidate = ctx->translation_pending_head;
+      if (candidate == NULL) {
+        break;
+      }
+
+      if (strcmp(candidate->target_language, batch[0]->target_language) != 0) {
+        break;
+      }
+
+      size_t candidate_len = strlen(candidate->sanitized) + SSH_CHATTER_TRANSLATION_SEGMENT_GUARD;
+      if (estimate + candidate_len >= SSH_CHATTER_TRANSLATION_BATCH_BUFFER) {
+        break;
+      }
+
+      ctx->translation_pending_head = candidate->next;
+      if (ctx->translation_pending_head == NULL) {
+        ctx->translation_pending_tail = NULL;
+      }
+      candidate->next = NULL;
+      batch[batch_count++] = candidate;
+      estimate += candidate_len;
+    }
+    pthread_mutex_unlock(&ctx->translation_mutex);
+
+    bool processed = false;
+    if (batch_count > 1U) {
+      processed = session_translation_process_batch(ctx, batch, batch_count);
+    }
+
+    if (!processed) {
+      for (size_t idx = 0U; idx < batch_count; ++idx) {
+        session_translation_process_single_job(ctx, batch[idx]);
+      }
+    }
   }
 
   return NULL;
@@ -7286,6 +7524,77 @@ static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post) {
   host->bbs_post_count = write_index;
 }
 
+static void session_bbs_queue_translation(session_ctx_t *ctx, const bbs_post_t *post) {
+  if (ctx == NULL || post == NULL || !post->in_use) {
+    return;
+  }
+
+  if (!ctx->translation_enabled || !ctx->output_translation_enabled ||
+      ctx->output_translation_language[0] == '\0') {
+    return;
+  }
+
+  char payload[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  size_t offset = 0U;
+
+  offset = session_append_fragment(payload, sizeof(payload), offset, "Title: ");
+  offset = session_append_fragment(payload, sizeof(payload), offset, post->title);
+  offset = session_append_fragment(payload, sizeof(payload), offset, "\nAuthor: ");
+  offset = session_append_fragment(payload, sizeof(payload), offset, post->author);
+
+  char created_buffer[32];
+  char bumped_buffer[32];
+  bbs_format_time(post->created_at, created_buffer, sizeof(created_buffer));
+  bbs_format_time(post->bumped_at, bumped_buffer, sizeof(bumped_buffer));
+  offset = session_append_fragment(payload, sizeof(payload), offset, "\nCreated: ");
+  offset = session_append_fragment(payload, sizeof(payload), offset, created_buffer);
+  offset = session_append_fragment(payload, sizeof(payload), offset, " (bumped ");
+  offset = session_append_fragment(payload, sizeof(payload), offset, bumped_buffer);
+  offset = session_append_fragment(payload, sizeof(payload), offset, ")\n");
+
+  if (post->tag_count > 0U) {
+    offset = session_append_fragment(payload, sizeof(payload), offset, "Tags: ");
+    for (size_t idx = 0U; idx < post->tag_count; ++idx) {
+      if (idx > 0U) {
+        offset = session_append_fragment(payload, sizeof(payload), offset, ",");
+      }
+      offset = session_append_fragment(payload, sizeof(payload), offset, post->tags[idx]);
+    }
+  } else {
+    offset = session_append_fragment(payload, sizeof(payload), offset, "Tags: (none)");
+  }
+
+  offset = session_append_fragment(payload, sizeof(payload), offset, "\nBody:\n");
+  if (post->body[0] != '\0') {
+    offset = session_append_fragment(payload, sizeof(payload), offset, post->body);
+  } else {
+    offset = session_append_fragment(payload, sizeof(payload), offset, "(empty)");
+  }
+
+  if (post->comment_count > 0U) {
+    offset = session_append_fragment(payload, sizeof(payload), offset, "\nComments:\n");
+    for (size_t idx = 0U; idx < post->comment_count; ++idx) {
+      const bbs_comment_t *comment = &post->comments[idx];
+      offset = session_append_fragment(payload, sizeof(payload), offset, comment->author);
+      offset = session_append_fragment(payload, sizeof(payload), offset, ": ");
+      offset = session_append_fragment(payload, sizeof(payload), offset, comment->text);
+      offset = session_append_fragment(payload, sizeof(payload), offset, "\n");
+    }
+  } else {
+    offset = session_append_fragment(payload, sizeof(payload), offset, "\nComments: none");
+  }
+
+  payload[offset < sizeof(payload) ? offset : sizeof(payload) - 1U] = '\0';
+
+  if (payload[0] == '\0') {
+    return;
+  }
+
+  if (session_translation_queue_caption(ctx, payload, 0U)) {
+    session_translation_flush_ready(ctx);
+  }
+}
+
 // Render an ASCII framed view of a post, including metadata and comments.
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post) {
   if (ctx == NULL || post == NULL || !post->in_use) {
@@ -7371,6 +7680,8 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post) 
   }
 
   session_render_separator(ctx, "End");
+
+  session_bbs_queue_translation(ctx, post);
 }
 
 // Show the BBS dashboard and mark the session as being in BBS mode.
