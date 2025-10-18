@@ -26,7 +26,6 @@ typedef struct translator_buffer {
 typedef enum translator_provider {
   TRANSLATOR_PROVIDER_GEMINI,
   TRANSLATOR_PROVIDER_OPENROUTER,
-  TRANSLATOR_PROVIDER_OPENAI,
 } translator_provider_t;
 
 typedef struct translator_candidate {
@@ -837,14 +836,6 @@ static bool translator_candidate_configure(translator_candidate_t *candidate, tr
       api_key = getenv("OPENROUTER_API_KEY");
       api_key_name = "OPENROUTER_API_KEY";
       break;
-    case TRANSLATOR_PROVIDER_OPENAI:
-      api_key = getenv("CHATGPT_API_KEY");
-      api_key_name = "CHATGPT_API_KEY";
-      if (api_key == NULL || api_key[0] == '\0') {
-        api_key = getenv("OPENAI_API_KEY");
-        api_key_name = "OPENAI_API_KEY";
-      }
-      break;
   }
 
   if (api_key == NULL || api_key[0] == '\0') {
@@ -1249,129 +1240,6 @@ static bool translator_try_openrouter(const translator_candidate_t *candidate, c
   return success;
 }
 
-static bool translator_try_chatgpt(const translator_candidate_t *candidate, const char *text,
-                                   const char *target_language, char *translation, size_t translation_len,
-                                   char *detected_language, size_t detected_len, bool *retryable) {
-  if (retryable != NULL) {
-    *retryable = false;
-  }
-
-  if (candidate == NULL) {
-    translator_set_error("OpenAI provider is not configured.");
-    if (retryable != NULL) {
-      *retryable = true;
-    }
-    return false;
-  }
-
-  const char *api_key = candidate->api_key;
-  const char *key_name = candidate->api_key_name != NULL ? candidate->api_key_name : "OPENAI_API_KEY";
-  if (api_key == NULL || api_key[0] == '\0') {
-    translator_set_error("%s is not configured.", key_name);
-    if (retryable != NULL) {
-      *retryable = true;
-    }
-    return false;
-  }
-
-  const char *model_name = candidate->model != NULL && candidate->model[0] != '\0' ? candidate->model : "gpt-5";
-
-  char *escaped_text = translator_escape_string(text);
-  char *escaped_target = translator_escape_string(target_language);
-  const char *system_prompt =
-      "You are a translation engine that detects the source language of text and translates it to a requested target language. "
-      "Preserve tokens like [[ANSI0]] or [[SEG00]] unchanged. Respond only with a JSON object containing keys detected_language "
-      "and translation.";
-  char *escaped_system = translator_escape_string(system_prompt);
-  if (escaped_text == NULL || escaped_target == NULL || escaped_system == NULL) {
-    translator_set_error("Failed to prepare translation request payload.");
-    free(escaped_text);
-    free(escaped_target);
-    free(escaped_system);
-    return false;
-  }
-
-  static const char chat_format[] =
-      "{" \
-        "\"model\":\"%s\"," \
-        "\"messages\":[" \
-          "{\"role\":\"system\",\"content\":\"%s\"}," \
-          "{\"role\":\"user\",\"content\":\"Target language: %s\\nText: %s\"}" \
-        "]," \
-        "\"temperature\":0" \
-      "}";
-
-  int computed = snprintf(NULL, 0, chat_format, model_name, escaped_system, escaped_target, escaped_text);
-  if (computed < 0) {
-    translator_set_error("Failed to prepare translation request payload.");
-    free(escaped_text);
-    free(escaped_target);
-    free(escaped_system);
-    return false;
-  }
-
-  size_t body_len = (size_t)computed + 1U;
-  char *body = malloc(body_len);
-  if (body == NULL) {
-    translator_set_error("Failed to prepare translation request payload.");
-    free(escaped_text);
-    free(escaped_target);
-    free(escaped_system);
-    return false;
-  }
-
-  snprintf(body, body_len, chat_format, model_name, escaped_system, escaped_target, escaped_text);
-  free(escaped_text);
-  free(escaped_target);
-  free(escaped_system);
-
-  CURL *curl = curl_easy_init();
-  if (curl == NULL) {
-    free(body);
-    translator_set_error("Failed to initialise CURL.");
-    return false;
-  }
-
-  translator_buffer_t buffer = {0};
-  bool success = false;
-  long status = 0L;
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
-  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-
-  size_t auth_len = strlen("Bearer ") + strlen(api_key) + 1U;
-  char *auth_value = malloc(auth_len);
-  if (auth_value != NULL) {
-    snprintf(auth_value, auth_len, "Bearer %s", api_key);
-  }
-
-  CURLcode result = translator_issue_json_post(curl, "https://api.openai.com/v1/chat/completions", body, "Authorization",
-                                               auth_value, NULL, &buffer, &status);
-  free(auth_value);
-
-  if (result != CURLE_OK) {
-    translator_set_error("Failed to contact ChatGPT API: %s", curl_easy_strerror(result));
-    if (retryable != NULL) {
-      *retryable = true;
-    }
-  } else if (status < 200L || status >= 300L || buffer.data == NULL) {
-    if (status == 429L || status == 503L || status == 500L || status == 401L || status == 403L) {
-      if (retryable != NULL) {
-        *retryable = true;
-      }
-    }
-    translator_set_error("ChatGPT (%s) returned HTTP %ld.", model_name, status);
-  } else if (translator_handle_chat_payload(buffer.data, translation, translation_len, detected_language, detected_len)) {
-    success = true;
-  }
-
-  free(buffer.data);
-  free(body);
-  curl_easy_cleanup(curl);
-
-  return success;
-}
-
 static size_t translator_prepare_candidates(translator_candidate_t *candidates, size_t capacity) {
   if (candidates == NULL || capacity == 0U) {
     return 0U;
@@ -1394,7 +1262,6 @@ static size_t translator_prepare_candidates(translator_candidate_t *candidates, 
       {TRANSLATOR_PROVIDER_GEMINI, "gemini-2.5-lite"},
       {TRANSLATOR_PROVIDER_OPENROUTER, "google/gemini-2.5"},
       {TRANSLATOR_PROVIDER_OPENROUTER, "google/gemini-2.5-lite"},
-      {TRANSLATOR_PROVIDER_OPENAI, "gpt-5"},
   };
 
   for (size_t idx = 0U; idx < sizeof(defaults) / sizeof(defaults[0]) && count < capacity; ++idx) {
@@ -1422,8 +1289,7 @@ bool translator_translate(const char *text, const char *target_language, char *t
   translator_candidate_t candidates[8];
   size_t candidate_count = translator_prepare_candidates(candidates, sizeof(candidates) / sizeof(candidates[0]));
   if (candidate_count == 0U) {
-    translator_set_error(
-        "No translation providers are configured. Set GEMINI_API_KEY, OPENROUTER_API_KEY, or OPENAI_API_KEY.");
+    translator_set_error("No translation providers are configured. Set GEMINI_API_KEY or OPENROUTER_API_KEY.");
     return false;
   }
 
@@ -1438,10 +1304,6 @@ bool translator_translate(const char *text, const char *target_language, char *t
       case TRANSLATOR_PROVIDER_OPENROUTER:
         success = translator_try_openrouter(&candidates[idx], text, target_language, translation, translation_len,
                                             detected_language, detected_len, &retryable);
-        break;
-      case TRANSLATOR_PROVIDER_OPENAI:
-        success = translator_try_chatgpt(&candidates[idx], text, target_language, translation, translation_len,
-                                         detected_language, detected_len, &retryable);
         break;
     }
 
