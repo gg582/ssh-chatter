@@ -244,6 +244,7 @@ typedef struct session_ctx {
   size_t translation_caption_spacing;
   size_t translation_placeholder_active_lines;
   bool translation_suppress_output;
+  bool translation_quota_notified;
   pthread_mutex_t translation_mutex;
   pthread_cond_t translation_cond;
   bool translation_mutex_initialized;
@@ -365,6 +366,7 @@ typedef struct host {
   size_t ban_count;
   char version[64];
   char motd[4096];
+  bool translation_quota_exhausted;
   size_t connection_count;
   chat_history_entry_t *history;
   size_t history_count;
