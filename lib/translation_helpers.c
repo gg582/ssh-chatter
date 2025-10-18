@@ -1,5 +1,6 @@
 #include "headers/translation_helpers.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -125,5 +126,38 @@ bool translation_restore_text(const char *translated, char *output, size_t outpu
     output[out_idx] = '\0';
   }
 
+  return true;
+}
+
+bool translation_strip_no_translate_prefix(const char *message, char *stripped, size_t stripped_len) {
+  if (stripped != NULL && stripped_len > 0U) {
+    stripped[0] = '\0';
+  }
+
+  if (message == NULL || stripped == NULL || stripped_len == 0U) {
+    return false;
+  }
+
+  if (message[0] != '@') {
+    return false;
+  }
+
+  char first = message[1];
+  char second = message[2];
+  if (!((first == 'n' || first == 'N') && (second == 't' || second == 'T'))) {
+    return false;
+  }
+
+  char trailing = message[3];
+  if (trailing != '\0' && !isspace((unsigned char)trailing)) {
+    return false;
+  }
+
+  const char *body = message + 3;
+  while (*body != '\0' && isspace((unsigned char)*body)) {
+    ++body;
+  }
+
+  snprintf(stripped, stripped_len, "%s", body);
   return true;
 }

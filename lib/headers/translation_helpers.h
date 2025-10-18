@@ -47,4 +47,6 @@ bool translation_prepare_text(const char *message, char *sanitized, size_t sanit
 bool translation_restore_text(const char *translated, char *output, size_t output_len,
                               const translation_placeholder_t *placeholders, size_t placeholder_count);
 
+bool translation_strip_no_translate_prefix(const char *message, char *stripped, size_t stripped_len);
+
 #endif
