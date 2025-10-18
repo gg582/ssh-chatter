@@ -1293,7 +1293,9 @@ static size_t translator_prepare_candidates(translator_candidate_t *candidates, 
 
   static const char *openrouter_priority[] = {
       "microsoft/mai-ds-r1:free",
-      "google/gemma-3n-e4b-it:free",
+      "openai/gpt-oss-20b:free",
+      "google/gemma-3-27b-it:free",
+
   };
 
   for (size_t idx = 0U; idx < sizeof(openrouter_priority) / sizeof(openrouter_priority[0]) && count < capacity; ++idx) {
@@ -1302,13 +1304,9 @@ static size_t translator_prepare_candidates(translator_candidate_t *candidates, 
   }
 
   static const char *openrouter_random_pool[] = {
-      "google/gemini-2.5",
-      "google/gemini-2.5-lite",
-      "meta-llama/llama-3.1-8b-instruct:free",
-      "meta-llama/llama-3.1-70b-instruct:free",
       "mistralai/mistral-nemo:free",
       "mistralai/mixtral-8x7b-instruct:free",
-      "nousresearch/hermes-3-llama-3.1-8b:free",
+      "mistralai/mistral-small-3.2-24b-instruct:free",
   };
 
   const size_t random_count = sizeof(openrouter_random_pool) / sizeof(openrouter_random_pool[0]);
