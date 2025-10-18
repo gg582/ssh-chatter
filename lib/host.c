@@ -12569,6 +12569,9 @@ static void *session_thread(void *arg) {
       if (ctx->channel != NULL && (ssh_channel_is_eof(ctx->channel) || !ssh_channel_is_open(ctx->channel))) {
         break;
       }
+      if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS) {
+        session_game_tetris_process_timeout(ctx);
+      }
       continue;
     }
 
