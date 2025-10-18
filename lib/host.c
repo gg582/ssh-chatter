@@ -525,6 +525,7 @@ static void session_handle_motd(session_ctx_t *ctx);
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments);
 static void session_handle_palette(session_ctx_t *ctx, const char *arguments);
 static void session_handle_translate(session_ctx_t *ctx, const char *arguments);
+static void session_handle_translate_scope(session_ctx_t *ctx, const char *arguments);
 static void session_handle_gemini(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_target_lang(session_ctx_t *ctx, const char *arguments);
@@ -3692,7 +3693,7 @@ static void session_translation_queue_block(session_ctx_t *ctx, const char *text
     return;
   }
 
-  if (translator_is_ollama_only()) {
+  if (translator_should_limit_to_chat_bbs()) {
     return;
   }
 
@@ -4900,7 +4901,7 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
 
   const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
                                  ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode &&
-                                 !translator_is_ollama_only();
+                                 !translator_should_limit_to_chat_bbs();
   const bool multiline_message = strchr(message, '\n') != NULL;
   bool translation_block = false;
   bool previous_suppress = ctx->translation_suppress_output;
@@ -5003,7 +5004,7 @@ static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text) {
 
   const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
                                  ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode &&
-                                 !translator_is_ollama_only();
+                                 !translator_should_limit_to_chat_bbs();
 
   bool previous_suppress = ctx->translation_suppress_output;
   if (translation_ready && !ctx->translation_suppress_output) {
@@ -5027,7 +5028,7 @@ static void session_send_system_lines_bulk(session_ctx_t *ctx, const char *const
 
   const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
                                  ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode &&
-                                 !translator_is_ollama_only();
+                                 !translator_should_limit_to_chat_bbs();
 
   bool previous_suppress = ctx->translation_suppress_output;
   if (translation_ready && !ctx->translation_suppress_output) {
@@ -6223,6 +6224,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/set-target-lang <language|off> - translate your outgoing messages",
       "/weather <region> <city> - show the weather for a region and city",
       "/translate <on|off>    - enable or disable translation after configuring languages",
+      "/translate-scope <chat|all> - limit translation to chat/BBS or restore full scope (operator only)",
       "/gemini <on|off>       - toggle Gemini provider (operator only)",
       "/chat-spacing <0-5>    - reserve blank lines before translated captions in chat",
       "/palette <name>        - apply a predefined interface palette (/palette list)",
@@ -11366,6 +11368,102 @@ static void session_handle_translate(session_ctx_t *ctx, const char *arguments) 
   }
 }
 
+static void session_handle_translate_scope(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
+    session_send_system_line(ctx, "Only operators may manage translation scope.");
+    return;
+  }
+
+  char token[16];
+  token[0] = '\0';
+  if (arguments != NULL) {
+    const char *cursor = arguments;
+    while (*cursor == ' ' || *cursor == '\t') {
+      ++cursor;
+    }
+
+    size_t length = 0U;
+    while (cursor[length] != '\0' && !isspace((unsigned char)cursor[length]) && length + 1U < sizeof(token)) {
+      token[length] = cursor[length];
+      ++length;
+    }
+    token[length] = '\0';
+  }
+
+  if (token[0] == '\0') {
+    const bool limited = translator_should_limit_to_chat_bbs();
+    const bool forced = translator_is_ollama_only();
+    const bool manual = translator_is_manual_chat_bbs_only();
+
+    char status[SSH_CHATTER_MESSAGE_LIMIT];
+    if (limited) {
+      snprintf(status, sizeof(status), "Translation scope is currently limited to chat messages and BBS posts.");
+    } else {
+      snprintf(status, sizeof(status),
+               "Translation scope currently includes system output and bulk messages.");
+    }
+    session_send_system_line(ctx, status);
+
+    if (forced) {
+      session_send_system_line(ctx,
+                               "Gemini translation is unavailable; Ollama fallback enforces chat/BBS-only scope.");
+    } else if (manual) {
+      session_send_system_line(ctx, "Chat/BBS-only scope is enabled manually.");
+    }
+
+    session_send_system_line(ctx, "Usage: /translate-scope <chat|all>");
+    return;
+  }
+
+  if (strcasecmp(token, "chat") == 0 || strcasecmp(token, "limit") == 0 || strcasecmp(token, "on") == 0) {
+    if (translator_is_manual_chat_bbs_only()) {
+      session_send_system_line(ctx,
+                               "Translation scope is already limited to chat messages and BBS posts.");
+      return;
+    }
+
+    translator_set_manual_chat_bbs_only(true);
+    session_send_system_line(ctx, "Translation scope limited to chat messages and BBS posts.");
+
+    char notice[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(notice, sizeof(notice), "* [%s] limited translation scope to chat and BBS posts.", ctx->user.name);
+    host_history_record_system(ctx->owner, notice);
+    chat_room_broadcast(&ctx->owner->room, notice, NULL);
+    return;
+  }
+
+  if (strcasecmp(token, "all") == 0 || strcasecmp(token, "full") == 0 || strcasecmp(token, "off") == 0) {
+    if (translator_is_ollama_only()) {
+      session_send_system_line(ctx,
+                               "Full translation scope cannot be restored while Gemini is unavailable."
+                               " Ollama-only mode restricts translation to chat and BBS posts.");
+      return;
+    }
+
+    if (!translator_is_manual_chat_bbs_only()) {
+      session_send_system_line(ctx,
+                               "Translation scope already includes system output and bulk messages.");
+      return;
+    }
+
+    translator_set_manual_chat_bbs_only(false);
+    session_send_system_line(ctx,
+                             "Full translation scope restored. System output and bulk messages are eligible for translation.");
+
+    char notice[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(notice, sizeof(notice), "* [%s] restored full translation scope for translations.", ctx->user.name);
+    host_history_record_system(ctx->owner, notice);
+    chat_room_broadcast(&ctx->owner->room, notice, NULL);
+    return;
+  }
+
+  session_send_system_line(ctx, "Usage: /translate-scope <chat|all>");
+}
+
 static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;
@@ -12032,6 +12130,10 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   }
   else if (session_parse_command(line, "/translate", &args)) {
     session_handle_translate(ctx, args);
+    return;
+  }
+  else if (session_parse_command(line, "/translate-scope", &args)) {
+    session_handle_translate_scope(ctx, args);
     return;
   }
   else if (session_parse_command(line, "/gemini", &args)) {
