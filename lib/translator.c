@@ -47,7 +47,7 @@ static bool g_last_error_was_quota = false;
 static struct timespec g_next_allowed_request = {0, 0};
 static bool g_gemini_manually_disabled = false;
 static struct timespec g_gemini_disabled_until = {0, 0};
-static bool g_manual_chat_bbs_only = false;
+static bool g_manual_chat_bbs_only = true;
 
 #define TRANSLATOR_RATE_LIMIT_INTERVAL_NS 800000000L
 #define TRANSLATOR_RATE_LIMIT_PENALTY_NS 3000000000L
