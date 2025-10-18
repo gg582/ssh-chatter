@@ -618,6 +618,7 @@ static void session_bbs_reset_pending_post(session_ctx_t *ctx);
 static bbs_post_t *host_find_bbs_post_locked(host_t *host, uint64_t id);
 static bbs_post_t *host_allocate_bbs_post_locked(host_t *host);
 static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
+static void session_bbs_queue_translation(session_ctx_t *ctx, const bbs_post_t *post);
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post);
 static bool session_asciiart_cooldown_active(session_ctx_t *ctx, struct timespec *now, long *remaining_seconds);
 static void session_asciiart_reset(session_ctx_t *ctx);
@@ -3713,23 +3714,42 @@ static void *session_translation_worker(void *arg) {
     restored[0] = '\0';
     detected[0] = '\0';
 
-    bool success = translator_translate(job->sanitized, job->target_language, translated_body, sizeof(translated_body),
-                                        detected, sizeof(detected));
+    bool success = false;
     char failure_message[128];
     failure_message[0] = '\0';
-    if (success) {
-      success = translation_restore_text(translated_body, restored, sizeof(restored), job->placeholders,
-                                         job->placeholder_count);
-      if (!success) {
+    const int max_attempts = 3;
+    for (int attempt = 0; attempt < max_attempts && !success; ++attempt) {
+      translated_body[0] = '\0';
+      detected[0] = '\0';
+
+      if (!translator_translate(job->sanitized, job->target_language, translated_body, sizeof(translated_body), detected,
+                                sizeof(detected))) {
+        const char *error = translator_last_error();
+        if (error != NULL && error[0] != '\0') {
+          snprintf(failure_message, sizeof(failure_message), "⚠️ translation failed: %s", error);
+        } else {
+          snprintf(failure_message, sizeof(failure_message), "⚠️ translation failed.");
+        }
+
+        if (attempt + 1 < max_attempts) {
+          struct timespec retry_delay = {.tv_sec = 1, .tv_nsec = 0L};
+          nanosleep(&retry_delay, NULL);
+        }
+        continue;
+      }
+
+      if (!translation_restore_text(translated_body, restored, sizeof(restored), job->placeholders,
+                                    job->placeholder_count)) {
         snprintf(failure_message, sizeof(failure_message), "⚠️ translation post-processing failed.");
+        break;
       }
-    } else {
-      const char *error = translator_last_error();
-      if (error != NULL && error[0] != '\0') {
-        snprintf(failure_message, sizeof(failure_message), "⚠️ translation failed: %s", error);
-      } else {
-        snprintf(failure_message, sizeof(failure_message), "⚠️ translation failed.");
-      }
+
+      success = true;
+      failure_message[0] = '\0';
+    }
+
+    if (!success && failure_message[0] == '\0') {
+      snprintf(failure_message, sizeof(failure_message), "⚠️ translation unavailable.");
     }
 
     translation_caption_result_t *result = calloc(1U, sizeof(*result));
@@ -7286,6 +7306,77 @@ static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post) {
   host->bbs_post_count = write_index;
 }
 
+static void session_bbs_queue_translation(session_ctx_t *ctx, const bbs_post_t *post) {
+  if (ctx == NULL || post == NULL || !post->in_use) {
+    return;
+  }
+
+  if (!ctx->translation_enabled || !ctx->output_translation_enabled ||
+      ctx->output_translation_language[0] == '\0') {
+    return;
+  }
+
+  char payload[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  size_t offset = 0U;
+
+  offset = session_append_fragment(payload, sizeof(payload), offset, "Title: ");
+  offset = session_append_fragment(payload, sizeof(payload), offset, post->title);
+  offset = session_append_fragment(payload, sizeof(payload), offset, "\nAuthor: ");
+  offset = session_append_fragment(payload, sizeof(payload), offset, post->author);
+
+  char created_buffer[32];
+  char bumped_buffer[32];
+  bbs_format_time(post->created_at, created_buffer, sizeof(created_buffer));
+  bbs_format_time(post->bumped_at, bumped_buffer, sizeof(bumped_buffer));
+  offset = session_append_fragment(payload, sizeof(payload), offset, "\nCreated: ");
+  offset = session_append_fragment(payload, sizeof(payload), offset, created_buffer);
+  offset = session_append_fragment(payload, sizeof(payload), offset, " (bumped ");
+  offset = session_append_fragment(payload, sizeof(payload), offset, bumped_buffer);
+  offset = session_append_fragment(payload, sizeof(payload), offset, ")\n");
+
+  if (post->tag_count > 0U) {
+    offset = session_append_fragment(payload, sizeof(payload), offset, "Tags: ");
+    for (size_t idx = 0U; idx < post->tag_count; ++idx) {
+      if (idx > 0U) {
+        offset = session_append_fragment(payload, sizeof(payload), offset, ",");
+      }
+      offset = session_append_fragment(payload, sizeof(payload), offset, post->tags[idx]);
+    }
+  } else {
+    offset = session_append_fragment(payload, sizeof(payload), offset, "Tags: (none)");
+  }
+
+  offset = session_append_fragment(payload, sizeof(payload), offset, "\nBody:\n");
+  if (post->body[0] != '\0') {
+    offset = session_append_fragment(payload, sizeof(payload), offset, post->body);
+  } else {
+    offset = session_append_fragment(payload, sizeof(payload), offset, "(empty)");
+  }
+
+  if (post->comment_count > 0U) {
+    offset = session_append_fragment(payload, sizeof(payload), offset, "\nComments:\n");
+    for (size_t idx = 0U; idx < post->comment_count; ++idx) {
+      const bbs_comment_t *comment = &post->comments[idx];
+      offset = session_append_fragment(payload, sizeof(payload), offset, comment->author);
+      offset = session_append_fragment(payload, sizeof(payload), offset, ": ");
+      offset = session_append_fragment(payload, sizeof(payload), offset, comment->text);
+      offset = session_append_fragment(payload, sizeof(payload), offset, "\n");
+    }
+  } else {
+    offset = session_append_fragment(payload, sizeof(payload), offset, "\nComments: none");
+  }
+
+  payload[offset < sizeof(payload) ? offset : sizeof(payload) - 1U] = '\0';
+
+  if (payload[0] == '\0') {
+    return;
+  }
+
+  if (session_translation_queue_caption(ctx, payload, 0U)) {
+    session_translation_flush_ready(ctx);
+  }
+}
+
 // Render an ASCII framed view of a post, including metadata and comments.
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post) {
   if (ctx == NULL || post == NULL || !post->in_use) {
@@ -7371,6 +7462,8 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post) 
   }
 
   session_render_separator(ctx, "End");
+
+  session_bbs_queue_translation(ctx, post);
 }
 
 // Show the BBS dashboard and mark the session as being in BBS mode.
