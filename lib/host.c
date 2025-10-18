@@ -4066,6 +4066,7 @@ static void *session_translation_worker(void *arg) {
         struct timespec aggregation_delay = {.tv_sec = 0, .tv_nsec = SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS};
         nanosleep(&aggregation_delay, NULL);
       }
+    }
 
     pthread_mutex_lock(&ctx->translation_mutex);
     while (batch_count < SSH_CHATTER_TRANSLATION_BATCH_MAX && ctx->translation_pending_head != NULL) {
