@@ -4956,6 +4956,8 @@ static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
     session_render_separator(ctx, "Input");
   }
 
+  session_apply_background_fill(ctx);
+
   const char *fg = ctx->system_fg_code != NULL ? ctx->system_fg_code : "";
   const char *hl = ctx->system_highlight_code != NULL ? ctx->system_highlight_code : "";
   const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
@@ -6214,7 +6216,7 @@ static void session_handle_kick(session_ctx_t *ctx, const char *arguments) {
   }
 
   char notice[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(notice, sizeof(notice), "* %s has been kicked by %s", target->user.name, ctx->user.name);
+  snprintf(notice, sizeof(notice), "* [%s] has been kicked by [%s]", target->user.name, ctx->user.name);
   host_history_record_system(ctx->owner, notice);
   chat_room_broadcast(&ctx->owner->room, notice, NULL);
 
@@ -6287,7 +6289,7 @@ static void session_handle_ban(session_ctx_t *ctx, const char *arguments) {
   }
 
   char notice[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(notice, sizeof(notice), "* %s has been banned by %s", target->user.name, ctx->user.name);
+  snprintf(notice, sizeof(notice), "* [%s] has been banned by [%s]", target->user.name, ctx->user.name);
   host_history_record_system(ctx->owner, notice);
   chat_room_broadcast(&ctx->owner->room, notice, NULL);
   session_send_system_line(ctx, "Ban applied.");
@@ -6295,7 +6297,7 @@ static void session_handle_ban(session_ctx_t *ctx, const char *arguments) {
 
   if (target->channel != NULL) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "You have been banned by %s.", ctx->user.name);
+    snprintf(message, sizeof(message), "You have been banned by [%s].", ctx->user.name);
     session_send_system_line(target, message);
     target->should_exit = true;
     ssh_channel_send_eof(target->channel);
@@ -7763,7 +7765,7 @@ static void session_handle_poll(session_ctx_t *ctx, const char *arguments) {
   pthread_mutex_unlock(&host->lock);
 
   char announce[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(announce, sizeof(announce), "* %s started poll #%" PRIu64 ": %s", ctx->user.name, host->poll.id, tokens[0]);
+  snprintf(announce, sizeof(announce), "* [%s] started poll #%" PRIu64 ": %s", ctx->user.name, host->poll.id, tokens[0]);
   chat_room_broadcast(&host->room, announce, NULL);
 
   for (size_t idx = 0U; idx < option_count; ++idx) {
@@ -8066,7 +8068,7 @@ static void session_handle_vote_command(session_ctx_t *ctx, const char *argument
     pthread_mutex_unlock(&host->lock);
 
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "* %s closed poll [%s].", ctx->user.name, label);
+    snprintf(message, sizeof(message), "* [%s] closed poll [%s].", ctx->user.name, label);
     chat_room_broadcast(&host->room, message, NULL);
     session_send_system_line(ctx, "Poll closed.");
     return;
@@ -8198,7 +8200,7 @@ static void session_handle_vote_command(session_ctx_t *ctx, const char *argument
   if (question_preview > 120) {
     question_preview = 120;
   }
-  snprintf(announce, sizeof(announce), "* %s started poll [%s] #%" PRIu64 ": %.*s", ctx->user.name, label, snapshot.poll.id,
+  snprintf(announce, sizeof(announce), "* [%s] started poll [%s] #%" PRIu64 ": %.*s", ctx->user.name, label, snapshot.poll.id,
            question_preview, snapshot.poll.question);
   chat_room_broadcast(&host->room, announce, NULL);
 
@@ -10947,13 +10949,13 @@ static void session_handle_showstatus(session_ctx_t *ctx, const char *arguments)
 
   if (target->status_message[0] == '\0') {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "%s has not set a status.", target->user.name);
+    snprintf(message, sizeof(message), "[%s] has not set a status.", target->user.name);
     session_send_system_line(ctx, message);
     return;
   }
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(message, sizeof(message), "%s's status: %s", target->user.name, target->status_message);
+  snprintf(message, sizeof(message), "[%s]'s status: %s", target->user.name, target->status_message);
   session_send_system_line(ctx, message);
 }
 
@@ -11168,7 +11170,7 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments) {
   snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", new_name);
 
   char announcement[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(announcement, sizeof(announcement), "* %s is now known as %s", old_name, ctx->user.name);
+  snprintf(announcement, sizeof(announcement), "* [%s] is now known as [%s]", old_name, ctx->user.name);
   host_history_record_system(ctx->owner, announcement);
   chat_room_broadcast(&ctx->owner->room, announcement, NULL);
   session_apply_saved_preferences(ctx);
@@ -12545,7 +12547,7 @@ static void *session_thread(void *arg) {
     session_send_system_line(ctx, "Type /help to explore available commands.");
 
     char join_message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(join_message, sizeof(join_message), "* %s has joined the chat", ctx->user.name);
+    snprintf(join_message, sizeof(join_message), "* [%s] has joined the chat", ctx->user.name);
     host_history_record_system(ctx->owner, join_message);
     chat_room_broadcast(&ctx->owner->room, join_message, NULL);
   }
@@ -12796,7 +12798,7 @@ static void *session_thread(void *arg) {
   if (ctx->has_joined_room) {
     printf("[part] %s\n", ctx->user.name);
     char part_message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(part_message, sizeof(part_message), "* %s has left the chat", ctx->user.name);
+    snprintf(part_message, sizeof(part_message), "* [%s] has left the chat", ctx->user.name);
     host_history_record_system(ctx->owner, part_message);
     chat_room_broadcast(&ctx->owner->room, part_message, NULL);
     chat_room_remove(&ctx->owner->room, ctx);
