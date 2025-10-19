@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <time.h>
 
 #ifndef PATH_MAX
@@ -395,6 +396,8 @@ typedef struct host {
   char vote_state_file_path[PATH_MAX];
   char ban_state_file_path[PATH_MAX];
   char reply_state_file_path[PATH_MAX];
+  _Atomic bool security_filter_enabled;
+  _Atomic bool security_filter_failure_logged;
   poll_state_t poll;
   named_poll_state_t named_polls[SSH_CHATTER_MAX_NAMED_POLLS];
   size_t named_poll_count;

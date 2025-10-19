@@ -52,6 +52,11 @@ confirm the build still succeeds before pushing the result.
 
 - `host_snapshot_last_captcha` exposes the most recently generated captcha prompt and answer along with a timestamp so external clients can pass challenges on behalf of unattended automation.
 
+## Security hardening
+
+- `scripts/safe_permission.sh` tightens the ownership and mode on runtime data files (BBS state, vote state, cooldown snapshots, and general chatter state). Run it after deployment to confine the data directory to `ssh-chatter` and to ensure each file is set to `0600`. Override the targets by passing explicit paths or by exporting `STATE_ROOT` or the corresponding `CHATTER_*_FILE` environment variables before execution.
+- Chat messages, ASCII art, and BBS posts/comments flow through an AI-backed security filter. The filter queries Gemini first (using `GEMINI_API_KEY`) and transparently falls back to a local Ollama instance (default `http://127.0.0.1:11434`) when Gemini is unavailable. Disable the feature with `CHATTER_SECURITY_FILTER=off`. If every provider fails, the filter automatically disables itself to avoid blocking conversations while misconfigured.
+
 ## Prerequisites
 
 Building the project requires a POSIX environment with:
@@ -178,6 +183,8 @@ Supported environment variables include:
 - `CHATTER_HOST_KEY_DIR` – Directory containing `ssh_host_rsa_key` (default `/var/lib/ssh-chatter`).
 - `CHATTER_EXTRA_ARGS` – Additional arguments appended to the `ssh-chatter` invocation.
 - `CHATTER_VOTE_FILE` – Path to the vote state file (default `vote_state.dat`).
+- `CHATTER_GEMINI_COOLDOWN_FILE` – Path to the Gemini cooldown state file (default `gemini_cooldown.dat`).
+- `CHATTER_SECURITY_FILTER` – Set to `off`/`false`/`0` to disable the AI-backed security filter (enabled by default).
 
 Translation support now relies on the Google Gemini API.  Set the following in `chatter.env` (or the environment) to enable it:
 
