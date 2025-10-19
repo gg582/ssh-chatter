@@ -357,7 +357,7 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
     snprintf(prompt->question, sizeof(prompt->question),
              "%s is a %s who has a %s named %s. \"%s\" is adorable. Answer with correct casing what the double-quoted text refers to."
 	     " - e.g) %s (O) %s (X)",
-             story->person_name, story->descriptor, story->pet_species, story->pet_name, quoted_text, story->descriptor, session_convert_string_to_lowercase(story->person_name));
+             story->person_name, story->descriptor, story->pet_species, story->pet_name, quoted_text, story->person_name, session_convert_string_to_lowercase(story->person_name));
     snprintf(prompt->answer, sizeof(prompt->answer), "%s", answer);
     return;
   }
