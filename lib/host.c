@@ -71,6 +71,9 @@
 #define SSH_CHATTER_JOIN_NAME_THRESHOLD 12U
 #define SSH_CHATTER_SUSPICIOUS_EVENT_WINDOW_NS 300000000000LL
 #define SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD 2U
+#define SSH_CHATTER_CLAMAV_SCAN_INTERVAL_SECONDS (5 * 60 * 60)
+#define SSH_CHATTER_CLAMAV_SLEEP_CHUNK_SECONDS 30U
+#define SSH_CHATTER_CLAMAV_OUTPUT_LIMIT 512U
 
 #ifndef O_NOFOLLOW
 #define O_NOFOLLOW 0
@@ -718,10 +721,12 @@ static void host_bbs_state_load(host_t *host);
 static void host_bbs_state_save_locked(host_t *host);
 static void host_security_configure(host_t *host);
 static bool host_ensure_private_data_path(host_t *host, const char *path, bool create_directories);
+static void host_security_compact_whitespace(char *text);
+static bool host_security_execute_clamav_backend(host_t *host, char *notice, size_t notice_length);
+static void *host_security_clamav_backend(void *arg);
+static void host_security_start_clamav_backend(host_t *host);
 static void host_security_disable_filter(host_t *host, const char *reason);
 static void host_security_disable_clamav(host_t *host, const char *reason);
-static host_security_scan_result_t host_security_scan_with_clamav(host_t *host, const char *payload, size_t length,
-                                                                 char *diagnostic, size_t diagnostic_length);
 static host_security_scan_result_t host_security_scan_payload(host_t *host, const char *category, const char *payload,
                                                               size_t length, char *diagnostic, size_t diagnostic_length);
 static bool host_eliza_enable(host_t *host);
@@ -2649,7 +2654,7 @@ static void host_security_configure(host_t *host) {
   if (!clamav_disabled) {
     const char *command = getenv("CHATTER_CLAMAV_COMMAND");
     if (command == NULL || command[0] == '\0') {
-      command = "clamscan --no-summary --stdout -";
+      command = "clamscan --no-summary --stdout .";
     }
 
     size_t command_length = strlen(command);
@@ -2740,6 +2745,230 @@ static void host_security_disable_clamav(host_t *host, const char *reason) {
   }
 }
 
+static void host_security_compact_whitespace(char *text) {
+  if (text == NULL) {
+    return;
+  }
+
+  size_t read_index = 0U;
+  size_t write_index = 0U;
+  bool previous_was_space = false;
+
+  while (text[read_index] != '\0') {
+    unsigned char ch = (unsigned char)text[read_index++];
+    if (ch == '\r' || ch == '\n' || ch == '\t') {
+      ch = ' ';
+    } else if (ch < 0x20U || ch == 0x7FU) {
+      ch = ' ';
+    }
+
+    if (ch == ' ') {
+      if (previous_was_space) {
+        continue;
+      }
+      previous_was_space = true;
+      text[write_index++] = ' ';
+    } else {
+      previous_was_space = false;
+      text[write_index++] = (char)ch;
+    }
+  }
+
+  if (write_index > 0U && text[write_index - 1U] == ' ') {
+    --write_index;
+  }
+
+  text[write_index] = '\0';
+}
+
+static bool host_security_execute_clamav_backend(host_t *host, char *notice, size_t notice_length) {
+  if (notice != NULL && notice_length > 0U) {
+    notice[0] = '\0';
+  }
+
+  if (host == NULL || notice == NULL || notice_length == 0U) {
+    return false;
+  }
+
+  if (!atomic_load(&host->security_clamav_enabled)) {
+    return false;
+  }
+
+  if (host->security_clamav_command[0] == '\0') {
+    return false;
+  }
+
+  struct timespec start = {0, 0};
+  clock_gettime(CLOCK_MONOTONIC, &start);
+
+  FILE *pipe = popen(host->security_clamav_command, "r");
+  if (pipe == NULL) {
+    int error_code = errno;
+    char reason[128];
+    if (error_code != 0) {
+      snprintf(reason, sizeof(reason), "%s", strerror(error_code));
+    } else {
+      snprintf(reason, sizeof(reason), "%s", "unable to launch command");
+    }
+    snprintf(notice, notice_length, "* [security] Scheduled ClamAV scan failed to start (%s).", reason);
+    host_security_disable_clamav(host, reason);
+    return true;
+  }
+
+  char output[SSH_CHATTER_CLAMAV_OUTPUT_LIMIT];
+  output[0] = '\0';
+  size_t output_length = 0U;
+
+  char buffer[256];
+  while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+    size_t chunk = strlen(buffer);
+    if (chunk == 0U) {
+      continue;
+    }
+    if (output_length + chunk >= sizeof(output)) {
+      chunk = sizeof(output) - output_length - 1U;
+    }
+    if (chunk == 0U) {
+      break;
+    }
+    memcpy(output + output_length, buffer, chunk);
+    output_length += chunk;
+    output[output_length] = '\0';
+  }
+
+  errno = 0;
+  int status = pclose(pipe);
+  struct timespec end = {0, 0};
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  host->security_clamav_last_run = end;
+  struct timespec elapsed = timespec_diff(&end, &start);
+  double seconds = (double)elapsed.tv_sec + (double)elapsed.tv_nsec / 1000000000.0;
+
+  host_security_compact_whitespace(output);
+
+  if (status == -1) {
+    int error_code = errno;
+    if (error_code != 0) {
+      snprintf(notice, notice_length,
+               "* [security] Scheduled ClamAV scan failed (unable to retrieve status: %s).",
+               strerror(error_code));
+    } else {
+      snprintf(notice, notice_length,
+               "* [security] Scheduled ClamAV scan failed (unable to retrieve status).");
+    }
+    host_security_disable_clamav(host, "unable to retrieve scheduled ClamAV status");
+    return true;
+  }
+
+  if (!WIFEXITED(status)) {
+    snprintf(notice, notice_length, "* [security] Scheduled ClamAV scan terminated unexpectedly.");
+    host_security_disable_clamav(host, "scheduled ClamAV scan terminated unexpectedly");
+    return true;
+  }
+
+  int exit_code = WEXITSTATUS(status);
+  if (exit_code == 0) {
+    if (output[0] != '\0') {
+      snprintf(notice, notice_length, "* [security] Scheduled ClamAV scan finished in %.1fs (clean): %s", seconds, output);
+    } else {
+      snprintf(notice, notice_length, "* [security] Scheduled ClamAV scan finished in %.1fs (clean).", seconds);
+    }
+    return true;
+  }
+
+  if (exit_code == 1) {
+    if (output[0] != '\0') {
+      snprintf(notice, notice_length,
+               "* [security] Scheduled ClamAV scan finished in %.1fs (issues found): %s", seconds, output);
+    } else {
+      snprintf(notice, notice_length,
+               "* [security] Scheduled ClamAV scan finished in %.1fs (issues found).", seconds);
+    }
+    return true;
+  }
+
+  if (output[0] != '\0') {
+    snprintf(notice, notice_length,
+             "* [security] Scheduled ClamAV scan failed in %.1fs (exit code %d): %s", seconds, exit_code, output);
+  } else {
+    snprintf(notice, notice_length,
+             "* [security] Scheduled ClamAV scan failed in %.1fs (exit code %d).", seconds, exit_code);
+  }
+  host_security_disable_clamav(host, "scheduled ClamAV scan returned an error");
+  return true;
+}
+
+static void *host_security_clamav_backend(void *arg) {
+  host_t *host = (host_t *)arg;
+  if (host == NULL) {
+    return NULL;
+  }
+
+  atomic_store(&host->security_clamav_thread_running, true);
+  printf("[security] scheduled ClamAV backend thread started (interval: %u seconds)\n",
+         (unsigned int)SSH_CHATTER_CLAMAV_SCAN_INTERVAL_SECONDS);
+
+  while (!atomic_load(&host->security_clamav_thread_stop)) {
+    if (atomic_load(&host->security_clamav_enabled) && host->security_clamav_command[0] != '\0') {
+      char notice[SSH_CHATTER_MESSAGE_LIMIT];
+      if (host_security_execute_clamav_backend(host, notice, sizeof(notice)) && notice[0] != '\0') {
+        printf("%s\n", notice);
+        host_history_record_system(host, notice);
+        chat_room_broadcast(&host->room, notice, NULL);
+      }
+    }
+
+    unsigned int remaining = SSH_CHATTER_CLAMAV_SCAN_INTERVAL_SECONDS;
+    while (remaining > 0U && !atomic_load(&host->security_clamav_thread_stop)) {
+      unsigned int chunk =
+          remaining > SSH_CHATTER_CLAMAV_SLEEP_CHUNK_SECONDS ? SSH_CHATTER_CLAMAV_SLEEP_CHUNK_SECONDS : remaining;
+      struct timespec pause_duration = {
+          .tv_sec = (time_t)chunk,
+          .tv_nsec = 0,
+      };
+      nanosleep(&pause_duration, NULL);
+      if (remaining < chunk) {
+        remaining = 0U;
+      } else {
+        remaining -= chunk;
+      }
+    }
+  }
+
+  atomic_store(&host->security_clamav_thread_running, false);
+  printf("[security] scheduled ClamAV backend thread stopped\n");
+  return NULL;
+}
+
+static void host_security_start_clamav_backend(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->security_clamav_thread_initialized) {
+    return;
+  }
+
+  if (!atomic_load(&host->security_clamav_enabled)) {
+    return;
+  }
+
+  if (host->security_clamav_command[0] == '\0') {
+    return;
+  }
+
+  atomic_store(&host->security_clamav_thread_stop, false);
+  atomic_store(&host->security_clamav_thread_running, false);
+
+  int error = pthread_create(&host->security_clamav_thread, NULL, host_security_clamav_backend, host);
+  if (error != 0) {
+    printf("[security] failed to start ClamAV backend thread: %s\n", strerror(error));
+    return;
+  }
+
+  host->security_clamav_thread_initialized = true;
+}
+
 static bool host_ensure_private_data_path(host_t *host, const char *path, bool create_directories) {
   (void)host;
   if (path == NULL || path[0] == '\0') {
@@ -2821,80 +3050,6 @@ static bool host_ensure_private_data_path(host_t *host, const char *path, bool c
   return true;
 }
 
-static host_security_scan_result_t host_security_scan_with_clamav(host_t *host, const char *payload, size_t length,
-                                                                 char *diagnostic, size_t diagnostic_length) {
-  if (diagnostic != NULL && diagnostic_length > 0U) {
-    diagnostic[0] = '\0';
-  }
-
-  if (host == NULL || payload == NULL || length == 0U) {
-    return HOST_SECURITY_SCAN_CLEAN;
-  }
-
-  if (!atomic_load(&host->security_clamav_enabled)) {
-    return HOST_SECURITY_SCAN_CLEAN;
-  }
-
-  if (host->security_clamav_command[0] == '\0') {
-    return HOST_SECURITY_SCAN_CLEAN;
-  }
-
-  FILE *pipe = popen(host->security_clamav_command, "w");
-  if (pipe == NULL) {
-    if (diagnostic != NULL && diagnostic_length > 0U) {
-      snprintf(diagnostic, diagnostic_length, "%s", "failed to invoke ClamAV command");
-    }
-    return HOST_SECURITY_SCAN_ERROR;
-  }
-
-  size_t written = fwrite(payload, 1U, length, pipe);
-  bool write_ok = written == length;
-  if (write_ok) {
-    write_ok = fflush(pipe) == 0;
-  }
-
-  int status = pclose(pipe);
-
-  if (!write_ok) {
-    if (diagnostic != NULL && diagnostic_length > 0U) {
-      snprintf(diagnostic, diagnostic_length, "%s", "failed to stream payload to ClamAV");
-    }
-    return HOST_SECURITY_SCAN_ERROR;
-  }
-
-  if (status == -1) {
-    if (diagnostic != NULL && diagnostic_length > 0U) {
-      snprintf(diagnostic, diagnostic_length, "%s", "failed to retrieve ClamAV exit status");
-    }
-    return HOST_SECURITY_SCAN_ERROR;
-  }
-
-  if (!WIFEXITED(status)) {
-    if (diagnostic != NULL && diagnostic_length > 0U) {
-      snprintf(diagnostic, diagnostic_length, "%s", "ClamAV terminated unexpectedly");
-    }
-    return HOST_SECURITY_SCAN_ERROR;
-  }
-
-  int exit_code = WEXITSTATUS(status);
-  if (exit_code == 0) {
-    return HOST_SECURITY_SCAN_CLEAN;
-  }
-
-  if (exit_code == 1) {
-    if (diagnostic != NULL && diagnostic_length > 0U) {
-      snprintf(diagnostic, diagnostic_length, "%s", "ClamAV detected malicious content");
-    }
-    return HOST_SECURITY_SCAN_BLOCKED;
-  }
-
-  if (diagnostic != NULL && diagnostic_length > 0U) {
-    snprintf(diagnostic, diagnostic_length, "ClamAV exited with status %d", exit_code);
-  }
-
-  return HOST_SECURITY_SCAN_ERROR;
-}
-
 static host_security_scan_result_t host_security_scan_payload(host_t *host, const char *category, const char *payload,
                                                              size_t length, char *diagnostic,
                                                              size_t diagnostic_length) {
@@ -2919,35 +3074,8 @@ static host_security_scan_result_t host_security_scan_payload(host_t *host, cons
   }
 
   if (clamav_active) {
-    char clamav_diagnostic[256];
-    host_security_scan_result_t clamav_result =
-        host_security_scan_with_clamav(host, payload, length, clamav_diagnostic, sizeof(clamav_diagnostic));
-
-    if (clamav_result == HOST_SECURITY_SCAN_BLOCKED) {
-      if (diagnostic != NULL && diagnostic_length > 0U) {
-        if (clamav_diagnostic[0] != '\0') {
-          snprintf(diagnostic, diagnostic_length, "%s", clamav_diagnostic);
-        } else {
-          snprintf(diagnostic, diagnostic_length, "%s", "ClamAV detected malicious content");
-        }
-      }
-      return HOST_SECURITY_SCAN_BLOCKED;
-    }
-
-    if (clamav_result == HOST_SECURITY_SCAN_ERROR) {
-      host_security_disable_clamav(host, clamav_diagnostic[0] != '\0' ? clamav_diagnostic : "ClamAV failure");
-      clamav_active = atomic_load(&host->security_clamav_enabled);
-      if (!ai_active) {
-        if (diagnostic != NULL && diagnostic_length > 0U) {
-          if (clamav_diagnostic[0] != '\0') {
-            snprintf(diagnostic, diagnostic_length, "%s", clamav_diagnostic);
-          } else {
-            snprintf(diagnostic, diagnostic_length, "%s", "ClamAV scan unavailable");
-          }
-        }
-        return HOST_SECURITY_SCAN_ERROR;
-      }
-    }
+    // ClamAV scans now run asynchronously in the scheduled backend thread.
+    clamav_active = false;
   }
 
   ai_active = atomic_load(&host->security_ai_enabled);
@@ -15518,6 +15646,11 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_ban_resolve_path(host);
   host->reply_state_file_path[0] = '\0';
   host_reply_state_resolve_path(host);
+  host->security_clamav_thread_initialized = false;
+  atomic_store(&host->security_clamav_thread_running, false);
+  atomic_store(&host->security_clamav_thread_stop, false);
+  host->security_clamav_last_run.tv_sec = 0;
+  host->security_clamav_last_run.tv_nsec = 0;
   host_security_configure(host);
   pthread_mutex_init(&host->lock, NULL);
   poll_state_reset(&host->poll);
@@ -15581,6 +15714,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
     }
 
   }
+  host_security_start_clamav_backend(host);
 }
 
 static bool host_try_load_motd_from_path(host_t *host, const char *path) {
@@ -15748,6 +15882,13 @@ static void host_sleep_after_error(void) {
 void host_shutdown(host_t *host) {
   if (host == NULL) {
     return;
+  }
+
+  if (host->security_clamav_thread_initialized) {
+    atomic_store(&host->security_clamav_thread_stop, true);
+    pthread_join(host->security_clamav_thread, NULL);
+    host->security_clamav_thread_initialized = false;
+    atomic_store(&host->security_clamav_thread_running, false);
   }
 
   if (host->web_client != NULL) {
