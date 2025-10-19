@@ -55,7 +55,7 @@ confirm the build still succeeds before pushing the result.
 ## Security hardening
 
 - `scripts/safe_permission.sh` tightens the ownership and mode on runtime data files (BBS state, vote state, cooldown snapshots, and general chatter state). Run it after deployment to confine the data directory to `ssh-chatter` and to ensure each file is set to `0600`. Override the targets by passing explicit paths or by exporting `STATE_ROOT` or the corresponding `CHATTER_*_FILE` environment variables before execution.
-- Chat messages, ASCII art, and BBS posts/comments flow through a layered security filter. ClamAV scans the payload first (defaulting to `clamscan --no-summary --stdout -`, overridable with `CHATTER_CLAMAV_COMMAND` or disabled with `CHATTER_CLAMAV=off`) and the AI moderation bridge then queries Gemini (`GEMINI_API_KEY`) with an automatic Ollama fallback (`http://127.0.0.1:11434` by default). Disable the entire feature with `CHATTER_SECURITY_FILTER=off`. If every provider fails, the filter automatically disables itself to avoid blocking conversations while misconfigured.
+- Chat messages, ASCII art, and BBS posts/comments flow through a layered security filter. ClamAV scans the payload first (defaulting to `clamscan --no-summary --stdout -`, overridable with `CHATTER_CLAMAV_COMMAND` or disabled with `CHATTER_CLAMAV=off`). AI-based moderation is now opt-in—enable it with `CHATTER_SECURITY_AI=on` to query Gemini (`GEMINI_API_KEY`) with an automatic Ollama fallback (`http://127.0.0.1:11434` by default). Disable the entire feature with `CHATTER_SECURITY_FILTER=off`. If every provider fails, the filter automatically disables itself to avoid blocking conversations while misconfigured.
 - Suspicious submissions that trip the layered filter are now tracked per-IP; repeated hits trigger an automatic kick and ban, while the rapid reconnect detector allows longer recovery windows so unstable network sessions can rejoin without being penalized.
 
 ## Prerequisites
@@ -186,6 +186,7 @@ Supported environment variables include:
 - `CHATTER_VOTE_FILE` – Path to the vote state file (default `vote_state.dat`).
 - `CHATTER_GEMINI_COOLDOWN_FILE` – Path to the Gemini cooldown state file (default `gemini_cooldown.dat`).
 - `CHATTER_SECURITY_FILTER` – Set to `off`/`false`/`0` to disable the layered security filter (enabled by default).
+- `CHATTER_SECURITY_AI` – Set to `on`/`true`/`1` to enable AI moderation (disabled by default).
 - `CHATTER_CLAMAV` – Set to `off`/`false`/`0` to disable ClamAV scanning (enabled by default when `clamscan` is available).
 - `CHATTER_CLAMAV_COMMAND` – Override the command used to feed payloads into ClamAV (default `clamscan --no-summary --stdout -`).
 

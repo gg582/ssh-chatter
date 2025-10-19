@@ -2591,20 +2591,33 @@ static void host_security_configure(host_t *host) {
     }
   }
 
-  bool has_gemini = false;
-  const char *gemini_key = getenv("GEMINI_API_KEY");
-  if (gemini_key != NULL && gemini_key[0] != '\0') {
-    has_gemini = true;
+  bool ai_requested = false;
+  const char *ai_toggle = getenv("CHATTER_SECURITY_AI");
+  if (ai_toggle != NULL && ai_toggle[0] != '\0') {
+    if (!(strcasecmp(ai_toggle, "0") == 0 || strcasecmp(ai_toggle, "false") == 0 ||
+          strcasecmp(ai_toggle, "off") == 0)) {
+      ai_requested = true;
+    }
   }
 
-  atomic_store(&host->security_ai_enabled, true);
-  pipeline_enabled = true;
+  if (ai_requested) {
+    bool has_gemini = false;
+    const char *gemini_key = getenv("GEMINI_API_KEY");
+    if (gemini_key != NULL && gemini_key[0] != '\0') {
+      has_gemini = true;
+    }
 
-  const char *message = has_gemini ?
-                           "[security] AI payload moderation enabled (Gemini primary, Ollama fallback)" :
-                           "[security] AI payload moderation enabled (Ollama fallback only)";
+    atomic_store(&host->security_ai_enabled, true);
+    pipeline_enabled = true;
 
-  printf("%s\n", message);
+    const char *message = has_gemini ?
+                             "[security] AI payload moderation enabled (Gemini primary, Ollama fallback)" :
+                             "[security] AI payload moderation enabled (Ollama fallback only)";
+
+    printf("%s\n", message);
+  } else {
+    printf("[security] AI payload moderation disabled (set CHATTER_SECURITY_AI=on to enable)\n");
+  }
 
   if (pipeline_enabled) {
     atomic_store(&host->security_filter_enabled, true);
