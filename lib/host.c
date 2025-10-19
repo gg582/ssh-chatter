@@ -49,6 +49,7 @@
 
 #define ANSI_CLEAR_LINE "\033[2K"
 #define ANSI_INSERT_LINE "\033[1L"
+#define ANSI_CURSOR_COLUMN_RESET "\033[1G"
 
 #define SSH_CHATTER_MESSAGE_BOX_MAX_LINES 32U
 #define SSH_CHATTER_MESSAGE_BOX_PADDING 2U
@@ -11773,21 +11774,27 @@ static void session_asciiart_capture_line(session_ctx_t *ctx, const char *line) 
   }
 
   size_t available = sizeof(ctx->asciiart_buffer) - ctx->asciiart_length - 1U;
-  if (available == 0U) {
+  const size_t prefix_len = sizeof(ANSI_CURSOR_COLUMN_RESET) - 1U;
+  const size_t newline_cost = ctx->asciiart_length > 0U ? 1U : 0U;
+  if (available < newline_cost + prefix_len) {
     session_send_system_line(ctx, "ASCII art buffer is full. Additional text ignored.");
     return;
   }
 
   size_t line_length = strlen(line);
-  bool needs_newline = ctx->asciiart_length > 0U;
-  if (needs_newline) {
-    ctx->asciiart_buffer[ctx->asciiart_length++] = '\n';
-    available--;
+  size_t max_line_length = available - newline_cost - prefix_len;
+  if (line_length > max_line_length) {
+    line_length = max_line_length;
+    session_send_system_line(ctx, "Line truncated to fit within the ASCII art size limit.");
   }
 
-  if (line_length > available) {
-    line_length = available;
-    session_send_system_line(ctx, "Line truncated to fit within the ASCII art size limit.");
+  if (ctx->asciiart_length > 0U) {
+    ctx->asciiart_buffer[ctx->asciiart_length++] = '\n';
+  }
+
+  if (prefix_len > 0U) {
+    memcpy(ctx->asciiart_buffer + ctx->asciiart_length, ANSI_CURSOR_COLUMN_RESET, prefix_len);
+    ctx->asciiart_length += prefix_len;
   }
 
   if (line_length > 0U) {
