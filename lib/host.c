@@ -413,9 +413,9 @@ typedef struct palette_descriptor {
 
 static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
   {"windows", "High contrast palette reminiscent of Windows", "cyan", "blue", true, "white", "blue", "yellow", true},
-  {"gnu-linux", "Modern, elegant, and free. the universal rhythm of your workflow.", "bright-green", "black", true, "bright-cyan", "black", "bright-yellow", true},
+  {"gnu-linux", "Modern, elegant, and free. the universal rhythm of your workflow.", "bright-green", "black", true, "bright-green", "black", "bright-yellow", true},
   {"macos", "Precision in silence. Minimalist contemporary unix.", "bright-white", "black", false, "bright-blue", "black", "white", false},
-  {"freebsd", "Rigid and graceful BSD. The biggest 'True UNIX'", "bright-red", "black", false, "bright-yellow", "black", "bright-white", false},
+  {"freebsd", "Rigid and graceful BSD. The biggest 'True UNIX'", "bright-red", "black", false, "red", "black", "bright-white", false},
   {"solaris", "Ancient sun of enterprise UNIX: Sun, Machine, nostalgia.", "bright-yellow", "black", true, "bright-red", "black", "bright-white", true},
   {"openbsd-fortress", "Security through simplicity. calm blue walls over disciplined darkness.", "bright-blue", "black", false, "bright-white", "black", "cyan", false},
   {"netbsd-universal", "Runs on anything. Maybe your fridge, too?", "bright-cyan", "black", false, "bright-white", "black", "bright-yellow", false},
