@@ -285,7 +285,7 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
   const size_t story_count = sizeof(CAPTCHA_STORIES) / sizeof(CAPTCHA_STORIES[0]);
   if (story_count == 0U) {
     snprintf(prompt->question, sizeof(prompt->question),
-             "Tom is a man who has a cat named Tom. \"it\" is adorable. Answer what the double-quoted text refers to.");
+             "Tom is a man who has a cat named Tom. \"the pet\" is adorable. Answer what the double-quoted text refers to.");
     snprintf(prompt->answer, sizeof(prompt->answer), "%s", "Tom");
     return;
   }
