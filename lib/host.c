@@ -66,9 +66,9 @@
 #define SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS 200000000L
 #define SSH_CHATTER_TRANSLATION_SEGMENT_GUARD 32U
 #define SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS 150000000L
-#define SSH_CHATTER_JOIN_RAPID_WINDOW_NS 5000000000LL
-#define SSH_CHATTER_JOIN_IP_THRESHOLD 24U
-#define SSH_CHATTER_JOIN_NAME_THRESHOLD 12U
+#define SSH_CHATTER_JOIN_RAPID_WINDOW_NS 60000000000LL
+#define SSH_CHATTER_JOIN_IP_THRESHOLD 6U
+#define SSH_CHATTER_JOIN_NAME_THRESHOLD 6U
 #define SSH_CHATTER_SUSPICIOUS_EVENT_WINDOW_NS 300000000000LL
 #define SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD 2U
 #define SSH_CHATTER_CLAMAV_SCAN_INTERVAL_SECONDS (5 * 60 * 60)
@@ -605,6 +605,7 @@ static bool host_is_ip_banned(host_t *host, const char *ip);
 static bool host_is_username_banned(host_t *host, const char *username);
 static bool host_add_ban_entry(host_t *host, const char *username, const char *ip);
 static bool host_remove_ban_entry(host_t *host, const char *token);
+static join_activity_entry_t *host_find_join_activity_locked(host_t *host, const char *ip);
 static join_activity_entry_t *host_ensure_join_activity_locked(host_t *host, const char *ip);
 static bool host_register_suspicious_activity(host_t *host, const char *username, const char *ip,
                                              size_t *attempts_out);
@@ -780,6 +781,9 @@ static bbs_post_t *host_allocate_bbs_post_locked(host_t *host);
 static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
 static void session_bbs_queue_translation(session_ctx_t *ctx, const bbs_post_t *post);
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, const char *notice);
+static bool host_asciiart_cooldown_active(host_t *host, const char *ip, const struct timespec *now,
+                                          long *remaining_seconds);
+static void host_asciiart_register_post(host_t *host, const char *ip, const struct timespec *when);
 static bool session_asciiart_cooldown_active(session_ctx_t *ctx, struct timespec *now, long *remaining_seconds);
 static void session_asciiart_reset(session_ctx_t *ctx);
 static void session_asciiart_begin(session_ctx_t *ctx);
@@ -7648,15 +7652,42 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
       message_text = "";
     }
 
+    bool multiline_message = strchr(message_text, '\n') != NULL;
+    const char *header_body = message_text;
+    if (multiline_message) {
+      header_body = "shared ASCII art:";
+    }
+
     char header[SSH_CHATTER_MESSAGE_LIMIT + 128];
     if (entry->message_id > 0U) {
       snprintf(header, sizeof(header), "[#%" PRIu64 "] %s%s%s[%s]%s %s", entry->message_id, highlight, bold, color,
-               entry->username, ANSI_RESET, message_text);
+               entry->username, ANSI_RESET, header_body);
     } else {
       snprintf(header, sizeof(header), "%s%s%s[%s]%s %s", highlight, bold, color, entry->username, ANSI_RESET,
-               message_text);
+               header_body);
     }
     session_send_plain_line(ctx, header);
+
+    if (multiline_message) {
+      const char *line_start = message_text;
+      while (line_start != NULL) {
+        const char *newline = strchr(line_start, '\n');
+        size_t segment_length = newline != NULL ? (size_t)(newline - line_start) : strlen(line_start);
+        char line[SSH_CHATTER_MESSAGE_LIMIT + 1U];
+        if (segment_length >= sizeof(line)) {
+          segment_length = sizeof(line) - 1U;
+        }
+        if (segment_length > 0U) {
+          memcpy(line, line_start, segment_length);
+        }
+        line[segment_length] = '\0';
+        session_send_plain_line(ctx, line);
+        if (newline == NULL) {
+          break;
+        }
+        line_start = newline + 1;
+      }
+    }
 
     char attachment_line[SSH_CHATTER_ATTACHMENT_TARGET_LEN + 64];
     if (entry->attachment_type != CHAT_ATTACHMENT_NONE && entry->attachment_target[0] != '\0') {
@@ -8174,7 +8205,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/video <url> [caption] - share a video link",
       "/audio <url> [caption] - share an audio clip",
       "/files <url> [caption] - share a downloadable file",
-      "/asciiart           - open the ASCII art composer (max 64 lines, 1/min)",
+      "/asciiart           - open the ASCII art composer (max 64 lines, 1/10 min per IP)",
       "/game <tetris|liargame> - start a minigame in the chat (use /suspend! or Ctrl+Z to exit)",
       "Up/Down arrows           - scroll recent chat history",
       "/color (text;highlight[;bold]) - style your handle",
@@ -11495,6 +11526,68 @@ static void session_bbs_regen_post(session_ctx_t *ctx, uint64_t id) {
   session_bbs_render_post(ctx, &snapshot, "Post bumped to the top.");
 }
 
+static bool host_asciiart_cooldown_active(host_t *host, const char *ip, const struct timespec *now,
+                                          long *remaining_seconds) {
+  if (host == NULL || ip == NULL || ip[0] == '\0') {
+    if (remaining_seconds != NULL) {
+      *remaining_seconds = 0L;
+    }
+    return false;
+  }
+
+  struct timespec current = {0, 0};
+  if (now != NULL) {
+    current = *now;
+  } else if (clock_gettime(CLOCK_MONOTONIC, &current) != 0) {
+    current.tv_sec = time(NULL);
+    current.tv_nsec = 0L;
+  }
+
+  bool active = false;
+  long remaining = 0L;
+
+  pthread_mutex_lock(&host->lock);
+  join_activity_entry_t *entry = host_find_join_activity_locked(host, ip);
+  if (entry != NULL && entry->asciiart_has_cooldown) {
+    struct timespec expiry = entry->last_asciiart_post;
+    expiry.tv_sec += SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS;
+    if (timespec_compare(&current, &expiry) >= 0) {
+      entry->asciiart_has_cooldown = false;
+    } else {
+      active = true;
+      struct timespec diff = timespec_diff(&expiry, &current);
+      remaining = diff.tv_sec;
+      if (diff.tv_nsec > 0L) {
+        ++remaining;
+      }
+      if (remaining < 0L) {
+        remaining = 0L;
+      }
+    }
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (remaining_seconds != NULL) {
+    *remaining_seconds = active ? remaining : 0L;
+  }
+
+  return active;
+}
+
+static void host_asciiart_register_post(host_t *host, const char *ip, const struct timespec *when) {
+  if (host == NULL || ip == NULL || ip[0] == '\0' || when == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  join_activity_entry_t *entry = host_ensure_join_activity_locked(host, ip);
+  if (entry != NULL) {
+    entry->last_asciiart_post = *when;
+    entry->asciiart_has_cooldown = true;
+  }
+  pthread_mutex_unlock(&host->lock);
+}
+
 static void session_asciiart_reset(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return;
@@ -11521,33 +11614,43 @@ static bool session_asciiart_cooldown_active(session_ctx_t *ctx, struct timespec
     *now = current;
   }
 
-  if (!ctx->asciiart_has_cooldown) {
+  long session_remaining = 0L;
+  bool session_active = false;
+  if (ctx->asciiart_has_cooldown) {
+    struct timespec expiry = ctx->last_asciiart_post;
+    expiry.tv_sec += SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS;
+    if (timespec_compare(&current, &expiry) >= 0) {
+      ctx->asciiart_has_cooldown = false;
+    } else {
+      session_active = true;
+      struct timespec diff = timespec_diff(&expiry, &current);
+      session_remaining = diff.tv_sec;
+      if (diff.tv_nsec > 0L) {
+        ++session_remaining;
+      }
+      if (session_remaining < 0L) {
+        session_remaining = 0L;
+      }
+    }
+  }
+
+  long ip_remaining = 0L;
+  bool ip_active = host_asciiart_cooldown_active(ctx->owner, ctx->client_ip, &current, &ip_remaining);
+
+  if (!session_active && !ip_active) {
     if (remaining_seconds != NULL) {
       *remaining_seconds = 0L;
     }
     return false;
   }
 
-  struct timespec expiry = ctx->last_asciiart_post;
-  expiry.tv_sec += SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS;
-  if (timespec_compare(&current, &expiry) >= 0) {
-    ctx->asciiart_has_cooldown = false;
-    if (remaining_seconds != NULL) {
-      *remaining_seconds = 0L;
-    }
-    return false;
+  long max_remaining = session_active ? session_remaining : 0L;
+  if (ip_active && ip_remaining > max_remaining) {
+    max_remaining = ip_remaining;
   }
 
   if (remaining_seconds != NULL) {
-    struct timespec diff = timespec_diff(&expiry, &current);
-    long seconds = diff.tv_sec;
-    if (diff.tv_nsec > 0L) {
-      ++seconds;
-    }
-    if (seconds < 0L) {
-      seconds = 0L;
-    }
-    *remaining_seconds = seconds;
+    *remaining_seconds = max_remaining;
   }
 
   return true;
@@ -11584,7 +11687,7 @@ static void session_asciiart_begin(session_ctx_t *ctx) {
   session_asciiart_reset(ctx);
   ctx->asciiart_pending = true;
 
-  session_send_system_line(ctx, "ASCII art composer ready (max 64 lines).");
+  session_send_system_line(ctx, "ASCII art composer ready (max 64 lines, 10-minute cooldown per IP).");
   session_send_system_line(ctx,
                            "Type " SSH_CHATTER_ASCIIART_TERMINATOR " on a line by itself or press Ctrl+S to finish.");
   session_send_system_line(ctx, "Press Ctrl+A to cancel the draft.");
@@ -11618,6 +11721,7 @@ static void session_asciiart_commit(session_ctx_t *ctx) {
 
   ctx->last_asciiart_post = now;
   ctx->asciiart_has_cooldown = true;
+  host_asciiart_register_post(ctx->owner, ctx->client_ip, &now);
 
   chat_history_entry_t entry = {0};
   if (!host_history_record_user(ctx->owner, ctx, ctx->asciiart_buffer, &entry)) {
@@ -14130,6 +14234,7 @@ static bool host_register_join_attempt(host_t *host, const char *username, const
 
   bool ban_ip = false;
   bool ban_same_name = false;
+  bool exempt_ip = false;
 
   pthread_mutex_lock(&host->lock);
   join_activity_entry_t *entry = host_ensure_join_activity_locked(host, ip);
@@ -14162,7 +14267,11 @@ static bool host_register_join_attempt(host_t *host, const char *username, const
 
   entry->last_attempt = now;
 
-  if (within_window && entry->rapid_attempts >= SSH_CHATTER_JOIN_IP_THRESHOLD) {
+  if (host_ip_has_grant_locked(host, ip)) {
+    exempt_ip = true;
+  }
+
+  if (!exempt_ip && within_window && entry->rapid_attempts >= SSH_CHATTER_JOIN_IP_THRESHOLD) {
     ban_ip = true;
   }
   if (within_window && entry->same_name_attempts >= SSH_CHATTER_JOIN_NAME_THRESHOLD) {
@@ -14170,7 +14279,7 @@ static bool host_register_join_attempt(host_t *host, const char *username, const
   }
   pthread_mutex_unlock(&host->lock);
 
-  if (ban_ip || ban_same_name) {
+  if ((ban_ip || ban_same_name) && !exempt_ip) {
     const char *ban_user = (username != NULL && username[0] != '\0') ? username : "";
     if (host_add_ban_entry(host, ban_user, ip)) {
       printf("[auto-ban] %s flagged for rapid reconnects\n", ip);
