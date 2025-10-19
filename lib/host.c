@@ -4769,12 +4769,30 @@ static void session_translation_reserve_placeholders(session_ctx_t *ctx, size_t 
   }
 }
 
+static bool session_translation_push_scope_override(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  bool previous = ctx->translation_manual_scope_override;
+  ctx->translation_manual_scope_override = true;
+  return previous;
+}
+
+static void session_translation_pop_scope_override(session_ctx_t *ctx, bool previous) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  ctx->translation_manual_scope_override = previous;
+}
+
 static void session_translation_queue_block(session_ctx_t *ctx, const char *text) {
   if (ctx == NULL || text == NULL || text[0] == '\0') {
     return;
   }
 
-  if (translator_should_limit_to_chat_bbs()) {
+  if (translator_should_limit_to_chat_bbs() && !ctx->translation_manual_scope_override) {
     return;
   }
 
@@ -5834,7 +5852,10 @@ static void session_send_line(session_ctx_t *ctx, const char *message) {
   session_write_rendered_line(ctx, render_text);
 
   size_t placeholder_lines = 0U;
-  const bool translation_ready = !suppress_translation && !ctx->translation_suppress_output && ctx->translation_enabled &&
+  const bool scope_allows_translation =
+      (!translator_should_limit_to_chat_bbs() || ctx->translation_manual_scope_override);
+  const bool translation_ready = scope_allows_translation && !suppress_translation &&
+                                 !ctx->translation_suppress_output && ctx->translation_enabled &&
                                  ctx->output_translation_enabled && ctx->output_translation_language[0] != '\0' &&
                                  render_text[0] != '\0';
   if (translation_ready && !ctx->in_bbs_mode) {
@@ -6248,9 +6269,11 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
     return;
   }
 
-  const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
-                                 ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode &&
-                                 !translator_should_limit_to_chat_bbs();
+  const bool scope_allows_translation =
+      (!translator_should_limit_to_chat_bbs() || ctx->translation_manual_scope_override);
+  const bool translation_ready = scope_allows_translation && ctx->translation_enabled &&
+                                 ctx->output_translation_enabled && ctx->output_translation_language[0] != '\0' &&
+                                 !ctx->in_bbs_mode;
   const bool multiline_message = strchr(message, '\n') != NULL;
   bool translation_block = false;
   bool previous_suppress = ctx->translation_suppress_output;
@@ -6351,9 +6374,11 @@ static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text) {
     return;
   }
 
-  const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
-                                 ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode &&
-                                 !translator_should_limit_to_chat_bbs();
+  const bool scope_allows_translation =
+      (!translator_should_limit_to_chat_bbs() || ctx->translation_manual_scope_override);
+  const bool translation_ready = scope_allows_translation && ctx->translation_enabled &&
+                                 ctx->output_translation_enabled && ctx->output_translation_language[0] != '\0' &&
+                                 !ctx->in_bbs_mode;
 
   bool previous_suppress = ctx->translation_suppress_output;
   if (translation_ready && !ctx->translation_suppress_output) {
@@ -6375,9 +6400,11 @@ static void session_send_system_lines_bulk(session_ctx_t *ctx, const char *const
     return;
   }
 
-  const bool translation_ready = ctx->translation_enabled && ctx->output_translation_enabled &&
-                                 ctx->output_translation_language[0] != '\0' && !ctx->in_bbs_mode &&
-                                 !translator_should_limit_to_chat_bbs();
+  const bool scope_allows_translation =
+      (!translator_should_limit_to_chat_bbs() || ctx->translation_manual_scope_override);
+  const bool translation_ready = scope_allows_translation && ctx->translation_enabled &&
+                                 ctx->output_translation_enabled && ctx->output_translation_language[0] != '\0' &&
+                                 !ctx->in_bbs_mode;
 
   bool previous_suppress = ctx->translation_suppress_output;
   if (translation_ready && !ctx->translation_suppress_output) {
@@ -7062,6 +7089,7 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
   }
 
   if (entry->is_user_message) {
+    bool previous_override = session_translation_push_scope_override(ctx);
     const char *highlight = entry->user_highlight_code != NULL ? entry->user_highlight_code : "";
     const char *color = entry->user_color_code != NULL ? entry->user_color_code : "";
     const char *bold = entry->user_is_bold ? ANSI_BOLD : "";
@@ -7114,6 +7142,8 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
     if (entry->message_id > 0U) {
       session_send_reply_tree(ctx, entry->message_id, 0U, 1U);
     }
+
+    session_translation_pop_scope_override(ctx, previous_override);
   } else {
     session_send_system_line(ctx, entry->message);
   }
@@ -10237,6 +10267,7 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, 
     return;
   }
 
+  bool previous_override = session_translation_push_scope_override(ctx);
   session_bbs_prepare_canvas(ctx);
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];
@@ -10337,6 +10368,7 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, 
   session_send_system_line(ctx, "Need a new thread? Use /bbs post <title>[|tags...] instead.");
 
   session_bbs_queue_translation(ctx, post);
+  session_translation_pop_scope_override(ctx, previous_override);
 }
 
 // Show the BBS dashboard and mark the session as being in BBS mode.
@@ -10358,6 +10390,7 @@ static void session_bbs_list(session_ctx_t *ctx) {
     return;
   }
 
+  bool previous_override = session_translation_push_scope_override(ctx);
   typedef struct bbs_listing {
     uint64_t id;
     char title[SSH_CHATTER_BBS_TITLE_LEN];
@@ -10398,6 +10431,7 @@ static void session_bbs_list(session_ctx_t *ctx) {
     session_send_system_line(ctx,
                              "The bulletin board is empty. Use /bbs post <title> [tags...] to write something. Finish drafts "
                              "with " SSH_CHATTER_BBS_TERMINATOR ".");
+    session_translation_pop_scope_override(ctx, previous_override);
     return;
   }
 
@@ -10450,6 +10484,7 @@ static void session_bbs_list(session_ctx_t *ctx) {
   }
 
   session_render_separator(ctx, "End");
+  session_translation_pop_scope_override(ctx, previous_override);
 }
 
 // Display a single post to the user.

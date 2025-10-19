@@ -259,6 +259,7 @@ typedef struct session_ctx {
   size_t translation_caption_spacing;
   size_t translation_placeholder_active_lines;
   bool translation_suppress_output;
+  bool translation_manual_scope_override;
   bool translation_quota_notified;
   pthread_mutex_t translation_mutex;
   pthread_cond_t translation_cond;
