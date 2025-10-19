@@ -58,6 +58,7 @@
 #define SSH_CHATTER_BBS_DEFAULT_TAG "general"
 #define SSH_CHATTER_BBS_TERMINATOR ">/__BBS_END>"
 #define SSH_CHATTER_ASCIIART_TERMINATOR ">/__ARTWORK_END>"
+#define SSH_CHATTER_BBS_POST_TITLE_DISPLAY_LIMIT 50U
 #define SSH_CHATTER_TETROMINO_SIZE 4
 #define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT ((unsigned int)INT_MAX)
 #define SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM "ssh-rsa"
@@ -620,6 +621,8 @@ static void session_handle_soulmate(session_ctx_t *ctx);
 static void session_handle_grant(session_ctx_t *ctx, const char *arguments);
 static void session_handle_revoke(session_ctx_t *ctx, const char *arguments);
 static void session_normalize_newlines(char *text);
+static size_t string_display_width(const char *text);
+static void string_truncate_display_width(char *text, size_t max_width);
 static bool timezone_sanitize_identifier(const char *input, char *output, size_t length);
 static bool timezone_resolve_identifier(const char *input, char *resolved, size_t length);
 static const palette_descriptor_t *palette_find_descriptor(const char *name);
@@ -4243,6 +4246,7 @@ static void host_bbs_state_save_locked(host_t *host) {
 
     snprintf(serialized.author, sizeof(serialized.author), "%s", post->author);
     snprintf(serialized.title, sizeof(serialized.title), "%s", post->title);
+    string_truncate_display_width(serialized.title, SSH_CHATTER_BBS_POST_TITLE_DISPLAY_LIMIT);
     snprintf(serialized.body, sizeof(serialized.body), "%s", post->body);
 
     for (size_t tag = 0U; tag < serialized.tag_count; ++tag) {
@@ -4378,6 +4382,7 @@ static void host_bbs_state_load(host_t *host) {
     post->bumped_at = (time_t)serialized.bumped_at;
     snprintf(post->author, sizeof(post->author), "%s", serialized.author);
     snprintf(post->title, sizeof(post->title), "%s", serialized.title);
+    string_truncate_display_width(post->title, SSH_CHATTER_BBS_POST_TITLE_DISPLAY_LIMIT);
     snprintf(post->body, sizeof(post->body), "%s", serialized.body);
 
     size_t tag_limit = serialized.tag_count;
@@ -10527,6 +10532,7 @@ static void session_bbs_commit_pending_post(session_ctx_t *ctx) {
 
   snprintf(post->author, sizeof(post->author), "%s", ctx->user.name);
   snprintf(post->title, sizeof(post->title), "%s", ctx->pending_bbs_title);
+  string_truncate_display_width(post->title, SSH_CHATTER_BBS_POST_TITLE_DISPLAY_LIMIT);
   memcpy(post->body, ctx->pending_bbs_body, ctx->pending_bbs_body_length);
   post->body[ctx->pending_bbs_body_length] = '\0';
   post->tag_count = ctx->pending_bbs_tag_count;
@@ -10631,6 +10637,13 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
 
   if (title[0] == '\0') {
     session_send_system_line(ctx, "A title is required to create a post.");
+    return;
+  }
+
+  const size_t title_width = string_display_width(title);
+  if (title_width > SSH_CHATTER_BBS_POST_TITLE_DISPLAY_LIMIT) {
+    session_send_system_line(ctx,
+                             "BBS post titles are limited to 50 characters (Hangul counts as two spaces).");
     return;
   }
 
@@ -14236,6 +14249,99 @@ static void session_normalize_newlines(char *text) {
   }
 
   text[write_idx] = '\0';
+}
+
+static size_t string_display_width(const char *text) {
+  if (text == NULL) {
+    return 0U;
+  }
+
+  mbstate_t state;
+  memset(&state, 0, sizeof(state));
+
+  size_t width = 0U;
+  const char *cursor = text;
+  while (*cursor != '\0') {
+    wchar_t wc;
+    size_t consumed = mbrtowc(&wc, cursor, MB_CUR_MAX, &state);
+    if (consumed == (size_t)-1) {
+      ++width;
+      ++cursor;
+      memset(&state, 0, sizeof(state));
+      continue;
+    }
+    if (consumed == (size_t)-2) {
+      ++width;
+      ++cursor;
+      memset(&state, 0, sizeof(state));
+      continue;
+    }
+    if (consumed == 0U) {
+      break;
+    }
+
+    int char_width = wcwidth(wc);
+    if (char_width <= 0) {
+      char_width = 1;
+    }
+
+    width += (size_t)char_width;
+    cursor += consumed;
+  }
+
+  return width;
+}
+
+static void string_truncate_display_width(char *text, size_t max_width) {
+  if (text == NULL) {
+    return;
+  }
+
+  mbstate_t state;
+  memset(&state, 0, sizeof(state));
+
+  size_t width = 0U;
+  char *cursor = text;
+  while (*cursor != '\0') {
+    wchar_t wc;
+    size_t consumed = mbrtowc(&wc, cursor, MB_CUR_MAX, &state);
+    if (consumed == (size_t)-1) {
+      if (width + 1U > max_width) {
+        *cursor = '\0';
+        return;
+      }
+      ++width;
+      ++cursor;
+      memset(&state, 0, sizeof(state));
+      continue;
+    }
+    if (consumed == (size_t)-2) {
+      if (width + 1U > max_width) {
+        *cursor = '\0';
+        return;
+      }
+      ++width;
+      ++cursor;
+      memset(&state, 0, sizeof(state));
+      continue;
+    }
+    if (consumed == 0U) {
+      break;
+    }
+
+    int char_width = wcwidth(wc);
+    if (char_width <= 0) {
+      char_width = 1;
+    }
+
+    if (width + (size_t)char_width > max_width) {
+      *cursor = '\0';
+      return;
+    }
+
+    width += (size_t)char_width;
+    cursor += consumed;
+  }
 }
 
 static bool timezone_sanitize_identifier(const char *input, char *output, size_t length) {
