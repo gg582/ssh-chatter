@@ -4713,7 +4713,7 @@ static void host_state_load(host_t *host) {
     ++host->preference_count;
   }
 
-  memset(host->operator_grants, 0, sizeof(host->operator_grants));
+  memset(host->operator_grants, 0, HOST_GRANTS_CLEAR_SIZE);
   host->operator_grant_count = 0U;
   for (uint32_t idx = 0; success && idx < grant_count; ++idx) {
     host_state_grant_entry_t serialized = {0};
