@@ -8106,8 +8106,9 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
     now.tv_nsec = 0L;
   }
 
-  bool allow_message = true;
-  if (ctx->has_last_message_time) {
+  const bool translation_throttle =
+      ctx->translation_enabled && ctx->input_translation_enabled && ctx->input_translation_language[0] != '\0';
+  if (translation_throttle && ctx->has_last_message_time) {
     time_t sec_delta = now.tv_sec - ctx->last_message_time.tv_sec;
     long nsec_delta = now.tv_nsec - ctx->last_message_time.tv_nsec;
     if (nsec_delta < 0L) {
@@ -8115,13 +8116,9 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
       nsec_delta += 1000000000L;
     }
     if (sec_delta < 0 || (sec_delta == 0 && nsec_delta < 1000000000L)) {
-      allow_message = false;
+      session_send_system_line(ctx, "Please wait at least one second before sending another message.");
+      return;
     }
-  }
-
-  if (!allow_message) {
-    session_send_system_line(ctx, "Please wait at least one second before sending another message.");
-    return;
   }
 
   ctx->last_message_time = now;
@@ -9277,9 +9274,22 @@ static void session_handle_usercount(session_ctx_t *ctx) {
   count = ctx->owner->room.member_count;
   pthread_mutex_unlock(&ctx->owner->room.lock);
 
+  const bool eliza_active = atomic_load(&ctx->owner->eliza_enabled);
+  size_t displayed = count;
+  if (eliza_active) {
+    if (SIZE_MAX - displayed > 0U) {
+      ++displayed;
+    }
+  }
+
   char message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(message, sizeof(message), "There %s currently %zu user%s connected.",
-           count == 1U ? "is" : "are", count, count == 1U ? "" : "s");
+  if (eliza_active && displayed > count) {
+    snprintf(message, sizeof(message), "There %s currently %zu user%s connected (including eliza).",
+             displayed == 1U ? "is" : "are", displayed, displayed == 1U ? "" : "s");
+  } else {
+    snprintf(message, sizeof(message), "There %s currently %zu user%s connected.",
+             displayed == 1U ? "is" : "are", displayed, displayed == 1U ? "" : "s");
+  }
 
   host_history_record_system(ctx->owner, message);
   chat_room_broadcast(&ctx->owner->room, message, NULL);
