@@ -406,6 +406,11 @@ typedef struct host {
   _Atomic bool security_clamav_enabled;
   _Atomic bool security_clamav_failure_logged;
   char security_clamav_command[PATH_MAX];
+  pthread_t security_clamav_thread;
+  bool security_clamav_thread_initialized;
+  _Atomic bool security_clamav_thread_running;
+  _Atomic bool security_clamav_thread_stop;
+  struct timespec security_clamav_last_run;
   poll_state_t poll;
   named_poll_state_t named_polls[SSH_CHATTER_MAX_NAMED_POLLS];
   size_t named_poll_count;
