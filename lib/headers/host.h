@@ -307,6 +307,7 @@ typedef struct user_preference {
   char birthday[16];
   uint8_t translation_caption_spacing;
   bool translation_master_enabled;
+  bool translation_master_explicit;
   bool output_translation_enabled;
   bool input_translation_enabled;
   char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];

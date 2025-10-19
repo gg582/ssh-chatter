@@ -954,7 +954,7 @@ static const char *const TETROMINO_SHAPES[7][4] = {
 static const char TETROMINO_DISPLAY_CHARS[7] = {'I', 'J', 'L', 'O', 'S', 'T', 'Z'};
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
-static const uint32_t HOST_STATE_VERSION = 6U;
+static const uint32_t HOST_STATE_VERSION = 7U;
 
 #define HOST_STATE_SOUND_ALIAS_LEN 32U
 
@@ -1055,7 +1055,7 @@ typedef struct host_state_preference_entry_v5 {
   char birthday[16];
 } host_state_preference_entry_v5_t;
 
-typedef struct host_state_preference_entry {
+typedef struct host_state_preference_entry_v6 {
   uint8_t has_user_theme;
   uint8_t has_system_theme;
   uint8_t user_is_bold;
@@ -1078,6 +1078,35 @@ typedef struct host_state_preference_entry {
   uint8_t output_translation_enabled;
   uint8_t input_translation_enabled;
   uint8_t reserved[3];
+  char birthday[16];
+  char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+  char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+} host_state_preference_entry_v6_t;
+
+typedef struct host_state_preference_entry {
+  uint8_t has_user_theme;
+  uint8_t has_system_theme;
+  uint8_t user_is_bold;
+  uint8_t system_is_bold;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  char user_color_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char user_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_fg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_bg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char os_name[SSH_CHATTER_OS_NAME_LEN];
+  int32_t daily_year;
+  int32_t daily_yday;
+  char daily_function[64];
+  uint64_t last_poll_id;
+  int32_t last_poll_choice;
+  uint8_t has_birthday;
+  uint8_t translation_caption_spacing;
+  uint8_t translation_enabled;
+  uint8_t output_translation_enabled;
+  uint8_t input_translation_enabled;
+  uint8_t translation_master_explicit;
+  uint8_t reserved[2];
   char birthday[16];
   char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
@@ -2355,6 +2384,7 @@ static void host_store_translation_preferences(host_t *host, const session_ctx_t
   user_preference_t *pref = host_ensure_preference_locked(host, ctx->user.name);
   if (pref != NULL) {
     pref->translation_master_enabled = ctx->translation_enabled;
+    pref->translation_master_explicit = true;
     pref->output_translation_enabled = ctx->output_translation_enabled;
     pref->input_translation_enabled = ctx->input_translation_enabled;
     snprintf(pref->output_translation_language, sizeof(pref->output_translation_language), "%s",
@@ -3405,6 +3435,7 @@ static void host_state_save_locked(host_t *host) {
     serialized.translation_enabled = pref->translation_master_enabled ? 1U : 0U;
     serialized.output_translation_enabled = pref->output_translation_enabled ? 1U : 0U;
     serialized.input_translation_enabled = pref->input_translation_enabled ? 1U : 0U;
+    serialized.translation_master_explicit = pref->translation_master_explicit ? 1U : 0U;
     memset(serialized.reserved, 0, sizeof(serialized.reserved));
     snprintf(serialized.birthday, sizeof(serialized.birthday), "%s", pref->birthday);
     snprintf(serialized.output_translation_language, sizeof(serialized.output_translation_language), "%s",
@@ -3947,11 +3978,45 @@ static void host_state_load(host_t *host) {
 
   for (uint32_t idx = 0; success && idx < preference_count; ++idx) {
     host_state_preference_entry_t serialized = {0};
-    if (version >= 6U) {
+    if (version >= 7U) {
       if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
         success = false;
         break;
       }
+    } else if (version == 6U) {
+      host_state_preference_entry_v6_t legacy6 = {0};
+      if (fread(&legacy6, sizeof(legacy6), 1U, fp) != 1U) {
+        success = false;
+        break;
+      }
+      serialized.has_user_theme = legacy6.has_user_theme;
+      serialized.has_system_theme = legacy6.has_system_theme;
+      serialized.user_is_bold = legacy6.user_is_bold;
+      serialized.system_is_bold = legacy6.system_is_bold;
+      snprintf(serialized.username, sizeof(serialized.username), "%s", legacy6.username);
+      snprintf(serialized.user_color_name, sizeof(serialized.user_color_name), "%s", legacy6.user_color_name);
+      snprintf(serialized.user_highlight_name, sizeof(serialized.user_highlight_name), "%s", legacy6.user_highlight_name);
+      snprintf(serialized.system_fg_name, sizeof(serialized.system_fg_name), "%s", legacy6.system_fg_name);
+      snprintf(serialized.system_bg_name, sizeof(serialized.system_bg_name), "%s", legacy6.system_bg_name);
+      snprintf(serialized.system_highlight_name, sizeof(serialized.system_highlight_name), "%s",
+               legacy6.system_highlight_name);
+      snprintf(serialized.os_name, sizeof(serialized.os_name), "%s", legacy6.os_name);
+      serialized.daily_year = legacy6.daily_year;
+      serialized.daily_yday = legacy6.daily_yday;
+      snprintf(serialized.daily_function, sizeof(serialized.daily_function), "%s", legacy6.daily_function);
+      serialized.last_poll_id = legacy6.last_poll_id;
+      serialized.last_poll_choice = legacy6.last_poll_choice;
+      serialized.has_birthday = legacy6.has_birthday;
+      serialized.translation_caption_spacing = legacy6.translation_caption_spacing;
+      serialized.translation_enabled = legacy6.translation_enabled;
+      serialized.output_translation_enabled = legacy6.output_translation_enabled;
+      serialized.input_translation_enabled = legacy6.input_translation_enabled;
+      serialized.translation_master_explicit = legacy6.translation_enabled;
+      snprintf(serialized.birthday, sizeof(serialized.birthday), "%s", legacy6.birthday);
+      snprintf(serialized.output_translation_language, sizeof(serialized.output_translation_language), "%s",
+               legacy6.output_translation_language);
+      snprintf(serialized.input_translation_language, sizeof(serialized.input_translation_language), "%s",
+               legacy6.input_translation_language);
     } else if (version == 5U) {
       host_state_preference_entry_v5_t legacy5 = {0};
       if (fread(&legacy5, sizeof(legacy5), 1U, fp) != 1U) {
@@ -3980,6 +4045,7 @@ static void host_state_load(host_t *host) {
       serialized.translation_enabled = 0U;
       serialized.output_translation_enabled = 0U;
       serialized.input_translation_enabled = 0U;
+      serialized.translation_master_explicit = 0U;
       snprintf(serialized.birthday, sizeof(serialized.birthday), "%s", legacy5.birthday);
       serialized.output_translation_language[0] = '\0';
       serialized.input_translation_language[0] = '\0';
@@ -4011,6 +4077,7 @@ static void host_state_load(host_t *host) {
       serialized.translation_enabled = 0U;
       serialized.output_translation_enabled = 0U;
       serialized.input_translation_enabled = 0U;
+      serialized.translation_master_explicit = 0U;
       serialized.birthday[0] = '\0';
       serialized.output_translation_language[0] = '\0';
       serialized.input_translation_language[0] = '\0';
@@ -4042,6 +4109,7 @@ static void host_state_load(host_t *host) {
       serialized.translation_enabled = 0U;
       serialized.output_translation_enabled = 0U;
       serialized.input_translation_enabled = 0U;
+      serialized.translation_master_explicit = 0U;
       serialized.birthday[0] = '\0';
       serialized.output_translation_language[0] = '\0';
       serialized.input_translation_language[0] = '\0';
@@ -4075,6 +4143,7 @@ static void host_state_load(host_t *host) {
     snprintf(pref->birthday, sizeof(pref->birthday), "%s", serialized.birthday);
     pref->translation_caption_spacing = serialized.translation_caption_spacing;
     pref->translation_master_enabled = serialized.translation_enabled != 0U;
+    pref->translation_master_explicit = serialized.translation_master_explicit != 0U;
     pref->output_translation_enabled = serialized.output_translation_enabled != 0U;
     pref->input_translation_enabled = serialized.input_translation_enabled != 0U;
     snprintf(pref->output_translation_language, sizeof(pref->output_translation_language), "%s",
@@ -4682,6 +4751,14 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
   }
   pthread_mutex_unlock(&host->lock);
 
+  ctx->translation_caption_spacing = 0U;
+  ctx->translation_enabled = false;
+  ctx->output_translation_enabled = false;
+  ctx->output_translation_language[0] = '\0';
+  ctx->input_translation_enabled = false;
+  ctx->input_translation_language[0] = '\0';
+  ctx->last_detected_input_language[0] = '\0';
+
   if (has_snapshot) {
     if (snapshot.has_user_theme) {
       const char *color_code = lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]),
@@ -4744,7 +4821,9 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
     if (ctx->translation_caption_spacing > 8U) {
       ctx->translation_caption_spacing = 8U;
     }
-    ctx->translation_enabled = snapshot.translation_master_enabled;
+    if (snapshot.translation_master_explicit) {
+      ctx->translation_enabled = snapshot.translation_master_enabled;
+    }
     ctx->output_translation_enabled = snapshot.output_translation_enabled;
     snprintf(ctx->output_translation_language, sizeof(ctx->output_translation_language), "%s",
              snapshot.output_translation_language);
