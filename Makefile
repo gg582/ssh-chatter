@@ -7,11 +7,13 @@ CFLAGS = -std=c2x -Ofast \
         -fno-omit-frame-pointer -fstack-protector-strong -fno-common \
         -fPIC \
         -g \
+	-D_FORTIFY_SOURCE=2 \
 	-march=native \
 	-flto=$(shell nproc) \
 	-fomit-frame-pointer \
 	-fno-signed-zeros \
 	-funroll-loops \
+	-fuse-linker-plugin \
 	-falign-functions=32 \
 	-falign-loops=32 \
 	-ftree-vectorize \
