@@ -23,6 +23,7 @@ PY
 resolve_path() {
   local input="$1"
   if [[ -z "$input" ]]; then
+    echo "";
     return
   fi
 

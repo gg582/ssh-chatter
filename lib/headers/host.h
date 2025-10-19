@@ -73,6 +73,8 @@ typedef struct join_activity_entry {
   struct timespec last_attempt;
   size_t rapid_attempts;
   size_t same_name_attempts;
+  struct timespec last_suspicious;
+  size_t suspicious_events;
 } join_activity_entry_t;
 
 typedef struct client_manager client_manager_t;
@@ -398,6 +400,10 @@ typedef struct host {
   char reply_state_file_path[PATH_MAX];
   _Atomic bool security_filter_enabled;
   _Atomic bool security_filter_failure_logged;
+  _Atomic bool security_ai_enabled;
+  _Atomic bool security_clamav_enabled;
+  _Atomic bool security_clamav_failure_logged;
+  char security_clamav_command[PATH_MAX];
   poll_state_t poll;
   named_poll_state_t named_polls[SSH_CHATTER_MAX_NAMED_POLLS];
   size_t named_poll_count;
