@@ -734,6 +734,8 @@ static bool host_eliza_disable(host_t *host);
 static void host_eliza_announce_join(host_t *host);
 static void host_eliza_announce_depart(host_t *host);
 static void host_eliza_say(host_t *host, const char *message);
+static void host_eliza_handle_private_message(session_ctx_t *ctx, const char *message);
+static void host_eliza_prepare_private_reply(const char *message, char *reply, size_t reply_length);
 static bool host_eliza_content_is_severe(const char *text);
 static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const char *reason, bool from_filter);
 static bool session_security_check_text(session_ctx_t *ctx, const char *category, const char *content, size_t length);
@@ -3216,6 +3218,84 @@ static void host_eliza_say(host_t *host, const char *message) {
   if (!host_post_client_message(host, "eliza", message, NULL, NULL, false)) {
     printf("[eliza] failed to deliver message: %s\n", message);
   }
+}
+
+static void host_eliza_prepare_private_reply(const char *message, char *reply, size_t reply_length) {
+  if (reply == NULL || reply_length == 0U) {
+    return;
+  }
+
+  reply[0] = '\0';
+
+  if (message == NULL) {
+    snprintf(reply, reply_length, "I'm listening. Let me know what's going on.");
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", message);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    snprintf(reply, reply_length, "I'm here if you want to talk about anything.");
+    return;
+  }
+
+  const bool says_hello = string_contains_case_insensitive(working, "hello") ||
+                          string_contains_case_insensitive(working, "hi") ||
+                          string_contains_case_insensitive(working, "안녕");
+  const bool asks_help = string_contains_case_insensitive(working, "help") ||
+                         string_contains_case_insensitive(working, "도와");
+  const bool expresses_thanks = string_contains_case_insensitive(working, "thank") ||
+                                string_contains_case_insensitive(working, "고마");
+  const bool asks_question = strchr(working, '?') != NULL;
+
+  if (says_hello) {
+    snprintf(reply, reply_length, "Hi there! I'm here if you need anything.");
+    return;
+  }
+
+  if (expresses_thanks) {
+    snprintf(reply, reply_length, "You're welcome. I'm glad to help keep things calm.");
+    return;
+  }
+
+  if (asks_help) {
+    snprintf(reply, reply_length, "Tell me what's happening and I'll see how I can help.");
+    return;
+  }
+
+  if (asks_question) {
+    snprintf(reply, reply_length, "That's a thoughtful question. What do you think about it?");
+    return;
+  }
+
+  snprintf(reply, reply_length, "I'm listening. Share anything that's on your mind.");
+}
+
+static void host_eliza_handle_private_message(session_ctx_t *ctx, const char *message) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  host_t *host = ctx->owner;
+  if (!atomic_load(&host->eliza_enabled)) {
+    session_send_system_line(ctx, "eliza isn't around right now.");
+    return;
+  }
+
+  session_ctx_t palette = {0};
+  palette.user_color_code = host->user_theme.userColor != NULL ? host->user_theme.userColor : "";
+  palette.user_highlight_code = host->user_theme.highlight != NULL ? host->user_theme.highlight : "";
+  palette.user_is_bold = host->user_theme.isBold;
+
+  char reply[SSH_CHATTER_MESSAGE_LIMIT];
+  host_eliza_prepare_private_reply(message, reply, sizeof(reply));
+
+  session_send_private_message_line(ctx, &palette, "eliza -> you", reply);
+  printf("[pm] eliza -> %s: %s\n", ctx->user.name, reply);
+
+  clock_gettime(CLOCK_MONOTONIC, &host->eliza_last_action);
 }
 
 static bool host_eliza_content_is_severe(const char *text) {
@@ -8775,11 +8855,22 @@ static void session_handle_pm(session_ctx_t *ctx, const char *arguments) {
   snprintf(target_name, sizeof(target_name), "%.*s", (int)sizeof(target_name) - 1, working);
 
   session_ctx_t *target = chat_room_find_user(&ctx->owner->room, target_name);
+  const bool target_is_eliza = strcasecmp(target_name, "eliza") == 0;
+  const bool eliza_active = target_is_eliza && atomic_load(&ctx->owner->eliza_enabled);
+
   if (target == NULL) {
-    char not_found[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(not_found, sizeof(not_found), "User '%s' is not connected.", target_name);
-    session_send_system_line(ctx, not_found);
-    return;
+    if (target_is_eliza) {
+      if (!eliza_active) {
+        session_send_system_line(ctx, "eliza isn't around right now.");
+        return;
+      }
+      session_send_system_line(ctx, "Connecting you with eliza...");
+    } else {
+      char not_found[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(not_found, sizeof(not_found), "User '%s' is not connected.", target_name);
+      session_send_system_line(ctx, not_found);
+      return;
+    }
   }
 
   char prepared[SSH_CHATTER_MESSAGE_LIMIT];
@@ -8789,16 +8880,17 @@ static void session_handle_pm(session_ctx_t *ctx, const char *arguments) {
   bool translation_bypass = translation_strip_no_translate_prefix(prepared, stripped, sizeof(stripped));
   const char *deliver_body = translation_bypass ? stripped : prepared;
 
-  printf("[pm] %s -> %s: %s\n", ctx->user.name, target->user.name, deliver_body);
+  const char *target_display = target != NULL ? target->user.name : target_name;
+  printf("[pm] %s -> %s: %s\n", ctx->user.name, target_display, deliver_body);
 
   char to_target_label[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(to_target_label, sizeof(to_target_label), "%s -> you", ctx->user.name);
 
   char to_sender_label[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(to_sender_label, sizeof(to_sender_label), "you -> %s", target->user.name);
+  snprintf(to_sender_label, sizeof(to_sender_label), "you -> %s", target_display);
 
-  bool attempt_translation = !translation_bypass && ctx->translation_enabled && ctx->input_translation_enabled &&
-                             ctx->input_translation_language[0] != '\0';
+  bool attempt_translation = (target != NULL) && !translation_bypass && ctx->translation_enabled &&
+                             ctx->input_translation_enabled && ctx->input_translation_language[0] != '\0';
 
   if (attempt_translation) {
     if (session_translation_queue_private_message(ctx, target, deliver_body)) {
@@ -8807,8 +8899,14 @@ static void session_handle_pm(session_ctx_t *ctx, const char *arguments) {
     session_send_system_line(ctx, "Translation unavailable; sending your original message.");
   }
 
-  session_send_private_message_line(target, ctx, to_target_label, deliver_body);
+  if (target != NULL) {
+    session_send_private_message_line(target, ctx, to_target_label, deliver_body);
+    session_send_private_message_line(ctx, ctx, to_sender_label, deliver_body);
+    return;
+  }
+
   session_send_private_message_line(ctx, ctx, to_sender_label, deliver_body);
+  host_eliza_handle_private_message(ctx, deliver_body);
 }
 
 static bool username_contains(const char *username, const char *needle) {
