@@ -16,6 +16,8 @@ bool translator_translate_with_cancel(const char *text, const char *target_langu
                                       char *detected_language, size_t detected_len,
                                       const volatile bool *cancel_flag);
 
+bool translator_eliza_respond(const char *prompt, char *reply, size_t reply_len);
+
 bool translator_moderate_text(const char *category, const char *content, bool *blocked, char *reason,
                               size_t reason_len);
 
