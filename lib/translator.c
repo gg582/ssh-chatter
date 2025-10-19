@@ -48,6 +48,7 @@ static struct timespec g_next_allowed_request = {0, 0};
 static bool g_gemini_manually_disabled = false;
 static struct timespec g_gemini_disabled_until = {0, 0};
 static bool g_manual_chat_bbs_only = true;
+static bool g_manual_skip_scrollback_translation = false;
 
 #define TRANSLATOR_RATE_LIMIT_INTERVAL_NS 800000000L
 #define TRANSLATOR_RATE_LIMIT_PENALTY_NS 3000000000L
@@ -337,6 +338,9 @@ bool translator_is_ollama_only(void) {
 void translator_set_manual_chat_bbs_only(bool enabled) {
   pthread_mutex_lock(&g_provider_mutex);
   g_manual_chat_bbs_only = enabled;
+  if (!enabled) {
+    g_manual_skip_scrollback_translation = false;
+  }
   pthread_mutex_unlock(&g_provider_mutex);
 }
 
@@ -347,12 +351,33 @@ bool translator_is_manual_chat_bbs_only(void) {
   return limited;
 }
 
+void translator_set_manual_skip_scrollback(bool enabled) {
+  pthread_mutex_lock(&g_provider_mutex);
+  g_manual_skip_scrollback_translation = enabled;
+  pthread_mutex_unlock(&g_provider_mutex);
+}
+
+bool translator_is_manual_skip_scrollback(void) {
+  pthread_mutex_lock(&g_provider_mutex);
+  bool skip = g_manual_skip_scrollback_translation;
+  pthread_mutex_unlock(&g_provider_mutex);
+  return skip;
+}
+
 bool translator_should_limit_to_chat_bbs(void) {
   if (translator_is_ollama_only()) {
     return true;
   }
 
   return translator_is_manual_chat_bbs_only();
+}
+
+bool translator_should_skip_scrollback_translation(void) {
+  if (!translator_is_manual_chat_bbs_only()) {
+    return false;
+  }
+
+  return translator_is_manual_skip_scrollback();
 }
 
 static size_t translator_utf8_encode(uint32_t codepoint, char *output, size_t max_len) {
