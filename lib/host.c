@@ -14,7 +14,9 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
+#include <libgen.h>
 #include <limits.h>
 #include <wchar.h>
 #include <arpa/inet.h>
@@ -29,7 +31,9 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -62,6 +66,15 @@
 #define SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS 200000000L
 #define SSH_CHATTER_TRANSLATION_SEGMENT_GUARD 32U
 #define SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS 150000000L
+#define SSH_CHATTER_JOIN_RAPID_WINDOW_NS 5000000000LL
+#define SSH_CHATTER_JOIN_IP_THRESHOLD 24U
+#define SSH_CHATTER_JOIN_NAME_THRESHOLD 12U
+#define SSH_CHATTER_SUSPICIOUS_EVENT_WINDOW_NS 300000000000LL
+#define SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD 2U
+
+#ifndef O_NOFOLLOW
+#define O_NOFOLLOW 0
+#endif
 
 static const char kTranslationQuotaNotice[] =
     "⚠️ Translation quota exhausted. Translation features are temporarily disabled.";
@@ -91,6 +104,12 @@ typedef struct {
   const char *pet_pronoun;
   captcha_template_t template_type;
 } captcha_story_t;
+
+typedef enum {
+  HOST_SECURITY_SCAN_CLEAN = 0,
+  HOST_SECURITY_SCAN_BLOCKED,
+  HOST_SECURITY_SCAN_ERROR,
+} host_security_scan_result_t;
 
 static const captcha_story_t CAPTCHA_STORIES[] = {
     {"Jiho", "software engineer", true, "cat", "Hodu", NULL, CAPTCHA_TEMPLATE_PRONOUN},
@@ -535,6 +554,9 @@ static bool host_is_ip_banned(host_t *host, const char *ip);
 static bool host_is_username_banned(host_t *host, const char *username);
 static bool host_add_ban_entry(host_t *host, const char *username, const char *ip);
 static bool host_remove_ban_entry(host_t *host, const char *token);
+static join_activity_entry_t *host_ensure_join_activity_locked(host_t *host, const char *ip);
+static bool host_register_suspicious_activity(host_t *host, const char *username, const char *ip,
+                                             size_t *attempts_out);
 static bool session_is_private_ipv4(const unsigned char octets[4]);
 static bool session_is_lan_client(const char *ip);
 static void session_assign_lan_privileges(session_ctx_t *ctx);
@@ -545,6 +567,7 @@ static void session_force_dark_mode_foreground(session_ctx_t *ctx);
 static void session_apply_saved_preferences(session_ctx_t *ctx);
 static void session_dispatch_command(session_ctx_t *ctx, const char *line);
 static void session_handle_exit(session_ctx_t *ctx);
+static void session_force_disconnect(session_ctx_t *ctx, const char *reason);
 static void session_handle_nick(session_ctx_t *ctx, const char *arguments);
 static bool session_detect_provider_ip(const char *ip, char *label, size_t length);
 static bool host_lookup_member_ip(host_t *host, const char *username, char *ip, size_t length);
@@ -654,6 +677,15 @@ static void host_state_save_locked(host_t *host);
 static void host_bbs_resolve_path(host_t *host);
 static void host_bbs_state_load(host_t *host);
 static void host_bbs_state_save_locked(host_t *host);
+static void host_security_configure(host_t *host);
+static bool host_ensure_private_data_path(host_t *host, const char *path, bool create_directories);
+static void host_security_disable_filter(host_t *host, const char *reason);
+static void host_security_disable_clamav(host_t *host, const char *reason);
+static host_security_scan_result_t host_security_scan_with_clamav(host_t *host, const char *payload, size_t length,
+                                                                 char *diagnostic, size_t diagnostic_length);
+static host_security_scan_result_t host_security_scan_payload(host_t *host, const char *category, const char *payload,
+                                                              size_t length, char *diagnostic, size_t diagnostic_length);
+static bool session_security_check_text(session_ctx_t *ctx, const char *category, const char *content, size_t length);
 static void host_vote_resolve_path(host_t *host);
 static void host_vote_state_load(host_t *host);
 static void host_vote_state_save_locked(host_t *host);
@@ -2508,6 +2540,459 @@ static void host_history_normalize_entry(host_t *host, chat_history_entry_t *ent
   entry->user_highlight_code = highlight_code;
 }
 
+static void host_security_configure(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  atomic_store(&host->security_filter_enabled, false);
+  atomic_store(&host->security_filter_failure_logged, false);
+  atomic_store(&host->security_ai_enabled, false);
+  atomic_store(&host->security_clamav_enabled, false);
+  atomic_store(&host->security_clamav_failure_logged, false);
+  host->security_clamav_command[0] = '\0';
+
+  const char *toggle = getenv("CHATTER_SECURITY_FILTER");
+  if (toggle != NULL && toggle[0] != '\0') {
+    if (strcasecmp(toggle, "0") == 0 || strcasecmp(toggle, "false") == 0 || strcasecmp(toggle, "off") == 0) {
+      return;
+    }
+  }
+
+  bool pipeline_enabled = false;
+
+  const char *clamav_toggle = getenv("CHATTER_CLAMAV");
+  bool clamav_disabled = false;
+  if (clamav_toggle != NULL && clamav_toggle[0] != '\0') {
+    if (strcasecmp(clamav_toggle, "0") == 0 || strcasecmp(clamav_toggle, "false") == 0 ||
+        strcasecmp(clamav_toggle, "off") == 0) {
+      clamav_disabled = true;
+    }
+  }
+
+  if (!clamav_disabled) {
+    const char *command = getenv("CHATTER_CLAMAV_COMMAND");
+    if (command == NULL || command[0] == '\0') {
+      command = "clamscan --no-summary --stdout -";
+    }
+
+    size_t command_length = strlen(command);
+    if (command_length < sizeof(host->security_clamav_command)) {
+      snprintf(host->security_clamav_command, sizeof(host->security_clamav_command), "%s", command);
+      atomic_store(&host->security_clamav_enabled, true);
+      pipeline_enabled = true;
+      printf("[security] ClamAV scanning enabled via command: %s\n", host->security_clamav_command);
+    } else {
+      printf("[security] unable to enable ClamAV scanning: command is too long\n");
+    }
+  }
+
+  bool has_gemini = false;
+  const char *gemini_key = getenv("GEMINI_API_KEY");
+  if (gemini_key != NULL && gemini_key[0] != '\0') {
+    has_gemini = true;
+  }
+
+  atomic_store(&host->security_ai_enabled, true);
+  pipeline_enabled = true;
+
+  const char *message = has_gemini ?
+                           "[security] AI payload moderation enabled (Gemini primary, Ollama fallback)" :
+                           "[security] AI payload moderation enabled (Ollama fallback only)";
+
+  printf("%s\n", message);
+
+  if (pipeline_enabled) {
+    atomic_store(&host->security_filter_enabled, true);
+  }
+}
+
+static void host_security_disable_filter(host_t *host, const char *reason) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (!atomic_exchange(&host->security_ai_enabled, false)) {
+    return;
+  }
+
+  if (reason == NULL || reason[0] == '\0') {
+    reason = "moderation failure";
+  }
+
+  if (!atomic_exchange(&host->security_filter_failure_logged, true)) {
+    printf("[security] disabling payload moderation: %s\n", reason);
+  }
+
+  if (!atomic_load(&host->security_clamav_enabled)) {
+    atomic_store(&host->security_filter_enabled, false);
+  }
+}
+
+static void host_security_disable_clamav(host_t *host, const char *reason) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (!atomic_exchange(&host->security_clamav_enabled, false)) {
+    return;
+  }
+
+  if (reason == NULL || reason[0] == '\0') {
+    reason = "ClamAV failure";
+  }
+
+  if (!atomic_exchange(&host->security_clamav_failure_logged, true)) {
+    printf("[security] disabling ClamAV scanning: %s\n", reason);
+  }
+
+  if (!atomic_load(&host->security_ai_enabled)) {
+    atomic_store(&host->security_filter_enabled, false);
+  }
+}
+
+static bool host_ensure_private_data_path(host_t *host, const char *path, bool create_directories) {
+  (void)host;
+  if (path == NULL || path[0] == '\0') {
+    return false;
+  }
+
+  char parent_buffer[PATH_MAX];
+  snprintf(parent_buffer, sizeof(parent_buffer), "%s", path);
+  char *parent_dir = dirname(parent_buffer);
+  if (parent_dir == NULL || parent_dir[0] == '\0') {
+    parent_dir = ".";
+  }
+
+  char parent_path[PATH_MAX];
+  snprintf(parent_path, sizeof(parent_path), "%s", parent_dir);
+
+  struct stat dir_stat;
+  if (stat(parent_path, &dir_stat) != 0) {
+    if (!(create_directories && errno == ENOENT)) {
+      humanized_log_error("host", "failed to inspect data directory", errno != 0 ? errno : EIO);
+      return false;
+    }
+
+    if (mkdir(parent_path, 0750) != 0 && errno != EEXIST) {
+      humanized_log_error("host", "failed to create data directory", errno != 0 ? errno : EIO);
+      return false;
+    }
+
+    if (stat(parent_path, &dir_stat) != 0) {
+      humanized_log_error("host", "failed to inspect data directory", errno != 0 ? errno : EIO);
+      return false;
+    }
+  }
+
+  if (!S_ISDIR(dir_stat.st_mode)) {
+    humanized_log_error("host", "data path parent is not a directory", ENOTDIR);
+    return false;
+  }
+
+  mode_t insecure_bits = dir_stat.st_mode & (S_IWOTH | S_IWGRP);
+  bool is_dot = strcmp(parent_path, ".") == 0;
+  bool is_root = strcmp(parent_path, "/") == 0;
+  if (insecure_bits != 0U) {
+    if (!is_dot && !is_root) {
+      mode_t tightened = dir_stat.st_mode & (mode_t)~(S_IWOTH | S_IWGRP);
+      if (chmod(parent_path, tightened) != 0) {
+        humanized_log_error("host", "failed to tighten data directory permissions", errno != 0 ? errno : EACCES);
+        return false;
+      }
+    } else {
+      humanized_log_error("host", "data directory permissions are too loose", EACCES);
+      return false;
+    }
+  }
+
+  struct stat file_stat;
+  if (lstat(path, &file_stat) == 0) {
+    if (!S_ISREG(file_stat.st_mode)) {
+      humanized_log_error("host", "bbs state path does not reference a regular file", EINVAL);
+      return false;
+    }
+
+    if ((file_stat.st_mode & (S_IWOTH | S_IWGRP)) != 0U) {
+      if (chmod(path, S_IRUSR | S_IWUSR) != 0) {
+        humanized_log_error("host", "failed to tighten bbs state permissions", errno != 0 ? errno : EACCES);
+        return false;
+      }
+    }
+
+    if (file_stat.st_uid != geteuid()) {
+      humanized_log_error("host", "bbs state file ownership mismatch", EPERM);
+      return false;
+    }
+  } else if (errno != ENOENT) {
+    humanized_log_error("host", "failed to inspect bbs state path", errno != 0 ? errno : EIO);
+    return false;
+  }
+
+  return true;
+}
+
+static host_security_scan_result_t host_security_scan_with_clamav(host_t *host, const char *payload, size_t length,
+                                                                 char *diagnostic, size_t diagnostic_length) {
+  if (diagnostic != NULL && diagnostic_length > 0U) {
+    diagnostic[0] = '\0';
+  }
+
+  if (host == NULL || payload == NULL || length == 0U) {
+    return HOST_SECURITY_SCAN_CLEAN;
+  }
+
+  if (!atomic_load(&host->security_clamav_enabled)) {
+    return HOST_SECURITY_SCAN_CLEAN;
+  }
+
+  if (host->security_clamav_command[0] == '\0') {
+    return HOST_SECURITY_SCAN_CLEAN;
+  }
+
+  FILE *pipe = popen(host->security_clamav_command, "w");
+  if (pipe == NULL) {
+    if (diagnostic != NULL && diagnostic_length > 0U) {
+      snprintf(diagnostic, diagnostic_length, "%s", "failed to invoke ClamAV command");
+    }
+    return HOST_SECURITY_SCAN_ERROR;
+  }
+
+  size_t written = fwrite(payload, 1U, length, pipe);
+  bool write_ok = written == length;
+  if (write_ok) {
+    write_ok = fflush(pipe) == 0;
+  }
+
+  int status = pclose(pipe);
+
+  if (!write_ok) {
+    if (diagnostic != NULL && diagnostic_length > 0U) {
+      snprintf(diagnostic, diagnostic_length, "%s", "failed to stream payload to ClamAV");
+    }
+    return HOST_SECURITY_SCAN_ERROR;
+  }
+
+  if (status == -1) {
+    if (diagnostic != NULL && diagnostic_length > 0U) {
+      snprintf(diagnostic, diagnostic_length, "%s", "failed to retrieve ClamAV exit status");
+    }
+    return HOST_SECURITY_SCAN_ERROR;
+  }
+
+  if (!WIFEXITED(status)) {
+    if (diagnostic != NULL && diagnostic_length > 0U) {
+      snprintf(diagnostic, diagnostic_length, "%s", "ClamAV terminated unexpectedly");
+    }
+    return HOST_SECURITY_SCAN_ERROR;
+  }
+
+  int exit_code = WEXITSTATUS(status);
+  if (exit_code == 0) {
+    return HOST_SECURITY_SCAN_CLEAN;
+  }
+
+  if (exit_code == 1) {
+    if (diagnostic != NULL && diagnostic_length > 0U) {
+      snprintf(diagnostic, diagnostic_length, "%s", "ClamAV detected malicious content");
+    }
+    return HOST_SECURITY_SCAN_BLOCKED;
+  }
+
+  if (diagnostic != NULL && diagnostic_length > 0U) {
+    snprintf(diagnostic, diagnostic_length, "ClamAV exited with status %d", exit_code);
+  }
+
+  return HOST_SECURITY_SCAN_ERROR;
+}
+
+static host_security_scan_result_t host_security_scan_payload(host_t *host, const char *category, const char *payload,
+                                                             size_t length, char *diagnostic,
+                                                             size_t diagnostic_length) {
+  if (diagnostic != NULL && diagnostic_length > 0U) {
+    diagnostic[0] = '\0';
+  }
+
+  if (host == NULL || payload == NULL || length == 0U) {
+    return HOST_SECURITY_SCAN_CLEAN;
+  }
+
+  if (!atomic_load(&host->security_filter_enabled)) {
+    return HOST_SECURITY_SCAN_CLEAN;
+  }
+
+  bool clamav_active = atomic_load(&host->security_clamav_enabled);
+  bool ai_active = atomic_load(&host->security_ai_enabled);
+
+  if (!clamav_active && !ai_active) {
+    atomic_store(&host->security_filter_enabled, false);
+    return HOST_SECURITY_SCAN_CLEAN;
+  }
+
+  if (clamav_active) {
+    char clamav_diagnostic[256];
+    host_security_scan_result_t clamav_result =
+        host_security_scan_with_clamav(host, payload, length, clamav_diagnostic, sizeof(clamav_diagnostic));
+
+    if (clamav_result == HOST_SECURITY_SCAN_BLOCKED) {
+      if (diagnostic != NULL && diagnostic_length > 0U) {
+        if (clamav_diagnostic[0] != '\0') {
+          snprintf(diagnostic, diagnostic_length, "%s", clamav_diagnostic);
+        } else {
+          snprintf(diagnostic, diagnostic_length, "%s", "ClamAV detected malicious content");
+        }
+      }
+      return HOST_SECURITY_SCAN_BLOCKED;
+    }
+
+    if (clamav_result == HOST_SECURITY_SCAN_ERROR) {
+      host_security_disable_clamav(host, clamav_diagnostic[0] != '\0' ? clamav_diagnostic : "ClamAV failure");
+      clamav_active = atomic_load(&host->security_clamav_enabled);
+      if (!ai_active) {
+        if (diagnostic != NULL && diagnostic_length > 0U) {
+          if (clamav_diagnostic[0] != '\0') {
+            snprintf(diagnostic, diagnostic_length, "%s", clamav_diagnostic);
+          } else {
+            snprintf(diagnostic, diagnostic_length, "%s", "ClamAV scan unavailable");
+          }
+        }
+        return HOST_SECURITY_SCAN_ERROR;
+      }
+    }
+  }
+
+  ai_active = atomic_load(&host->security_ai_enabled);
+  if (!ai_active) {
+    return HOST_SECURITY_SCAN_CLEAN;
+  }
+
+  char snippet[1024];
+  size_t copy_length = length;
+  if (copy_length >= sizeof(snippet)) {
+    copy_length = sizeof(snippet) - 1U;
+  }
+
+  memcpy(snippet, payload, copy_length);
+  for (size_t idx = 0U; idx < copy_length; ++idx) {
+    unsigned char ch = (unsigned char)snippet[idx];
+    if (ch == '\0') {
+      copy_length = idx;
+      break;
+    }
+    if (ch < 0x20 && ch != '\n' && ch != '\r' && ch != '\t') {
+      snippet[idx] = ' ';
+    }
+  }
+  snippet[copy_length] = '\0';
+
+  bool blocked = false;
+  char reason[256];
+  reason[0] = '\0';
+
+  bool success = translator_moderate_text(category, snippet, &blocked, reason, sizeof(reason));
+  if (!success) {
+    const char *error = translator_last_error();
+    if (diagnostic != NULL && diagnostic_length > 0U) {
+      if (error != NULL && error[0] != '\0') {
+        snprintf(diagnostic, diagnostic_length, "%s", error);
+      } else {
+        snprintf(diagnostic, diagnostic_length, "%s", "moderation unavailable");
+      }
+    }
+    host_security_disable_filter(host, "moderation pipeline unavailable");
+    return HOST_SECURITY_SCAN_ERROR;
+  }
+
+  if (!blocked) {
+    if (diagnostic != NULL && diagnostic_length > 0U) {
+      diagnostic[0] = '\0';
+    }
+    return HOST_SECURITY_SCAN_CLEAN;
+  }
+
+  if (diagnostic != NULL && diagnostic_length > 0U) {
+    if (reason[0] != '\0') {
+      snprintf(diagnostic, diagnostic_length, "%s", reason);
+    } else {
+      snprintf(diagnostic, diagnostic_length, "%s", "potential intrusion attempt");
+    }
+  }
+
+  return HOST_SECURITY_SCAN_BLOCKED;
+}
+
+static bool session_security_check_text(session_ctx_t *ctx, const char *category, const char *content, size_t length) {
+  if (ctx == NULL || ctx->owner == NULL || content == NULL || length == 0U) {
+    return true;
+  }
+
+  char diagnostic[256];
+  host_security_scan_result_t scan_result =
+      host_security_scan_payload(ctx->owner, category, content, length, diagnostic, sizeof(diagnostic));
+
+  if (scan_result == HOST_SECURITY_SCAN_CLEAN) {
+    return true;
+  }
+
+  const char *label = category != NULL ? category : "submission";
+
+  if (scan_result == HOST_SECURITY_SCAN_BLOCKED) {
+    if (diagnostic[0] == '\0') {
+      snprintf(diagnostic, sizeof(diagnostic), "%s", "suspected intrusion content");
+    }
+    printf("[security] blocked %s from %s: %s\n", label, ctx->user.name, diagnostic);
+
+    char message[512];
+    snprintf(message, sizeof(message), "Security filter rejected your %s: %s", label, diagnostic);
+    session_send_system_line(ctx, message);
+
+    size_t attempts = 0U;
+    bool banned = host_register_suspicious_activity(ctx->owner, ctx->user.name, ctx->client_ip, &attempts);
+    if (attempts > 0U) {
+      printf("[security] suspicious payload counter for %s (%s): %zu/%u\n", ctx->user.name,
+             ctx->client_ip, attempts, (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
+    }
+
+    if (banned) {
+      printf("[security] auto-banned %s (%s) for repeated suspicious payloads\n", ctx->user.name,
+             ctx->client_ip);
+      char notice[256];
+      snprintf(notice, sizeof(notice),
+               "Repeated suspicious activity detected. You have been banned.");
+      session_force_disconnect(ctx, notice);
+      return false;
+    }
+
+    if (attempts > 0U) {
+      char warning[256];
+      snprintf(warning, sizeof(warning), "Further suspicious activity will result in a ban (%zu/%u).",
+               attempts, (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
+      session_send_system_line(ctx, warning);
+    }
+    return false;
+  }
+
+  const char *error = translator_last_error();
+  if (diagnostic[0] == '\0' && error != NULL && error[0] != '\0') {
+    snprintf(diagnostic, sizeof(diagnostic), "%s", error);
+  }
+
+  if (diagnostic[0] != '\0') {
+    printf("[security] unable to moderate %s from %s: %s\n", label, ctx->user.name, diagnostic);
+  } else {
+    printf("[security] unable to moderate %s from %s\n", label, ctx->user.name);
+  }
+
+  char message[512];
+  if (diagnostic[0] != '\0') {
+    snprintf(message, sizeof(message), "Security filter is unavailable (%s). Please try again later.", diagnostic);
+  } else {
+    snprintf(message, sizeof(message), "%s", "Security filter could not validate your submission. Please try again later.");
+  }
+  session_send_system_line(ctx, message);
+  return false;
+}
+
 static void host_state_resolve_path(host_t *host) {
   if (host == NULL) {
     return;
@@ -3679,6 +4164,10 @@ static void host_bbs_state_save_locked(host_t *host) {
     return;
   }
 
+  if (!host_ensure_private_data_path(host, host->bbs_state_file_path, true)) {
+    return;
+  }
+
   char temp_path[PATH_MAX];
   int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp", host->bbs_state_file_path);
   if (written < 0 || (size_t)written >= sizeof(temp_path)) {
@@ -3686,9 +4175,18 @@ static void host_bbs_state_save_locked(host_t *host) {
     return;
   }
 
-  FILE *fp = fopen(temp_path, "wb");
+  int temp_fd = open(temp_path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, S_IRUSR | S_IWUSR);
+  if (temp_fd < 0) {
+    humanized_log_error("host", "failed to open bbs state file", errno != 0 ? errno : EIO);
+    return;
+  }
+
+  FILE *fp = fdopen(temp_fd, "wb");
   if (fp == NULL) {
-    humanized_log_error("host", "failed to open bbs state file", errno);
+    int saved_errno = errno;
+    close(temp_fd);
+    unlink(temp_path);
+    humanized_log_error("host", "failed to wrap bbs state descriptor", saved_errno != 0 ? saved_errno : EIO);
     return;
   }
 
@@ -3753,8 +4251,8 @@ static void host_bbs_state_save_locked(host_t *host) {
   }
 
   if (success) {
-    int fd = fileno(fp);
-    if (fd >= 0 && fsync(fd) != 0) {
+    int file_descriptor = fileno(fp);
+    if (file_descriptor >= 0 && fsync(file_descriptor) != 0) {
       success = false;
     }
   }
@@ -3769,9 +4267,17 @@ static void host_bbs_state_save_locked(host_t *host) {
     return;
   }
 
+  if (chmod(temp_path, S_IRUSR | S_IWUSR) != 0) {
+    humanized_log_error("host", "failed to tighten temporary bbs state permissions", errno != 0 ? errno : EACCES);
+    unlink(temp_path);
+    return;
+  }
+
   if (rename(temp_path, host->bbs_state_file_path) != 0) {
     humanized_log_error("host", "failed to update bbs state file", errno);
     unlink(temp_path);
+  } else if (chmod(host->bbs_state_file_path, S_IRUSR | S_IWUSR) != 0) {
+    humanized_log_error("host", "failed to tighten bbs state permissions", errno != 0 ? errno : EACCES);
   }
 }
 
@@ -3781,6 +4287,10 @@ static void host_bbs_state_load(host_t *host) {
   }
 
   if (host->bbs_state_file_path[0] == '\0') {
+    return;
+  }
+
+  if (!host_ensure_private_data_path(host, host->bbs_state_file_path, false)) {
     return;
   }
 
@@ -5269,6 +5779,11 @@ static void session_render_caption_with_offset(session_ctx_t *ctx, const char *m
 
 static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *message) {
   if (ctx == NULL || ctx->owner == NULL || message == NULL) {
+    return;
+  }
+
+  size_t message_length = strnlen(message, SSH_CHATTER_MESSAGE_LIMIT);
+  if (!session_security_check_text(ctx, "chat message", message, message_length)) {
     return;
   }
 
@@ -9974,6 +10489,11 @@ static void session_bbs_commit_pending_post(session_ctx_t *ctx) {
     return;
   }
 
+  if (!session_security_check_text(ctx, "BBS post", ctx->pending_bbs_body, ctx->pending_bbs_body_length)) {
+    session_bbs_reset_pending_post(ctx);
+    return;
+  }
+
   host_t *host = ctx->owner;
   if (host == NULL) {
     session_bbs_reset_pending_post(ctx);
@@ -10260,6 +10780,11 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  size_t comment_scan_length = strnlen(comment_text, SSH_CHATTER_BBS_COMMENT_LEN);
+  if (!session_security_check_text(ctx, "BBS comment", comment_text, comment_scan_length)) {
+    return;
+  }
+
   host_t *host = ctx->owner;
   pthread_mutex_lock(&host->lock);
   bbs_post_t *post = host_find_bbs_post_locked(host, id);
@@ -10451,6 +10976,11 @@ static void session_asciiart_commit(session_ctx_t *ctx) {
   }
 
   if (ctx->owner == NULL) {
+    session_asciiart_reset(ctx);
+    return;
+  }
+
+  if (!session_security_check_text(ctx, "ASCII art", ctx->asciiart_buffer, ctx->asciiart_length)) {
     session_asciiart_reset(ctx);
     return;
   }
@@ -12743,14 +13273,17 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments) {
   session_send_system_line(ctx, "Display name updated.");
 }
 
-static void session_handle_exit(session_ctx_t *ctx) {
+static void session_force_disconnect(session_ctx_t *ctx, const char *reason) {
   if (ctx == NULL) {
     return;
   }
 
+  if (reason != NULL && reason[0] != '\0') {
+    session_send_system_line(ctx, reason);
+  }
+
   ctx->should_exit = true;
-  ctx->exit_status = EXIT_SUCCESS;
-  session_send_system_line(ctx, "Disconnecting... bye!");
+  ctx->exit_status = EXIT_FAILURE;
 
   if (ctx->translation_mutex_initialized) {
     pthread_mutex_lock(&ctx->translation_mutex);
@@ -12763,6 +13296,15 @@ static void session_handle_exit(session_ctx_t *ctx) {
   if (ctx->channel != NULL) {
     ssh_channel_send_eof(ctx->channel);
   }
+}
+
+static void session_handle_exit(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  session_force_disconnect(ctx, "Disconnecting... bye!");
+  ctx->exit_status = EXIT_SUCCESS;
 }
 
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments) {
@@ -12838,6 +13380,33 @@ static join_activity_entry_t *host_find_join_activity_locked(host_t *host, const
   return NULL;
 }
 
+static join_activity_entry_t *host_ensure_join_activity_locked(host_t *host, const char *ip) {
+  if (host == NULL || ip == NULL || ip[0] == '\0') {
+    return NULL;
+  }
+
+  join_activity_entry_t *entry = host_find_join_activity_locked(host, ip);
+  if (entry != NULL) {
+    return entry;
+  }
+
+  if (host->join_activity_count >= host->join_activity_capacity) {
+    size_t new_capacity = host->join_activity_capacity > 0U ? host->join_activity_capacity * 2U : 8U;
+    join_activity_entry_t *resized =
+        realloc(host->join_activity, new_capacity * sizeof(join_activity_entry_t));
+    if (resized == NULL) {
+      return NULL;
+    }
+    host->join_activity = resized;
+    host->join_activity_capacity = new_capacity;
+  }
+
+  entry = &host->join_activity[host->join_activity_count++];
+  memset(entry, 0, sizeof(*entry));
+  snprintf(entry->ip, sizeof(entry->ip), "%s", ip);
+  return entry;
+}
+
 static size_t host_prepare_join_delay(host_t *host, struct timespec *wait_duration) {
   struct timespec wait = {0, 0};
   if (host == NULL) {
@@ -12888,29 +13457,16 @@ static bool host_register_join_attempt(host_t *host, const char *username, const
   bool ban_same_name = false;
 
   pthread_mutex_lock(&host->lock);
-  join_activity_entry_t *entry = host_find_join_activity_locked(host, ip);
+  join_activity_entry_t *entry = host_ensure_join_activity_locked(host, ip);
   if (entry == NULL) {
-    if (host->join_activity_count >= host->join_activity_capacity) {
-      size_t new_capacity = host->join_activity_capacity > 0U ? host->join_activity_capacity * 2U : 8U;
-      join_activity_entry_t *resized =
-          realloc(host->join_activity, new_capacity * sizeof(join_activity_entry_t));
-      if (resized == NULL) {
-        pthread_mutex_unlock(&host->lock);
-        return false;
-      }
-      host->join_activity = resized;
-      host->join_activity_capacity = new_capacity;
-    }
-
-    entry = &host->join_activity[host->join_activity_count++];
-    memset(entry, 0, sizeof(*entry));
-    snprintf(entry->ip, sizeof(entry->ip), "%s", ip);
+    pthread_mutex_unlock(&host->lock);
+    return false;
   }
 
   struct timespec diff = timespec_diff(&now, &entry->last_attempt);
   const long long diff_ns = (long long)diff.tv_sec * 1000000000LL + (long long)diff.tv_nsec;
-  const bool within_window = (entry->last_attempt.tv_sec != 0 || entry->last_attempt.tv_nsec != 0) &&
-                             diff_ns <= 1000000000LL;
+  const bool has_prior_attempt = (entry->last_attempt.tv_sec != 0 || entry->last_attempt.tv_nsec != 0);
+  const bool within_window = has_prior_attempt && diff_ns <= SSH_CHATTER_JOIN_RAPID_WINDOW_NS;
 
   if (within_window) {
     entry->rapid_attempts += 1U;
@@ -12931,10 +13487,10 @@ static bool host_register_join_attempt(host_t *host, const char *username, const
 
   entry->last_attempt = now;
 
-  if (entry->rapid_attempts >= 10U) {
+  if (within_window && entry->rapid_attempts >= SSH_CHATTER_JOIN_IP_THRESHOLD) {
     ban_ip = true;
   }
-  if (entry->same_name_attempts >= 10U) {
+  if (within_window && entry->same_name_attempts >= SSH_CHATTER_JOIN_NAME_THRESHOLD) {
     ban_same_name = true;
   }
   pthread_mutex_unlock(&host->lock);
@@ -12944,6 +13500,53 @@ static bool host_register_join_attempt(host_t *host, const char *username, const
     if (host_add_ban_entry(host, ban_user, ip)) {
       printf("[auto-ban] %s flagged for rapid reconnects\n", ip);
     }
+    return true;
+  }
+
+  return false;
+}
+
+static bool host_register_suspicious_activity(host_t *host, const char *username, const char *ip,
+                                             size_t *attempts_out) {
+  if (host == NULL || ip == NULL || ip[0] == '\0') {
+    if (attempts_out != NULL) {
+      *attempts_out = 0U;
+    }
+    return false;
+  }
+
+  struct timespec now = {0, 0};
+  clock_gettime(CLOCK_MONOTONIC, &now);
+
+  size_t attempts = 0U;
+  pthread_mutex_lock(&host->lock);
+  join_activity_entry_t *entry = host_ensure_join_activity_locked(host, ip);
+  if (entry != NULL) {
+    if (entry->last_suspicious.tv_sec != 0 || entry->last_suspicious.tv_nsec != 0) {
+      struct timespec diff = timespec_diff(&now, &entry->last_suspicious);
+      long long diff_ns = (long long)diff.tv_sec * 1000000000LL + (long long)diff.tv_nsec;
+      if (diff_ns > SSH_CHATTER_SUSPICIOUS_EVENT_WINDOW_NS) {
+        entry->suspicious_events = 0U;
+      }
+    }
+
+    if (entry->suspicious_events < SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD) {
+      entry->suspicious_events += 1U;
+    } else {
+      entry->suspicious_events = SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD;
+    }
+    entry->last_suspicious = now;
+    attempts = entry->suspicious_events;
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (attempts_out != NULL) {
+    *attempts_out = attempts;
+  }
+
+  if (attempts >= SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD) {
+    const char *ban_user = (username != NULL && username[0] != '\0') ? username : "";
+    (void)host_add_ban_entry(host, ban_user, ip);
     return true;
   }
 
@@ -14481,6 +15084,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_ban_resolve_path(host);
   host->reply_state_file_path[0] = '\0';
   host_reply_state_resolve_path(host);
+  host_security_configure(host);
   pthread_mutex_init(&host->lock, NULL);
   poll_state_reset(&host->poll);
   for (size_t idx = 0U; idx < SSH_CHATTER_MAX_NAMED_POLLS; ++idx) {
