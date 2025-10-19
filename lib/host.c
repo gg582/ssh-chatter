@@ -3509,47 +3509,6 @@ static bool host_eliza_content_is_severe(const char *text) {
     return false;
   }
 
-  static const char *const kPhrases[] = {
-    // 혐오 단어 찾는 것도 고역입니다. 겨우 여기까지만 어떻게 저떻게 찾았는데 솔직히 치면서 숨막힙니다..
-    // It is really painful to find hate speech...It is really hard and sad to type these kinds of words
-    "찢재명", "찢가카", "찢칠라", "화짱조", 
-    "노묵훈", "노무쿤", "노알라", "노미현", "운지", "딱좋노", "야기분좋다", "이기야", // 진짜 왜 하필 노무현에만 이만큼 있나요?
-    "문재앙", "문코리타", "문켓몬", "문크예거", "문슬람", // 이쪽도 만만찮긴 한데....
-    "닭근혜", "닥그네", "닭그네",
-    "고담대구", "광주 폭동", "광주폭동", // 지역드립은 얄짤없습니다. 
-    "7시", "쌍도", "전라디언", "전라민국", 
-    "통구이", "엔젤두환", "즌라도",
-    "깜둥이", "좆슬람", "개슬람", "흑좆", "백좆", "똥남아", "깜씨", "쪽바리", "쪽발이", "짱꼴라", "좆선족", // 외국인 혐오와 일반화는 좋지 않아요. 물론 일부 밀입국자들이 문제라고는 하지만...
-    "ㅈ선족", 
-    // 어..이게...우리가 아는 그 ㅉㄲ는 아무래도.....이게 중국집에 대한 은어기도 해서 금지하고 싶어도 힘드네요
-  };
-
-  for (size_t idx = 0U; idx < sizeof(kPhrases) / sizeof(kPhrases[0]); ++idx) {
-    if (string_contains_case_insensitive(text, kPhrases[idx])) {
-      return true;
-    }
-  }
-
-  if (string_contains_case_insensitive(text, "nigger")) {
-    if (string_contains_case_insensitive(text, "ching chang") ||
-        string_contains_case_insensitive(text, "goy") ||
-        string_contains_case_insensitive(text, "nxxxxx") ||
-        string_contains_case_insensitive(text, "nxxxxr") ||
-        string_contains_case_insensitive(text, "nxxxer") ||
-        string_contains_case_insensitive(text, "nixxer") ||
-	string_contains_case_insensitive(text, "n_____") ||
-	string_contains_case_insensitive(text, "n____r") ||
-	string_contains_case_insensitive(text, "n___er") ||
-	string_contains_case_insensitive(text, "ni__er") ||
-	string_contains_case_insensitive(text, "nig_er") ||
-	string_contains_case_insensitive(text, "n___a") ||
-        string_contains_case_insensitive(text, "nig_er") ||
-        string_contains_case_insensitive(text, "n___a") ||
-        string_contains_case_insensitive(text, "ni__a")) {
-      return true;
-    }
-  }
-
   if (string_contains_case_insensitive(text, "child")) {
     if (string_contains_case_insensitive(text, "exploitation") || string_contains_case_insensitive(text, "abuse") ||
         string_contains_case_insensitive(text, "porn")) {
