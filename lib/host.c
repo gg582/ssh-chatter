@@ -276,6 +276,15 @@ static unsigned session_simple_hash(const char *text) {
   return hash;
 }
 
+static void session_convert_string_to_lowercase(const char *string) {
+  static char *str = malloc(strnlen(string, 16));
+  strncpy(str, string, strnlen(string, 16) + 1);
+  for(char *c = str; c != '\0'; c++) {
+    *c = tolower(*c);
+  }
+  return str;
+}
+
 static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *prompt) {
   if (prompt == NULL) {
     return;
@@ -328,7 +337,7 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
     const bool refer_pet = (variant & 1U) != 0U;
     const bool use_pronoun = (variant & 2U) != 0U;
 
-    const char *person_pronoun = story->is_male ? "he" : "she";
+    const char *person_pronoun = story->is_male ? "the man" : "the woman";
     const char *pet_pronoun = (story->pet_pronoun != NULL) ? story->pet_pronoun : "the pet";
     const char *answer = refer_pet ? story->pet_name : story->person_name;
 
@@ -346,8 +355,9 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
     }
 
     snprintf(prompt->question, sizeof(prompt->question),
-             "%s is a %s who has a %s named %s. \"%s\" is adorable. Answer what the double-quoted text refers to.",
-             story->person_name, story->descriptor, story->pet_species, story->pet_name, quoted_text);
+             "%s is a %s who has a %s named %s. \"%s\" is adorable. Answer with correct casing what the double-quoted text refers to."
+	     " - e.g) %s (O) %s (X)",
+             story->person_name, story->descriptor, story->pet_species, story->pet_name, quoted_text, story->descriptor, session_convert_string_to_lowercase(story->person_name));
     snprintf(prompt->answer, sizeof(prompt->answer), "%s", answer);
     return;
   }
