@@ -276,11 +276,11 @@ static unsigned session_simple_hash(const char *text) {
   return hash;
 }
 
-static void session_convert_string_to_lowercase(const char *string) {
-  static char *str = malloc(strnlen(string, 16));
+static char * session_convert_string_to_lowercase(const char *string) {
+  static char str[16];
   strncpy(str, string, strnlen(string, 16) + 1);
-  for(char *c = str; c != '\0'; c++) {
-    *c = tolower(*c);
+  for(char *c = str; *c != '\0'; c++) {
+    *c = (char)tolower((int)(*c));
   }
   return str;
 }
