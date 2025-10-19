@@ -7079,6 +7079,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/translate <on|off>    - enable or disable translation after configuring languages",
       "/translate-scope <chat|chat-nohistory|all> - limit translation to chat/BBS, optionally skipping scrollback (operator only)",
       "/gemini <on|off>       - toggle Gemini provider (operator only)",
+      "/gemini-unfreeze      - clear automatic Gemini cooldown (operator only)",
       "/chat-spacing <0-5>    - reserve blank lines before translated captions in chat",
       "/palette <name>        - apply a predefined interface palette (/palette list)",
       "/today               - discover today's function (once per day)",
@@ -12576,6 +12577,7 @@ static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
     }
 
     session_send_system_line(ctx, "Usage: /gemini <on|off>");
+    session_send_system_line(ctx, "Use /gemini-unfreeze to clear the automatic cooldown manually.");
     return;
   }
 
@@ -12605,6 +12607,32 @@ static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
   }
 
   session_send_system_line(ctx, "Usage: /gemini <on|off>");
+}
+
+static void session_handle_gemini_unfreeze(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
+    session_send_system_line(ctx, "Only operators may manage Gemini translation.");
+    return;
+  }
+
+  struct timespec remaining = {0, 0};
+  bool cooldown_active = translator_gemini_backoff_remaining(&remaining);
+  translator_clear_gemini_backoff();
+
+  if (cooldown_active) {
+    session_send_system_line(ctx, "Automatic Gemini cooldown cleared. Translations may resume immediately.");
+
+    char notice[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(notice, sizeof(notice), "* [%s] cleared the automatic Gemini cooldown.", ctx->user.name);
+    host_history_record_system(ctx->owner, notice);
+    chat_room_broadcast(&ctx->owner->room, notice, NULL);
+  } else {
+    session_send_system_line(ctx, "No automatic Gemini cooldown was active.");
+  }
 }
 
 static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
@@ -13196,6 +13224,10 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   }
   else if (session_parse_command(line, "/translate-scope", &args)) {
     session_handle_translate_scope(ctx, args);
+    return;
+  }
+  else if (session_parse_command(line, "/gemini-unfreeze", &args)) {
+    session_handle_gemini_unfreeze(ctx);
     return;
   }
   else if (session_parse_command(line, "/gemini", &args)) {
