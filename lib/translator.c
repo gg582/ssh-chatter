@@ -936,6 +936,58 @@ static const char *translator_skip_whitespace(const char *cursor) {
   return cursor;
 }
 
+static char *translator_extract_first_text_generic(const char *response) {
+  if (response == NULL) {
+    return NULL;
+  }
+
+  const char *text_marker = "\"text\"";
+  const size_t text_marker_len = strlen(text_marker);
+  const char *cursor = response;
+
+  while ((cursor = strstr(cursor, text_marker)) != NULL) {
+    const char *value_start = cursor + text_marker_len;
+    value_start = translator_skip_whitespace(value_start);
+    if (value_start == NULL || *value_start != ':') {
+      cursor += text_marker_len;
+      continue;
+    }
+
+    ++value_start;
+    value_start = translator_skip_whitespace(value_start);
+    if (value_start == NULL || *value_start != '"') {
+      cursor += text_marker_len;
+      continue;
+    }
+
+    ++value_start;
+
+    size_t capacity = strlen(value_start) + 1U;
+    char *candidate = malloc(capacity);
+    if (candidate == NULL) {
+      return NULL;
+    }
+
+    const char *after_string = NULL;
+    if (!translator_decode_json_string(value_start, candidate, capacity, &after_string)) {
+      free(candidate);
+      return NULL;
+    }
+
+    if (candidate[0] != '\0') {
+      return candidate;
+    }
+
+    free(candidate);
+    if (after_string == NULL) {
+      break;
+    }
+    cursor = after_string;
+  }
+
+  return NULL;
+}
+
 static char *translator_extract_payload_text(const char *response) {
   if (response == NULL) {
     return NULL;
@@ -1000,6 +1052,23 @@ static char *translator_extract_payload_text(const char *response) {
   }
 
   return latest_payload;
+}
+
+static bool translator_extract_plaintext_response(const char *response, char *dest, size_t dest_len) {
+  if (dest == NULL || dest_len == 0U) {
+    return false;
+  }
+
+  dest[0] = '\0';
+
+  char *payload = translator_extract_first_text_generic(response);
+  if (payload == NULL) {
+    return false;
+  }
+
+  snprintf(dest, dest_len, "%s", payload);
+  free(payload);
+  return dest[0] != '\0';
 }
 
 static bool translator_extract_json_value(const char *json, const char *key, char *dest, size_t dest_len) {
@@ -1658,6 +1727,188 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
   return success;
 }
 
+static bool translator_try_gemini_eliza(const translator_candidate_t *candidate, const char *prompt,
+                                        char *reply, size_t reply_len, bool *retryable) {
+  if (retryable != NULL) {
+    *retryable = false;
+  }
+
+  if (candidate == NULL) {
+    translator_set_error("Gemini provider is not configured.");
+    if (retryable != NULL) {
+      *retryable = true;
+    }
+    return false;
+  }
+
+  if (reply == NULL || reply_len == 0U || prompt == NULL) {
+    translator_set_error("Invalid eliza prompt.");
+    return false;
+  }
+
+  const char *api_key = candidate->api_key;
+  if (api_key == NULL || api_key[0] == '\0') {
+    translator_set_error("GEMINI_API_KEY is not configured.");
+    if (retryable != NULL) {
+      *retryable = true;
+    }
+    return false;
+  }
+
+  const char *base = getenv("GEMINI_API_BASE");
+  if (base == NULL || base[0] == '\0') {
+    base = getenv("GEMINI_BASE_URL");
+  }
+
+  const char *model_name =
+      candidate->model != NULL && candidate->model[0] != '\0' ? candidate->model : TRANSLATOR_DEFAULT_MODEL;
+
+  static const char *system_prompt =
+      "You are eliza, a calm and empathetic moderator for a retro terminal chat room. Offer concise, supportive "
+      "guidance while reinforcing community rules. Keep replies under three sentences, avoid roleplay as law "
+      "enforcement, and respond in the same language as the user whenever possible.";
+
+  char *escaped_prompt = translator_escape_string(prompt);
+  char *escaped_system = translator_escape_string(system_prompt);
+  if (escaped_prompt == NULL || escaped_system == NULL) {
+    free(escaped_prompt);
+    free(escaped_system);
+    translator_set_error("Failed to prepare eliza request payload.");
+    return false;
+  }
+
+  char *api_url = translator_build_gemini_url(base, model_name, api_key, false);
+  if (api_url == NULL) {
+    free(escaped_prompt);
+    free(escaped_system);
+    translator_set_error("Failed to build Gemini API URL.");
+    return false;
+  }
+
+  static const char body_format[] =
+      "{" \
+      "\"system_instruction\":{" \
+        "\"parts\":[{\"text\":\"%s\"}]" \
+      "}," \
+      "\"contents\":[" \
+        "{" \
+          "\"role\":\"user\"," \
+          "\"parts\":[{\"text\":\"%s\"}]" \
+        "}" \
+      "]," \
+      "\"generationConfig\":{\"responseMimeType\":\"text/plain\",\"temperature\":0.4,\"maxOutputTokens\":256}" \
+      "}";
+
+  int computed = snprintf(NULL, 0, body_format, escaped_system, escaped_prompt);
+  if (computed < 0) {
+    free(api_url);
+    free(escaped_prompt);
+    free(escaped_system);
+    translator_set_error("Failed to prepare eliza request payload.");
+    return false;
+  }
+
+  size_t body_len = (size_t)computed + 1U;
+  char *body = malloc(body_len);
+  if (body == NULL) {
+    free(api_url);
+    free(escaped_prompt);
+    free(escaped_system);
+    translator_set_error("Failed to prepare eliza request payload.");
+    return false;
+  }
+
+  int written = snprintf(body, body_len, body_format, escaped_system, escaped_prompt);
+  free(escaped_prompt);
+  free(escaped_system);
+  if (written < 0 || (size_t)written >= body_len) {
+    free(api_url);
+    free(body);
+    translator_set_error("Failed to prepare eliza request payload.");
+    return false;
+  }
+
+  CURL *curl = curl_easy_init();
+  if (curl == NULL) {
+    free(api_url);
+    free(body);
+    translator_set_error("Failed to initialise HTTP client.");
+    return false;
+  }
+
+  translator_buffer_t buffer = {0};
+  long status = 0L;
+  bool success = false;
+  bool request_failed = false;
+  bool rate_limited = false;
+
+  CURLcode result = translator_issue_gemini_request(curl, api_url, api_key, body, false, NULL, &buffer, &status);
+  if (result != CURLE_OK) {
+    translator_set_error("Failed to contact Gemini API: %s", curl_easy_strerror(result));
+    if (retryable != NULL) {
+      *retryable = true;
+    }
+    request_failed = true;
+  } else if (status < 200L || status >= 300L || buffer.data == NULL) {
+    char message[256];
+    message[0] = '\0';
+    if (buffer.data != NULL) {
+      (void)translator_extract_json_value(buffer.data, "\"message\"", message, sizeof(message));
+    }
+
+    const bool quota_like = status == 429L ||
+                            translator_string_contains_case_insensitive(message, "quota") ||
+                            translator_string_contains_case_insensitive(message, "limit") ||
+                            translator_string_contains_case_insensitive(message, "exhaust") ||
+                            translator_string_contains_case_insensitive(message, "not found");
+
+    if (status == 429L || status == 404L || quota_like) {
+      if (retryable != NULL) {
+        *retryable = true;
+      }
+    }
+    if (status == 429L) {
+      rate_limited = true;
+    }
+
+    if (message[0] != '\0') {
+      translator_set_error("Gemini (%s) HTTP %ld: %s", model_name, status, message);
+    } else if (status != 0L) {
+      translator_set_error("Gemini (%s) returned HTTP %ld.", model_name, status);
+    } else {
+      translator_set_error("Gemini (%s) returned an empty response.", model_name);
+    }
+
+    if (quota_like) {
+      translator_mark_quota_exhausted();
+    }
+    request_failed = true;
+  } else if (!translator_extract_plaintext_response(buffer.data, reply, reply_len)) {
+    translator_set_error("Gemini response did not include text output.");
+    request_failed = true;
+  } else {
+    translator_set_error(NULL);
+    success = true;
+  }
+
+  if (success) {
+    translator_clear_gemini_backoff();
+  } else if (request_failed) {
+    if (rate_limited) {
+      translator_schedule_gemini_backoff_ns(TRANSLATOR_GEMINI_RATE_LIMIT_DURATION_NS);
+    } else {
+      translator_schedule_gemini_backoff_until_midnight();
+    }
+  }
+
+  free(buffer.data);
+  free(body);
+  free(api_url);
+  curl_easy_cleanup(curl);
+
+  return success;
+}
+
 static bool translator_try_gemini_moderation(const translator_candidate_t *candidate, const char *category,
                                              const char *content, bool *blocked, char *reason, size_t reason_len,
                                              bool *retryable) {
@@ -1987,6 +2238,135 @@ static bool translator_try_ollama(const translator_candidate_t *candidate, const
   return success;
 }
 
+static bool translator_try_ollama_eliza(const translator_candidate_t *candidate, const char *prompt,
+                                        char *reply, size_t reply_len, bool *retryable) {
+  if (retryable != NULL) {
+    *retryable = false;
+  }
+
+  if (candidate == NULL) {
+    translator_set_error("Ollama provider is not configured.");
+    return false;
+  }
+
+  if (reply == NULL || reply_len == 0U || prompt == NULL) {
+    translator_set_error("Invalid eliza prompt.");
+    return false;
+  }
+
+  const char *model_name = candidate->model != NULL && candidate->model[0] != '\0' ? candidate->model : "gemma2:2b";
+  const char *address = getenv("OLLAMA_ADDRESS");
+  char *url = translator_build_ollama_url(address);
+  if (url == NULL) {
+    translator_set_error("Failed to build Ollama endpoint URL.");
+    return false;
+  }
+
+  static const char *system_prompt =
+      "You are eliza, a calm and empathetic moderator for a retro terminal chat room. Offer short, supportive "
+      "messages, remind users of community expectations when needed, and answer using the same language as the user."
+      " Keep replies under three sentences.";
+
+  char *escaped_prompt = translator_escape_string(prompt);
+  char *escaped_system = translator_escape_string(system_prompt);
+  if (escaped_prompt == NULL || escaped_system == NULL) {
+    free(url);
+    free(escaped_prompt);
+    free(escaped_system);
+    translator_set_error("Failed to prepare eliza request.");
+    return false;
+  }
+
+  static const char body_format[] =
+      "{" \
+        "\"model\":\"%s\"," \
+        "\"prompt\":\"%s\"," \
+        "\"system\":\"%s\"," \
+        "\"stream\":false" \
+      "}";
+
+  int computed = snprintf(NULL, 0, body_format, model_name, escaped_prompt, escaped_system);
+  if (computed < 0) {
+    free(url);
+    free(escaped_prompt);
+    free(escaped_system);
+    translator_set_error("Failed to prepare eliza request.");
+    return false;
+  }
+
+  size_t body_len = (size_t)computed + 1U;
+  char *body = malloc(body_len);
+  if (body == NULL) {
+    free(url);
+    free(escaped_prompt);
+    free(escaped_system);
+    translator_set_error("Failed to prepare eliza request.");
+    return false;
+  }
+
+  snprintf(body, body_len, body_format, model_name, escaped_prompt, escaped_system);
+  free(escaped_prompt);
+  free(escaped_system);
+
+  CURL *curl = curl_easy_init();
+  if (curl == NULL) {
+    free(url);
+    free(body);
+    translator_set_error("Failed to initialise HTTP client.");
+    return false;
+  }
+
+  translator_buffer_t buffer = {0};
+  long status = 0L;
+  CURLcode result = translator_issue_json_post(curl, url, body, NULL, NULL, NULL, NULL, &buffer, &status);
+  free(url);
+
+  bool success = false;
+  if (result != CURLE_OK) {
+    translator_set_error("Failed to contact Ollama API: %s", curl_easy_strerror(result));
+    if (retryable != NULL) {
+      *retryable = true;
+    }
+  } else if (status < 200L || status >= 300L || buffer.data == NULL) {
+    char message[256];
+    message[0] = '\0';
+    if (buffer.data != NULL) {
+      (void)translator_extract_json_value(buffer.data, "\"error\"", message, sizeof(message));
+      if (message[0] == '\0') {
+        (void)translator_extract_json_value(buffer.data, "\"message\"", message, sizeof(message));
+      }
+    }
+    if (status == 0L || status >= 500L) {
+      if (retryable != NULL) {
+        *retryable = true;
+      }
+    }
+    if (message[0] != '\0') {
+      translator_set_error("Ollama HTTP %ld: %s", status, message);
+    } else if (status != 0L) {
+      translator_set_error("Ollama returned HTTP %ld.", status);
+    } else {
+      translator_set_error("Ollama returned an empty response.");
+    }
+  } else {
+    char payload[TRANSLATOR_MAX_RESPONSE];
+    payload[0] = '\0';
+    if (!translator_extract_json_value(buffer.data, "\"response\"", payload, sizeof(payload))) {
+      translator_set_error("Ollama response did not include text output.");
+    } else {
+      snprintf(reply, reply_len, "%s", payload);
+      translator_set_error(NULL);
+      success = true;
+    }
+  }
+
+  free(buffer.data);
+  free(body);
+  curl_easy_cleanup(curl);
+
+  return success;
+}
+
 static bool translator_try_ollama_moderation(const translator_candidate_t *candidate, const char *category,
                                              const char *content, bool *blocked, char *reason, size_t reason_len,
                                              bool *retryable) {
@@ -2229,6 +2609,55 @@ bool translator_translate(const char *text, const char *target_language, char *t
                           char *detected_language, size_t detected_len) {
   return translator_translate_internal(text, target_language, translation, translation_len, detected_language, detected_len,
                                        NULL);
+}
+
+bool translator_eliza_respond(const char *prompt, char *reply, size_t reply_len) {
+  if (reply != NULL && reply_len > 0U) {
+    reply[0] = '\0';
+  }
+
+  if (prompt == NULL || reply == NULL || reply_len == 0U) {
+    translator_set_error("Invalid eliza prompt.");
+    return false;
+  }
+
+  translator_global_init();
+  translator_set_error(NULL);
+
+  translator_candidate_t candidates[8];
+  size_t candidate_count = translator_prepare_candidates(candidates, sizeof(candidates) / sizeof(candidates[0]));
+  if (candidate_count == 0U) {
+    translator_set_error("No conversation providers are configured. Set GEMINI_API_KEY or run Ollama locally.");
+    return false;
+  }
+
+  for (size_t idx = 0U; idx < candidate_count; ++idx) {
+    bool retryable = false;
+    bool success = false;
+
+    switch (candidates[idx].provider) {
+      case TRANSLATOR_PROVIDER_GEMINI:
+        success = translator_try_gemini_eliza(&candidates[idx], prompt, reply, reply_len, &retryable);
+        break;
+      case TRANSLATOR_PROVIDER_OLLAMA:
+        success = translator_try_ollama_eliza(&candidates[idx], prompt, reply, reply_len, &retryable);
+        break;
+    }
+
+    if (success) {
+      return true;
+    }
+
+    if (!retryable && idx + 1U < candidate_count) {
+      continue;
+    }
+
+    if (!retryable) {
+      break;
+    }
+  }
+
+  return false;
 }
 
 bool translator_moderate_text(const char *category, const char *content, bool *blocked, char *reason,

@@ -3241,6 +3241,18 @@ static void host_eliza_prepare_private_reply(const char *message, char *reply, s
     return;
   }
 
+  if (translator_eliza_respond(working, reply, reply_length)) {
+    trim_whitespace_inplace(reply);
+    if (reply[0] != '\0') {
+      return;
+    }
+  } else {
+    const char *error = translator_last_error();
+    if (error != NULL && error[0] != '\0') {
+      printf("[eliza] AI backend error: %s\n", error);
+    }
+  }
+
   const bool says_hello = string_contains_case_insensitive(working, "hello") ||
                           string_contains_case_insensitive(working, "hi") ||
                           string_contains_case_insensitive(working, "안녕");
