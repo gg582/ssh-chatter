@@ -76,6 +76,10 @@
 #define O_NOFOLLOW 0
 #endif
 
+#ifndef O_NOFOLLOW
+#define O_NOFOLLOW 0
+#endif
+
 static const char kTranslationQuotaNotice[] =
     "⚠️ Translation quota exhausted. Translation features are temporarily disabled.";
 static const char kTranslationQuotaSystemMessage[] =
