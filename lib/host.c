@@ -329,7 +329,7 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
     const bool use_pronoun = (variant & 2U) != 0U;
 
     const char *person_pronoun = story->is_male ? "he" : "she";
-    const char *pet_pronoun = (story->pet_pronoun != NULL) ? story->pet_pronoun : "it";
+    const char *pet_pronoun = (story->pet_pronoun != NULL) ? story->pet_pronoun : "the pet";
     const char *answer = refer_pet ? story->pet_name : story->person_name;
 
     char quoted_buffer[128];
