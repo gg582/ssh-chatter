@@ -14770,6 +14770,9 @@ static void *session_thread(void *arg) {
 
     int read_result = ssh_channel_read_timeout(ctx->channel, buffer, sizeof(buffer) - 1U, 0, 200);
     if (read_result == SSH_AGAIN) {
+      if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS) {
+        session_game_tetris_process_timeout(ctx);
+      }
       continue;
     }
     if (read_result == SSH_ERROR || read_result == SSH_EOF) {
