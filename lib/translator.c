@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <ctype.h>
 #include <time.h>
 
@@ -52,7 +53,8 @@ static bool g_manual_skip_scrollback_translation = true;
 
 #define TRANSLATOR_RATE_LIMIT_INTERVAL_NS 800000000L
 #define TRANSLATOR_RATE_LIMIT_PENALTY_NS 3000000000L
-#define TRANSLATOR_GEMINI_DISABLE_DURATION_NS (24L * 60L * 60L * 1000000000L)
+#define TRANSLATOR_GEMINI_RATE_LIMIT_DURATION_NS (60L * 60L * 1000000000L)
+#define TRANSLATOR_GEMINI_FALLBACK_DURATION_NS (24L * 60L * 60L * 1000000000L)
 
 static struct timespec translator_timespec_now(void) {
   struct timespec now = {0, 0};
@@ -232,10 +234,14 @@ static void translator_clear_gemini_backoff_locked(void) {
   g_gemini_disabled_until.tv_nsec = 0;
 }
 
-static void translator_clear_gemini_backoff(void) {
+static void translator_clear_gemini_backoff_internal(void) {
   pthread_mutex_lock(&g_provider_mutex);
   translator_clear_gemini_backoff_locked();
   pthread_mutex_unlock(&g_provider_mutex);
+}
+
+void translator_clear_gemini_backoff(void) {
+  translator_clear_gemini_backoff_internal();
 }
 
 static void translator_schedule_gemini_backoff_ns(long duration_ns) {
@@ -249,6 +255,59 @@ static void translator_schedule_gemini_backoff_ns(long duration_ns) {
     g_gemini_disabled_until = until;
   }
   pthread_mutex_unlock(&g_provider_mutex);
+}
+
+static long translator_gemini_backoff_duration_until_midnight(void) {
+  time_t now_wall = time(NULL);
+  if (now_wall == (time_t)-1) {
+    return TRANSLATOR_GEMINI_FALLBACK_DURATION_NS;
+  }
+
+  struct tm local_tm = {0};
+#if defined(_POSIX_THREAD_SAFE_FUNCTIONS) && !defined(__APPLE__)
+  if (localtime_r(&now_wall, &local_tm) == NULL) {
+    return TRANSLATOR_GEMINI_FALLBACK_DURATION_NS;
+  }
+#else
+  struct tm *local_tmp = localtime(&now_wall);
+  if (local_tmp == NULL) {
+    return TRANSLATOR_GEMINI_FALLBACK_DURATION_NS;
+  }
+  local_tm = *local_tmp;
+#endif
+
+  local_tm.tm_hour = 0;
+  local_tm.tm_min = 0;
+  local_tm.tm_sec = 0;
+  local_tm.tm_isdst = -1;
+  local_tm.tm_mday += 1;
+
+  time_t midnight = mktime(&local_tm);
+  if (midnight == (time_t)-1) {
+    return TRANSLATOR_GEMINI_FALLBACK_DURATION_NS;
+  }
+
+  double seconds = difftime(midnight, now_wall);
+  if (seconds <= 0.0) {
+    return 1L * 1000000000L;
+  }
+
+  double nanoseconds = seconds * 1000000000.0;
+  if (nanoseconds > (double)LONG_MAX) {
+    return TRANSLATOR_GEMINI_FALLBACK_DURATION_NS;
+  }
+
+  long rounded = (long)(nanoseconds + 0.5);
+  if (rounded <= 0L) {
+    return 1L * 1000000000L;
+  }
+
+  return rounded;
+}
+
+static void translator_schedule_gemini_backoff_until_midnight(void) {
+  long duration = translator_gemini_backoff_duration_until_midnight();
+  translator_schedule_gemini_backoff_ns(duration);
 }
 
 static bool translator_gemini_backoff_active_unlocked(const struct timespec *now, struct timespec *remaining) {
@@ -1238,6 +1297,7 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
   bool attempted_request = false;
   bool request_failed = false;
   bool cancelled = false;
+  bool rate_limited = false;
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -1288,6 +1348,9 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
           *retryable = true;
         }
       }
+      if (status == 429L) {
+        rate_limited = true;
+      }
       if (message[0] != '\0') {
         translator_set_error("Gemini (%s) HTTP %ld: %s", model_name, status, message);
       } else if (status != 0L) {
@@ -1309,7 +1372,11 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
   if (success) {
     translator_clear_gemini_backoff();
   } else if (!cancelled && attempted_request && request_failed) {
-    translator_schedule_gemini_backoff_ns(TRANSLATOR_GEMINI_DISABLE_DURATION_NS);
+    if (rate_limited) {
+      translator_schedule_gemini_backoff_ns(TRANSLATOR_GEMINI_RATE_LIMIT_DURATION_NS);
+    } else {
+      translator_schedule_gemini_backoff_until_midnight();
+    }
   }
 
   free(stream_buffer.data);

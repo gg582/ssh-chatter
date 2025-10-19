@@ -24,6 +24,7 @@ void translator_set_gemini_enabled(bool enabled);
 bool translator_is_gemini_enabled(void);
 bool translator_is_gemini_manually_disabled(void);
 bool translator_gemini_backoff_remaining(struct timespec *remaining);
+void translator_clear_gemini_backoff(void);
 bool translator_is_ollama_only(void);
 void translator_set_manual_chat_bbs_only(bool enabled);
 bool translator_is_manual_chat_bbs_only(void);
