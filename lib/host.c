@@ -593,6 +593,7 @@ static void session_handle_gemini(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_target_lang(session_ctx_t *ctx, const char *arguments);
 static void session_handle_chat_spacing(session_ctx_t *ctx, const char *arguments);
+static void session_handle_eliza(session_ctx_t *ctx, const char *arguments);
 static void session_handle_status(session_ctx_t *ctx, const char *arguments);
 static void session_handle_showstatus(session_ctx_t *ctx, const char *arguments);
 static void session_handle_weather(session_ctx_t *ctx, const char *arguments);
@@ -689,6 +690,13 @@ static host_security_scan_result_t host_security_scan_with_clamav(host_t *host, 
                                                                  char *diagnostic, size_t diagnostic_length);
 static host_security_scan_result_t host_security_scan_payload(host_t *host, const char *category, const char *payload,
                                                               size_t length, char *diagnostic, size_t diagnostic_length);
+static bool host_eliza_enable(host_t *host);
+static bool host_eliza_disable(host_t *host);
+static void host_eliza_announce_join(host_t *host);
+static void host_eliza_announce_depart(host_t *host);
+static void host_eliza_say(host_t *host, const char *message);
+static bool host_eliza_content_is_severe(const char *text);
+static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const char *reason, bool from_filter);
 static bool session_security_check_text(session_ctx_t *ctx, const char *category, const char *content, size_t length);
 static void host_vote_resolve_path(host_t *host);
 static void host_vote_state_load(host_t *host);
@@ -2938,6 +2946,194 @@ static host_security_scan_result_t host_security_scan_payload(host_t *host, cons
   return HOST_SECURITY_SCAN_BLOCKED;
 }
 
+static bool host_eliza_enable(host_t *host) {
+  if (host == NULL) {
+    return false;
+  }
+
+  bool changed = false;
+  bool announce = false;
+
+  pthread_mutex_lock(&host->lock);
+  if (!atomic_load(&host->eliza_enabled)) {
+    atomic_store(&host->eliza_enabled, true);
+    changed = true;
+  }
+  if (!atomic_load(&host->eliza_announced)) {
+    atomic_store(&host->eliza_announced, true);
+    announce = true;
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (announce) {
+    host_eliza_announce_join(host);
+  }
+
+  return changed;
+}
+
+static bool host_eliza_disable(host_t *host) {
+  if (host == NULL) {
+    return false;
+  }
+
+  bool changed = false;
+  bool announce_depart = false;
+
+  pthread_mutex_lock(&host->lock);
+  if (atomic_load(&host->eliza_enabled)) {
+    changed = true;
+  }
+  atomic_store(&host->eliza_enabled, false);
+  if (atomic_load(&host->eliza_announced)) {
+    announce_depart = true;
+  }
+  atomic_store(&host->eliza_announced, false);
+  pthread_mutex_unlock(&host->lock);
+
+  if (announce_depart) {
+    host_eliza_announce_depart(host);
+  }
+
+  return changed;
+}
+
+static void host_eliza_announce_join(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  host_history_record_system(host, "* [eliza] has joined the chat");
+  host_eliza_say(host, "Hey everyone, I'm eliza. Just another chatter keeping an eye on things.");
+}
+
+static void host_eliza_announce_depart(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  host_eliza_say(host, "I'm heading out. Stay safe!");
+  host_history_record_system(host, "* [eliza] has left the chat");
+}
+
+static void host_eliza_say(host_t *host, const char *message) {
+  if (host == NULL || message == NULL || message[0] == '\0') {
+    return;
+  }
+
+  if (!host_post_client_message(host, "eliza", message, NULL, NULL, false)) {
+    printf("[eliza] failed to deliver message: %s\n", message);
+  }
+}
+
+static bool host_eliza_content_is_severe(const char *text) {
+  if (text == NULL || text[0] == '\0') {
+    return false;
+  }
+
+  static const char *const kPhrases[] = {
+      "murder",        "kill",          "bomb",           "terror",
+      "terrorism",     "kidnap",        "homicide",       "assassin",
+      "mass shooting", "school shooting","shoot up",      "arson",
+      "child porn",    "child abuse",   "human traffic",  "felony",
+      "살인",           "폭탄",           "테러",            "유괴",
+      "총기난사",       "아동포르노",     "중범죄",
+  };
+
+  for (size_t idx = 0U; idx < sizeof(kPhrases) / sizeof(kPhrases[0]); ++idx) {
+    if (string_contains_case_insensitive(text, kPhrases[idx])) {
+      return true;
+    }
+  }
+
+  if (string_contains_case_insensitive(text, "drug")) {
+    if (string_contains_case_insensitive(text, "traffic") ||
+        string_contains_case_insensitive(text, "selling") ||
+        string_contains_case_insensitive(text, "deal") ||
+        string_contains_case_insensitive(text, "manufactur")) {
+      return true;
+    }
+  }
+
+  if (string_contains_case_insensitive(text, "마약")) {
+    if (string_contains_case_insensitive(text, "판매") || string_contains_case_insensitive(text, "밀매") ||
+        string_contains_case_insensitive(text, "거래")) {
+      return true;
+    }
+  }
+
+  if (string_contains_case_insensitive(text, "child")) {
+    if (string_contains_case_insensitive(text, "exploitation") || string_contains_case_insensitive(text, "abuse") ||
+        string_contains_case_insensitive(text, "porn")) {
+      return true;
+    }
+  }
+
+  if (string_contains_case_insensitive(text, "아동")) {
+    if (string_contains_case_insensitive(text, "학대") || string_contains_case_insensitive(text, "착취") ||
+        string_contains_case_insensitive(text, "포르노")) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const char *reason, bool from_filter) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return false;
+  }
+
+  host_t *host = ctx->owner;
+  if (!atomic_load(&host->eliza_enabled)) {
+    return false;
+  }
+
+  if (ctx->should_exit) {
+    return false;
+  }
+
+  bool severe = host_eliza_content_is_severe(content);
+  if (!severe && reason != NULL) {
+    severe = host_eliza_content_is_severe(reason);
+  }
+
+  if (!severe) {
+    return false;
+  }
+
+  if (!atomic_load(&host->eliza_announced)) {
+    bool announce = false;
+    pthread_mutex_lock(&host->lock);
+    if (!atomic_load(&host->eliza_announced)) {
+      atomic_store(&host->eliza_announced, true);
+      announce = true;
+    }
+    pthread_mutex_unlock(&host->lock);
+    if (announce) {
+      host_eliza_announce_join(host);
+    }
+  }
+
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(message, sizeof(message), "%s, that crosses a legal line. You're out of here.", ctx->user.name);
+  host_eliza_say(host, message);
+
+  char notice[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(notice, sizeof(notice), "* [eliza] removed [%s] for severe content.", ctx->user.name);
+  host_history_record_system(host, notice);
+
+  clock_gettime(CLOCK_MONOTONIC, &host->eliza_last_action);
+  if (from_filter && reason != NULL && reason[0] != '\0') {
+    printf("[eliza] removing %s (%s) after filter flag: %s\n", ctx->user.name, ctx->client_ip, reason);
+  } else {
+    printf("[eliza] removing %s (%s) after manual keyword flag\n", ctx->user.name, ctx->client_ip);
+  }
+
+  session_force_disconnect(ctx, "You have been removed by eliza for severe content.");
+  return true;
+}
+
 static bool session_security_check_text(session_ctx_t *ctx, const char *category, const char *content, size_t length) {
   if (ctx == NULL || ctx->owner == NULL || content == NULL || length == 0U) {
     return true;
@@ -2986,6 +3182,7 @@ static bool session_security_check_text(session_ctx_t *ctx, const char *category
                attempts, (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
       session_send_system_line(ctx, warning);
     }
+    (void)host_eliza_intervene(ctx, content, diagnostic, true);
     return false;
   }
 
@@ -5817,6 +6014,10 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *mes
     return;
   }
 
+  if (host_eliza_intervene(ctx, message, NULL, false)) {
+    return;
+  }
+
   size_t message_length = strnlen(message, SSH_CHATTER_MESSAGE_LIMIT);
   if (!session_security_check_text(ctx, "chat message", message, message_length)) {
     return;
@@ -7642,6 +7843,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/translate-scope <chat|chat-nohistory|all> - limit translation to chat/BBS, optionally skipping scrollback (operator only)",
       "/gemini <on|off>       - toggle Gemini provider (operator only)",
       "/gemini-unfreeze      - clear automatic Gemini cooldown (operator only)",
+      "/eliza <on|off>        - toggle the eliza moderator persona (operator only)",
       "/chat-spacing <0-5>    - reserve blank lines before translated captions in chat",
       "/palette <name>        - apply a predefined interface palette (/palette list)",
       "/today               - discover today's function (once per day)",
@@ -13193,6 +13395,54 @@ static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
   session_send_system_line(ctx, "Usage: /gemini <on|off>");
 }
 
+static void session_handle_eliza(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
+    session_send_system_line(ctx, "Only operators may control eliza.");
+    return;
+  }
+
+  char token[32];
+  if (arguments != NULL) {
+    snprintf(token, sizeof(token), "%s", arguments);
+    trim_whitespace_inplace(token);
+  } else {
+    token[0] = '\0';
+  }
+
+  if (token[0] == '\0') {
+    bool enabled = atomic_load(&ctx->owner->eliza_enabled);
+    char status[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(status, sizeof(status), "eliza is currently %s.", enabled ? "enabled" : "disabled");
+    session_send_system_line(ctx, status);
+    session_send_system_line(ctx, "Usage: /eliza <on|off>");
+    return;
+  }
+
+  if (strcasecmp(token, "on") == 0) {
+    if (host_eliza_enable(ctx->owner)) {
+      session_send_system_line(ctx, "eliza enabled. She will now mingle with the room and watch for severe issues.");
+    } else {
+      session_send_system_line(ctx, "eliza is already active.");
+    }
+    return;
+  }
+
+  if (strcasecmp(token, "off") == 0) {
+    if (host_eliza_disable(ctx->owner)) {
+      session_send_system_line(ctx, "eliza disabled. She will no longer intervene.");
+    } else {
+      session_send_system_line(ctx, "eliza is already inactive.");
+    }
+    return;
+  }
+
+  session_send_system_line(ctx, "Usage: /eliza <on|off>");
+}
+
 static void session_handle_gemini_unfreeze(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;
@@ -13889,6 +14139,10 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   }
   else if (session_parse_command(line, "/gemini", &args)) {
     session_handle_gemini(ctx, args);
+    return;
+  }
+  else if (session_parse_command(line, "/eliza", &args)) {
+    session_handle_eliza(ctx, args);
     return;
   }
   else if (session_parse_command(line, "/chat-spacing", &args)) {
@@ -15181,6 +15435,10 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->last_captcha_answer[0] = '\0';
   host->last_captcha_generated.tv_sec = 0;
   host->last_captcha_generated.tv_nsec = 0L;
+  atomic_store(&host->eliza_enabled, false);
+  atomic_store(&host->eliza_announced, false);
+  host->eliza_last_action.tv_sec = 0;
+  host->eliza_last_action.tv_nsec = 0L;
 
   (void)host_try_load_motd_from_path(host, "/etc/ssh-chatter/motd");
 
