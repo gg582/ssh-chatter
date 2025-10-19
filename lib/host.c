@@ -6257,6 +6257,12 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
     return;
   }
 
+  bool suppress_translation = translator_should_skip_scrollback_translation();
+  bool previous_translation_suppress = ctx->translation_suppress_output;
+  if (suppress_translation) {
+    ctx->translation_suppress_output = true;
+  }
+
   const size_t step = SSH_CHATTER_SCROLLBACK_CHUNK > 0 ? SSH_CHATTER_SCROLLBACK_CHUNK : 1U;
   if (ctx->history_scroll_position >= total) {
     ctx->history_scroll_position = total > 0U ? total - 1U : 0U;
@@ -6321,7 +6327,7 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
       session_send_system_line(ctx, "Already at the latest messages.");
     }
     session_render_prompt(ctx, false);
-    return;
+    goto cleanup;
   }
 
   const size_t newest_visible = total - 1U - new_position;
@@ -6352,7 +6358,7 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
   if (copied == 0U) {
     session_send_system_line(ctx, "Unable to read chat history right now.");
     session_render_prompt(ctx, false);
-    return;
+    goto cleanup;
   }
 
   for (size_t idx = 0; idx < copied; ++idx) {
@@ -6364,6 +6370,11 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
   }
 
   session_render_prompt(ctx, false);
+
+cleanup:
+  if (suppress_translation) {
+    ctx->translation_suppress_output = previous_translation_suppress;
+  }
 }
 
 static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
@@ -7042,7 +7053,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/set-target-lang <language|off> - translate your outgoing messages",
       "/weather <region> <city> - show the weather for a region and city",
       "/translate <on|off>    - enable or disable translation after configuring languages",
-      "/translate-scope <chat|all> - limit translation to chat/BBS or restore full scope (operator only)",
+      "/translate-scope <chat|chat-nohistory|all> - limit translation to chat/BBS, optionally skipping scrollback (operator only)",
       "/gemini <on|off>       - toggle Gemini provider (operator only)",
       "/chat-spacing <0-5>    - reserve blank lines before translated captions in chat",
       "/palette <name>        - apply a predefined interface palette (/palette list)",
@@ -12376,10 +12387,16 @@ static void session_handle_translate_scope(session_ctx_t *ctx, const char *argum
     const bool limited = translator_should_limit_to_chat_bbs();
     const bool forced = translator_is_ollama_only();
     const bool manual = translator_is_manual_chat_bbs_only();
+    const bool skip_scrollback = translator_is_manual_skip_scrollback();
 
     char status[SSH_CHATTER_MESSAGE_LIMIT];
     if (limited) {
-      snprintf(status, sizeof(status), "Translation scope is currently limited to chat messages and BBS posts.");
+      if (skip_scrollback) {
+        snprintf(status, sizeof(status),
+                 "Translation scope is currently limited to chat messages and BBS posts. Scrollback translation is disabled.");
+      } else {
+        snprintf(status, sizeof(status), "Translation scope is currently limited to chat messages and BBS posts.");
+      }
     } else {
       snprintf(status, sizeof(status),
                "Translation scope currently includes system output and bulk messages.");
@@ -12390,25 +12407,51 @@ static void session_handle_translate_scope(session_ctx_t *ctx, const char *argum
       session_send_system_line(ctx,
                                "Gemini translation is unavailable; Ollama fallback enforces chat/BBS-only scope.");
     } else if (manual) {
-      session_send_system_line(ctx, "Chat/BBS-only scope is enabled manually.");
+      if (skip_scrollback) {
+        session_send_system_line(ctx, "Chat/BBS-only scope is enabled manually. Scrollback translation is suppressed.");
+      } else {
+        session_send_system_line(ctx, "Chat/BBS-only scope is enabled manually.");
+      }
     }
 
-    session_send_system_line(ctx, "Usage: /translate-scope <chat|all>");
+    session_send_system_line(ctx, "Usage: /translate-scope <chat|chat-nohistory|all>");
     return;
   }
 
   if (strcasecmp(token, "chat") == 0 || strcasecmp(token, "limit") == 0 || strcasecmp(token, "on") == 0) {
-    if (translator_is_manual_chat_bbs_only()) {
+    if (translator_is_manual_chat_bbs_only() && !translator_is_manual_skip_scrollback()) {
       session_send_system_line(ctx,
                                "Translation scope is already limited to chat messages and BBS posts.");
       return;
     }
 
     translator_set_manual_chat_bbs_only(true);
+    translator_set_manual_skip_scrollback(false);
     session_send_system_line(ctx, "Translation scope limited to chat messages and BBS posts.");
 
     char notice[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(notice, sizeof(notice), "* [%s] limited translation scope to chat and BBS posts.", ctx->user.name);
+    host_history_record_system(ctx->owner, notice);
+    chat_room_broadcast(&ctx->owner->room, notice, NULL);
+    return;
+  }
+
+  if (strcasecmp(token, "chat-nohistory") == 0 || strcasecmp(token, "chat_nohistory") == 0 ||
+      strcasecmp(token, "chat-nohist") == 0) {
+    if (translator_is_manual_chat_bbs_only() && translator_is_manual_skip_scrollback()) {
+      session_send_system_line(ctx,
+                               "Translation scope is already limited to chat/BBS posts with scrollback translation disabled.");
+      return;
+    }
+
+    translator_set_manual_chat_bbs_only(true);
+    translator_set_manual_skip_scrollback(true);
+    session_send_system_line(ctx,
+                             "Translation scope limited to chat messages and BBS posts. Scrollback translation is disabled.");
+
+    char notice[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(notice, sizeof(notice),
+             "* [%s] limited translation scope to chat/BBS posts and disabled scrollback translation.", ctx->user.name);
     host_history_record_system(ctx->owner, notice);
     chat_room_broadcast(&ctx->owner->room, notice, NULL);
     return;
@@ -12429,6 +12472,7 @@ static void session_handle_translate_scope(session_ctx_t *ctx, const char *argum
     }
 
     translator_set_manual_chat_bbs_only(false);
+    translator_set_manual_skip_scrollback(false);
     session_send_system_line(ctx,
                              "Full translation scope restored. System output and bulk messages are eligible for translation.");
 
