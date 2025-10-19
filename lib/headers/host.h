@@ -50,7 +50,7 @@
 #define SSH_CHATTER_STATUS_LEN 128
 #define SSH_CHATTER_ASCIIART_MAX_LINES 64
 #define SSH_CHATTER_ASCIIART_BUFFER_LEN 1024
-#define SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS 60
+#define SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS 600
 #define SSH_CHATTER_TETRIS_WIDTH 10
 #define SSH_CHATTER_TETRIS_HEIGHT 20
 #define SSH_CHATTER_TETRIS_GRAVITY_THRESHOLD 5U
@@ -75,6 +75,8 @@ typedef struct join_activity_entry {
   size_t same_name_attempts;
   struct timespec last_suspicious;
   size_t suspicious_events;
+  bool asciiart_has_cooldown;
+  struct timespec last_asciiart_post;
 } join_activity_entry_t;
 
 typedef struct client_manager client_manager_t;
