@@ -14,7 +14,9 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
+#include <libgen.h>
 #include <limits.h>
 #include <wchar.h>
 #include <arpa/inet.h>
@@ -29,6 +31,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -63,6 +66,10 @@
 #define SSH_CHATTER_TRANSLATION_SEGMENT_GUARD 32U
 #define SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS 150000000L
 
+#ifndef O_NOFOLLOW
+#define O_NOFOLLOW 0
+#endif
+
 static const char kTranslationQuotaNotice[] =
     "⚠️ Translation quota exhausted. Translation features are temporarily disabled.";
 static const char kTranslationQuotaSystemMessage[] =
@@ -91,6 +98,12 @@ typedef struct {
   const char *pet_pronoun;
   captcha_template_t template_type;
 } captcha_story_t;
+
+typedef enum {
+  HOST_SECURITY_SCAN_CLEAN = 0,
+  HOST_SECURITY_SCAN_BLOCKED,
+  HOST_SECURITY_SCAN_ERROR,
+} host_security_scan_result_t;
 
 static const captcha_story_t CAPTCHA_STORIES[] = {
     {"Jiho", "software engineer", true, "cat", "Hodu", NULL, CAPTCHA_TEMPLATE_PRONOUN},
@@ -654,6 +667,12 @@ static void host_state_save_locked(host_t *host);
 static void host_bbs_resolve_path(host_t *host);
 static void host_bbs_state_load(host_t *host);
 static void host_bbs_state_save_locked(host_t *host);
+static void host_security_configure(host_t *host);
+static bool host_ensure_private_data_path(host_t *host, const char *path, bool create_directories);
+static void host_security_disable_filter(host_t *host, const char *reason);
+static host_security_scan_result_t host_security_scan_payload(host_t *host, const char *category, const char *payload,
+                                                              size_t length, char *diagnostic, size_t diagnostic_length);
+static bool session_security_check_text(session_ctx_t *ctx, const char *category, const char *content, size_t length);
 static void host_vote_resolve_path(host_t *host);
 static void host_vote_state_load(host_t *host);
 static void host_vote_state_save_locked(host_t *host);
@@ -2508,6 +2527,252 @@ static void host_history_normalize_entry(host_t *host, chat_history_entry_t *ent
   entry->user_highlight_code = highlight_code;
 }
 
+static void host_security_configure(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  atomic_store(&host->security_filter_enabled, false);
+  atomic_store(&host->security_filter_failure_logged, false);
+
+  const char *toggle = getenv("CHATTER_SECURITY_FILTER");
+  if (toggle != NULL && toggle[0] != '\0') {
+    if (strcasecmp(toggle, "0") == 0 || strcasecmp(toggle, "false") == 0 || strcasecmp(toggle, "off") == 0) {
+      return;
+    }
+  }
+
+  bool has_gemini = false;
+  const char *gemini_key = getenv("GEMINI_API_KEY");
+  if (gemini_key != NULL && gemini_key[0] != '\0') {
+    has_gemini = true;
+  }
+
+  const char *message = has_gemini ?
+                           "[security] AI payload moderation enabled (Gemini primary, Ollama fallback)" :
+                           "[security] AI payload moderation enabled (Ollama fallback only)";
+
+  atomic_store(&host->security_filter_enabled, true);
+  printf("%s\n", message);
+}
+
+static void host_security_disable_filter(host_t *host, const char *reason) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (!atomic_exchange(&host->security_filter_enabled, false)) {
+    return;
+  }
+
+  if (reason == NULL || reason[0] == '\0') {
+    reason = "moderation failure";
+  }
+
+  if (!atomic_exchange(&host->security_filter_failure_logged, true)) {
+    printf("[security] disabling payload moderation: %s\n", reason);
+  }
+}
+
+static bool host_ensure_private_data_path(host_t *host, const char *path, bool create_directories) {
+  (void)host;
+  if (path == NULL || path[0] == '\0') {
+    return false;
+  }
+
+  char parent_buffer[PATH_MAX];
+  snprintf(parent_buffer, sizeof(parent_buffer), "%s", path);
+  char *parent_dir = dirname(parent_buffer);
+  if (parent_dir == NULL || parent_dir[0] == '\0') {
+    parent_dir = ".";
+  }
+
+  char parent_path[PATH_MAX];
+  snprintf(parent_path, sizeof(parent_path), "%s", parent_dir);
+
+  struct stat dir_stat;
+  if (stat(parent_path, &dir_stat) != 0) {
+    if (!(create_directories && errno == ENOENT)) {
+      humanized_log_error("host", "failed to inspect data directory", errno != 0 ? errno : EIO);
+      return false;
+    }
+
+    if (mkdir(parent_path, 0750) != 0 && errno != EEXIST) {
+      humanized_log_error("host", "failed to create data directory", errno != 0 ? errno : EIO);
+      return false;
+    }
+
+    if (stat(parent_path, &dir_stat) != 0) {
+      humanized_log_error("host", "failed to inspect data directory", errno != 0 ? errno : EIO);
+      return false;
+    }
+  }
+
+  if (!S_ISDIR(dir_stat.st_mode)) {
+    humanized_log_error("host", "data path parent is not a directory", ENOTDIR);
+    return false;
+  }
+
+  mode_t insecure_bits = dir_stat.st_mode & (S_IWOTH | S_IWGRP);
+  bool is_dot = strcmp(parent_path, ".") == 0;
+  bool is_root = strcmp(parent_path, "/") == 0;
+  if (insecure_bits != 0U) {
+    if (!is_dot && !is_root) {
+      mode_t tightened = dir_stat.st_mode & (mode_t)~(S_IWOTH | S_IWGRP);
+      if (chmod(parent_path, tightened) != 0) {
+        humanized_log_error("host", "failed to tighten data directory permissions", errno != 0 ? errno : EACCES);
+        return false;
+      }
+    } else {
+      humanized_log_error("host", "data directory permissions are too loose", EACCES);
+      return false;
+    }
+  }
+
+  struct stat file_stat;
+  if (lstat(path, &file_stat) == 0) {
+    if (!S_ISREG(file_stat.st_mode)) {
+      humanized_log_error("host", "bbs state path does not reference a regular file", EINVAL);
+      return false;
+    }
+
+    if ((file_stat.st_mode & (S_IWOTH | S_IWGRP)) != 0U) {
+      if (chmod(path, S_IRUSR | S_IWUSR) != 0) {
+        humanized_log_error("host", "failed to tighten bbs state permissions", errno != 0 ? errno : EACCES);
+        return false;
+      }
+    }
+
+    if (file_stat.st_uid != geteuid()) {
+      humanized_log_error("host", "bbs state file ownership mismatch", EPERM);
+      return false;
+    }
+  } else if (errno != ENOENT) {
+    humanized_log_error("host", "failed to inspect bbs state path", errno != 0 ? errno : EIO);
+    return false;
+  }
+
+  return true;
+}
+
+static host_security_scan_result_t host_security_scan_payload(host_t *host, const char *category, const char *payload,
+                                                             size_t length, char *diagnostic,
+                                                             size_t diagnostic_length) {
+  if (diagnostic != NULL && diagnostic_length > 0U) {
+    diagnostic[0] = '\0';
+  }
+
+  if (host == NULL || payload == NULL || length == 0U) {
+    return HOST_SECURITY_SCAN_CLEAN;
+  }
+
+  if (!atomic_load(&host->security_filter_enabled)) {
+    return HOST_SECURITY_SCAN_CLEAN;
+  }
+
+  char snippet[1024];
+  size_t copy_length = length;
+  if (copy_length >= sizeof(snippet)) {
+    copy_length = sizeof(snippet) - 1U;
+  }
+
+  memcpy(snippet, payload, copy_length);
+  for (size_t idx = 0U; idx < copy_length; ++idx) {
+    unsigned char ch = (unsigned char)snippet[idx];
+    if (ch == '\0') {
+      copy_length = idx;
+      break;
+    }
+    if (ch < 0x20 && ch != '\n' && ch != '\r' && ch != '\t') {
+      snippet[idx] = ' ';
+    }
+  }
+  snippet[copy_length] = '\0';
+
+  bool blocked = false;
+  char reason[256];
+  reason[0] = '\0';
+
+  bool success = translator_moderate_text(category, snippet, &blocked, reason, sizeof(reason));
+  if (!success) {
+    const char *error = translator_last_error();
+    if (diagnostic != NULL && diagnostic_length > 0U) {
+      if (error != NULL && error[0] != '\0') {
+        snprintf(diagnostic, diagnostic_length, "%s", error);
+      } else {
+        snprintf(diagnostic, diagnostic_length, "%s", "moderation unavailable");
+      }
+    }
+    host_security_disable_filter(host, "moderation pipeline unavailable");
+    return HOST_SECURITY_SCAN_ERROR;
+  }
+
+  if (!blocked) {
+    if (diagnostic != NULL && diagnostic_length > 0U) {
+      diagnostic[0] = '\0';
+    }
+    return HOST_SECURITY_SCAN_CLEAN;
+  }
+
+  if (diagnostic != NULL && diagnostic_length > 0U) {
+    if (reason[0] != '\0') {
+      snprintf(diagnostic, diagnostic_length, "%s", reason);
+    } else {
+      snprintf(diagnostic, diagnostic_length, "%s", "potential intrusion attempt");
+    }
+  }
+
+  return HOST_SECURITY_SCAN_BLOCKED;
+}
+
+static bool session_security_check_text(session_ctx_t *ctx, const char *category, const char *content, size_t length) {
+  if (ctx == NULL || ctx->owner == NULL || content == NULL || length == 0U) {
+    return true;
+  }
+
+  char diagnostic[256];
+  host_security_scan_result_t scan_result =
+      host_security_scan_payload(ctx->owner, category, content, length, diagnostic, sizeof(diagnostic));
+
+  if (scan_result == HOST_SECURITY_SCAN_CLEAN) {
+    return true;
+  }
+
+  const char *label = category != NULL ? category : "submission";
+
+  if (scan_result == HOST_SECURITY_SCAN_BLOCKED) {
+    if (diagnostic[0] == '\0') {
+      snprintf(diagnostic, sizeof(diagnostic), "%s", "suspected intrusion content");
+    }
+    printf("[security] blocked %s from %s: %s\n", label, ctx->user.name, diagnostic);
+
+    char message[512];
+    snprintf(message, sizeof(message), "Security filter rejected your %s: %s", label, diagnostic);
+    session_send_system_line(ctx, message);
+    return false;
+  }
+
+  const char *error = translator_last_error();
+  if (diagnostic[0] == '\0' && error != NULL && error[0] != '\0') {
+    snprintf(diagnostic, sizeof(diagnostic), "%s", error);
+  }
+
+  if (diagnostic[0] != '\0') {
+    printf("[security] unable to moderate %s from %s: %s\n", label, ctx->user.name, diagnostic);
+  } else {
+    printf("[security] unable to moderate %s from %s\n", label, ctx->user.name);
+  }
+
+  char message[512];
+  if (diagnostic[0] != '\0') {
+    snprintf(message, sizeof(message), "Security filter is unavailable (%s). Please try again later.", diagnostic);
+  } else {
+    snprintf(message, sizeof(message), "%s", "Security filter could not validate your submission. Please try again later.");
+  }
+  session_send_system_line(ctx, message);
+  return false;
+}
+
 static void host_state_resolve_path(host_t *host) {
   if (host == NULL) {
     return;
@@ -3679,6 +3944,10 @@ static void host_bbs_state_save_locked(host_t *host) {
     return;
   }
 
+  if (!host_ensure_private_data_path(host, host->bbs_state_file_path, true)) {
+    return;
+  }
+
   char temp_path[PATH_MAX];
   int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp", host->bbs_state_file_path);
   if (written < 0 || (size_t)written >= sizeof(temp_path)) {
@@ -3686,9 +3955,18 @@ static void host_bbs_state_save_locked(host_t *host) {
     return;
   }
 
-  FILE *fp = fopen(temp_path, "wb");
+  int temp_fd = open(temp_path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, S_IRUSR | S_IWUSR);
+  if (temp_fd < 0) {
+    humanized_log_error("host", "failed to open bbs state file", errno != 0 ? errno : EIO);
+    return;
+  }
+
+  FILE *fp = fdopen(temp_fd, "wb");
   if (fp == NULL) {
-    humanized_log_error("host", "failed to open bbs state file", errno);
+    int saved_errno = errno;
+    close(temp_fd);
+    unlink(temp_path);
+    humanized_log_error("host", "failed to wrap bbs state descriptor", saved_errno != 0 ? saved_errno : EIO);
     return;
   }
 
@@ -3753,8 +4031,8 @@ static void host_bbs_state_save_locked(host_t *host) {
   }
 
   if (success) {
-    int fd = fileno(fp);
-    if (fd >= 0 && fsync(fd) != 0) {
+    int file_descriptor = fileno(fp);
+    if (file_descriptor >= 0 && fsync(file_descriptor) != 0) {
       success = false;
     }
   }
@@ -3769,9 +4047,17 @@ static void host_bbs_state_save_locked(host_t *host) {
     return;
   }
 
+  if (chmod(temp_path, S_IRUSR | S_IWUSR) != 0) {
+    humanized_log_error("host", "failed to tighten temporary bbs state permissions", errno != 0 ? errno : EACCES);
+    unlink(temp_path);
+    return;
+  }
+
   if (rename(temp_path, host->bbs_state_file_path) != 0) {
     humanized_log_error("host", "failed to update bbs state file", errno);
     unlink(temp_path);
+  } else if (chmod(host->bbs_state_file_path, S_IRUSR | S_IWUSR) != 0) {
+    humanized_log_error("host", "failed to tighten bbs state permissions", errno != 0 ? errno : EACCES);
   }
 }
 
@@ -3781,6 +4067,10 @@ static void host_bbs_state_load(host_t *host) {
   }
 
   if (host->bbs_state_file_path[0] == '\0') {
+    return;
+  }
+
+  if (!host_ensure_private_data_path(host, host->bbs_state_file_path, false)) {
     return;
   }
 
@@ -5269,6 +5559,11 @@ static void session_render_caption_with_offset(session_ctx_t *ctx, const char *m
 
 static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *message) {
   if (ctx == NULL || ctx->owner == NULL || message == NULL) {
+    return;
+  }
+
+  size_t message_length = strnlen(message, SSH_CHATTER_MESSAGE_LIMIT);
+  if (!session_security_check_text(ctx, "chat message", message, message_length)) {
     return;
   }
 
@@ -9974,6 +10269,11 @@ static void session_bbs_commit_pending_post(session_ctx_t *ctx) {
     return;
   }
 
+  if (!session_security_check_text(ctx, "BBS post", ctx->pending_bbs_body, ctx->pending_bbs_body_length)) {
+    session_bbs_reset_pending_post(ctx);
+    return;
+  }
+
   host_t *host = ctx->owner;
   if (host == NULL) {
     session_bbs_reset_pending_post(ctx);
@@ -10260,6 +10560,11 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  size_t comment_scan_length = strnlen(comment_text, SSH_CHATTER_BBS_COMMENT_LEN);
+  if (!session_security_check_text(ctx, "BBS comment", comment_text, comment_scan_length)) {
+    return;
+  }
+
   host_t *host = ctx->owner;
   pthread_mutex_lock(&host->lock);
   bbs_post_t *post = host_find_bbs_post_locked(host, id);
@@ -10451,6 +10756,11 @@ static void session_asciiart_commit(session_ctx_t *ctx) {
   }
 
   if (ctx->owner == NULL) {
+    session_asciiart_reset(ctx);
+    return;
+  }
+
+  if (!session_security_check_text(ctx, "ASCII art", ctx->asciiart_buffer, ctx->asciiart_length)) {
     session_asciiart_reset(ctx);
     return;
   }
@@ -14481,6 +14791,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_ban_resolve_path(host);
   host->reply_state_file_path[0] = '\0';
   host_reply_state_resolve_path(host);
+  host_security_configure(host);
   pthread_mutex_init(&host->lock, NULL);
   poll_state_reset(&host->poll);
   for (size_t idx = 0U; idx < SSH_CHATTER_MAX_NAMED_POLLS; ++idx) {
