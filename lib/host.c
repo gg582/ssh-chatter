@@ -49,6 +49,7 @@
 
 #define ANSI_CLEAR_LINE "\033[2K"
 #define ANSI_INSERT_LINE "\033[1L"
+#define ANSI_CURSOR_COLUMN_RESET "\033[1G"
 
 #define SSH_CHATTER_MESSAGE_BOX_MAX_LINES 32U
 #define SSH_CHATTER_MESSAGE_BOX_PADDING 2U
@@ -66,14 +67,21 @@
 #define SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS 200000000L
 #define SSH_CHATTER_TRANSLATION_SEGMENT_GUARD 32U
 #define SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS 150000000L
-#define SSH_CHATTER_JOIN_RAPID_WINDOW_NS 5000000000LL
-#define SSH_CHATTER_JOIN_IP_THRESHOLD 24U
-#define SSH_CHATTER_JOIN_NAME_THRESHOLD 12U
+#define SSH_CHATTER_JOIN_RAPID_WINDOW_NS 60000000000LL
+#define SSH_CHATTER_JOIN_IP_THRESHOLD 6U
+#define SSH_CHATTER_JOIN_NAME_THRESHOLD 6U
 #define SSH_CHATTER_SUSPICIOUS_EVENT_WINDOW_NS 300000000000LL
 #define SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD 2U
 #define SSH_CHATTER_CLAMAV_SCAN_INTERVAL_SECONDS (5 * 60 * 60)
 #define SSH_CHATTER_CLAMAV_SLEEP_CHUNK_SECONDS 30U
+#define SSH_CHATTER_BBS_WATCHDOG_SLEEP_SECONDS 5U
 #define SSH_CHATTER_CLAMAV_OUTPUT_LIMIT 512U
+#define SSH_CHATTER_BBS_REVIEW_INTERVAL_SECONDS 120U
+#define ELIZA_MEMORY_MAGIC 0x454C5A41U
+#define ELIZA_MEMORY_VERSION 1U
+#define SSH_CHATTER_ELIZA_CONTEXT_LIMIT 3U
+#define SSH_CHATTER_ELIZA_CONTEXT_BUFFER (SSH_CHATTER_MESSAGE_LIMIT * 4U)
+#define SSH_CHATTER_ELIZA_TOKEN_LIMIT 16U
 
 #ifndef O_NOFOLLOW
 #define O_NOFOLLOW 0
@@ -558,6 +566,7 @@ static void session_render_caption_with_offset(session_ctx_t *ctx, const char *m
 static void session_send_line(session_ctx_t *ctx, const char *message);
 static void session_send_plain_line(session_ctx_t *ctx, const char *message);
 static void session_send_system_line(session_ctx_t *ctx, const char *message);
+static void session_send_system_line_with_column_reset(session_ctx_t *ctx, const char *message);
 static void session_send_raw_text(session_ctx_t *ctx, const char *text);
 static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text);
 static void session_send_system_lines_bulk(session_ctx_t *ctx, const char *const *lines, size_t line_count);
@@ -584,6 +593,8 @@ static bool host_history_reserve_locked(host_t *host, size_t min_capacity);
 static size_t host_history_total(host_t *host);
 static size_t host_history_copy_range(host_t *host, size_t start_index, chat_history_entry_t *buffer, size_t capacity);
 static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, chat_history_entry_t *entry);
+static size_t host_history_delete_range(host_t *host, uint64_t start_id, uint64_t end_id, uint64_t *first_removed,
+                                        uint64_t *last_removed, size_t *replies_removed);
 static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entry_t *entry, const session_ctx_t *from);
 static void chat_room_broadcast_caption(chat_room_t *room, const char *message);
 static bool host_history_apply_reaction(host_t *host, uint64_t message_id, size_t reaction_index, chat_history_entry_t *updated_entry);
@@ -605,6 +616,7 @@ static bool host_is_ip_banned(host_t *host, const char *ip);
 static bool host_is_username_banned(host_t *host, const char *username);
 static bool host_add_ban_entry(host_t *host, const char *username, const char *ip);
 static bool host_remove_ban_entry(host_t *host, const char *token);
+static join_activity_entry_t *host_find_join_activity_locked(host_t *host, const char *ip);
 static join_activity_entry_t *host_ensure_join_activity_locked(host_t *host, const char *ip);
 static bool host_register_suspicious_activity(host_t *host, const char *username, const char *ip,
                                              size_t *attempts_out);
@@ -641,6 +653,7 @@ static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *argume
 static void session_handle_set_target_lang(session_ctx_t *ctx, const char *arguments);
 static void session_handle_chat_spacing(session_ctx_t *ctx, const char *arguments);
 static void session_handle_eliza(session_ctx_t *ctx, const char *arguments);
+static void session_handle_eliza_chat(session_ctx_t *ctx, const char *arguments);
 static void session_handle_status(session_ctx_t *ctx, const char *arguments);
 static void session_handle_showstatus(session_ctx_t *ctx, const char *arguments);
 static void session_handle_weather(session_ctx_t *ctx, const char *arguments);
@@ -667,6 +680,7 @@ static void session_handle_birthday(session_ctx_t *ctx, const char *arguments);
 static void session_handle_soulmate(session_ctx_t *ctx);
 static void session_handle_grant(session_ctx_t *ctx, const char *arguments);
 static void session_handle_revoke(session_ctx_t *ctx, const char *arguments);
+static void session_handle_delete_message(session_ctx_t *ctx, const char *arguments);
 static void session_normalize_newlines(char *text);
 static bool timezone_sanitize_identifier(const char *input, char *output, size_t length);
 static bool timezone_resolve_identifier(const char *input, char *resolved, size_t length);
@@ -726,9 +740,19 @@ static const char *chat_attachment_type_label(chat_attachment_type_t type);
 static void host_state_resolve_path(host_t *host);
 static void host_state_load(host_t *host);
 static void host_state_save_locked(host_t *host);
+static void host_eliza_memory_resolve_path(host_t *host);
+static void host_eliza_memory_load(host_t *host);
+static void host_eliza_memory_save_locked(host_t *host);
+static void host_eliza_memory_store(host_t *host, const char *prompt, const char *reply);
+static size_t host_eliza_memory_collect_context(host_t *host, const char *prompt, char *context,
+                                                size_t context_length);
+static size_t host_eliza_memory_collect_tokens(const char *prompt, char tokens[][32], size_t max_tokens);
 static void host_bbs_resolve_path(host_t *host);
 static void host_bbs_state_load(host_t *host);
 static void host_bbs_state_save_locked(host_t *host);
+static void host_bbs_start_watchdog(host_t *host);
+static void *host_bbs_watchdog_thread(void *arg);
+static void host_bbs_watchdog_scan(host_t *host);
 static void host_security_configure(host_t *host);
 static bool host_ensure_private_data_path(host_t *host, const char *path, bool create_directories);
 static void host_security_compact_whitespace(char *text);
@@ -780,6 +804,9 @@ static bbs_post_t *host_allocate_bbs_post_locked(host_t *host);
 static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
 static void session_bbs_queue_translation(session_ctx_t *ctx, const bbs_post_t *post);
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, const char *notice);
+static bool host_asciiart_cooldown_active(host_t *host, const char *ip, const struct timespec *now,
+                                          long *remaining_seconds);
+static void host_asciiart_register_post(host_t *host, const char *ip, const struct timespec *when);
 static bool session_asciiart_cooldown_active(session_ctx_t *ctx, struct timespec *now, long *remaining_seconds);
 static void session_asciiart_reset(session_ctx_t *ctx);
 static void session_asciiart_begin(session_ctx_t *ctx);
@@ -974,6 +1001,21 @@ static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
 static const uint32_t HOST_STATE_VERSION = 7U;
 
 #define HOST_STATE_SOUND_ALIAS_LEN 32U
+
+typedef struct eliza_memory_header {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t entry_count;
+  uint32_t reserved;
+  uint64_t next_id;
+} eliza_memory_header_t;
+
+typedef struct eliza_memory_entry_serialized {
+  uint64_t id;
+  int64_t stored_at;
+  char prompt[SSH_CHATTER_MESSAGE_LIMIT];
+  char reply[SSH_CHATTER_MESSAGE_LIMIT];
+} eliza_memory_entry_serialized_t;
 
 typedef struct host_state_header_v1 {
   uint32_t magic;
@@ -1639,7 +1681,6 @@ static void session_assign_lan_privileges(session_ctx_t *ctx) {
 
   if (session_is_lan_client(ctx->client_ip)) {
     ctx->user.is_operator = true;
-    ctx->user.is_lan_operator = true;
     ctx->auth.is_operator = true;
   }
 }
@@ -2011,6 +2052,122 @@ static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, cha
   pthread_mutex_unlock(&host->lock);
 
   return found;
+}
+
+static size_t host_history_delete_range(host_t *host, uint64_t start_id, uint64_t end_id, uint64_t *first_removed,
+                                        uint64_t *last_removed, size_t *replies_removed) {
+  if (first_removed != NULL) {
+    *first_removed = 0U;
+  }
+  if (last_removed != NULL) {
+    *last_removed = 0U;
+  }
+  if (replies_removed != NULL) {
+    *replies_removed = 0U;
+  }
+
+  if (host == NULL || start_id == 0U || end_id == 0U || start_id > end_id) {
+    return 0U;
+  }
+
+  size_t removed = 0U;
+  size_t reply_removed = 0U;
+  uint64_t local_first = 0U;
+  uint64_t local_last = 0U;
+
+  pthread_mutex_lock(&host->lock);
+  if (host->history != NULL && host->history_count > 0U) {
+    size_t write_index = 0U;
+    for (size_t idx = 0U; idx < host->history_count; ++idx) {
+      chat_history_entry_t *entry = &host->history[idx];
+      const bool drop = entry->is_user_message && entry->message_id >= start_id && entry->message_id <= end_id;
+      if (drop) {
+        if (local_first == 0U || entry->message_id < local_first) {
+          local_first = entry->message_id;
+        }
+        if (entry->message_id > local_last) {
+          local_last = entry->message_id;
+        }
+        ++removed;
+        continue;
+      }
+
+      if (write_index != idx) {
+        host->history[write_index] = *entry;
+      }
+      ++write_index;
+    }
+
+    if (removed > 0U) {
+      for (size_t idx = write_index; idx < host->history_count; ++idx) {
+        memset(&host->history[idx], 0, sizeof(host->history[idx]));
+      }
+      host->history_count = write_index;
+      host_state_save_locked(host);
+    }
+  }
+
+  if (removed > 0U && host->reply_count > 0U) {
+    size_t write_index = 0U;
+    for (size_t idx = 0U; idx < host->reply_count; ++idx) {
+      chat_reply_entry_t *entry = &host->replies[idx];
+      if (!entry->in_use) {
+        continue;
+      }
+
+      const bool drop = entry->parent_message_id >= start_id && entry->parent_message_id <= end_id;
+      if (drop) {
+        ++reply_removed;
+        continue;
+      }
+
+      if (write_index != idx) {
+        host->replies[write_index] = *entry;
+      }
+      ++write_index;
+    }
+
+    if (reply_removed > 0U) {
+      for (size_t idx = write_index; idx < host->reply_count; ++idx) {
+        memset(&host->replies[idx], 0, sizeof(host->replies[idx]));
+      }
+      host->reply_count = write_index;
+
+      uint64_t max_reply_id = 0U;
+      for (size_t idx = 0U; idx < host->reply_count; ++idx) {
+        const chat_reply_entry_t *entry = &host->replies[idx];
+        if (!entry->in_use) {
+          continue;
+        }
+        if (entry->reply_id > max_reply_id) {
+          max_reply_id = entry->reply_id;
+        }
+      }
+
+      if (max_reply_id == 0U) {
+        host->next_reply_id = host->reply_count == 0U ? 1U : host->next_reply_id;
+      } else if (host->next_reply_id <= max_reply_id) {
+        host->next_reply_id = (max_reply_id == UINT64_MAX) ? UINT64_MAX : max_reply_id + 1U;
+      }
+
+      host_reply_state_save_locked(host);
+    }
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (removed > 0U) {
+    if (first_removed != NULL) {
+      *first_removed = local_first;
+    }
+    if (last_removed != NULL) {
+      *last_removed = local_last;
+    }
+  }
+  if (replies_removed != NULL) {
+    *replies_removed = reply_removed;
+  }
+
+  return removed;
 }
 
 static bool host_replies_find_entry_by_id(host_t *host, uint64_t reply_id, chat_reply_entry_t *entry) {
@@ -4695,6 +4852,440 @@ static void host_reply_state_load(host_t *host) {
   free(entries);
 }
 
+static void host_eliza_memory_resolve_path(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  const char *memory_path = getenv("CHATTER_ELIZA_MEMORY_FILE");
+  if (memory_path == NULL || memory_path[0] == '\0') {
+    memory_path = "eliza_memory.dat";
+  }
+
+  int written = snprintf(host->eliza_memory_file_path, sizeof(host->eliza_memory_file_path), "%s", memory_path);
+  if (written < 0 || (size_t)written >= sizeof(host->eliza_memory_file_path)) {
+    humanized_log_error("host", "eliza memory file path is too long", ENAMETOOLONG);
+    host->eliza_memory_file_path[0] = '\0';
+  }
+}
+
+static void host_eliza_memory_save_locked(host_t *host) {
+  if (host == NULL || host->eliza_memory_file_path[0] == '\0') {
+    return;
+  }
+
+  if (!host_ensure_private_data_path(host, host->eliza_memory_file_path, true)) {
+    return;
+  }
+
+  char temp_path[PATH_MAX];
+  int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp", host->eliza_memory_file_path);
+  if (written < 0 || (size_t)written >= sizeof(temp_path)) {
+    humanized_log_error("host", "eliza memory path is too long", ENAMETOOLONG);
+    return;
+  }
+
+  FILE *fp = fopen(temp_path, "wb");
+  if (fp == NULL) {
+    humanized_log_error("host", "failed to open eliza memory file", errno != 0 ? errno : EIO);
+    return;
+  }
+
+  size_t stored = host->eliza_memory_count;
+  if (stored > SSH_CHATTER_ELIZA_MEMORY_MAX) {
+    stored = SSH_CHATTER_ELIZA_MEMORY_MAX;
+  }
+
+  eliza_memory_header_t header = {0};
+  header.magic = ELIZA_MEMORY_MAGIC;
+  header.version = ELIZA_MEMORY_VERSION;
+  header.entry_count = (uint32_t)stored;
+  header.next_id = host->eliza_memory_next_id;
+
+  bool success = fwrite(&header, sizeof(header), 1U, fp) == 1U;
+  int write_error = 0;
+  if (!success && errno != 0) {
+    write_error = errno;
+  }
+
+  for (size_t idx = 0U; success && idx < stored; ++idx) {
+    const eliza_memory_entry_t *entry = &host->eliza_memory[idx];
+    eliza_memory_entry_serialized_t serialized = {0};
+    serialized.id = entry->id;
+    serialized.stored_at = (int64_t)entry->stored_at;
+    snprintf(serialized.prompt, sizeof(serialized.prompt), "%s", entry->prompt);
+    snprintf(serialized.reply, sizeof(serialized.reply), "%s", entry->reply);
+    if (fwrite(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+      success = false;
+      if (errno != 0) {
+        write_error = errno;
+      }
+      break;
+    }
+  }
+
+  if (success && fflush(fp) != 0) {
+    success = false;
+    if (errno != 0) {
+      write_error = errno;
+    }
+  }
+
+  if (success) {
+    int fd = fileno(fp);
+    if (fd >= 0 && fsync(fd) != 0) {
+      success = false;
+      if (errno != 0) {
+        write_error = errno;
+      }
+    }
+  }
+
+  if (fclose(fp) != 0) {
+    if (success && errno != 0) {
+      write_error = errno;
+    }
+    success = false;
+  }
+
+  if (!success) {
+    unlink(temp_path);
+    humanized_log_error("host", "failed to write eliza memory file", write_error != 0 ? write_error : EIO);
+    return;
+  }
+
+  if (rename(temp_path, host->eliza_memory_file_path) != 0) {
+    int rename_error = errno != 0 ? errno : EIO;
+    unlink(temp_path);
+    humanized_log_error("host", "failed to install eliza memory file", rename_error);
+    return;
+  }
+
+  if (chmod(host->eliza_memory_file_path, S_IRUSR | S_IWUSR) != 0) {
+    humanized_log_error("host", "failed to set eliza memory permissions", errno != 0 ? errno : EACCES);
+  }
+}
+
+static void host_eliza_memory_load(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->eliza_memory_file_path[0] == '\0') {
+    return;
+  }
+
+  if (!host_ensure_private_data_path(host, host->eliza_memory_file_path, false)) {
+    return;
+  }
+
+  FILE *fp = fopen(host->eliza_memory_file_path, "rb");
+  if (fp == NULL) {
+    return;
+  }
+
+  eliza_memory_header_t header = {0};
+  if (fread(&header, sizeof(header), 1U, fp) != 1U) {
+    fclose(fp);
+    return;
+  }
+
+  if (header.magic != ELIZA_MEMORY_MAGIC || header.version == 0U || header.version > ELIZA_MEMORY_VERSION) {
+    fclose(fp);
+    return;
+  }
+
+  uint32_t entry_count = header.entry_count;
+  eliza_memory_entry_serialized_t *entries = NULL;
+  if (entry_count > 0U) {
+    entries = calloc(entry_count, sizeof(*entries));
+    if (entries == NULL) {
+      fclose(fp);
+      humanized_log_error("host", "failed to allocate eliza memory buffer", ENOMEM);
+      return;
+    }
+  }
+
+  bool success = true;
+  int read_error = 0;
+  for (uint32_t idx = 0U; idx < entry_count; ++idx) {
+    if (fread(&entries[idx], sizeof(entries[idx]), 1U, fp) != 1U) {
+      success = false;
+      if (errno != 0) {
+        read_error = errno;
+      }
+      break;
+    }
+  }
+
+  fclose(fp);
+
+  if (!success) {
+    humanized_log_error("host", "failed to read eliza memory file", read_error != 0 ? read_error : EIO);
+    free(entries);
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  memset(host->eliza_memory, 0, sizeof(host->eliza_memory));
+  host->eliza_memory_count = 0U;
+  host->eliza_memory_next_id = header.next_id != 0U ? header.next_id : 1U;
+
+  uint64_t max_id = 0U;
+  for (uint32_t idx = 0U; idx < entry_count; ++idx) {
+    uint64_t entry_id = entries[idx].id != 0U ? entries[idx].id : (uint64_t)(idx + 1U);
+    if (idx < SSH_CHATTER_ELIZA_MEMORY_MAX) {
+      eliza_memory_entry_t *slot = &host->eliza_memory[host->eliza_memory_count++];
+      slot->id = entry_id;
+      slot->stored_at = (time_t)entries[idx].stored_at;
+      snprintf(slot->prompt, sizeof(slot->prompt), "%s", entries[idx].prompt);
+      snprintf(slot->reply, sizeof(slot->reply), "%s", entries[idx].reply);
+    }
+    if (entry_id > max_id) {
+      max_id = entry_id;
+    }
+  }
+
+  if (max_id >= host->eliza_memory_next_id) {
+    host->eliza_memory_next_id = (max_id == UINT64_MAX) ? UINT64_MAX : max_id + 1U;
+  }
+  if (host->eliza_memory_next_id == 0U) {
+    host->eliza_memory_next_id = (uint64_t)host->eliza_memory_count + 1U;
+  }
+
+  pthread_mutex_unlock(&host->lock);
+  free(entries);
+}
+
+static void host_eliza_memory_store(host_t *host, const char *prompt, const char *reply) {
+  if (host == NULL || prompt == NULL || reply == NULL) {
+    return;
+  }
+
+  char clean_prompt[SSH_CHATTER_MESSAGE_LIMIT];
+  char clean_reply[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(clean_prompt, sizeof(clean_prompt), "%s", prompt);
+  snprintf(clean_reply, sizeof(clean_reply), "%s", reply);
+  trim_whitespace_inplace(clean_prompt);
+  trim_whitespace_inplace(clean_reply);
+
+  pthread_mutex_lock(&host->lock);
+  if (host->eliza_memory_count >= SSH_CHATTER_ELIZA_MEMORY_MAX) {
+    memmove(host->eliza_memory, host->eliza_memory + 1,
+            (SSH_CHATTER_ELIZA_MEMORY_MAX - 1U) * sizeof(host->eliza_memory[0]));
+    host->eliza_memory_count = SSH_CHATTER_ELIZA_MEMORY_MAX - 1U;
+  }
+
+  eliza_memory_entry_t *entry = &host->eliza_memory[host->eliza_memory_count++];
+  if (host->eliza_memory_next_id == 0U) {
+    host->eliza_memory_next_id = 1U;
+  }
+  entry->id = host->eliza_memory_next_id;
+  if (host->eliza_memory_next_id < UINT64_MAX) {
+    host->eliza_memory_next_id += 1U;
+  }
+  entry->stored_at = time(NULL);
+  snprintf(entry->prompt, sizeof(entry->prompt), "%s", clean_prompt);
+  snprintf(entry->reply, sizeof(entry->reply), "%s", clean_reply);
+
+  host_eliza_memory_save_locked(host);
+  pthread_mutex_unlock(&host->lock);
+}
+
+static size_t host_eliza_memory_collect_tokens(const char *prompt, char tokens[][32], size_t max_tokens) {
+  if (tokens == NULL || max_tokens == 0U || prompt == NULL) {
+    return 0U;
+  }
+
+  size_t count = 0U;
+  size_t length = strlen(prompt);
+  size_t idx = 0U;
+  while (idx < length && count < max_tokens) {
+    while (idx < length && isspace((unsigned char)prompt[idx])) {
+      ++idx;
+    }
+    if (idx >= length) {
+      break;
+    }
+
+    size_t token_idx = 0U;
+    char buffer[32];
+    while (idx < length && !isspace((unsigned char)prompt[idx])) {
+      unsigned char ch = (unsigned char)prompt[idx];
+      if (token_idx + 1U < sizeof(buffer)) {
+        buffer[token_idx++] = (ch < 0x80U) ? (char)tolower(ch) : (char)ch;
+      }
+      ++idx;
+    }
+    buffer[token_idx] = '\0';
+
+    if (token_idx == 0U) {
+      continue;
+    }
+    if (token_idx < 3U && (unsigned char)buffer[0] < 0x80U) {
+      continue;
+    }
+
+    bool duplicate = false;
+    for (size_t existing = 0U; existing < count; ++existing) {
+      if (strcmp(tokens[existing], buffer) == 0) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) {
+      continue;
+    }
+
+    snprintf(tokens[count], 32U, "%s", buffer);
+    ++count;
+  }
+
+  return count;
+}
+
+static size_t host_eliza_memory_collect_context(host_t *host, const char *prompt, char *context,
+                                                size_t context_length) {
+  if (context == NULL || context_length == 0U) {
+    return 0U;
+  }
+
+  context[0] = '\0';
+  if (host == NULL || prompt == NULL) {
+    return 0U;
+  }
+
+  eliza_memory_entry_t snapshot[SSH_CHATTER_ELIZA_MEMORY_MAX];
+  size_t snapshot_count = 0U;
+
+  pthread_mutex_lock(&host->lock);
+  snapshot_count = host->eliza_memory_count;
+  if (snapshot_count > SSH_CHATTER_ELIZA_MEMORY_MAX) {
+    snapshot_count = SSH_CHATTER_ELIZA_MEMORY_MAX;
+  }
+  if (snapshot_count > 0U) {
+    memcpy(snapshot, host->eliza_memory, snapshot_count * sizeof(snapshot[0]));
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (snapshot_count == 0U) {
+    return 0U;
+  }
+
+  char tokens[SSH_CHATTER_ELIZA_TOKEN_LIMIT][32];
+  size_t token_count = host_eliza_memory_collect_tokens(prompt, tokens, SSH_CHATTER_ELIZA_TOKEN_LIMIT);
+
+  size_t best_indices[SSH_CHATTER_ELIZA_CONTEXT_LIMIT] = {0U};
+  size_t best_scores[SSH_CHATTER_ELIZA_CONTEXT_LIMIT] = {0U};
+  size_t best_count = 0U;
+
+  for (size_t idx = 0U; idx < snapshot_count; ++idx) {
+    const eliza_memory_entry_t *entry = &snapshot[idx];
+    size_t score = 0U;
+
+    if (token_count > 0U) {
+      for (size_t token_idx = 0U; token_idx < token_count; ++token_idx) {
+        if (tokens[token_idx][0] == '\0') {
+          continue;
+        }
+        if (string_contains_case_insensitive(entry->prompt, tokens[token_idx]) ||
+            string_contains_case_insensitive(entry->reply, tokens[token_idx])) {
+          ++score;
+        }
+      }
+
+      if (score == 0U) {
+        continue;
+      }
+    }
+
+    size_t recency_bonus = snapshot_count - idx;
+    if (recency_bonus > 4U) {
+      recency_bonus = 4U;
+    }
+    score += recency_bonus;
+
+    size_t insert_pos = best_count;
+    if (best_count < SSH_CHATTER_ELIZA_CONTEXT_LIMIT) {
+      ++best_count;
+    } else if (score <= best_scores[SSH_CHATTER_ELIZA_CONTEXT_LIMIT - 1U]) {
+      continue;
+    } else {
+      insert_pos = SSH_CHATTER_ELIZA_CONTEXT_LIMIT - 1U;
+    }
+
+    while (insert_pos > 0U && score > best_scores[insert_pos - 1U]) {
+      if (insert_pos < SSH_CHATTER_ELIZA_CONTEXT_LIMIT) {
+        best_scores[insert_pos] = best_scores[insert_pos - 1U];
+        best_indices[insert_pos] = best_indices[insert_pos - 1U];
+      }
+      --insert_pos;
+    }
+
+    best_scores[insert_pos] = score;
+    best_indices[insert_pos] = idx;
+  }
+
+  if (best_count == 0U && token_count == 0U) {
+    size_t fallback = snapshot_count < SSH_CHATTER_ELIZA_CONTEXT_LIMIT ? snapshot_count : SSH_CHATTER_ELIZA_CONTEXT_LIMIT;
+    for (size_t idx = 0U; idx < fallback; ++idx) {
+      best_indices[idx] = snapshot_count - idx - 1U;
+    }
+    best_count = fallback;
+  }
+
+  if (best_count == 0U) {
+    return 0U;
+  }
+
+  size_t offset = 0U;
+  for (size_t idx = 0U; idx < best_count; ++idx) {
+    const eliza_memory_entry_t *entry = &snapshot[best_indices[idx]];
+    char time_buffer[32];
+    time_buffer[0] = '\0';
+    if (entry->stored_at != 0) {
+      struct tm tm_value;
+      if (localtime_r(&entry->stored_at, &tm_value) != NULL) {
+        strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M", &tm_value);
+      }
+    }
+    if (time_buffer[0] == '\0') {
+      snprintf(time_buffer, sizeof(time_buffer), "-");
+    }
+
+    char block[SSH_CHATTER_MESSAGE_LIMIT * 2];
+    int written = snprintf(block, sizeof(block), "%s- [%s] user: %s\n  eliza: %s", idx == 0U ? "" : "\n",
+                           time_buffer,
+                           entry->prompt[0] != '\0' ? entry->prompt : "(empty)",
+                           entry->reply[0] != '\0' ? entry->reply : "(empty)");
+    if (written < 0) {
+      continue;
+    }
+
+    size_t block_len = (size_t)written;
+    if (block_len >= sizeof(block)) {
+      block_len = sizeof(block) - 1U;
+      block[block_len] = '\0';
+    }
+
+    if (offset + block_len >= context_length) {
+      size_t available = (offset < context_length) ? context_length - offset - 1U : 0U;
+      if (available > 0U) {
+        memcpy(context + offset, block, available);
+        offset += available;
+        context[offset] = '\0';
+      }
+      break;
+    }
+
+    memcpy(context + offset, block, block_len);
+    offset += block_len;
+    context[offset] = '\0';
+  }
+
+  return best_count;
+}
+
 static void host_bbs_resolve_path(host_t *host) {
   if (host == NULL) {
     return;
@@ -4973,6 +5564,209 @@ static void host_bbs_state_load(host_t *host) {
 
   pthread_mutex_unlock(&host->lock);
   fclose(fp);
+}
+
+static void host_bbs_watchdog_scan(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  bbs_post_t snapshot[SSH_CHATTER_BBS_MAX_POSTS];
+  size_t snapshot_count = 0U;
+
+  pthread_mutex_lock(&host->lock);
+  for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+    if (!host->bbs_posts[idx].in_use) {
+      continue;
+    }
+
+    if (snapshot_count < SSH_CHATTER_BBS_MAX_POSTS) {
+      snapshot[snapshot_count++] = host->bbs_posts[idx];
+    }
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (snapshot_count == 0U) {
+    return;
+  }
+
+  for (size_t idx = 0U; idx < snapshot_count; ++idx) {
+    const bbs_post_t *post = &snapshot[idx];
+
+    char content[SSH_CHATTER_BBS_BODY_LEN +
+                 (SSH_CHATTER_BBS_COMMENT_LEN * SSH_CHATTER_BBS_MAX_COMMENTS) + 1024U];
+    int written = snprintf(content, sizeof(content),
+                          "Title: %s\nTags: ",
+                          post->title[0] != '\0' ? post->title : "(untitled)");
+    if (written < 0) {
+      continue;
+    }
+
+    size_t offset = (size_t)written;
+    if (offset >= sizeof(content)) {
+      offset = sizeof(content) - 1U;
+    }
+
+    for (size_t tag = 0U; tag < post->tag_count; ++tag) {
+      const char *prefix = (tag == 0U) ? "" : ",";
+      int tag_written = snprintf(content + offset, sizeof(content) - offset, "%s%s", prefix,
+                                 post->tags[tag]);
+      if (tag_written < 0) {
+        break;
+      }
+      offset += (size_t)tag_written;
+      if (offset >= sizeof(content)) {
+        offset = sizeof(content) - 1U;
+        break;
+      }
+    }
+
+    if (offset + 2U < sizeof(content)) {
+      content[offset++] = '\n';
+      content[offset++] = '\n';
+      content[offset] = '\0';
+    } else {
+      content[sizeof(content) - 1U] = '\0';
+      offset = sizeof(content) - 1U;
+    }
+
+    int body_written = snprintf(content + offset, sizeof(content) - offset,
+                                "Body:\n%s",
+                                post->body[0] != '\0' ? post->body : "(empty)");
+    if (body_written < 0) {
+      continue;
+    }
+    offset += (size_t)body_written;
+    if (offset >= sizeof(content)) {
+      offset = sizeof(content) - 1U;
+    }
+
+    for (size_t comment = 0U; comment < post->comment_count; ++comment) {
+      if (offset + 2U >= sizeof(content)) {
+        break;
+      }
+      content[offset++] = '\n';
+      content[offset++] = '\n';
+      content[offset] = '\0';
+
+      const bbs_comment_t *entry = &post->comments[comment];
+      int comment_written = snprintf(content + offset, sizeof(content) - offset,
+                                     "Comment by %s:\n%s",
+                                     entry->author[0] != '\0' ? entry->author : "(anonymous)",
+                                     entry->text[0] != '\0' ? entry->text : "(empty)");
+      if (comment_written < 0) {
+        break;
+      }
+      offset += (size_t)comment_written;
+      if (offset >= sizeof(content)) {
+        offset = sizeof(content) - 1U;
+        break;
+      }
+    }
+
+    bool blocked = false;
+    char reason[256];
+    reason[0] = '\0';
+    if (!translator_moderate_text("bbs_post", content, &blocked, reason, sizeof(reason))) {
+      const char *error = translator_last_error();
+      if (error != NULL && error[0] != '\0') {
+        printf("[bbs] moderation unavailable for post #%" PRIu64 ": %s\n", post->id, error);
+      } else {
+        printf("[bbs] moderation unavailable for post #%" PRIu64 "\n", post->id);
+      }
+      break;
+    }
+
+    if (!blocked) {
+      continue;
+    }
+
+    trim_whitespace_inplace(reason);
+    const char *diagnostic = (reason[0] != '\0') ? reason : "policy violation";
+
+    pthread_mutex_lock(&host->lock);
+    bbs_post_t *live = host_find_bbs_post_locked(host, post->id);
+    if (live != NULL) {
+      host_clear_bbs_post_locked(host, live);
+      host_bbs_state_save_locked(host);
+    }
+    pthread_mutex_unlock(&host->lock);
+
+    if (live == NULL) {
+      continue;
+    }
+
+    printf("[bbs] removed post #%" PRIu64 " by %s (%s)\n", post->id,
+           post->author[0] != '\0' ? post->author : "unknown", diagnostic);
+
+    char notice[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(notice, sizeof(notice),
+             "* [eliza] removed BBS post #%" PRIu64 " by %s (%s).",
+             post->id,
+             post->author[0] != '\0' ? post->author : "unknown",
+             diagnostic);
+    host_history_record_system(host, notice);
+    chat_room_broadcast(&host->room, notice, NULL);
+  }
+
+}
+
+static void *host_bbs_watchdog_thread(void *arg) {
+  host_t *host = (host_t *)arg;
+  if (host == NULL) {
+    return NULL;
+  }
+
+  atomic_store(&host->bbs_watchdog_thread_running, true);
+  printf("[bbs] watchdog thread started\n");
+
+  while (!atomic_load(&host->bbs_watchdog_thread_stop)) {
+    host_bbs_watchdog_scan(host);
+
+    clock_gettime(CLOCK_MONOTONIC, &host->bbs_watchdog_last_run);
+
+    unsigned int remaining = SSH_CHATTER_BBS_REVIEW_INTERVAL_SECONDS;
+    while (remaining > 0U && !atomic_load(&host->bbs_watchdog_thread_stop)) {
+      unsigned int chunk = remaining > SSH_CHATTER_BBS_WATCHDOG_SLEEP_SECONDS
+                               ? SSH_CHATTER_BBS_WATCHDOG_SLEEP_SECONDS
+                               : remaining;
+      struct timespec pause = {
+          .tv_sec = (time_t)chunk,
+          .tv_nsec = 0L,
+      };
+      nanosleep(&pause, NULL);
+      if (remaining <= chunk) {
+        remaining = 0U;
+      } else {
+        remaining -= chunk;
+      }
+    }
+  }
+
+  atomic_store(&host->bbs_watchdog_thread_running, false);
+  printf("[bbs] watchdog thread stopped\n");
+  return NULL;
+}
+
+static void host_bbs_start_watchdog(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->bbs_watchdog_thread_initialized) {
+    return;
+  }
+
+  atomic_store(&host->bbs_watchdog_thread_stop, false);
+  atomic_store(&host->bbs_watchdog_thread_running, false);
+
+  int error = pthread_create(&host->bbs_watchdog_thread, NULL, host_bbs_watchdog_thread, host);
+  if (error != 0) {
+    printf("[bbs] failed to start watchdog thread: %s\n", strerror(error));
+    return;
+  }
+
+  host->bbs_watchdog_thread_initialized = true;
 }
 static void session_apply_saved_preferences(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->owner == NULL) {
@@ -6890,6 +7684,28 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
   ctx->translation_suppress_output = previous_suppress;
 }
 
+static void session_send_system_line_with_column_reset(session_ctx_t *ctx, const char *message) {
+  if (ctx == NULL || message == NULL) {
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  static const size_t kPrefixLength = sizeof(ANSI_CURSOR_COLUMN_RESET) - 1U;
+  if (strncmp(message, ANSI_CURSOR_COLUMN_RESET, kPrefixLength) == 0) {
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  char prefixed[SSH_CHATTER_MESSAGE_LIMIT + sizeof(ANSI_CURSOR_COLUMN_RESET)];
+  int written = snprintf(prefixed, sizeof(prefixed), "%s%s", ANSI_CURSOR_COLUMN_RESET, message);
+  if (written < 0 || (size_t)written >= sizeof(prefixed)) {
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  session_send_system_line(ctx, prefixed);
+}
+
 static void session_send_raw_text(session_ctx_t *ctx, const char *text) {
   if (ctx == NULL || ctx->channel == NULL || text == NULL) {
     return;
@@ -7658,15 +8474,42 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
       message_text = "";
     }
 
+    bool multiline_message = strchr(message_text, '\n') != NULL;
+    const char *header_body = message_text;
+    if (multiline_message) {
+      header_body = "shared ASCII art:";
+    }
+
     char header[SSH_CHATTER_MESSAGE_LIMIT + 128];
     if (entry->message_id > 0U) {
       snprintf(header, sizeof(header), "[#%" PRIu64 "] %s%s%s[%s]%s %s", entry->message_id, highlight, bold, color,
-               entry->username, ANSI_RESET, message_text);
+               entry->username, ANSI_RESET, header_body);
     } else {
       snprintf(header, sizeof(header), "%s%s%s[%s]%s %s", highlight, bold, color, entry->username, ANSI_RESET,
-               message_text);
+               header_body);
     }
     session_send_plain_line(ctx, header);
+
+    if (multiline_message) {
+      const char *line_start = message_text;
+      while (line_start != NULL) {
+        const char *newline = strchr(line_start, '\n');
+        size_t segment_length = newline != NULL ? (size_t)(newline - line_start) : strlen(line_start);
+        char line[SSH_CHATTER_MESSAGE_LIMIT + 1U];
+        if (segment_length >= sizeof(line)) {
+          segment_length = sizeof(line) - 1U;
+        }
+        if (segment_length > 0U) {
+          memcpy(line, line_start, segment_length);
+        }
+        line[segment_length] = '\0';
+        session_send_plain_line(ctx, line);
+        if (newline == NULL) {
+          break;
+        }
+        line_start = newline + 1;
+      }
+    }
 
     char attachment_line[SSH_CHATTER_ATTACHMENT_TARGET_LEN + 64];
     if (entry->attachment_type != CHAT_ATTACHMENT_NONE && entry->attachment_target[0] != '\0') {
@@ -8184,7 +9027,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/video <url> [caption] - share a video link",
       "/audio <url> [caption] - share an audio clip",
       "/files <url> [caption] - share a downloadable file",
-      "/asciiart           - open the ASCII art composer (max 64 lines, 1/min)",
+      "/asciiart           - open the ASCII art composer (max 64 lines, 1/10 min per IP)",
       "/game <tetris|liargame> - start a minigame in the chat (use /suspend! or Ctrl+Z to exit)",
       "Up/Down arrows           - scroll recent chat history",
       "/color (text;highlight[;bold]) - style your handle",
@@ -8197,6 +9040,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/gemini <on|off>       - toggle Gemini provider (operator only)",
       "/gemini-unfreeze      - clear automatic Gemini cooldown (operator only)",
       "/eliza <on|off>        - toggle the eliza moderator persona (operator only)",
+      "/eliza-chat <message>  - chat with eliza using shared memories",
       "/chat-spacing <0-5>    - reserve blank lines before translated captions in chat",
       "/palette <name>        - apply a predefined interface palette (/palette list)",
       "/today               - discover today's function (once per day)",
@@ -8217,6 +9061,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/kick <username>      - disconnect a user (operator only)",
       "/ban <username>       - ban a user (operator only)",
       "/banlist             - list active bans (operator only)",
+      "/delete-msg <id|start-end> - remove chat history messages (operator only)",
       "/block <user|ip>      - hide messages from a user or IP locally (/block list to review)",
       "/unblock <target|all> - remove a local block entry",
       "/pardon <user|ip>     - remove a ban (operator only)",
@@ -10132,6 +10977,111 @@ static void session_handle_revoke(session_ctx_t *ctx, const char *arguments) {
   session_send_system_line(ctx, message);
 }
 
+static void session_handle_delete_message(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
+    session_send_system_line(ctx, "Only operators may delete messages.");
+    return;
+  }
+
+  static const char *kUsage = "Usage: /delete-msg <id|start-end>";
+  if (arguments == NULL) {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  uint64_t start_id = 0U;
+  uint64_t end_id = 0U;
+  char *dash = strchr(working, '-');
+  if (dash != NULL) {
+    *dash = '\0';
+    char *end_token = dash + 1;
+    trim_whitespace_inplace(working);
+    trim_whitespace_inplace(end_token);
+    if (working[0] == '\0' || end_token[0] == '\0') {
+      session_send_system_line(ctx, kUsage);
+      return;
+    }
+
+    char *endptr = NULL;
+    errno = 0;
+    unsigned long long start_value = strtoull(working, &endptr, 10);
+    if (errno != 0 || endptr == NULL || *endptr != '\0' || start_value == 0ULL) {
+      session_send_system_line(ctx, kUsage);
+      return;
+    }
+
+    errno = 0;
+    unsigned long long end_value = strtoull(end_token, &endptr, 10);
+    if (errno != 0 || endptr == NULL || *endptr != '\0' || end_value == 0ULL) {
+      session_send_system_line(ctx, kUsage);
+      return;
+    }
+
+    start_id = (uint64_t)start_value;
+    end_id = (uint64_t)end_value;
+    if (start_id > end_id) {
+      session_send_system_line(ctx, "Start identifier must be less than or equal to the end identifier.");
+      return;
+    }
+  } else {
+    char *endptr = NULL;
+    errno = 0;
+    unsigned long long value = strtoull(working, &endptr, 10);
+    if (errno != 0 || endptr == NULL || *endptr != '\0' || value == 0ULL) {
+      session_send_system_line(ctx, kUsage);
+      return;
+    }
+    start_id = (uint64_t)value;
+    end_id = start_id;
+  }
+
+  uint64_t first_removed = 0U;
+  uint64_t last_removed = 0U;
+  size_t replies_removed = 0U;
+  size_t removed = host_history_delete_range(ctx->owner, start_id, end_id, &first_removed, &last_removed, &replies_removed);
+  if (removed == 0U) {
+    session_send_system_line(ctx, "No chat messages matched that identifier.");
+    return;
+  }
+
+  char range_label[64];
+  if (last_removed != 0U && last_removed != first_removed) {
+    snprintf(range_label, sizeof(range_label), "#%" PRIu64 "-#%" PRIu64, first_removed, last_removed);
+  } else {
+    snprintf(range_label, sizeof(range_label), "#%" PRIu64, first_removed);
+  }
+
+  char reply_note[64];
+  if (replies_removed > 0U) {
+    snprintf(reply_note, sizeof(reply_note), " (%zu repl%s removed)", replies_removed, replies_removed == 1U ? "y" : "ies");
+  } else {
+    reply_note[0] = '\0';
+  }
+
+  char acknowledgement[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(acknowledgement, sizeof(acknowledgement), "Removed %zu message%s (%s)%s.", removed,
+           removed == 1U ? "" : "s", range_label, reply_note);
+  session_send_system_line(ctx, acknowledgement);
+
+  char notice[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(notice, sizeof(notice), "* [%s] removed %s %s%s.", ctx->user.name, removed == 1U ? "message" : "messages",
+           range_label, reply_note);
+  host_history_record_system(ctx->owner, notice);
+  chat_room_broadcast(&ctx->owner->room, notice, NULL);
+}
+
 static void session_handle_poll(session_ctx_t *ctx, const char *arguments) {
   static const char *kUsage =
       "Usage: /poll <question>|<option1>|<option2>[|option3][|option4][|option5] or /poll to view current poll";
@@ -10904,7 +11854,7 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, 
   while (body_cursor != NULL && *body_cursor != '\0') {
     const char *newline = strchr(body_cursor, '\n');
     if (newline == NULL) {
-      session_send_system_line(ctx, body_cursor);
+      session_send_system_line_with_column_reset(ctx, body_cursor);
       break;
     }
     size_t len = (size_t)(newline - body_cursor);
@@ -10914,7 +11864,7 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, 
     }
     memcpy(line, body_cursor, len);
     line[len] = '\0';
-    session_send_system_line(ctx, line);
+    session_send_system_line_with_column_reset(ctx, line);
     body_cursor = newline + 1;
   }
   if (post->body[0] == '\0') {
@@ -10932,7 +11882,7 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, 
       char line[SSH_CHATTER_MESSAGE_LIMIT];
       snprintf(line, sizeof(line), "[%zu] %s (%s)", idx + 1U, comment->author, comment_time);
       session_send_system_line(ctx, line);
-      session_send_system_line(ctx, comment->text);
+      session_send_system_line_with_column_reset(ctx, comment->text);
     }
   }
 
@@ -11505,6 +12455,68 @@ static void session_bbs_regen_post(session_ctx_t *ctx, uint64_t id) {
   session_bbs_render_post(ctx, &snapshot, "Post bumped to the top.");
 }
 
+static bool host_asciiart_cooldown_active(host_t *host, const char *ip, const struct timespec *now,
+                                          long *remaining_seconds) {
+  if (host == NULL || ip == NULL || ip[0] == '\0') {
+    if (remaining_seconds != NULL) {
+      *remaining_seconds = 0L;
+    }
+    return false;
+  }
+
+  struct timespec current = {0, 0};
+  if (now != NULL) {
+    current = *now;
+  } else if (clock_gettime(CLOCK_MONOTONIC, &current) != 0) {
+    current.tv_sec = time(NULL);
+    current.tv_nsec = 0L;
+  }
+
+  bool active = false;
+  long remaining = 0L;
+
+  pthread_mutex_lock(&host->lock);
+  join_activity_entry_t *entry = host_find_join_activity_locked(host, ip);
+  if (entry != NULL && entry->asciiart_has_cooldown) {
+    struct timespec expiry = entry->last_asciiart_post;
+    expiry.tv_sec += SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS;
+    if (timespec_compare(&current, &expiry) >= 0) {
+      entry->asciiart_has_cooldown = false;
+    } else {
+      active = true;
+      struct timespec diff = timespec_diff(&expiry, &current);
+      remaining = diff.tv_sec;
+      if (diff.tv_nsec > 0L) {
+        ++remaining;
+      }
+      if (remaining < 0L) {
+        remaining = 0L;
+      }
+    }
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (remaining_seconds != NULL) {
+    *remaining_seconds = active ? remaining : 0L;
+  }
+
+  return active;
+}
+
+static void host_asciiart_register_post(host_t *host, const char *ip, const struct timespec *when) {
+  if (host == NULL || ip == NULL || ip[0] == '\0' || when == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  join_activity_entry_t *entry = host_ensure_join_activity_locked(host, ip);
+  if (entry != NULL) {
+    entry->last_asciiart_post = *when;
+    entry->asciiart_has_cooldown = true;
+  }
+  pthread_mutex_unlock(&host->lock);
+}
+
 static void session_asciiart_reset(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return;
@@ -11531,33 +12543,43 @@ static bool session_asciiart_cooldown_active(session_ctx_t *ctx, struct timespec
     *now = current;
   }
 
-  if (!ctx->asciiart_has_cooldown) {
+  long session_remaining = 0L;
+  bool session_active = false;
+  if (ctx->asciiart_has_cooldown) {
+    struct timespec expiry = ctx->last_asciiart_post;
+    expiry.tv_sec += SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS;
+    if (timespec_compare(&current, &expiry) >= 0) {
+      ctx->asciiart_has_cooldown = false;
+    } else {
+      session_active = true;
+      struct timespec diff = timespec_diff(&expiry, &current);
+      session_remaining = diff.tv_sec;
+      if (diff.tv_nsec > 0L) {
+        ++session_remaining;
+      }
+      if (session_remaining < 0L) {
+        session_remaining = 0L;
+      }
+    }
+  }
+
+  long ip_remaining = 0L;
+  bool ip_active = host_asciiart_cooldown_active(ctx->owner, ctx->client_ip, &current, &ip_remaining);
+
+  if (!session_active && !ip_active) {
     if (remaining_seconds != NULL) {
       *remaining_seconds = 0L;
     }
     return false;
   }
 
-  struct timespec expiry = ctx->last_asciiart_post;
-  expiry.tv_sec += SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS;
-  if (timespec_compare(&current, &expiry) >= 0) {
-    ctx->asciiart_has_cooldown = false;
-    if (remaining_seconds != NULL) {
-      *remaining_seconds = 0L;
-    }
-    return false;
+  long max_remaining = session_active ? session_remaining : 0L;
+  if (ip_active && ip_remaining > max_remaining) {
+    max_remaining = ip_remaining;
   }
 
   if (remaining_seconds != NULL) {
-    struct timespec diff = timespec_diff(&expiry, &current);
-    long seconds = diff.tv_sec;
-    if (diff.tv_nsec > 0L) {
-      ++seconds;
-    }
-    if (seconds < 0L) {
-      seconds = 0L;
-    }
-    *remaining_seconds = seconds;
+    *remaining_seconds = max_remaining;
   }
 
   return true;
@@ -11594,7 +12616,7 @@ static void session_asciiart_begin(session_ctx_t *ctx) {
   session_asciiart_reset(ctx);
   ctx->asciiart_pending = true;
 
-  session_send_system_line(ctx, "ASCII art composer ready (max 64 lines).");
+  session_send_system_line(ctx, "ASCII art composer ready (max 64 lines, 10-minute cooldown per IP).");
   session_send_system_line(ctx,
                            "Type " SSH_CHATTER_ASCIIART_TERMINATOR " on a line by itself or press Ctrl+S to finish.");
   session_send_system_line(ctx, "Press Ctrl+A to cancel the draft.");
@@ -11628,6 +12650,7 @@ static void session_asciiart_commit(session_ctx_t *ctx) {
 
   ctx->last_asciiart_post = now;
   ctx->asciiart_has_cooldown = true;
+  host_asciiart_register_post(ctx->owner, ctx->client_ip, &now);
 
   chat_history_entry_t entry = {0};
   if (!host_history_record_user(ctx->owner, ctx, ctx->asciiart_buffer, &entry)) {
@@ -11679,21 +12702,27 @@ static void session_asciiart_capture_line(session_ctx_t *ctx, const char *line) 
   }
 
   size_t available = sizeof(ctx->asciiart_buffer) - ctx->asciiart_length - 1U;
-  if (available == 0U) {
+  const size_t prefix_len = sizeof(ANSI_CURSOR_COLUMN_RESET) - 1U;
+  const size_t newline_cost = ctx->asciiart_length > 0U ? 1U : 0U;
+  if (available < newline_cost + prefix_len) {
     session_send_system_line(ctx, "ASCII art buffer is full. Additional text ignored.");
     return;
   }
 
   size_t line_length = strlen(line);
-  bool needs_newline = ctx->asciiart_length > 0U;
-  if (needs_newline) {
-    ctx->asciiart_buffer[ctx->asciiart_length++] = '\n';
-    available--;
+  size_t max_line_length = available - newline_cost - prefix_len;
+  if (line_length > max_line_length) {
+    line_length = max_line_length;
+    session_send_system_line(ctx, "Line truncated to fit within the ASCII art size limit.");
   }
 
-  if (line_length > available) {
-    line_length = available;
-    session_send_system_line(ctx, "Line truncated to fit within the ASCII art size limit.");
+  if (ctx->asciiart_length > 0U) {
+    ctx->asciiart_buffer[ctx->asciiart_length++] = '\n';
+  }
+
+  if (prefix_len > 0U) {
+    memcpy(ctx->asciiart_buffer + ctx->asciiart_length, ANSI_CURSOR_COLUMN_RESET, prefix_len);
+    ctx->asciiart_length += prefix_len;
   }
 
   if (line_length > 0U) {
@@ -13824,6 +14853,92 @@ static void session_handle_eliza(session_ctx_t *ctx, const char *arguments) {
   session_send_system_line(ctx, "Usage: /eliza <on|off>");
 }
 
+static void session_handle_eliza_chat(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  static const char *kUsage = "Usage: /eliza-chat <message>";
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  char prompt[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(prompt, sizeof(prompt), "%s", arguments);
+  trim_whitespace_inplace(prompt);
+
+  if (prompt[0] == '\0') {
+    session_send_system_line(ctx, kUsage);
+    return;
+  }
+
+  host_t *host = ctx->owner;
+  if (!atomic_load(&host->eliza_enabled)) {
+    (void)host_eliza_enable(host);
+  }
+
+  char context[SSH_CHATTER_ELIZA_CONTEXT_BUFFER];
+  context[0] = '\0';
+  size_t context_count = host_eliza_memory_collect_context(host, prompt, context, sizeof(context));
+
+  char formatted_prompt[sizeof(context) + (SSH_CHATTER_MESSAGE_LIMIT * 3U)];
+  if (context_count > 0U && context[0] != '\0') {
+    snprintf(formatted_prompt, sizeof(formatted_prompt),
+             "You are eliza, a calm and safety-focused chat companion in a shared room."
+             " When helpful, remind people of legal and safety boundaries and encourage contacting local authorities for"
+             " imminent danger. Ground your reply using the prior memories below.\n\n"
+             "Memories:\n%s\n\nUser (%s) says:\n%s\n\nRespond as eliza with empathy and brevity.",
+             context, ctx->user.name, prompt);
+  } else {
+    snprintf(formatted_prompt, sizeof(formatted_prompt),
+             "You are eliza, a calm and safety-focused chat companion in a shared room."
+             " When helpful, remind people of legal and safety boundaries and encourage contacting local authorities for"
+             " imminent danger.\n\nUser (%s) says:\n%s\n\nRespond as eliza with empathy and brevity.",
+             ctx->user.name, prompt);
+  }
+
+  session_send_private_message_line(ctx, ctx, "you -> eliza", prompt);
+
+  char reply[SSH_CHATTER_MESSAGE_LIMIT];
+  reply[0] = '\0';
+
+  if (!translator_eliza_respond(formatted_prompt, reply, sizeof(reply))) {
+    const char *error = translator_last_error();
+    if (error != NULL && error[0] != '\0') {
+      char line[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(line, sizeof(line), "eliza can't reply right now (%s).", error);
+      session_send_system_line(ctx, line);
+    } else {
+      session_send_system_line(ctx, "eliza can't reply right now. Try again in a moment.");
+    }
+    return;
+  }
+
+  trim_whitespace_inplace(reply);
+  if (reply[0] == '\0') {
+    session_send_system_line(ctx, "eliza didn't have anything to add.");
+    return;
+  }
+
+  host_eliza_memory_store(host, prompt, reply);
+
+  session_ctx_t palette = {0};
+  palette.user_color_code = host->user_theme.userColor;
+  palette.user_highlight_code = host->user_theme.highlight;
+  palette.user_is_bold = host->user_theme.isBold;
+
+  session_send_private_message_line(ctx, &palette, "eliza -> you", reply);
+
+  clock_gettime(CLOCK_MONOTONIC, &host->eliza_last_action);
+  ctx->last_message_time = host->eliza_last_action;
+  ctx->has_last_message_time = true;
+
+  printf("[eliza-chat] %s -> eliza: %s\n", ctx->user.name, prompt);
+  printf("[eliza-chat] eliza -> %s: %s\n", ctx->user.name, reply);
+}
+
 static void session_handle_gemini_unfreeze(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;
@@ -14140,6 +15255,7 @@ static bool host_register_join_attempt(host_t *host, const char *username, const
 
   bool ban_ip = false;
   bool ban_same_name = false;
+  bool exempt_ip = false;
 
   pthread_mutex_lock(&host->lock);
   join_activity_entry_t *entry = host_ensure_join_activity_locked(host, ip);
@@ -14172,7 +15288,11 @@ static bool host_register_join_attempt(host_t *host, const char *username, const
 
   entry->last_attempt = now;
 
-  if (within_window && entry->rapid_attempts >= SSH_CHATTER_JOIN_IP_THRESHOLD) {
+  if (host_ip_has_grant_locked(host, ip)) {
+    exempt_ip = true;
+  }
+
+  if (!exempt_ip && within_window && entry->rapid_attempts >= SSH_CHATTER_JOIN_IP_THRESHOLD) {
     ban_ip = true;
   }
   if (within_window && entry->same_name_attempts >= SSH_CHATTER_JOIN_NAME_THRESHOLD) {
@@ -14180,7 +15300,7 @@ static bool host_register_join_attempt(host_t *host, const char *username, const
   }
   pthread_mutex_unlock(&host->lock);
 
-  if (ban_ip || ban_same_name) {
+  if ((ban_ip || ban_same_name) && !exempt_ip) {
     const char *ban_user = (username != NULL && username[0] != '\0') ? username : "";
     if (host_add_ban_entry(host, ban_user, ip)) {
       printf("[auto-ban] %s flagged for rapid reconnects\n", ip);
@@ -14466,6 +15586,10 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_ban(ctx, args);
     return;
   }
+  else if (session_parse_command(line, "/delete-msg", &args)) {
+    session_handle_delete_message(ctx, args);
+    return;
+  }
   else if (session_parse_command(line, "/block", &args)) {
     session_handle_block(ctx, args);
     return;
@@ -14524,6 +15648,10 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   }
   else if (session_parse_command(line, "/eliza", &args)) {
     session_handle_eliza(ctx, args);
+    return;
+  }
+  else if (session_parse_command(line, "/eliza-chat", &args)) {
+    session_handle_eliza_chat(ctx, args);
     return;
   }
   else if (session_parse_command(line, "/chat-spacing", &args)) {
@@ -15743,6 +16871,9 @@ void host_init(host_t *host, auth_profile_t *auth) {
   memset(host->replies, 0, sizeof(host->replies));
   host->reply_count = 0U;
   host->next_reply_id = 1U;
+  memset(host->eliza_memory, 0, sizeof(host->eliza_memory));
+  host->eliza_memory_count = 0U;
+  host->eliza_memory_next_id = 1U;
   snprintf(host->version, sizeof(host->version), "ssh-chatter (C, rolling release)");
   snprintf(host->motd, sizeof(host->motd),
   "Welcome to ssh-chat!\n"
@@ -15776,11 +16907,18 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_ban_resolve_path(host);
   host->reply_state_file_path[0] = '\0';
   host_reply_state_resolve_path(host);
+  host->eliza_memory_file_path[0] = '\0';
+  host_eliza_memory_resolve_path(host);
   host->security_clamav_thread_initialized = false;
   atomic_store(&host->security_clamav_thread_running, false);
   atomic_store(&host->security_clamav_thread_stop, false);
   host->security_clamav_last_run.tv_sec = 0;
   host->security_clamav_last_run.tv_nsec = 0;
+  host->bbs_watchdog_thread_initialized = false;
+  atomic_store(&host->bbs_watchdog_thread_running, false);
+  atomic_store(&host->bbs_watchdog_thread_stop, false);
+  host->bbs_watchdog_last_run.tv_sec = 0;
+  host->bbs_watchdog_last_run.tv_nsec = 0;
   host_security_configure(host);
   pthread_mutex_init(&host->lock, NULL);
   poll_state_reset(&host->poll);
@@ -15833,6 +16971,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_bbs_state_load(host);
   host_ban_state_load(host);
   host_reply_state_load(host);
+  host_eliza_memory_load(host);
 
   host->clients = client_manager_create(host);
   if (host->clients == NULL) {
@@ -15845,6 +16984,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
 
   }
   host_security_start_clamav_backend(host);
+  host_bbs_start_watchdog(host);
 }
 
 static bool host_try_load_motd_from_path(host_t *host, const char *path) {
@@ -16019,6 +17159,13 @@ void host_shutdown(host_t *host) {
     pthread_join(host->security_clamav_thread, NULL);
     host->security_clamav_thread_initialized = false;
     atomic_store(&host->security_clamav_thread_running, false);
+  }
+
+  if (host->bbs_watchdog_thread_initialized) {
+    atomic_store(&host->bbs_watchdog_thread_stop, true);
+    pthread_join(host->bbs_watchdog_thread, NULL);
+    host->bbs_watchdog_thread_initialized = false;
+    atomic_store(&host->bbs_watchdog_thread_running, false);
   }
 
   if (host->web_client != NULL) {

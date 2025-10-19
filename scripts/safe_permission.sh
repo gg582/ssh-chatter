@@ -62,6 +62,7 @@ DEFAULT_TARGETS=(
   "${CHATTER_VOTE_FILE:-$STATE_ROOT/vote_state.dat}"
   "${CHATTER_GEMINI_COOLDOWN_FILE:-$STATE_ROOT/gemini_cooldown.dat}"
   "${CHATTER_STATE_FILE:-$STATE_ROOT/chatter_state.dat}"
+  "${CHATTER_ELIZA_MEMORY_FILE:-$STATE_ROOT/eliza_memory.dat}"
 )
 
 declare -a TARGETS=()

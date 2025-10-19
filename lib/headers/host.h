@@ -50,7 +50,8 @@
 #define SSH_CHATTER_STATUS_LEN 128
 #define SSH_CHATTER_ASCIIART_MAX_LINES 64
 #define SSH_CHATTER_ASCIIART_BUFFER_LEN 1024
-#define SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS 60
+#define SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS 600
+#define SSH_CHATTER_ELIZA_MEMORY_MAX 128
 #define SSH_CHATTER_TETRIS_WIDTH 10
 #define SSH_CHATTER_TETRIS_HEIGHT 20
 #define SSH_CHATTER_TETRIS_GRAVITY_THRESHOLD 5U
@@ -75,6 +76,8 @@ typedef struct join_activity_entry {
   size_t same_name_attempts;
   struct timespec last_suspicious;
   size_t suspicious_events;
+  bool asciiart_has_cooldown;
+  struct timespec last_asciiart_post;
 } join_activity_entry_t;
 
 typedef struct client_manager client_manager_t;
@@ -126,6 +129,13 @@ typedef struct chat_reply_entry {
   char username[SSH_CHATTER_USERNAME_LEN];
   char message[SSH_CHATTER_MESSAGE_LIMIT];
 } chat_reply_entry_t;
+
+typedef struct eliza_memory_entry {
+  uint64_t id;
+  time_t stored_at;
+  char prompt[SSH_CHATTER_MESSAGE_LIMIT];
+  char reply[SSH_CHATTER_MESSAGE_LIMIT];
+} eliza_memory_entry_t;
 
 typedef struct session_block_entry {
   bool in_use;
@@ -411,6 +421,11 @@ typedef struct host {
   _Atomic bool security_clamav_thread_running;
   _Atomic bool security_clamav_thread_stop;
   struct timespec security_clamav_last_run;
+  pthread_t bbs_watchdog_thread;
+  bool bbs_watchdog_thread_initialized;
+  _Atomic bool bbs_watchdog_thread_running;
+  _Atomic bool bbs_watchdog_thread_stop;
+  struct timespec bbs_watchdog_last_run;
   poll_state_t poll;
   named_poll_state_t named_polls[SSH_CHATTER_MAX_NAMED_POLLS];
   size_t named_poll_count;
@@ -423,6 +438,10 @@ typedef struct host {
   _Atomic bool eliza_enabled;
   _Atomic bool eliza_announced;
   struct timespec eliza_last_action;
+  char eliza_memory_file_path[PATH_MAX];
+  eliza_memory_entry_t eliza_memory[SSH_CHATTER_ELIZA_MEMORY_MAX];
+  size_t eliza_memory_count;
+  uint64_t eliza_memory_next_id;
   struct {
     char ip[SSH_CHATTER_IP_LEN];
   } operator_grants[SSH_CHATTER_MAX_GRANTS];
