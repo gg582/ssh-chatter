@@ -1,12 +1,33 @@
 CC := cc
-CFLAGS = -std=c2x -O1 \
+CFLAGS = -std=c2x -Ofast \
         -Ilib/headers \
         -Wall -Wextra -Werror -Wshadow -Wformat=2 -Wundef -Wconversion -Wdouble-promotion \
         -fsanitize=address,leak,undefined,shift,bounds,float-divide-by-zero,vptr \
         -fsanitize-address-use-after-scope \
         -fno-omit-frame-pointer -fstack-protector-strong -fno-common \
         -fPIC \
-        -g
+        -g \
+	-march=native \
+	-flto=$(shell nproc) \
+	-fomit-frame-pointer \
+	-fno-signed-zeros \
+	-funroll-loops \
+	-falign-functions=32 \
+	-falign-loops=32 \
+	-ftree-vectorize \
+	-fno-math-errno \
+	-fmerge-all-constants \
+	-fipa-pta \
+	-fdevirtualize-at-ltrans \
+	-fpeel-loops \
+	-fweb \
+	-fdata-sections \
+       	-ffunction-sections \
+	-fno-asynchronous-unwind-tables \
+	-fno-stack-protector\
+	-fstrict-aliasing \
+	-fstrict-overflow \
+	-fno-trapping-math
 COMMON_LDFLAGS = -fsanitize=address,leak,undefined,shift,bounds,float-divide-by-zero,vptr \
         -lpthread -ldl -lcurl
 LDFLAGS = $(COMMON_LDFLAGS) -lssh

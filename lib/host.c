@@ -401,6 +401,29 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
   {"deep-blue", "IBM Supercomputer monitoring interface style", "white", "blue", true, "cyan", "blue", "white", true},
   {"win10", "High contrast palette reminiscent of Windows 10", "cyan", "blue", true, "white", "blue", "yellow", true},
   {"korea", "Taegeuk-gi inspired black base with red and blue accents", "bright-blue", "blue", true, "bright-white", "blue", "red", true},
+  {"neo-seoul", "Neon skyline of Gangnam and Hongdae: glowing magenta and cyan lights on dark asphalt", "bright-magenta", "black", true, "bright-cyan", "black", "cyan", true},
+  {"korean-palace", "Royal dancheong harmony: jade green, vermilion red, and gold over black lacquer", "bright-yellow", "black", true, "red", "black", "green", false},
+  {"daegu-summer", "Blazing red-orange heat and festival gold under night sky", "bright-red", "black", true, "bright-yellow", "black", "yellow", true},
+  {"kangwon-winter", "Cold white peaks and blue shadows of Gangwon’s frozen dawn", "bright-white", "blue", true, "bright-cyan", "blue", "white", true},
+  {"jeolla-seaside", "Quiet sea and horizon light of Mokpo and Yeosu nights", "bright-cyan", "black", false, "cyan", "black", "bright-blue", true},
+  {"daejeon-tech", "Futuristic research district glow: clean LED light on steel gray night", "bright-white", "black", true, "bright-white", "black", "bright-cyan", true},
+  {"jeju-rock", "Volcanic basalt, moss green, and deep sea mist of Jeju Island", "bright-green", "black", false, "bright-cyan", "black", "green", false},
+  {"busan-harbor", "Night harbor lights and steel-blue waters of Busan Port", "bright-blue", "black", true, "cyan", "black", "bright-blue", true},
+  {"incheon-industrial", "Metallic cranes and sodium streetlights of Incheon docks", "bright-yellow", "black", true, "bright-yellow", "black", "bright-red", true},
+  {"ulsan-steel", "Molten metal glow inside heavy industry furnace halls", "bright-red", "black", true, "bright-yellow", "black", "red", true},
+  {"chungcheong-field", "Muted greens and dust gold of inland farmlands", "yellow", "black", false, "green", "black", "yellow", false},
+  {"sejong-night", "Balanced dark-blue administration city under cool LED light", "bright-white", "blue", true, "bright-cyan", "blue", "white", true},
+  {"han", "Deep unresolved sorrow and austere beauty pale blue and gray layers", "bright-cyan", "blue", false, "white", "blue", "bright-white", false},
+  {"jeong", "Warm emotional bonds and communal comfort soft red and gold glow on darkness", "bright-red", "black", true, "yellow", "black", "bright-yellow", true},
+  {"heung", "Joyful energy and dynamic spirit: brilliant magenta and yellow over black", "bright-magenta", "black", true, "bright-yellow", "black", "magenta", true},
+  {"pcbang-night", "Late-night gaming neon: cold blue LEDs, energy drink, and so on", "bright-cyan", "black", true, "bright-red", "black", "bright-blue", true},
+  {"nunchi", "Subtle perception and quiet adaptation: dim neutral tones with cyan glints", "white", "black", false, "bright-cyan", "black", "cyan", false},
+  {"alcohol", "Soju nights and neon haze: industrial green bottles and pink laughter", "bright-green", "black", true, "bright-magenta", "black", "green", true},
+  {"korean-hardcore", "I don't wanna die yet! neon blood and cold steel over asphalt black", "bright-red", "black", true, "bright-blue", "black", "bright-red", true},
+  {"korean-nationalists", "Slightly exclusive types. you know the kind.", "bright-green", "black", true, "bright-blue", "black", "bright-cyan", true},
+
+  {"medieval-korea", "Celadon grace and temple gold over aged ink-black lacquer", "bright-cyan", "black", false, "bright-yellow", "black", "cyan", false},
+  {"stoneage-korea", "Primitive contrast of pale clothing and ground stone tools - raw earth and silence", "bright-white", "black", false, "bright-yellow", "black", "white", false},
 };
 
 typedef int (*accept_channel_fn_t)(ssh_message, ssh_channel);
@@ -1191,8 +1214,7 @@ static void session_describe_peer(ssh_session session, char *buffer, size_t len)
     return;
   }
 
-  strncpy(buffer, host, len - 1U);
-  buffer[len - 1U] = '\0';
+  snprintf(buffer, len, "%s", host);
 }
 
 typedef enum {
@@ -5969,7 +5991,9 @@ static void session_render_banner(session_ctx_t *ctx) {
   }
 
   char welcome[SSH_CHATTER_MESSAGE_LIMIT];
-  size_t name_len = strlen(ctx->user.name);
+  size_t name_len = 0;
+  if (ctx->user.name[0] != '\0')
+    name_len = strlen(ctx->user.name);
   int welcome_padding = 47 - (int)name_len;
   if (welcome_padding < 0) {
     welcome_padding = 0;
@@ -11126,9 +11150,11 @@ static void session_game_tetris_clear_lines(session_ctx_t *ctx, unsigned *cleare
     }
     ++removed;
     for (int move_row = row; move_row > 0; --move_row) {
-      memcpy(state->board[move_row], state->board[move_row - 1], sizeof(state->board[move_row]));
+    memcpy(state->board[move_row],
+      state->board[move_row - 1],
+      (size_t)state->column * sizeof(state->board[0][0]));
     }
-    memset(state->board[0], 0, sizeof(state->board[0]));
+    memset(state->board[0], 0, (size_t)state->column * sizeof(state->board[0][0]));
   }
   if (cleared != NULL) {
     *cleared = removed;
@@ -12483,7 +12509,7 @@ static void session_handle_translate_scope(session_ctx_t *ctx, const char *argum
     return;
   }
 
-  session_send_system_line(ctx, "Usage: /translate-scope <chat|all>");
+  session_send_system_line(ctx, "Usage: /translate-scope <chat-nohistory|chat|all>");
 }
 
 static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
