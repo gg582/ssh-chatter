@@ -11685,11 +11685,13 @@ static void session_game_tetris_clear_lines(session_ctx_t *ctx, unsigned *cleare
     }
     ++removed;
     for (int move_row = row; move_row > 0; --move_row) {
-    memcpy(state->board[move_row],
-      state->board[move_row - 1],
-      (size_t)state->column * sizeof(state->board[0][0]));
+      for (int move_col = 0; move_col < SSH_CHATTER_TETRIS_WIDTH; ++move_col) {
+        state->board[move_row][move_col] = state->board[move_row - 1][move_col];
+      }
     }
-    memset(state->board[0], 0, (size_t)state->column * sizeof(state->board[0][0]));
+    for (int move_col = 0; move_col < SSH_CHATTER_TETRIS_WIDTH; ++move_col) {
+      state->board[0][move_col] = 0;
+    }
   }
   if (cleared != NULL) {
     *cleared = removed;
