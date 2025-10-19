@@ -55,10 +55,10 @@
 #define SSH_CHATTER_BBS_TERMINATOR ">/__BBS_END>"
 #define SSH_CHATTER_ASCIIART_TERMINATOR ">/__ARTWORK_END>"
 #define SSH_CHATTER_TETROMINO_SIZE 4
-#define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT 3U
+#define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT ((unsigned int)INT_MAX)
 #define SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM "ssh-rsa"
 #define SESSION_CHANNEL_TIMEOUT (-2)
-#define SSH_CHATTER_CHANNEL_RECOVERY_LIMIT 5U
+#define SSH_CHATTER_CHANNEL_RECOVERY_LIMIT ((unsigned int)INT_MAX)
 #define SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS 200000000L
 #define SSH_CHATTER_TRANSLATION_SEGMENT_GUARD 32U
 #define SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS 150000000L
@@ -14593,6 +14593,14 @@ bool host_snapshot_last_captcha(host_t *host, char *question, size_t question_le
   return has_captcha;
 }
 
+static void host_sleep_after_error(void) {
+  struct timespec delay = {
+      .tv_sec = 1,
+      .tv_nsec = 0,
+  };
+  nanosleep(&delay, NULL);
+}
+
 void host_shutdown(host_t *host) {
   if (host == NULL) {
     return;
@@ -14632,48 +14640,54 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
   const char *address = bind_addr != NULL ? bind_addr : "0.0.0.0";
   const char *bind_port = port != NULL ? port : "2222";
   const char *rsa_filename = "ssh_host_rsa_key";
-  const char *rsa_key_path = NULL;
-  char resolved_rsa_key[PATH_MAX];
-
-  if (key_directory != NULL && key_directory[0] != '\0') {
-    const size_t dir_len = strlen(key_directory);
-    if (dir_len >= sizeof(resolved_rsa_key)) {
-      humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
-      return -1;
-    }
-    const bool needs_separator = dir_len > 0 && key_directory[dir_len - 1U] != '/';
-    int written = snprintf(resolved_rsa_key, sizeof(resolved_rsa_key), "%s%s%s", key_directory,
-                           needs_separator ? "/" : "", rsa_filename);
-    if (written < 0 || (size_t)written >= sizeof(resolved_rsa_key)) {
-      humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
-      return -1;
-    }
-    rsa_key_path = resolved_rsa_key;
-  } else {
-    const char *candidates[] = {rsa_filename, "/etc/ssh/ssh_host_rsa_key"};
-    for (size_t idx = 0; idx < sizeof(candidates) / sizeof(candidates[0]); ++idx) {
-      if (access(candidates[idx], R_OK) == 0) {
-        rsa_key_path = candidates[idx];
-        break;
-      }
-    }
-  }
-
-  if (rsa_key_path == NULL) {
-    humanized_log_error("host", "unable to locate RSA host key", ENOENT);
-    return -1;
-  }
-
-  if (access(rsa_key_path, R_OK) != 0) {
-    humanized_log_error("host", "unable to access RSA host key", errno);
-    return -1;
-  }
 
   while (true) {
+    const char *rsa_key_path = NULL;
+    char resolved_rsa_key[PATH_MAX];
+
+    if (key_directory != NULL && key_directory[0] != '\0') {
+      const size_t dir_len = strlen(key_directory);
+      if (dir_len >= sizeof(resolved_rsa_key)) {
+        humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
+        host_sleep_after_error();
+        continue;
+      }
+      const bool needs_separator = dir_len > 0 && key_directory[dir_len - 1U] != '/';
+      int written = snprintf(resolved_rsa_key, sizeof(resolved_rsa_key), "%s%s%s", key_directory,
+                             needs_separator ? "/" : "", rsa_filename);
+      if (written < 0 || (size_t)written >= sizeof(resolved_rsa_key)) {
+        humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
+        host_sleep_after_error();
+        continue;
+      }
+      rsa_key_path = resolved_rsa_key;
+      if (access(rsa_key_path, R_OK) != 0) {
+        const int access_error = errno;
+        humanized_log_error("host", "unable to access RSA host key",
+                            access_error != 0 ? access_error : EIO);
+        host_sleep_after_error();
+        continue;
+      }
+    } else {
+      const char *candidates[] = {rsa_filename, "/etc/ssh/ssh_host_rsa_key"};
+      for (size_t idx = 0; idx < sizeof(candidates) / sizeof(candidates[0]); ++idx) {
+        if (access(candidates[idx], R_OK) == 0) {
+          rsa_key_path = candidates[idx];
+          break;
+        }
+      }
+      if (rsa_key_path == NULL) {
+        humanized_log_error("host", "unable to locate RSA host key", ENOENT);
+        host_sleep_after_error();
+        continue;
+      }
+    }
+
     ssh_bind bind_handle = ssh_bind_new();
     if (bind_handle == NULL) {
       humanized_log_error("host", "failed to allocate ssh_bind", ENOMEM);
-      return -1;
+      host_sleep_after_error();
+      continue;
     }
 
     ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDADDR, address);
@@ -14691,7 +14705,8 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       if (!unsupported_option) {
         humanized_log_error("host", error_message, errno != 0 ? errno : EIO);
         ssh_bind_free(bind_handle);
-        return -1;
+        host_sleep_after_error();
+        continue;
       }
 
       ssh_key imported_key = NULL;
@@ -14699,7 +14714,8 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
           imported_key == NULL) {
         humanized_log_error("host", "failed to import RSA host key", EIO);
         ssh_bind_free(bind_handle);
-        return -1;
+        host_sleep_after_error();
+        continue;
       }
 
       const int import_result =
@@ -14708,7 +14724,8 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       if (import_result != SSH_OK) {
         humanized_log_error("host", ssh_get_error(bind_handle), errno != 0 ? errno : EIO);
         ssh_bind_free(bind_handle);
-        return -1;
+        host_sleep_after_error();
+        continue;
       }
 
       key_loaded = true;
@@ -14717,13 +14734,15 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     if (!key_loaded) {
       humanized_log_error("host", "failed to configure host key", EIO);
       ssh_bind_free(bind_handle);
-      return -1;
+      host_sleep_after_error();
+      continue;
     }
 
     if (ssh_bind_listen(bind_handle) < 0) {
       humanized_log_error("host", ssh_get_error(bind_handle), EIO);
       ssh_bind_free(bind_handle);
-      return -1;
+      host_sleep_after_error();
+      continue;
     }
 
     host->listener.handle = bind_handle;
@@ -14891,7 +14910,8 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     host->listener.handle = NULL;
 
     if (!restart_listener) {
-      break;
+      host_sleep_after_error();
+      continue;
     }
 
     struct timespec backoff = {
