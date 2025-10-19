@@ -438,6 +438,7 @@ typedef struct host {
   _Atomic bool eliza_enabled;
   _Atomic bool eliza_announced;
   struct timespec eliza_last_action;
+  char eliza_state_file_path[PATH_MAX];
   char eliza_memory_file_path[PATH_MAX];
   eliza_memory_entry_t eliza_memory[SSH_CHATTER_ELIZA_MEMORY_MAX];
   size_t eliza_memory_count;

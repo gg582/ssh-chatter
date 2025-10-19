@@ -740,6 +740,9 @@ static const char *chat_attachment_type_label(chat_attachment_type_t type);
 static void host_state_resolve_path(host_t *host);
 static void host_state_load(host_t *host);
 static void host_state_save_locked(host_t *host);
+static void host_eliza_state_resolve_path(host_t *host);
+static void host_eliza_state_load(host_t *host);
+static void host_eliza_state_save_locked(host_t *host);
 static void host_eliza_memory_resolve_path(host_t *host);
 static void host_eliza_memory_load(host_t *host);
 static void host_eliza_memory_save_locked(host_t *host);
@@ -999,6 +1002,8 @@ static const char TETROMINO_DISPLAY_CHARS[7] = {'I', 'J', 'L', 'O', 'S', 'T', 'Z
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
 static const uint32_t HOST_STATE_VERSION = 7U;
+static const uint32_t ELIZA_STATE_MAGIC = 0x454c5354U; /* 'ELST' */
+static const uint32_t ELIZA_STATE_VERSION = 1U;
 
 #define HOST_STATE_SOUND_ALIAS_LEN 32U
 
@@ -1016,6 +1021,13 @@ typedef struct eliza_memory_entry_serialized {
   char prompt[SSH_CHATTER_MESSAGE_LIMIT];
   char reply[SSH_CHATTER_MESSAGE_LIMIT];
 } eliza_memory_entry_serialized_t;
+
+typedef struct eliza_state_record {
+  uint32_t magic;
+  uint32_t version;
+  uint8_t enabled;
+  uint8_t reserved[7];
+} eliza_state_record_t;
 
 typedef struct host_state_header_v1 {
   uint32_t magic;
@@ -3324,6 +3336,9 @@ static bool host_eliza_enable(host_t *host) {
     atomic_store(&host->eliza_announced, true);
     announce = true;
   }
+  if (changed) {
+    host_eliza_state_save_locked(host);
+  }
   pthread_mutex_unlock(&host->lock);
 
   if (announce) {
@@ -3350,6 +3365,9 @@ static bool host_eliza_disable(host_t *host) {
     announce_depart = true;
   }
   atomic_store(&host->eliza_announced, false);
+  if (changed) {
+    host_eliza_state_save_locked(host);
+  }
   pthread_mutex_unlock(&host->lock);
 
   if (announce_depart) {
@@ -3726,6 +3744,36 @@ static void host_reply_state_resolve_path(host_t *host) {
   }
 }
 
+static void host_eliza_state_resolve_path(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  const char *state_path = getenv("CHATTER_ELIZA_STATE_FILE");
+  char fallback_path[PATH_MAX];
+  fallback_path[0] = '\0';
+  if (state_path == NULL || state_path[0] == '\0') {
+    state_path = "eliza_state.dat";
+    if (host->eliza_memory_file_path[0] != '\0') {
+      char memory_parent_buffer[PATH_MAX];
+      snprintf(memory_parent_buffer, sizeof(memory_parent_buffer), "%s", host->eliza_memory_file_path);
+      char *memory_parent = dirname(memory_parent_buffer);
+      if (memory_parent != NULL && memory_parent[0] != '\0' && strcmp(memory_parent, ".") != 0) {
+        int derived_written = snprintf(fallback_path, sizeof(fallback_path), "%s/%s", memory_parent, "eliza_state.dat");
+        if (derived_written >= 0 && (size_t)derived_written < sizeof(fallback_path)) {
+          state_path = fallback_path;
+        }
+      }
+    }
+  }
+
+  int written = snprintf(host->eliza_state_file_path, sizeof(host->eliza_state_file_path), "%s", state_path);
+  if (written < 0 || (size_t)written >= sizeof(host->eliza_state_file_path)) {
+    humanized_log_error("host", "eliza state file path is too long", ENAMETOOLONG);
+    host->eliza_state_file_path[0] = '\0';
+  }
+}
+
 static void host_state_save_locked(host_t *host) {
   if (host == NULL) {
     return;
@@ -3869,6 +3917,121 @@ static void host_state_save_locked(host_t *host) {
   if (rename(temp_path, host->state_file_path) != 0) {
     humanized_log_error("host", "failed to update state file", errno);
     unlink(temp_path);
+  }
+}
+
+static void host_eliza_state_save_locked(host_t *host) {
+  if (host == NULL || host->eliza_state_file_path[0] == '\0') {
+    return;
+  }
+
+  if (!host_ensure_private_data_path(host, host->eliza_state_file_path, true)) {
+    return;
+  }
+
+  char temp_path[PATH_MAX];
+  int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp", host->eliza_state_file_path);
+  if (written < 0 || (size_t)written >= sizeof(temp_path)) {
+    humanized_log_error("host", "eliza state path is too long", ENAMETOOLONG);
+    return;
+  }
+
+  FILE *fp = fopen(temp_path, "wb");
+  if (fp == NULL) {
+    humanized_log_error("host", "failed to open eliza state file", errno != 0 ? errno : EIO);
+    return;
+  }
+
+  eliza_state_record_t record = {0};
+  record.magic = ELIZA_STATE_MAGIC;
+  record.version = ELIZA_STATE_VERSION;
+  record.enabled = atomic_load(&host->eliza_enabled) ? 1U : 0U;
+
+  bool success = fwrite(&record, sizeof(record), 1U, fp) == 1U;
+  int write_error = 0;
+  if (!success && errno != 0) {
+    write_error = errno;
+  }
+
+  if (success && fflush(fp) != 0) {
+    success = false;
+    if (errno != 0) {
+      write_error = errno;
+    }
+  }
+
+  if (success) {
+    int fd = fileno(fp);
+    if (fd >= 0 && fsync(fd) != 0) {
+      success = false;
+      if (errno != 0) {
+        write_error = errno;
+      }
+    }
+  }
+
+  if (fclose(fp) != 0) {
+    if (success && errno != 0) {
+      write_error = errno;
+    }
+    success = false;
+  }
+
+  if (!success) {
+    unlink(temp_path);
+    humanized_log_error("host", "failed to write eliza state file", write_error != 0 ? write_error : EIO);
+    return;
+  }
+
+  if (rename(temp_path, host->eliza_state_file_path) != 0) {
+    int rename_error = errno != 0 ? errno : EIO;
+    unlink(temp_path);
+    humanized_log_error("host", "failed to update eliza state file", rename_error);
+    return;
+  }
+
+  if (chmod(host->eliza_state_file_path, S_IRUSR | S_IWUSR) != 0) {
+    humanized_log_error("host", "failed to set eliza state permissions", errno != 0 ? errno : EACCES);
+  }
+}
+
+static void host_eliza_state_load(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->eliza_state_file_path[0] == '\0') {
+    return;
+  }
+
+  if (!host_ensure_private_data_path(host, host->eliza_state_file_path, false)) {
+    return;
+  }
+
+  FILE *fp = fopen(host->eliza_state_file_path, "rb");
+  if (fp == NULL) {
+    return;
+  }
+
+  eliza_state_record_t record = {0};
+  if (fread(&record, sizeof(record), 1U, fp) != 1U) {
+    fclose(fp);
+    return;
+  }
+
+  fclose(fp);
+
+  if (record.magic != ELIZA_STATE_MAGIC || record.version == 0U || record.version > ELIZA_STATE_VERSION) {
+    return;
+  }
+
+  if (record.enabled != 0U) {
+    (void)host_eliza_enable(host);
+  } else {
+    pthread_mutex_lock(&host->lock);
+    atomic_store(&host->eliza_enabled, false);
+    atomic_store(&host->eliza_announced, false);
+    pthread_mutex_unlock(&host->lock);
   }
 }
 
@@ -16602,9 +16765,20 @@ static void *session_thread(void *arg) {
       }
 
       if (read_result == SSH_ERROR) {
+        const char *error_message = ssh_get_error(ctx->session);
+        bool unexpected_bytes_error = false;
+        if (error_message != NULL && error_message[0] != '\0') {
+          unexpected_bytes_error = strstr(error_message, "unexpected bytes remain after decoding") != NULL;
+        }
+
+        if (unexpected_bytes_error) {
+          const char *username = ctx->user.name[0] != '\0' ? ctx->user.name : "unknown";
+          printf("[session] channel decode error for %s: %s\n", username, error_message);
+          break;
+        }
+
         if (ctx->has_joined_room && ctx->channel_error_retries < SSH_CHATTER_CHANNEL_RECOVERY_LIMIT) {
           ctx->channel_error_retries += 1U;
-          const char *error_message = ssh_get_error(ctx->session);
           if (error_message == NULL || error_message[0] == '\0') {
             error_message = "unknown channel error";
           }
@@ -16619,7 +16793,6 @@ static void *session_thread(void *arg) {
         }
 
         if (ctx->has_joined_room) {
-          const char *error_message = ssh_get_error(ctx->session);
           if (error_message == NULL || error_message[0] == '\0') {
             error_message = "unknown channel error";
           }
@@ -16899,6 +17072,8 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_reply_state_resolve_path(host);
   host->eliza_memory_file_path[0] = '\0';
   host_eliza_memory_resolve_path(host);
+  host->eliza_state_file_path[0] = '\0';
+  host_eliza_state_resolve_path(host);
   host->security_clamav_thread_initialized = false;
   atomic_store(&host->security_clamav_thread_running, false);
   atomic_store(&host->security_clamav_thread_stop, false);
@@ -16962,6 +17137,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_ban_state_load(host);
   host_reply_state_load(host);
   host_eliza_memory_load(host);
+  host_eliza_state_load(host);
 
   host->clients = client_manager_create(host);
   if (host->clients == NULL) {
