@@ -1717,25 +1717,31 @@ static bool host_bind_configure_key(ssh_bind bind_handle, const hostkey_spec_t *
     return false;
   }
 
+  const char *direct_error_message = NULL;
+  int direct_error_code = 0;
   if (spec->has_direct_option) {
     errno = 0;
     if (ssh_bind_options_set(bind_handle, spec->direct_option, key_path) == SSH_OK) {
       return true;
     }
 
-    const char *error_message = ssh_get_error(bind_handle);
-    const bool unsupported_option = (error_message != NULL &&
-                                     strstr(error_message, "Unknown ssh option") != NULL) ||
+    direct_error_message = ssh_get_error(bind_handle);
+    direct_error_code = errno != 0 ? errno : EIO;
+    const bool unsupported_option = (direct_error_message != NULL &&
+                                     strstr(direct_error_message, "Unknown ssh option") != NULL) ||
                                     errno == ENOTSUP;
-    if (!unsupported_option) {
-      humanized_log_error("host", error_message, errno != 0 ? errno : EIO);
-      return false;
+    if (unsupported_option) {
+      direct_error_message = NULL;
+      direct_error_code = 0;
     }
   }
 
   ssh_key imported_key = NULL;
   if (ssh_pki_import_privkey_file(key_path, NULL, NULL, NULL, &imported_key) != SSH_OK ||
       imported_key == NULL) {
+    if (direct_error_message != NULL && direct_error_message[0] != '\0') {
+      humanized_log_error("host", direct_error_message, direct_error_code);
+    }
     char error_message[128];
     snprintf(error_message, sizeof(error_message), "failed to import %s host key",
              spec->algorithm_name != NULL ? spec->algorithm_name : "server");
@@ -1746,6 +1752,9 @@ static bool host_bind_configure_key(ssh_bind bind_handle, const hostkey_spec_t *
   const int import_result = ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_IMPORT_KEY, imported_key);
   ssh_key_free(imported_key);
   if (import_result != SSH_OK) {
+    if (direct_error_message != NULL && direct_error_message[0] != '\0') {
+      humanized_log_error("host", direct_error_message, direct_error_code);
+    }
     const char *bind_error = ssh_get_error(bind_handle);
     if (bind_error != NULL) {
       humanized_log_error("host", bind_error, errno != 0 ? errno : EIO);
@@ -18101,14 +18110,6 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 
     ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDADDR, address);
     ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDPORT_STR, bind_port);
-    errno = 0;
-    if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, required_algorithms[0]) != SSH_OK) {
-      humanized_log_error("host", ssh_get_error(bind_handle), errno != 0 ? errno : EIO);
-      ssh_bind_free(bind_handle);
-      host_sleep_after_error();
-      continue;
-    }
-
     errno = 0;
     if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY_ALGORITHMS, hostkey_algorithm_config) !=
         SSH_OK) {
