@@ -61,12 +61,26 @@ if [[ ! -f "$CONFIG_DIR/chatter.env" ]]; then
 ENV
 fi
 
-if [[ ! -f "$STATE_DIR/ssh_host_rsa_key" ]]; then
-  ssh-keygen -q -t rsa -b 4096 -N "" -f "$STATE_DIR/ssh_host_rsa_key"
-  chown "$SERVICE_USER:$SERVICE_GROUP" "$STATE_DIR"/ssh_host_rsa_key*
-  chmod 640 "$STATE_DIR/ssh_host_rsa_key"
-  chmod 644 "$STATE_DIR/ssh_host_rsa_key.pub"
-fi
+generate_host_key() {
+  local key_type=$1
+  local key_file=$2
+  shift 2 || true
+  local key_args=("$@")
+  local key_path="$STATE_DIR/$key_file"
+
+  if [[ -f "$key_path" ]]; then
+    return
+  fi
+
+  ssh-keygen -q -t "$key_type" "${key_args[@]}" -N "" -f "$key_path"
+  chown "$SERVICE_USER:$SERVICE_GROUP" "$key_path" "$key_path.pub"
+  chmod 640 "$key_path"
+  chmod 644 "$key_path.pub"
+}
+
+generate_host_key rsa ssh_host_rsa_key -b 4096
+generate_host_key ed25519 ssh_host_ed25519
+generate_host_key ecdsa ssh_host_ecdsa
 
 make -C "$PROJECT_ROOT"
 install -Dm755 "$PROJECT_ROOT/ssh-chatter" "$INSTALL_PATH"

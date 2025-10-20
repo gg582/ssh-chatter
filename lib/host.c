@@ -4,6 +4,7 @@
 
 #include "host.h"
 #include <libssh/libssh.h>
+#include <libssh/server.h>
 #include "client.h"
 #include "webssh_client.h"
 #include "translator.h"
@@ -61,7 +62,47 @@
 #define SSH_CHATTER_ASCIIART_TERMINATOR ">/__ARTWORK_END>"
 #define SSH_CHATTER_TETROMINO_SIZE 4
 #define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT ((unsigned int)INT_MAX)
-#define SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM "ssh-rsa"
+#define SSH_CHATTER_MAX_HOSTKEY_ALGORITHMS 4U
+
+typedef struct {
+  const char *algorithm_name;
+  const char *system_fallback;
+  const char *const *filenames;
+  size_t filename_count;
+  bool has_direct_option;
+  enum ssh_bind_options_e direct_option;
+} hostkey_spec_t;
+
+static const char *const SSH_CHATTER_HOSTKEY_FILENAMES_RSA[] = {"ssh_host_rsa_key"};
+static const char *const SSH_CHATTER_HOSTKEY_FILENAMES_ECDSA[] = {"ssh_host_ecdsa_key", "ssh_host_ecdsa"};
+static const char *const SSH_CHATTER_HOSTKEY_FILENAMES_ED25519[] = {"ssh_host_ed25519_key", "ssh_host_ed25519"};
+
+static const hostkey_spec_t SSH_CHATTER_HOSTKEY_SPECS[] = {
+    {.algorithm_name = "ssh-ed25519",
+     .system_fallback = "/etc/ssh/ssh_host_ed25519_key",
+     .filenames = SSH_CHATTER_HOSTKEY_FILENAMES_ED25519,
+     .filename_count = sizeof(SSH_CHATTER_HOSTKEY_FILENAMES_ED25519) /
+                       sizeof(SSH_CHATTER_HOSTKEY_FILENAMES_ED25519[0]),
+     .has_direct_option = false,
+     .direct_option = SSH_BIND_OPTIONS_IMPORT_KEY},
+    {.algorithm_name = "ecdsa-sha2-nistp256",
+     .system_fallback = "/etc/ssh/ssh_host_ecdsa_key",
+     .filenames = SSH_CHATTER_HOSTKEY_FILENAMES_ECDSA,
+     .filename_count = sizeof(SSH_CHATTER_HOSTKEY_FILENAMES_ECDSA) /
+                       sizeof(SSH_CHATTER_HOSTKEY_FILENAMES_ECDSA[0]),
+     .has_direct_option = true,
+     .direct_option = SSH_BIND_OPTIONS_ECDSAKEY},
+    {.algorithm_name = "ssh-rsa",
+     .system_fallback = "/etc/ssh/ssh_host_rsa_key",
+     .filenames = SSH_CHATTER_HOSTKEY_FILENAMES_RSA,
+     .filename_count = sizeof(SSH_CHATTER_HOSTKEY_FILENAMES_RSA) /
+                       sizeof(SSH_CHATTER_HOSTKEY_FILENAMES_RSA[0]),
+     .has_direct_option = true,
+     .direct_option = SSH_BIND_OPTIONS_RSAKEY},
+};
+
+#define SSH_CHATTER_HOSTKEY_SPEC_COUNT                                                     \
+  (sizeof(SSH_CHATTER_HOSTKEY_SPECS) / sizeof(SSH_CHATTER_HOSTKEY_SPECS[0]))
 #define SESSION_CHANNEL_TIMEOUT (-2)
 #define SSH_CHATTER_CHANNEL_RECOVERY_LIMIT ((unsigned int)INT_MAX)
 #define SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS 200000000L
@@ -1443,20 +1484,42 @@ static bool hostkey_list_contains(const unsigned char *data, size_t data_len, co
   return false;
 }
 
-static hostkey_probe_result_t session_probe_client_hostkey_algorithms(ssh_session session,
-                                                                      const char *required_algorithm) {
+static hostkey_probe_result_t session_probe_client_hostkey_algorithms(
+    ssh_session session, const char *const *required_algorithms, size_t algorithm_count) {
   hostkey_probe_result_t result;
   result.status = HOSTKEY_SUPPORT_UNKNOWN;
   result.offered_algorithms[0] = '\0';
 
-  if (session == NULL || required_algorithm == NULL || required_algorithm[0] == '\0') {
+  if (session == NULL || required_algorithms == NULL || algorithm_count == 0U) {
     return result;
   }
 
-  const size_t required_length = strlen(required_algorithm);
-  if (required_length == 0U) {
+  size_t required_lengths[SSH_CHATTER_MAX_HOSTKEY_ALGORITHMS];
+  const char *filtered_algorithms[SSH_CHATTER_MAX_HOSTKEY_ALGORITHMS];
+  if (algorithm_count > SSH_CHATTER_MAX_HOSTKEY_ALGORITHMS) {
+    algorithm_count = SSH_CHATTER_MAX_HOSTKEY_ALGORITHMS;
+  }
+
+  size_t valid_algorithms = 0U;
+  for (size_t idx = 0U; idx < algorithm_count; ++idx) {
+    const char *algorithm = required_algorithms[idx];
+    if (algorithm == NULL || algorithm[0] == '\0') {
+      continue;
+    }
+    const size_t length = strlen(algorithm);
+    if (length == 0U) {
+      continue;
+    }
+    required_lengths[valid_algorithms] = length;
+    filtered_algorithms[valid_algorithms] = algorithm;
+    ++valid_algorithms;
+  }
+
+  if (valid_algorithms == 0U) {
     return result;
   }
+
+  algorithm_count = valid_algorithms;
 
   const int socket_fd = ssh_get_fd(session);
   if (socket_fd < 0) {
@@ -1628,10 +1691,16 @@ static hostkey_probe_result_t session_probe_client_hostkey_algorithms(ssh_sessio
 
     if (hostkey_len == 0U) {
       result.status = HOSTKEY_SUPPORT_REJECTED;
-    } else if (hostkey_list_contains(hostkey_data, hostkey_len, required_algorithm, required_length)) {
-      result.status = HOSTKEY_SUPPORT_ACCEPTED;
     } else {
-      result.status = HOSTKEY_SUPPORT_REJECTED;
+      bool accepted = false;
+      for (size_t idx = 0U; idx < algorithm_count; ++idx) {
+        if (hostkey_list_contains(hostkey_data, hostkey_len, filtered_algorithms[idx],
+                                  required_lengths[idx])) {
+          accepted = true;
+          break;
+        }
+      }
+      result.status = accepted ? HOSTKEY_SUPPORT_ACCEPTED : HOSTKEY_SUPPORT_REJECTED;
     }
 
     free(buffer);
@@ -1640,6 +1709,56 @@ static hostkey_probe_result_t session_probe_client_hostkey_algorithms(ssh_sessio
 
   free(buffer);
   return result;
+}
+
+static bool host_bind_configure_key(ssh_bind bind_handle, const hostkey_spec_t *spec,
+                                    const char *key_path) {
+  if (bind_handle == NULL || spec == NULL || key_path == NULL || key_path[0] == '\0') {
+    return false;
+  }
+
+  if (spec->has_direct_option) {
+    errno = 0;
+    if (ssh_bind_options_set(bind_handle, spec->direct_option, key_path) == SSH_OK) {
+      return true;
+    }
+
+    const char *error_message = ssh_get_error(bind_handle);
+    const bool unsupported_option = (error_message != NULL &&
+                                     strstr(error_message, "Unknown ssh option") != NULL) ||
+                                    errno == ENOTSUP;
+    if (!unsupported_option) {
+      humanized_log_error("host", error_message, errno != 0 ? errno : EIO);
+      return false;
+    }
+  }
+
+  ssh_key imported_key = NULL;
+  if (ssh_pki_import_privkey_file(key_path, NULL, NULL, NULL, &imported_key) != SSH_OK ||
+      imported_key == NULL) {
+    char error_message[128];
+    snprintf(error_message, sizeof(error_message), "failed to import %s host key",
+             spec->algorithm_name != NULL ? spec->algorithm_name : "server");
+    humanized_log_error("host", error_message, EIO);
+    return false;
+  }
+
+  const int import_result = ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_IMPORT_KEY, imported_key);
+  ssh_key_free(imported_key);
+  if (import_result != SSH_OK) {
+    const char *bind_error = ssh_get_error(bind_handle);
+    if (bind_error != NULL) {
+      humanized_log_error("host", bind_error, errno != 0 ? errno : EIO);
+    } else {
+      char error_message[128];
+      snprintf(error_message, sizeof(error_message), "failed to apply %s host key",
+               spec->algorithm_name != NULL ? spec->algorithm_name : "server");
+      humanized_log_error("host", error_message, errno != 0 ? errno : EIO);
+    }
+    return false;
+  }
+
+  return true;
 }
 
 static bool session_is_private_ipv4(const unsigned char octets[4]) {
@@ -17828,48 +17947,149 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 
   const char *address = bind_addr != NULL ? bind_addr : "0.0.0.0";
   const char *bind_port = port != NULL ? port : "2222";
-  const char *rsa_filename = "ssh_host_rsa_key";
 
   while (true) {
-    const char *rsa_key_path = NULL;
-    char resolved_rsa_key[PATH_MAX];
+    typedef struct {
+      const hostkey_spec_t *spec;
+      char path[PATH_MAX];
+    } hostkey_candidate_t;
+
+    hostkey_candidate_t candidates[SSH_CHATTER_HOSTKEY_SPEC_COUNT];
+    size_t candidate_count = 0U;
+    bool fatal_path_error = false;
 
     if (key_directory != NULL && key_directory[0] != '\0') {
       const size_t dir_len = strlen(key_directory);
-      if (dir_len >= sizeof(resolved_rsa_key)) {
+      if (dir_len >= PATH_MAX) {
         humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
         host_sleep_after_error();
         continue;
       }
-      const bool needs_separator = dir_len > 0 && key_directory[dir_len - 1U] != '/';
-      int written = snprintf(resolved_rsa_key, sizeof(resolved_rsa_key), "%s%s%s", key_directory,
-                             needs_separator ? "/" : "", rsa_filename);
-      if (written < 0 || (size_t)written >= sizeof(resolved_rsa_key)) {
-        humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
-        host_sleep_after_error();
-        continue;
+
+      const bool needs_separator = key_directory[dir_len - 1U] != '/';
+      for (size_t spec_idx = 0U; spec_idx < SSH_CHATTER_HOSTKEY_SPEC_COUNT; ++spec_idx) {
+        if (candidate_count >= SSH_CHATTER_HOSTKEY_SPEC_COUNT) {
+          break;
+        }
+        const hostkey_spec_t *spec = &SSH_CHATTER_HOSTKEY_SPECS[spec_idx];
+        bool found_in_directory = false;
+        for (size_t file_idx = 0U; file_idx < spec->filename_count; ++file_idx) {
+          const char *filename = spec->filenames[file_idx];
+          if (filename == NULL || filename[0] == '\0') {
+            continue;
+          }
+
+          hostkey_candidate_t candidate;
+          const int written = snprintf(candidate.path, sizeof(candidate.path), "%s%s%s", key_directory,
+                                       needs_separator ? "/" : "", filename);
+          if (written < 0 || (size_t)written >= sizeof(candidate.path)) {
+            humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
+            fatal_path_error = true;
+            break;
+          }
+
+          if (access(candidate.path, R_OK) == 0) {
+            candidate.spec = spec;
+            candidates[candidate_count++] = candidate;
+            found_in_directory = true;
+            break;
+          }
+        }
+        if (fatal_path_error) {
+          break;
+        }
+
+        if (!found_in_directory) {
+          printf("[listener] %s host key not found in %s\n", spec->algorithm_name, key_directory);
+        }
       }
-      rsa_key_path = resolved_rsa_key;
-      if (access(rsa_key_path, R_OK) != 0) {
-        const int access_error = errno;
-        humanized_log_error("host", "unable to access RSA host key",
-                            access_error != 0 ? access_error : EIO);
+
+      if (fatal_path_error) {
         host_sleep_after_error();
         continue;
       }
     } else {
-      const char *candidates[] = {rsa_filename, "/etc/ssh/ssh_host_rsa_key"};
-      for (size_t idx = 0; idx < sizeof(candidates) / sizeof(candidates[0]); ++idx) {
-        if (access(candidates[idx], R_OK) == 0) {
-          rsa_key_path = candidates[idx];
+      for (size_t spec_idx = 0U; spec_idx < SSH_CHATTER_HOSTKEY_SPEC_COUNT; ++spec_idx) {
+        if (candidate_count >= SSH_CHATTER_HOSTKEY_SPEC_COUNT) {
           break;
         }
+        const hostkey_spec_t *spec = &SSH_CHATTER_HOSTKEY_SPECS[spec_idx];
+        hostkey_candidate_t candidate;
+        bool found = false;
+
+        for (size_t file_idx = 0U; file_idx < spec->filename_count; ++file_idx) {
+          const char *filename = spec->filenames[file_idx];
+          if (filename == NULL || filename[0] == '\0') {
+            continue;
+          }
+          if (access(filename, R_OK) == 0) {
+            snprintf(candidate.path, sizeof(candidate.path), "%s", filename);
+            found = true;
+            break;
+          }
+        }
+
+        if (!found && spec->system_fallback != NULL && spec->system_fallback[0] != '\0' &&
+            access(spec->system_fallback, R_OK) == 0) {
+          snprintf(candidate.path, sizeof(candidate.path), "%s", spec->system_fallback);
+          found = true;
+        }
+
+        if (found) {
+          candidate.spec = spec;
+          candidates[candidate_count++] = candidate;
+        }
       }
-      if (rsa_key_path == NULL) {
-        humanized_log_error("host", "unable to locate RSA host key", ENOENT);
-        host_sleep_after_error();
+    }
+
+    if (candidate_count == 0U) {
+      humanized_log_error("host", "unable to locate any host keys", ENOENT);
+      host_sleep_after_error();
+      continue;
+    }
+
+    const char *required_algorithms[SSH_CHATTER_MAX_HOSTKEY_ALGORITHMS];
+    size_t required_algorithm_count = 0U;
+    char hostkey_algorithm_config[128];
+    char hostkey_algorithm_display[128];
+    size_t config_len = 0U;
+    size_t display_len = 0U;
+    hostkey_algorithm_config[0] = '\0';
+    hostkey_algorithm_display[0] = '\0';
+
+    for (size_t idx = 0U; idx < candidate_count && idx < SSH_CHATTER_MAX_HOSTKEY_ALGORITHMS; ++idx) {
+      const hostkey_candidate_t *candidate = &candidates[idx];
+      const char *algorithm = candidate->spec->algorithm_name;
+      if (algorithm == NULL || algorithm[0] == '\0') {
         continue;
       }
+      required_algorithms[required_algorithm_count++] = algorithm;
+
+      const char *config_sep = (config_len == 0U) ? "" : ",";
+      int written = snprintf(hostkey_algorithm_config + config_len,
+                             sizeof(hostkey_algorithm_config) - config_len, "%s%s", config_sep, algorithm);
+      if (written < 0 || (size_t)written >= sizeof(hostkey_algorithm_config) - config_len) {
+        config_len = sizeof(hostkey_algorithm_config) - 1U;
+        hostkey_algorithm_config[config_len] = '\0';
+      } else {
+        config_len += (size_t)written;
+      }
+
+      const char *display_sep = (display_len == 0U) ? "" : ", ";
+      written = snprintf(hostkey_algorithm_display + display_len,
+                         sizeof(hostkey_algorithm_display) - display_len, "%s%s", display_sep, algorithm);
+      if (written < 0 || (size_t)written >= sizeof(hostkey_algorithm_display) - display_len) {
+        display_len = sizeof(hostkey_algorithm_display) - 1U;
+        hostkey_algorithm_display[display_len] = '\0';
+      } else {
+        display_len += (size_t)written;
+      }
+    }
+
+    if (required_algorithm_count == 0U) {
+      humanized_log_error("host", "failed to determine host key algorithms", EIO);
+      host_sleep_after_error();
+      continue;
     }
 
     ssh_bind bind_handle = ssh_bind_new();
@@ -17881,51 +18101,39 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 
     ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDADDR, address);
     ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDPORT_STR, bind_port);
-    ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, "ssh-rsa");
     errno = 0;
-    bool key_loaded = false;
-    if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_RSAKEY, rsa_key_path) == SSH_OK) {
-      key_loaded = true;
-    } else {
-      const char *error_message = ssh_get_error(bind_handle);
-      const bool unsupported_option = (error_message != NULL &&
-                                       strstr(error_message, "Unknown ssh option") != NULL) ||
-                                      errno == ENOTSUP;
-      if (!unsupported_option) {
-        humanized_log_error("host", error_message, errno != 0 ? errno : EIO);
-        ssh_bind_free(bind_handle);
-        host_sleep_after_error();
-        continue;
-      }
-
-      ssh_key imported_key = NULL;
-      if (ssh_pki_import_privkey_file(rsa_key_path, NULL, NULL, NULL, &imported_key) != SSH_OK ||
-          imported_key == NULL) {
-        humanized_log_error("host", "failed to import RSA host key", EIO);
-        ssh_bind_free(bind_handle);
-        host_sleep_after_error();
-        continue;
-      }
-
-      const int import_result =
-          ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_IMPORT_KEY, imported_key);
-      ssh_key_free(imported_key);
-      if (import_result != SSH_OK) {
-        humanized_log_error("host", ssh_get_error(bind_handle), errno != 0 ? errno : EIO);
-        ssh_bind_free(bind_handle);
-        host_sleep_after_error();
-        continue;
-      }
-
-      key_loaded = true;
-    }
-
-    if (!key_loaded) {
-      humanized_log_error("host", "failed to configure host key", EIO);
+    if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, required_algorithms[0]) != SSH_OK) {
+      humanized_log_error("host", ssh_get_error(bind_handle), errno != 0 ? errno : EIO);
       ssh_bind_free(bind_handle);
       host_sleep_after_error();
       continue;
     }
+
+    errno = 0;
+    if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY_ALGORITHMS, hostkey_algorithm_config) !=
+        SSH_OK) {
+      humanized_log_error("host", ssh_get_error(bind_handle), errno != 0 ? errno : EIO);
+      ssh_bind_free(bind_handle);
+      host_sleep_after_error();
+      continue;
+    }
+
+    bool keys_loaded = true;
+    for (size_t idx = 0U; idx < candidate_count; ++idx) {
+      const hostkey_candidate_t *candidate = &candidates[idx];
+      if (!host_bind_configure_key(bind_handle, candidate->spec, candidate->path)) {
+        keys_loaded = false;
+        break;
+      }
+    }
+
+    if (!keys_loaded) {
+      ssh_bind_free(bind_handle);
+      host_sleep_after_error();
+      continue;
+    }
+
+    printf("[listener] host key algorithms: %s\n", hostkey_algorithm_display);
 
     if (ssh_bind_listen(bind_handle) < 0) {
       humanized_log_error("host", ssh_get_error(bind_handle), EIO);
@@ -18026,8 +18234,8 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         continue;
       }
 
-      hostkey_probe_result_t hostkey_probe =
-          session_probe_client_hostkey_algorithms(session, SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM);
+      hostkey_probe_result_t hostkey_probe = session_probe_client_hostkey_algorithms(
+          session, required_algorithms, required_algorithm_count);
       if (hostkey_probe.status == HOSTKEY_SUPPORT_REJECTED) {
         char peer_address[NI_MAXHOST];
         session_describe_peer(session, peer_address, sizeof(peer_address));
@@ -18037,11 +18245,11 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         }
 
         if (hostkey_probe.offered_algorithms[0] != '\0') {
-          printf("[reject] client %s does not accept %s host key (client offered: %s)\n", peer_address,
-                 SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM, hostkey_probe.offered_algorithms);
+          printf("[reject] client %s does not accept supported host key algorithms (%s) (client offered: %s)\n",
+                 peer_address, hostkey_algorithm_display, hostkey_probe.offered_algorithms);
         } else {
-          printf("[reject] client %s does not accept %s host key\n", peer_address,
-                 SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM);
+          printf("[reject] client %s does not accept supported host key algorithms (%s)\n", peer_address,
+                 hostkey_algorithm_display);
         }
 
         ssh_disconnect(session);
