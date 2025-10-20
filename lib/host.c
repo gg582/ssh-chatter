@@ -17966,6 +17966,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     hostkey_candidate_t candidates[SSH_CHATTER_HOSTKEY_SPEC_COUNT];
     size_t candidate_count = 0U;
     bool fatal_path_error = false;
+    bool permission_issue_detected = false;
 
     if (key_directory != NULL && key_directory[0] != '\0') {
       const size_t dir_len = strlen(key_directory);
@@ -17982,6 +17983,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         }
         const hostkey_spec_t *spec = &SSH_CHATTER_HOSTKEY_SPECS[spec_idx];
         bool found_in_directory = false;
+        bool permission_denied_for_spec = false;
         for (size_t file_idx = 0U; file_idx < spec->filename_count; ++file_idx) {
           const char *filename = spec->filenames[file_idx];
           if (filename == NULL || filename[0] == '\0') {
@@ -18003,12 +18005,25 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
             found_in_directory = true;
             break;
           }
+
+          const int access_error = errno;
+          if (access_error == EACCES) {
+            permission_issue_detected = true;
+            permission_denied_for_spec = true;
+            char log_message[512];
+            const char *algorithm = spec->algorithm_name != NULL ? spec->algorithm_name : "server";
+            snprintf(log_message, sizeof(log_message),
+                     "%s host key at %s is not readable; adjust permissions or copy it into a directory accessible to ssh-chatter",
+                     algorithm, candidate.path);
+            humanized_log_error("host", log_message, access_error);
+            break;
+          }
         }
         if (fatal_path_error) {
           break;
         }
 
-        if (!found_in_directory) {
+        if (!found_in_directory && !permission_denied_for_spec) {
           printf("[listener] %s host key not found in %s\n", spec->algorithm_name, key_directory);
         }
       }
@@ -18025,6 +18040,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         const hostkey_spec_t *spec = &SSH_CHATTER_HOSTKEY_SPECS[spec_idx];
         hostkey_candidate_t candidate;
         bool found = false;
+        bool permission_denied_for_spec = false;
 
         for (size_t file_idx = 0U; file_idx < spec->filename_count; ++file_idx) {
           const char *filename = spec->filenames[file_idx];
@@ -18036,12 +18052,35 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
             found = true;
             break;
           }
+
+          const int access_error = errno;
+          if (access_error == EACCES) {
+            permission_issue_detected = true;
+            permission_denied_for_spec = true;
+            char log_message[512];
+            const char *algorithm = spec->algorithm_name != NULL ? spec->algorithm_name : "server";
+            snprintf(log_message, sizeof(log_message),
+                     "%s host key at %s is not readable; adjust permissions or copy it into a directory accessible to ssh-chatter",
+                     algorithm, filename);
+            humanized_log_error("host", log_message, access_error);
+            break;
+          }
         }
 
-        if (!found && spec->system_fallback != NULL && spec->system_fallback[0] != '\0' &&
-            access(spec->system_fallback, R_OK) == 0) {
-          snprintf(candidate.path, sizeof(candidate.path), "%s", spec->system_fallback);
-          found = true;
+        if (!found && !permission_denied_for_spec && spec->system_fallback != NULL &&
+            spec->system_fallback[0] != '\0') {
+          if (access(spec->system_fallback, R_OK) == 0) {
+            snprintf(candidate.path, sizeof(candidate.path), "%s", spec->system_fallback);
+            found = true;
+          } else if (errno == EACCES) {
+            permission_issue_detected = true;
+            char log_message[512];
+            const char *algorithm = spec->algorithm_name != NULL ? spec->algorithm_name : "server";
+            snprintf(log_message, sizeof(log_message),
+                     "%s host key at %s is not readable; adjust permissions or copy it into a directory accessible to ssh-chatter",
+                     algorithm, spec->system_fallback);
+            humanized_log_error("host", log_message, errno);
+          }
         }
 
         if (found) {
@@ -18052,7 +18091,13 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     }
 
     if (candidate_count == 0U) {
-      humanized_log_error("host", "unable to locate any host keys", ENOENT);
+      if (permission_issue_detected) {
+        humanized_log_error("host",
+                            "host key files were found but are not readable; adjust permissions or pass -k with a directory containing copies readable by ssh-chatter",
+                            EACCES);
+      } else {
+        humanized_log_error("host", "unable to locate any host keys", ENOENT);
+      }
       host_sleep_after_error();
       continue;
     }
