@@ -77,6 +77,7 @@
 #define SSH_CHATTER_BBS_WATCHDOG_SLEEP_SECONDS 5U
 #define SSH_CHATTER_CLAMAV_OUTPUT_LIMIT 512U
 #define SSH_CHATTER_BBS_REVIEW_INTERVAL_SECONDS 120U
+#define SSH_CHATTER_ELIZA_BBS_FEEDBACK_PREFIX "Heads up: this post might need attention"
 #define ELIZA_MEMORY_MAGIC 0x454C5A41U
 #define ELIZA_MEMORY_VERSION 1U
 #define SSH_CHATTER_ELIZA_CONTEXT_LIMIT 3U
@@ -6240,29 +6241,79 @@ static void host_bbs_watchdog_scan(host_t *host) {
     trim_whitespace_inplace(reason);
     const char *diagnostic = (reason[0] != '\0') ? reason : "policy violation";
 
+    bool already_noted = false;
+    bool comment_added = false;
+    bool comment_blocked = false;
+    char author_buffer[SSH_CHATTER_USERNAME_LEN];
+    author_buffer[0] = '\0';
+
     pthread_mutex_lock(&host->lock);
     bbs_post_t *live = host_find_bbs_post_locked(host, post->id);
-    if (live != NULL) {
-      host_clear_bbs_post_locked(host, live);
-      host_bbs_state_save_locked(host);
+    if (live != NULL && live->in_use) {
+      const char *live_author = (live->author[0] != '\0') ? live->author : "unknown";
+      snprintf(author_buffer, sizeof(author_buffer), "%s", live_author);
+
+      for (size_t comment = 0U; comment < live->comment_count; ++comment) {
+        const bbs_comment_t *entry = &live->comments[comment];
+        if (entry->author[0] == '\0') {
+          continue;
+        }
+        if (strcasecmp(entry->author, "eliza") != 0) {
+          continue;
+        }
+        if (strstr(entry->text, SSH_CHATTER_ELIZA_BBS_FEEDBACK_PREFIX) != NULL) {
+          already_noted = true;
+          break;
+        }
+      }
+
+      if (!already_noted) {
+        if (live->comment_count < SSH_CHATTER_BBS_MAX_COMMENTS) {
+          char comment_text[SSH_CHATTER_BBS_COMMENT_LEN];
+          snprintf(comment_text, sizeof(comment_text),
+                   "%s (%s). Please adjust the post so it follows the board guidelines.",
+                   SSH_CHATTER_ELIZA_BBS_FEEDBACK_PREFIX, diagnostic);
+
+          bbs_comment_t *comment = &live->comments[live->comment_count++];
+          snprintf(comment->author, sizeof(comment->author), "%s", "eliza");
+          size_t comment_len = strnlen(comment_text, SSH_CHATTER_BBS_COMMENT_LEN - 1U);
+          memcpy(comment->text, comment_text, comment_len);
+          comment->text[comment_len] = '\0';
+          comment->created_at = time(NULL);
+          live->bumped_at = comment->created_at;
+          host_bbs_state_save_locked(host);
+          comment_added = true;
+        } else {
+          comment_blocked = true;
+        }
+      }
     }
     pthread_mutex_unlock(&host->lock);
 
-    if (live == NULL) {
+    if (!comment_added && !already_noted) {
+      if (comment_blocked) {
+        printf("[bbs] unable to leave eliza feedback on post #%" PRIu64 " (comment limit reached)\n", post->id);
+      } else if (author_buffer[0] == '\0') {
+        printf("[bbs] unable to locate live post #%" PRIu64 " for eliza feedback\n", post->id);
+      }
       continue;
     }
 
-    printf("[bbs] removed post #%" PRIu64 " by %s (%s)\n", post->id,
-           post->author[0] != '\0' ? post->author : "unknown", diagnostic);
-
-    char notice[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(notice, sizeof(notice),
-             "* [eliza] removed BBS post #%" PRIu64 " by %s (%s).",
+    if (comment_added) {
+      printf("[bbs] eliza left feedback on post #%" PRIu64 " by %s (%s)\n",
              post->id,
-             post->author[0] != '\0' ? post->author : "unknown",
+             author_buffer[0] != '\0' ? author_buffer : (post->author[0] != '\0' ? post->author : "unknown"),
              diagnostic);
-    host_history_record_system(host, notice);
-    chat_room_broadcast(&host->room, notice, NULL);
+
+      char notice[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(notice, sizeof(notice),
+               "* [eliza] commented on BBS post #%" PRIu64 " by %s (%s).",
+               post->id,
+               author_buffer[0] != '\0' ? author_buffer : (post->author[0] != '\0' ? post->author : "unknown"),
+               diagnostic);
+      host_history_record_system(host, notice);
+      chat_room_broadcast(&host->room, notice, NULL);
+    }
   }
 
 }
