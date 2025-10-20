@@ -238,6 +238,18 @@ static bool string_contains_case_insensitive(const char *haystack, const char *n
   return false;
 }
 
+static void host_session_release(ssh_session *session_ptr) {
+  if (session_ptr == NULL || *session_ptr == NULL) {
+    return;
+  }
+
+  ssh_session session = *session_ptr;
+  ssh_disconnect(session);
+
+  ssh_free(session);
+  *session_ptr = NULL;
+}
+
 static struct timespec timespec_diff(const struct timespec *end, const struct timespec *start) {
   struct timespec result = {0, 0};
   if (end == NULL || start == NULL) {
@@ -17401,11 +17413,7 @@ static void session_cleanup(session_ctx_t *ctx) {
   }
   session_close_channel(ctx);
 
-  if (ctx->session != NULL) {
-    ssh_disconnect(ctx->session);
-    ssh_free(ctx->session);
-    ctx->session = NULL;
-  }
+  host_session_release(&ctx->session);
 
   free(ctx);
 }
@@ -18443,10 +18451,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
             fatal_socket_error = false;
         }
 
-        if(session != NULL) {
-          ssh_free(session);
-          session = NULL;
-	}
+        host_session_release(&session);
         if (fatal_socket_error) {
           clock_gettime(CLOCK_MONOTONIC, &host->listener.last_error_time);
           if (host_listener_attempt_recover(host, bind_handle, address, bind_port)) {
@@ -18480,16 +18485,13 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
                  hostkey_algorithm_display);
         }
 
-        ssh_disconnect(session);
-        ssh_free(session);
-        session = NULL;
+        host_session_release(&session);
         continue;
       }
 
       if (ssh_handle_key_exchange(session) != SSH_OK) {
         humanized_log_error("host", ssh_get_error(session), EPROTO);
-        ssh_free(session);
-        session = NULL;
+        host_session_release(&session);
         continue;
       }
 
@@ -18505,13 +18507,12 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       session_ctx_t *ctx = calloc(1U, sizeof(session_ctx_t));
       if (ctx == NULL) {
         humanized_log_error("host", "failed to allocate session context", ENOMEM);
-        ssh_disconnect(session);
-        ssh_free(session);
-        session = NULL;
+        host_session_release(&session);
         continue;
       }
 
       ctx->session = session;
+      session = NULL;
       ctx->channel = NULL;
       ctx->owner = host;
       ctx->auth = (auth_profile_t){0};
