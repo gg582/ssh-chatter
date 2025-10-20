@@ -1767,13 +1767,24 @@ static bool host_bind_configure_key(ssh_bind bind_handle, const hostkey_spec_t *
       return true;
     }
 
+    const int direct_error = errno != 0 ? errno : EIO;
     const char *error_message = ssh_get_error(bind_handle);
     const bool unsupported_option = (error_message != NULL &&
                                      strstr(error_message, "Unknown ssh option") != NULL) ||
                                     errno == ENOTSUP;
-    if (!unsupported_option) {
-      host_log_key_error(spec, key_path, error_message, errno != 0 ? errno : EIO);
-      return false;
+
+    if (unsupported_option) {
+      char unsupported_message[256];
+      if (error_message != NULL && error_message[0] != '\0') {
+        snprintf(unsupported_message, sizeof(unsupported_message), "%s; falling back to key import",
+                 error_message);
+      } else {
+        snprintf(unsupported_message, sizeof(unsupported_message),
+                 "direct option unsupported; falling back to key import");
+      }
+      host_log_key_error(spec, key_path, unsupported_message, direct_error);
+    } else {
+      host_log_key_error(spec, key_path, error_message, direct_error);
     }
   }
 
