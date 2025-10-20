@@ -677,6 +677,7 @@ static void session_handle_files(session_ctx_t *ctx, const char *arguments);
 static void session_handle_reaction(session_ctx_t *ctx, size_t reaction_index, const char *arguments);
 static void session_handle_today(session_ctx_t *ctx);
 static void session_handle_date(session_ctx_t *ctx, const char *arguments);
+static void session_format_os_usage(char *buffer, size_t length);
 static void session_handle_os(session_ctx_t *ctx, const char *arguments);
 static void session_handle_getos(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pair(session_ctx_t *ctx);
@@ -11249,20 +11250,56 @@ cleanup:
   }
 }
 
-static void session_handle_os(session_ctx_t *ctx, const char *arguments) {
-  static char kUsage[1024] = "Usage: /os ";
-  for(size_t i = 0; i < sizeof(OS_CATALOG) / sizeof(os_descriptor_t); i++) {
-    strncat(kUsage, OS_CATALOG[i].name, 32);
-    if(i != (sizeof(OS_CATALOG) / sizeof(os_descriptor_t) - 1)) {
-      strncat(kUsage, "|", 2);
-    }
+static void session_format_os_usage(char *buffer, size_t length) {
+  if (buffer == NULL || length == 0U) {
+    return;
   }
+
+  int written = snprintf(buffer, length, "Usage: /os ");
+  if (written < 0) {
+    buffer[0] = '\0';
+    return;
+  }
+
+  size_t offset = (size_t)written;
+  if (offset >= length) {
+    buffer[length - 1U] = '\0';
+    return;
+  }
+
+  for (size_t idx = 0U; idx < sizeof(OS_CATALOG) / sizeof(OS_CATALOG[0]); ++idx) {
+    const char *separator = idx == 0U ? "" : "|";
+    if (offset >= length) {
+      buffer[length - 1U] = '\0';
+      return;
+    }
+
+    written = snprintf(buffer + offset, length - offset, "%s%s", separator, OS_CATALOG[idx].name);
+    if (written < 0) {
+      buffer[offset] = '\0';
+      return;
+    }
+
+    size_t appended = (size_t)written;
+    if (appended >= length - offset) {
+      buffer[length - 1U] = '\0';
+      return;
+    }
+
+    offset += appended;
+  }
+}
+
+static void session_handle_os(session_ctx_t *ctx, const char *arguments) {
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_format_os_usage(usage, sizeof(usage));
+
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
 
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -11270,7 +11307,7 @@ static void session_handle_os(session_ctx_t *ctx, const char *arguments) {
   snprintf(working, sizeof(working), "%s", arguments);
   trim_whitespace_inplace(working);
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -11280,7 +11317,7 @@ static void session_handle_os(session_ctx_t *ctx, const char *arguments) {
 
   const os_descriptor_t *descriptor = session_lookup_os_descriptor(working);
   if (descriptor == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
