@@ -767,6 +767,8 @@ static void host_bbs_start_watchdog(host_t *host);
 static void *host_bbs_watchdog_thread(void *arg);
 static void host_bbs_watchdog_scan(host_t *host);
 static void host_security_configure(host_t *host);
+static void host_eliza_configure(host_t *host);
+static bool host_eliza_is_disabled(const host_t *host);
 static bool host_ensure_private_data_path(host_t *host, const char *path, bool create_directories);
 static void host_security_compact_whitespace(char *text);
 static bool host_security_execute_clamav_backend(host_t *host, char *notice, size_t notice_length);
@@ -1320,18 +1322,23 @@ typedef struct os_descriptor {
 } os_descriptor_t;
 
 static const os_descriptor_t OS_CATALOG[] = {
-    {"windows", "Windows"},      {"macos", "macOS"},      {"linux", "Linux"},
-    {"freebsd", "FreeBSD"},      {"ios", "iOS"},          {"android", "Android"},
-    {"watchos", "watchOS"},      {"solaris", "Solaris"},  {"openbsd", "OpenBSD"},
+    {"windows", "Windows"},      {"macos", "macOS"},        {"linux", "Linux"},
+    {"freebsd", "FreeBSD"},      {"ios", "iOS"},            {"android", "Android"},
+    {"watchos", "watchOS"},      {"solaris", "Solaris"},    {"openbsd", "OpenBSD"},
     {"netbsd", "NetBSD"},        {"dragonflybsd", "DragonFlyBSD"},
-    {"reactos", "ReactOS"},      {"tyzen", "Tyzen"},
+    {"reactos", "ReactOS"},      {"tyzen", "Tyzen"},        {"templeos", "TempleOS"}, {"zealos", "ZealOS"},
+    {"riotos", "RiotOS"}, {"freertos", "FreeRTOS"}, {"contikios", "ContikiOS"}, {"contiki-ng", "Contiki-NG"}, 
+    {"msdos", "MS-DOS"} , {"cp/m", "CP/M"}, {"k-dos", "K-DOS"}, {"freedos", "FreeDOS"},
+    {"serenityos", "SerenityOS"}, {"haiku", "Haiku"},        {"plan9", "Plan 9"},
+    {"amigaos", "AmigaOS"},
 };
 
 static const os_descriptor_t *session_lookup_os_descriptor(const char *name);
 
 static const char *DAILY_FUNCTIONS[] = {"sin",   "cos",   "tan",   "sqrt",  "log",   "exp",     "printf",
                                         "malloc", "free",  "memcpy", "strncpy", "qsort", "fopen",   "close",
-                                        "select", "poll",  "fork",  "exec",  "pthread_create", "strtok"};
+                                        "select", "poll",  "fork",  "exec",  "pthread_create", "strtok",
+                                        "fprintf", "fgets", "printk", "pr_info", "perror", "exit"};
 
 static bool chat_room_ensure_capacity(chat_room_t *room, size_t required) {
   if (room == NULL) {
@@ -2892,6 +2899,42 @@ static void host_security_configure(host_t *host) {
   }
 }
 
+static bool host_eliza_is_disabled(const host_t *host) {
+  if (host == NULL) {
+    return true;
+  }
+
+  return host->eliza_globally_disabled;
+}
+
+static void host_eliza_configure(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  host->eliza_globally_disabled = false;
+
+  const char *toggle = getenv("CHATTER_ELIZA");
+  if (toggle == NULL || toggle[0] == '\0') {
+    return;
+  }
+
+  if (strcasecmp(toggle, "0") == 0 || strcasecmp(toggle, "false") == 0 || strcasecmp(toggle, "off") == 0 ||
+      strcasecmp(toggle, "disable") == 0 || strcasecmp(toggle, "disabled") == 0 || strcasecmp(toggle, "no") == 0) {
+    host->eliza_globally_disabled = true;
+    printf("[eliza] moderator disabled via CHATTER_ELIZA=%s\n", toggle);
+    return;
+  }
+
+  if (strcasecmp(toggle, "1") == 0 || strcasecmp(toggle, "true") == 0 || strcasecmp(toggle, "on") == 0 ||
+      strcasecmp(toggle, "enable") == 0 || strcasecmp(toggle, "enabled") == 0 || strcasecmp(toggle, "yes") == 0) {
+    printf("[eliza] moderator enabled via CHATTER_ELIZA=%s\n", toggle);
+    return;
+  }
+
+  printf("[eliza] ignoring unrecognised CHATTER_ELIZA value '%s' (expected on/off)\n", toggle);
+}
+
 static void host_security_disable_filter(host_t *host, const char *reason) {
   if (host == NULL) {
     return;
@@ -3330,7 +3373,7 @@ static host_security_scan_result_t host_security_scan_payload(host_t *host, cons
 }
 
 static bool host_eliza_enable(host_t *host) {
-  if (host == NULL) {
+  if (host == NULL || host_eliza_is_disabled(host)) {
     return false;
   }
 
@@ -3388,7 +3431,7 @@ static bool host_eliza_disable(host_t *host) {
 }
 
 static void host_eliza_announce_join(host_t *host) {
-  if (host == NULL) {
+  if (host == NULL || host_eliza_is_disabled(host) || !atomic_load(&host->eliza_enabled)) {
     return;
   }
 
@@ -3397,7 +3440,7 @@ static void host_eliza_announce_join(host_t *host) {
 }
 
 static void host_eliza_announce_depart(host_t *host) {
-  if (host == NULL) {
+  if (host == NULL || host_eliza_is_disabled(host)) {
     return;
   }
 
@@ -3406,7 +3449,8 @@ static void host_eliza_announce_depart(host_t *host) {
 }
 
 static void host_eliza_say(host_t *host, const char *message) {
-  if (host == NULL || message == NULL || message[0] == '\0') {
+  if (host == NULL || message == NULL || message[0] == '\0' || host_eliza_is_disabled(host) ||
+      !atomic_load(&host->eliza_enabled)) {
     return;
   }
 
@@ -3486,6 +3530,10 @@ static void host_eliza_handle_private_message(session_ctx_t *ctx, const char *me
   }
 
   host_t *host = ctx->owner;
+  if (host_eliza_is_disabled(host)) {
+    session_send_system_line(ctx, "eliza has been disabled by server configuration.");
+    return;
+  }
   if (!atomic_load(&host->eliza_enabled)) {
     session_send_system_line(ctx, "eliza isn't around right now.");
     return;
@@ -3574,6 +3622,9 @@ static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const 
   }
 
   host_t *host = ctx->owner;
+  if (host_eliza_is_disabled(host)) {
+    return false;
+  }
   if (!atomic_load(&host->eliza_enabled)) {
     return false;
   }
@@ -3965,7 +4016,7 @@ static void host_eliza_state_save_locked(host_t *host) {
   eliza_state_record_t record = {0};
   record.magic = ELIZA_STATE_MAGIC;
   record.version = ELIZA_STATE_VERSION;
-  record.enabled = atomic_load(&host->eliza_enabled) ? 1U : 0U;
+  record.enabled = (!host_eliza_is_disabled(host) && atomic_load(&host->eliza_enabled)) ? 1U : 0U;
 
   bool success = fwrite(&record, sizeof(record), 1U, fp) == 1U;
   int write_error = 0;
@@ -4025,6 +4076,14 @@ static void host_eliza_state_load(host_t *host) {
   }
 
   if (!host_ensure_private_data_path(host, host->eliza_state_file_path, false)) {
+    return;
+  }
+
+  if (host_eliza_is_disabled(host)) {
+    pthread_mutex_lock(&host->lock);
+    atomic_store(&host->eliza_enabled, false);
+    atomic_store(&host->eliza_announced, false);
+    pthread_mutex_unlock(&host->lock);
     return;
   }
 
@@ -6125,6 +6184,10 @@ static void host_bbs_state_load(host_t *host) {
 
 static void host_bbs_watchdog_scan(host_t *host) {
   if (host == NULL) {
+    return;
+  }
+
+  if (host_eliza_is_disabled(host) || !atomic_load(&host->eliza_enabled)) {
     return;
   }
 
@@ -9800,15 +9863,20 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
 
   const bool translation_throttle =
       ctx->translation_enabled && ctx->input_translation_enabled && ctx->input_translation_language[0] != '\0';
-  if (translation_throttle && ctx->has_last_message_time) {
+  const long minimum_delay_ns = translation_throttle ? 1000000000L : 500000000L;
+  if (ctx->has_last_message_time) {
     time_t sec_delta = now.tv_sec - ctx->last_message_time.tv_sec;
     long nsec_delta = now.tv_nsec - ctx->last_message_time.tv_nsec;
     if (nsec_delta < 0L) {
       --sec_delta;
       nsec_delta += 1000000000L;
     }
-    if (sec_delta < 0 || (sec_delta == 0 && nsec_delta < 1000000000L)) {
-      session_send_system_line(ctx, "Please wait at least one second before sending another message.");
+    if (sec_delta < 0 || (sec_delta == 0 && nsec_delta < minimum_delay_ns)) {
+      if (translation_throttle) {
+        session_send_system_line(ctx, "Please wait at least one second before sending another message.");
+      } else {
+        session_send_system_line(ctx, "Please wait at least half a second before sending another message.");
+      }
       return;
     }
   }
@@ -11178,7 +11246,8 @@ cleanup:
 
 static void session_handle_os(session_ctx_t *ctx, const char *arguments) {
   static const char *kUsage =
-      "Usage: /os <windows|macos|linux|freebsd|ios|android|watchos|solaris|openbsd|netbsd|dragonflybsd|reactos|tyzen>";
+      "Usage: /os <windows|macos|linux|freebsd|ios|android|watchos|solaris|openbsd|netbsd|dragonflybsd|reactos|tyzen|"
+      "templeos|serenityos|haiku|plan9|amigaos>";
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
@@ -15422,6 +15491,9 @@ static void session_handle_eliza(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  host_t *host = ctx->owner;
+  const bool globally_disabled = host_eliza_is_disabled(host);
+
   char token[32];
   if (arguments != NULL) {
     snprintf(token, sizeof(token), "%s", arguments);
@@ -15431,16 +15503,24 @@ static void session_handle_eliza(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (token[0] == '\0') {
-    bool enabled = atomic_load(&ctx->owner->eliza_enabled);
-    char status[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(status, sizeof(status), "eliza is currently %s.", enabled ? "enabled" : "disabled");
-    session_send_system_line(ctx, status);
+    if (globally_disabled) {
+      session_send_system_line(ctx, "eliza has been disabled by server configuration.");
+    } else {
+      bool enabled = atomic_load(&host->eliza_enabled);
+      char status[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(status, sizeof(status), "eliza is currently %s.", enabled ? "enabled" : "disabled");
+      session_send_system_line(ctx, status);
+    }
     session_send_system_line(ctx, "Usage: /eliza <on|off>");
     return;
   }
 
   if (strcasecmp(token, "on") == 0) {
-    if (host_eliza_enable(ctx->owner)) {
+    if (globally_disabled) {
+      session_send_system_line(ctx, "eliza has been disabled by server configuration.");
+      return;
+    }
+    if (host_eliza_enable(host)) {
       session_send_system_line(ctx, "eliza enabled. She will now mingle with the room and watch for severe issues.");
     } else {
       session_send_system_line(ctx, "eliza is already active.");
@@ -15449,7 +15529,7 @@ static void session_handle_eliza(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (strcasecmp(token, "off") == 0) {
-    if (host_eliza_disable(ctx->owner)) {
+    if (host_eliza_disable(host)) {
       session_send_system_line(ctx, "eliza disabled. She will no longer intervene.");
     } else {
       session_send_system_line(ctx, "eliza is already inactive.");
@@ -15482,8 +15562,13 @@ static void session_handle_eliza_chat(session_ctx_t *ctx, const char *arguments)
   }
 
   host_t *host = ctx->owner;
+  if (host_eliza_is_disabled(host)) {
+    session_send_system_line(ctx, "eliza has been disabled by server configuration.");
+    return;
+  }
   if (!atomic_load(&host->eliza_enabled)) {
-    (void)host_eliza_enable(host);
+    session_send_system_line(ctx, "eliza isn't around right now. Ask an operator to enable her with /eliza on.");
+    return;
   }
 
   char memory_context[SSH_CHATTER_ELIZA_CONTEXT_BUFFER];
@@ -17653,6 +17738,8 @@ void host_init(host_t *host, auth_profile_t *auth) {
   atomic_store(&host->eliza_announced, false);
   host->eliza_last_action.tv_sec = 0;
   host->eliza_last_action.tv_nsec = 0L;
+
+  host_eliza_configure(host);
 
   (void)host_try_load_motd_from_path(host, "/etc/ssh-chatter/motd");
 

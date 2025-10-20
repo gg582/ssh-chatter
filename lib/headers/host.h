@@ -437,6 +437,7 @@ typedef struct host {
   bool random_seeded;
   client_manager_t *clients;
   webssh_client_t *web_client;
+  bool eliza_globally_disabled;
   _Atomic bool eliza_enabled;
   _Atomic bool eliza_announced;
   struct timespec eliza_last_action;
