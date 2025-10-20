@@ -1322,15 +1322,20 @@ typedef struct os_descriptor {
 } os_descriptor_t;
 
 static const os_descriptor_t OS_CATALOG[] = {
-    {"windows", "Windows"},      {"macos", "macOS"},        {"linux", "Linux"},
+    {"windows", "Windows"},      {"macos", "macOS"}, {"tvos", "tvOS"}, {"ipados", "iPadOS"},
+    {"linux", "Linux"}, {"chromeos", "Chrome OS"}, {"ubports", "UBPorts"}, {"postmarketos", "Postmarket OS"},
     {"freebsd", "FreeBSD"},      {"ios", "iOS"},            {"android", "Android"},
+    {"blackberry", "Blackberry"}, {"arcaos", "ArcaOS"}, {"ibm-i", "IBM i"}, {"harmonyos-next", "HarmonyOS NEXT"},
     {"watchos", "watchOS"},      {"solaris", "Solaris"},    {"openbsd", "OpenBSD"},
-    {"netbsd", "NetBSD"},        {"dragonflybsd", "DragonFlyBSD"},
-    {"reactos", "ReactOS"},      {"tyzen", "Tyzen"},        {"templeos", "TempleOS"}, {"zealos", "ZealOS"},
+    {"netbsd", "NetBSD"},        {"dragonflybsd", "DragonFlyBSD"}, {"bsd", "BSD"}, {"unix", "UNIX System"},
+    {"reactos", "ReactOS"},      {"tizen", "Tizen"},        {"templeos", "TempleOS"}, {"zealos", "ZealOS"},
     {"riotos", "RiotOS"}, {"freertos", "FreeRTOS"}, {"contikios", "ContikiOS"}, {"contiki-ng", "Contiki-NG"}, 
-    {"msdos", "MS-DOS"} , {"cp/m", "CP/M"}, {"k-dos", "K-DOS"}, {"freedos", "FreeDOS"},
-    {"serenityos", "SerenityOS"}, {"haiku", "Haiku"},        {"plan9", "Plan 9"},
-    {"amigaos", "AmigaOS"},
+    {"msdos", "MS-DOS"} , {"cp/m-86", "CP/M-86"}, {"k-dos", "K-DOS"}, {"freedos", "FreeDOS"},
+    {"serenityos", "SerenityOS"}, {"haiku", "Haiku"},        {"plan9", "Plan 9"}, {"riscos", "RISC OS"}, 
+    {"inferno", "Inferno"}, {"macos-classic", "MacOS (classic)"}, {"morphos", "MorphOS"}, 
+    {"amigaos", "AmigaOS"}, {"irix", "Irix"}, {"Hpux", "hpux"}, {"vms", "VMS"}, {"MINIX", "minix"},
+    {"nesos", "NESOS"}, {"lunix", "LUnix"}, {"os/2", "OS/2"}, {"pcdos", "PC Dos"},
+    {"atari-tos", "Atari TOS"}, {"aix", "AIX"}, {"amoeba", "Amoeba"},
 };
 
 static const os_descriptor_t *session_lookup_os_descriptor(const char *name);
@@ -11245,9 +11250,13 @@ cleanup:
 }
 
 static void session_handle_os(session_ctx_t *ctx, const char *arguments) {
-  static const char *kUsage =
-      "Usage: /os <windows|macos|linux|freebsd|ios|android|watchos|solaris|openbsd|netbsd|dragonflybsd|reactos|tyzen|"
-      "templeos|serenityos|haiku|plan9|amigaos>";
+  static char kUsage[1024] = "Usage: /os ";
+  for(size_t i = 0; i < sizeof(OS_CATALOG) / sizeof(os_descriptor_t); i++) {
+    strncat(kUsage, OS_CATALOG[i].name, 32);
+    if(i != (sizeof(OS_CATALOG) / sizeof(os_descriptor_t) - 1)) {
+      strncat(kUsage, "|", 2);
+    }
+  }
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
@@ -16961,7 +16970,7 @@ static const os_descriptor_t *session_lookup_os_descriptor(const char *name) {
     return NULL;
   }
 
-  for (size_t idx = 0U; idx < sizeof(OS_CATALOG) / sizeof(OS_CATALOG[0]); ++idx) {
+  for (size_t idx = 0U; idx < sizeof(OS_CATALOG) / sizeof(os_descriptor_t); ++idx) {
     if (strcasecmp(OS_CATALOG[idx].name, name) == 0) {
       return &OS_CATALOG[idx];
     }
