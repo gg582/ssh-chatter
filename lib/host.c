@@ -18332,14 +18332,6 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 
     ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDADDR, address);
     ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDPORT_STR, bind_port);
-    errno = 0;
-    if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, required_algorithms[0]) !=
-        SSH_OK) {
-      humanized_log_error("host", ssh_get_error(bind_handle), errno != 0 ? errno : EIO);
-      ssh_bind_free(bind_handle);
-      host_sleep_after_error();
-      continue;
-    }
 
     errno = 0;
     if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY_ALGORITHMS, hostkey_algorithm_config) !=
