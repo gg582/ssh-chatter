@@ -11627,7 +11627,7 @@ static void session_handle_delete_message(session_ctx_t *ctx, const char *argume
 
 static void session_handle_poll(session_ctx_t *ctx, const char *arguments) {
   static const char *kUsage =
-      "Usage: /poll <question>|<option1>|<option2>[|option3][|option4][|option5] or /poll to view current poll";
+      "Usage: /poll to view current poll, /poll close, /poll activate, or /poll <question>|<option1>|<option2>[|option3][|option4][|option5]";
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
@@ -11647,6 +11647,99 @@ static void session_handle_poll(session_ctx_t *ctx, const char *arguments) {
 
   if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
     session_send_system_line(ctx, "Only operators may modify the main poll.");
+    return;
+  }
+
+  if (strchr(working, '|') == NULL && strncmp(working, "close", 5) == 0 &&
+      (working[5] == '\0' || isspace((unsigned char)working[5]))) {
+    const char *extra = working + 5;
+    while (*extra == ' ' || *extra == '\t') {
+      ++extra;
+    }
+    if (*extra != '\0') {
+      session_send_system_line(ctx, "Usage: /poll close");
+      return;
+    }
+
+    host_t *host = ctx->owner;
+    pthread_mutex_lock(&host->lock);
+    if (!host->poll.active) {
+      pthread_mutex_unlock(&host->lock);
+      session_send_system_line(ctx, "There is no active poll to close.");
+      return;
+    }
+
+    poll_state_t snapshot = host->poll;
+    host->poll.active = false;
+    host_vote_state_save_locked(host);
+    pthread_mutex_unlock(&host->lock);
+
+    char announce[SSH_CHATTER_MESSAGE_LIMIT];
+    if (snapshot.id != 0U && snapshot.question[0] != '\0') {
+      int preview = (int)strnlen(snapshot.question, sizeof(snapshot.question));
+      if (preview > 120) {
+        preview = 120;
+      }
+      snprintf(announce, sizeof(announce), "* [%s] closed poll #%" PRIu64 ": %.*s", ctx->user.name, snapshot.id, preview,
+               snapshot.question);
+    } else if (snapshot.id != 0U) {
+      snprintf(announce, sizeof(announce), "* [%s] closed poll #%" PRIu64 ".", ctx->user.name, snapshot.id);
+    } else {
+      snprintf(announce, sizeof(announce), "* [%s] closed the active poll.", ctx->user.name);
+    }
+    chat_room_broadcast(&ctx->owner->room, announce, NULL);
+
+    session_send_system_line(ctx, "Poll closed successfully.");
+    session_send_poll_summary(ctx);
+    return;
+  }
+
+  if (strchr(working, '|') == NULL && strncmp(working, "activate", 8) == 0 &&
+      (working[8] == '\0' || isspace((unsigned char)working[8]))) {
+    const char *extra = working + 8;
+    while (*extra == ' ' || *extra == '\t') {
+      ++extra;
+    }
+    if (*extra != '\0') {
+      session_send_system_line(ctx, "Usage: /poll activate");
+      return;
+    }
+
+    host_t *host = ctx->owner;
+    pthread_mutex_lock(&host->lock);
+    if (host->poll.option_count == 0U || host->poll.question[0] == '\0') {
+      pthread_mutex_unlock(&host->lock);
+      session_send_system_line(ctx, "No poll is configured to activate.");
+      return;
+    }
+    if (host->poll.active) {
+      pthread_mutex_unlock(&host->lock);
+      session_send_system_line(ctx, "The poll is already active.");
+      return;
+    }
+
+    host->poll.active = true;
+    poll_state_t snapshot = host->poll;
+    host_vote_state_save_locked(host);
+    pthread_mutex_unlock(&host->lock);
+
+    char announce[SSH_CHATTER_MESSAGE_LIMIT];
+    if (snapshot.id != 0U && snapshot.question[0] != '\0') {
+      int preview = (int)strnlen(snapshot.question, sizeof(snapshot.question));
+      if (preview > 120) {
+        preview = 120;
+      }
+      snprintf(announce, sizeof(announce), "* [%s] activated poll #%" PRIu64 ": %.*s", ctx->user.name, snapshot.id, preview,
+               snapshot.question);
+    } else if (snapshot.id != 0U) {
+      snprintf(announce, sizeof(announce), "* [%s] activated poll #%" PRIu64 ".", ctx->user.name, snapshot.id);
+    } else {
+      snprintf(announce, sizeof(announce), "* [%s] activated the poll.", ctx->user.name);
+    }
+    chat_room_broadcast(&ctx->owner->room, announce, NULL);
+
+    session_send_system_line(ctx, "Poll activated successfully.");
+    session_send_poll_summary(ctx);
     return;
   }
 
