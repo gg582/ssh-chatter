@@ -6199,24 +6199,52 @@ static void host_bbs_watchdog_scan(host_t *host) {
     trim_whitespace_inplace(reason);
     const char *diagnostic = (reason[0] != '\0') ? reason : "policy violation";
 
+    bool comment_added = false;
+    bool already_flagged = false;
+    const char *flag_prefix = "자동 모더레이션 경고:";
+    size_t flag_prefix_len = strlen(flag_prefix);
+
     pthread_mutex_lock(&host->lock);
     bbs_post_t *live = host_find_bbs_post_locked(host, post->id);
-    if (live != NULL) {
-      host_clear_bbs_post_locked(host, live);
-      host_bbs_state_save_locked(host);
+    if (live != NULL && live->in_use) {
+      for (size_t comment = 0U; comment < live->comment_count; ++comment) {
+        const bbs_comment_t *entry = &live->comments[comment];
+        if (strcmp(entry->author, "eliza") == 0 &&
+            strncmp(entry->text, flag_prefix, flag_prefix_len) == 0) {
+          already_flagged = true;
+          break;
+        }
+      }
+
+      if (!already_flagged) {
+        if (live->comment_count < SSH_CHATTER_BBS_MAX_COMMENTS) {
+          bbs_comment_t *entry = &live->comments[live->comment_count++];
+          snprintf(entry->author, sizeof(entry->author), "%s", "eliza");
+          snprintf(entry->text, sizeof(entry->text),
+                   "자동 모더레이션 경고: %s",
+                   diagnostic);
+          entry->created_at = time(NULL);
+          live->bumped_at = entry->created_at;
+          host_bbs_state_save_locked(host);
+          comment_added = true;
+        } else {
+          printf("[bbs] unable to comment on post #%" PRIu64 " due to comment limit\n",
+                 post->id);
+        }
+      }
     }
     pthread_mutex_unlock(&host->lock);
 
-    if (live == NULL) {
+    if (!comment_added) {
       continue;
     }
 
-    printf("[bbs] removed post #%" PRIu64 " by %s (%s)\n", post->id,
+    printf("[bbs] flagged post #%" PRIu64 " by %s (%s)\n", post->id,
            post->author[0] != '\0' ? post->author : "unknown", diagnostic);
 
     char notice[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(notice, sizeof(notice),
-             "* [eliza] removed BBS post #%" PRIu64 " by %s (%s).",
+             "* [eliza] flagged BBS post #%" PRIu64 " by %s (%s).",
              post->id,
              post->author[0] != '\0' ? post->author : "unknown",
              diagnostic);
