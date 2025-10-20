@@ -1326,7 +1326,9 @@ static const os_descriptor_t OS_CATALOG[] = {
     {"freebsd", "FreeBSD"},      {"ios", "iOS"},            {"android", "Android"},
     {"watchos", "watchOS"},      {"solaris", "Solaris"},    {"openbsd", "OpenBSD"},
     {"netbsd", "NetBSD"},        {"dragonflybsd", "DragonFlyBSD"},
-    {"reactos", "ReactOS"},      {"tyzen", "Tyzen"},        {"templeos", "TempleOS"},
+    {"reactos", "ReactOS"},      {"tyzen", "Tyzen"},        {"templeos", "TempleOS"}, {"zealos", "ZealOS"},
+    {"riotos", "RiotOS"}, {"freertos", "FreeRTOS"}, {"contikios", "ContikiOS"}, {"contiki-ng", "Contiki-NG"}, 
+    {"msdos", "MS-DOS"} , {"cp/m", "CP/M"}, {"k-dos", "K-DOS"}, {"freedos", "FreeDOS"},
     {"serenityos", "SerenityOS"}, {"haiku", "Haiku"},        {"plan9", "Plan 9"},
     {"amigaos", "AmigaOS"},
 };
@@ -1335,7 +1337,8 @@ static const os_descriptor_t *session_lookup_os_descriptor(const char *name);
 
 static const char *DAILY_FUNCTIONS[] = {"sin",   "cos",   "tan",   "sqrt",  "log",   "exp",     "printf",
                                         "malloc", "free",  "memcpy", "strncpy", "qsort", "fopen",   "close",
-                                        "select", "poll",  "fork",  "exec",  "pthread_create", "strtok"};
+                                        "select", "poll",  "fork",  "exec",  "pthread_create", "strtok",
+                                        "fprintf", "fgets", "printk", "pr_info", "perror", "exit"};
 
 static bool chat_room_ensure_capacity(chat_room_t *room, size_t required) {
   if (room == NULL) {
