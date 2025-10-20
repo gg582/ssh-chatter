@@ -8487,11 +8487,11 @@ static void session_render_banner(session_ctx_t *ctx) {
 
   static const char *kBanner[] = {
     "+====================================================+",
-    "|    ____ _           _   _                         |",
-    "|   / ___| |__   __ _| |_| |_ ___ _ __              |",
-    "|  | |   | '_ \\ / _` | __| __/ _ \\ '__|             |",
-    "|  | |___| | | | (_| | |_| ||  __/ |                |",
-    "|   \\____|_| |_|\\__,_|\\__|\\__\\___|_|                |",
+    "|    ____ _           _   _                          |",
+    "|   / ___| |__   __ _| |_| |_ ___ _ __               |",
+    "|  | |   | '_ \\ / _` | __| __/ _ \\ '__|              |",
+    "|  | |___| | | | (_| | |_| ||  __/ |                 |",
+    "|   \\____|_| |_|\\__,_|\\__|\\__\\___|_|                 |",
     "|                                                    |",
     "|   cute and tiny SSH chat written in C language.    |",
     "|   Type /help to see available commands.            |",
@@ -8507,7 +8507,7 @@ static void session_render_banner(session_ctx_t *ctx) {
   size_t name_len = 0;
   if (ctx->user.name[0] != '\0')
     name_len = strlen(ctx->user.name);
-  int welcome_padding = 47 - (int)name_len;
+  int welcome_padding = 40 - (int)name_len;
   if (welcome_padding < 0) {
     welcome_padding = 0;
   }
