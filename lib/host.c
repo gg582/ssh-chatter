@@ -1725,11 +1725,45 @@ static hostkey_probe_result_t session_probe_client_hostkey_algorithms(
   return result;
 }
 
+static void host_log_key_error(const hostkey_spec_t *spec, const char *key_path, const char *error_message,
+                               int error_code) {
+  char message_buffer[256];
+  char decorated_message[512];
+  const char *algorithm = (spec != NULL && spec->algorithm_name != NULL && spec->algorithm_name[0] != '\0')
+                              ? spec->algorithm_name
+                              : "server";
+  const char *message = error_message;
+
+  if (message == NULL || message[0] == '\0') {
+    if (key_path != NULL && key_path[0] != '\0') {
+      snprintf(message_buffer, sizeof(message_buffer), "failed to load %s host key from %s", algorithm, key_path);
+    } else {
+      snprintf(message_buffer, sizeof(message_buffer), "failed to load %s host key", algorithm);
+    }
+    message = message_buffer;
+  }
+
+  const char *final_message = message;
+  if (key_path != NULL && key_path[0] != '\0' && message != message_buffer) {
+    int written = snprintf(decorated_message, sizeof(decorated_message), "%s (%s host key: %s)", message, algorithm,
+                           key_path);
+    if (written >= 0 && (size_t)written < sizeof(decorated_message)) {
+      final_message = decorated_message;
+    }
+  }
+
+  humanized_log_error("host", final_message, error_code);
+}
+
 static bool host_bind_configure_key(ssh_bind bind_handle, const hostkey_spec_t *spec,
                                     const char *key_path) {
   if (bind_handle == NULL || spec == NULL || key_path == NULL || key_path[0] == '\0') {
     return false;
   }
+
+  int direct_error_code = 0;
+  char direct_error_message[128];
+  direct_error_message[0] = '\0';
 
   if (spec->has_direct_option) {
     errno = 0;
@@ -1742,33 +1776,36 @@ static bool host_bind_configure_key(ssh_bind bind_handle, const hostkey_spec_t *
                                      strstr(error_message, "Unknown ssh option") != NULL) ||
                                     errno == ENOTSUP;
     if (!unsupported_option) {
-      humanized_log_error("host", error_message, errno != 0 ? errno : EIO);
-      return false;
+      direct_error_code = errno != 0 ? errno : EIO;
+      if (error_message != NULL && error_message[0] != '\0') {
+        strncpy(direct_error_message, error_message, sizeof(direct_error_message) - 1U);
+        direct_error_message[sizeof(direct_error_message) - 1U] = '\0';
+      } else {
+        direct_error_message[0] = '\0';
+      }
     }
   }
 
   ssh_key imported_key = NULL;
+  errno = 0;
   if (ssh_pki_import_privkey_file(key_path, NULL, NULL, NULL, &imported_key) != SSH_OK ||
       imported_key == NULL) {
-    char error_message[128];
-    snprintf(error_message, sizeof(error_message), "failed to import %s host key",
-             spec->algorithm_name != NULL ? spec->algorithm_name : "server");
-    humanized_log_error("host", error_message, EIO);
+    const int import_error = errno != 0 ? errno : EIO;
+    if (direct_error_code != 0 || direct_error_message[0] != '\0') {
+      host_log_key_error(spec, key_path, direct_error_message,
+                         direct_error_code != 0 ? direct_error_code : import_error);
+    } else {
+      host_log_key_error(spec, key_path, NULL, import_error);
+    }
     return false;
   }
 
+  errno = 0;
   const int import_result = ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_IMPORT_KEY, imported_key);
   ssh_key_free(imported_key);
   if (import_result != SSH_OK) {
     const char *bind_error = ssh_get_error(bind_handle);
-    if (bind_error != NULL) {
-      humanized_log_error("host", bind_error, errno != 0 ? errno : EIO);
-    } else {
-      char error_message[128];
-      snprintf(error_message, sizeof(error_message), "failed to apply %s host key",
-               spec->algorithm_name != NULL ? spec->algorithm_name : "server");
-      humanized_log_error("host", error_message, errno != 0 ? errno : EIO);
-    }
+    host_log_key_error(spec, key_path, bind_error, errno != 0 ? errno : EIO);
     return false;
   }
 
