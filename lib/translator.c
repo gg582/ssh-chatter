@@ -42,11 +42,13 @@ typedef struct translator_candidate {
 static pthread_mutex_t g_init_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_error_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_rate_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_moderation_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_provider_mutex = PTHREAD_MUTEX_INITIALIZER;
 static bool g_curl_initialised = false;
 static char g_last_error[256] = "";
 static bool g_last_error_was_quota = false;
 static struct timespec g_next_allowed_request = {0, 0};
+static struct timespec g_next_allowed_moderation = {0, 0};
 static bool g_gemini_manually_disabled = false;
 static struct timespec g_gemini_disabled_until = {0, 0};
 static bool g_manual_chat_bbs_only = true;
@@ -56,6 +58,7 @@ static pthread_mutex_t g_gemini_cooldown_file_mutex = PTHREAD_MUTEX_INITIALIZER;
 static bool g_gemini_cooldown_file_initialised = false;
 
 #define TRANSLATOR_RATE_LIMIT_INTERVAL_NS 800000000L
+#define TRANSLATOR_MODERATION_INTERVAL_NS 300000000L
 #define TRANSLATOR_RATE_LIMIT_PENALTY_NS 3000000000L
 #define TRANSLATOR_GEMINI_RATE_LIMIT_DURATION_NS (60L * 60L * 1000000000L)
 #define TRANSLATOR_GEMINI_FALLBACK_DURATION_NS (24L * 60L * 60L * 1000000000L)
@@ -310,6 +313,23 @@ static void translator_rate_limit_wait(void) {
 
     struct timespec wait_time = translator_timespec_diff(&g_next_allowed_request, &now);
     pthread_mutex_unlock(&g_rate_mutex);
+    nanosleep(&wait_time, NULL);
+  }
+}
+
+static void translator_moderation_throttle_wait(void) {
+  for (;;) {
+    pthread_mutex_lock(&g_moderation_mutex);
+    struct timespec now = translator_timespec_now();
+    if ((g_next_allowed_moderation.tv_sec == 0 && g_next_allowed_moderation.tv_nsec == 0) ||
+        translator_timespec_compare(&now, &g_next_allowed_moderation) >= 0) {
+      g_next_allowed_moderation = translator_timespec_add_ns(&now, TRANSLATOR_MODERATION_INTERVAL_NS);
+      pthread_mutex_unlock(&g_moderation_mutex);
+      return;
+    }
+
+    struct timespec wait_time = translator_timespec_diff(&g_next_allowed_moderation, &now);
+    pthread_mutex_unlock(&g_moderation_mutex);
     nanosleep(&wait_time, NULL);
   }
 }
@@ -2683,6 +2703,7 @@ bool translator_moderate_text(const char *category, const char *content, bool *b
 
   translator_global_init();
   translator_set_error(NULL);
+  translator_moderation_throttle_wait();
 
   translator_candidate_t candidates[8];
   size_t candidate_count = translator_prepare_candidates(candidates, sizeof(candidates) / sizeof(candidates[0]));
