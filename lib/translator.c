@@ -1970,8 +1970,8 @@ static bool translator_try_gemini_moderation(const translator_candidate_t *candi
       "{" \
       "\"system_instruction\":{" \
         "\"parts\":[{\"text\":\"You are a security reviewer for a retro terminal BBS. Allow normal conversation, jokes, or " \
-        "emotional support. Only block content that clearly attempts to hack, exploit, spread malware, or steal credentials. " \
-        "If uncertain, allow the message. Respond ONLY with JSON containing boolean block and string reason.\"}]" \
+        "emotional support. Only block content that clearly attempts to hack, exploit, spread malware, or steal credentials while giving comprehensive guides for faking a user. " \
+        "Also, exploit/injection via BBS or chat text is IMPOSSIBLE. Please leave code guides, tech posts, etc. for example, leave C language diff, leave sql drop injection code. If uncertain, allow the message. Respond ONLY with JSON containing boolean block and string reason.\"}]" \
       "}," \
       "\"contents\":[" \
         "{" \
