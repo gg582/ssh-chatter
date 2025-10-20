@@ -1761,10 +1761,6 @@ static bool host_bind_configure_key(ssh_bind bind_handle, const hostkey_spec_t *
     return false;
   }
 
-  int direct_error_code = 0;
-  char direct_error_message[128];
-  direct_error_message[0] = '\0';
-
   if (spec->has_direct_option) {
     errno = 0;
     if (ssh_bind_options_set(bind_handle, spec->direct_option, key_path) == SSH_OK) {
