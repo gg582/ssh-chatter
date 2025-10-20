@@ -1331,7 +1331,7 @@ static const os_descriptor_t OS_CATALOG[] = {
     {"netbsd", "NetBSD"},        {"dragonflybsd", "DragonFlyBSD"}, {"bsd", "BSD"}, {"unix", "UNIX System"},
     {"reactos", "ReactOS"},      {"tizen", "Tizen"},        {"templeos", "TempleOS"}, {"zealos", "ZealOS"},
     {"riotos", "RiotOS"}, {"freertos", "FreeRTOS"}, {"contikios", "ContikiOS"}, {"contiki-ng", "Contiki-NG"}, 
-    {"msdos", "MS-DOS"} , {"cp/m-86", "CP/M-86"}, {"k-dos", "K-DOS"}, {"freedos", "FreeDOS"},
+    {"msdos", "MS-DOS"} , {"cp/m", "CP/M"}, {"k-dos", "K-DOS"}, {"freedos", "FreeDOS"}, {"drdos", "DRROS"},
     {"serenityos", "SerenityOS"}, {"haiku", "Haiku"},        {"plan9", "Plan 9"}, {"riscos", "RISC OS"}, 
     {"inferno", "Inferno"}, {"macos-classic", "MacOS (classic)"}, {"morphos", "MorphOS"}, 
     {"amigaos", "AmigaOS"}, {"irix", "Irix"}, {"Hpux", "hpux"}, {"vms", "VMS"}, {"MINIX", "minix"},
