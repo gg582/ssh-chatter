@@ -61,7 +61,18 @@
 #define SSH_CHATTER_ASCIIART_TERMINATOR ">/__ARTWORK_END>"
 #define SSH_CHATTER_TETROMINO_SIZE 4
 #define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT ((unsigned int)INT_MAX)
-#define SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM "ssh-rsa"
+#define SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_DISPLAY \
+  "ssh-rsa, ssh-ed25519, ecdsa-sha2-nistp256"
+
+static const char *const SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS[] = {
+    "ssh-rsa",
+    "ssh-ed25519",
+    "ecdsa-sha2-nistp256",
+};
+
+static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
+    sizeof(SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS) /
+    sizeof(SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS[0]);
 #define SESSION_CHANNEL_TIMEOUT (-2)
 #define SSH_CHATTER_CHANNEL_RECOVERY_LIMIT ((unsigned int)INT_MAX)
 #define SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS 200000000L
@@ -1443,19 +1454,20 @@ static bool hostkey_list_contains(const unsigned char *data, size_t data_len, co
   return false;
 }
 
-static hostkey_probe_result_t session_probe_client_hostkey_algorithms(ssh_session session,
-                                                                      const char *required_algorithm) {
+static hostkey_probe_result_t session_probe_client_hostkey_algorithms(
+    ssh_session session, const char *const *required_algorithms, size_t required_algorithm_count) {
   hostkey_probe_result_t result;
   result.status = HOSTKEY_SUPPORT_UNKNOWN;
   result.offered_algorithms[0] = '\0';
 
-  if (session == NULL || required_algorithm == NULL || required_algorithm[0] == '\0') {
+  if (session == NULL || required_algorithms == NULL || required_algorithm_count == 0U) {
     return result;
   }
 
-  const size_t required_length = strlen(required_algorithm);
-  if (required_length == 0U) {
-    return result;
+  for (size_t i = 0; i < required_algorithm_count; ++i) {
+    if (required_algorithms[i] == NULL || required_algorithms[i][0] == '\0') {
+      return result;
+    }
   }
 
   const int socket_fd = ssh_get_fd(session);
@@ -1628,10 +1640,26 @@ static hostkey_probe_result_t session_probe_client_hostkey_algorithms(ssh_sessio
 
     if (hostkey_len == 0U) {
       result.status = HOSTKEY_SUPPORT_REJECTED;
-    } else if (hostkey_list_contains(hostkey_data, hostkey_len, required_algorithm, required_length)) {
-      result.status = HOSTKEY_SUPPORT_ACCEPTED;
     } else {
-      result.status = HOSTKEY_SUPPORT_REJECTED;
+      bool supported = false;
+      for (size_t i = 0; i < required_algorithm_count; ++i) {
+        const char *algorithm = required_algorithms[i];
+        const size_t required_length = strlen(algorithm);
+        if (required_length == 0U) {
+          continue;
+        }
+
+        if (hostkey_list_contains(hostkey_data, hostkey_len, algorithm, required_length)) {
+          supported = true;
+          break;
+        }
+      }
+
+      if (supported) {
+        result.status = HOSTKEY_SUPPORT_ACCEPTED;
+      } else {
+        result.status = HOSTKEY_SUPPORT_REJECTED;
+      }
     }
 
     free(buffer);
@@ -18039,8 +18067,8 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         continue;
       }
 
-      hostkey_probe_result_t hostkey_probe =
-          session_probe_client_hostkey_algorithms(session, SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM);
+      hostkey_probe_result_t hostkey_probe = session_probe_client_hostkey_algorithms(
+          session, SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS, SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT);
       if (hostkey_probe.status == HOSTKEY_SUPPORT_REJECTED) {
         char peer_address[NI_MAXHOST];
         session_describe_peer(session, peer_address, sizeof(peer_address));
@@ -18050,11 +18078,11 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         }
 
         if (hostkey_probe.offered_algorithms[0] != '\0') {
-          printf("[reject] client %s does not accept %s host key (client offered: %s)\n", peer_address,
-                 SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM, hostkey_probe.offered_algorithms);
+          printf("[reject] client %s does not accept one of [%s] host keys (client offered: %s)\n",
+                 peer_address, SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_DISPLAY, hostkey_probe.offered_algorithms);
         } else {
-          printf("[reject] client %s does not accept %s host key\n", peer_address,
-                 SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHM);
+          printf("[reject] client %s does not accept one of [%s] host keys\n", peer_address,
+                 SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_DISPLAY);
         }
 
         ssh_disconnect(session);
