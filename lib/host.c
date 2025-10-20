@@ -18443,7 +18443,10 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
             fatal_socket_error = false;
         }
 
-        ssh_free(session);
+        if(session != NULL) {
+          ssh_free(session);
+          session = NULL;
+	}
         if (fatal_socket_error) {
           clock_gettime(CLOCK_MONOTONIC, &host->listener.last_error_time);
           if (host_listener_attempt_recover(host, bind_handle, address, bind_port)) {
@@ -18479,12 +18482,14 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 
         ssh_disconnect(session);
         ssh_free(session);
+        session = NULL;
         continue;
       }
 
       if (ssh_handle_key_exchange(session) != SSH_OK) {
         humanized_log_error("host", ssh_get_error(session), EPROTO);
         ssh_free(session);
+        session = NULL;
         continue;
       }
 
@@ -18502,6 +18507,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         humanized_log_error("host", "failed to allocate session context", ENOMEM);
         ssh_disconnect(session);
         ssh_free(session);
+        session = NULL;
         continue;
       }
 
