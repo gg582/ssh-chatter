@@ -1761,10 +1761,6 @@ static bool host_bind_configure_key(ssh_bind bind_handle, const hostkey_spec_t *
     return false;
   }
 
-  int direct_error_code = 0;
-  char direct_error_message[128];
-  direct_error_message[0] = '\0';
-
   if (spec->has_direct_option) {
     errno = 0;
     if (ssh_bind_options_set(bind_handle, spec->direct_option, key_path) == SSH_OK) {
@@ -1776,13 +1772,8 @@ static bool host_bind_configure_key(ssh_bind bind_handle, const hostkey_spec_t *
                                      strstr(error_message, "Unknown ssh option") != NULL) ||
                                     errno == ENOTSUP;
     if (!unsupported_option) {
-      direct_error_code = errno != 0 ? errno : EIO;
-      if (error_message != NULL && error_message[0] != '\0') {
-        strncpy(direct_error_message, error_message, sizeof(direct_error_message) - 1U);
-        direct_error_message[sizeof(direct_error_message) - 1U] = '\0';
-      } else {
-        direct_error_message[0] = '\0';
-      }
+      host_log_key_error(spec, key_path, error_message, errno != 0 ? errno : EIO);
+      return false;
     }
   }
 
@@ -1791,12 +1782,7 @@ static bool host_bind_configure_key(ssh_bind bind_handle, const hostkey_spec_t *
   if (ssh_pki_import_privkey_file(key_path, NULL, NULL, NULL, &imported_key) != SSH_OK ||
       imported_key == NULL) {
     const int import_error = errno != 0 ? errno : EIO;
-    if (direct_error_code != 0 || direct_error_message[0] != '\0') {
-      host_log_key_error(spec, key_path, direct_error_message,
-                         direct_error_code != 0 ? direct_error_code : import_error);
-    } else {
-      host_log_key_error(spec, key_path, NULL, import_error);
-    }
+    host_log_key_error(spec, key_path, NULL, import_error);
     return false;
   }
 
