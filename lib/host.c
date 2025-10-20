@@ -11806,7 +11806,7 @@ static void session_handle_delete_message(session_ctx_t *ctx, const char *argume
 
 static void session_handle_poll(session_ctx_t *ctx, const char *arguments) {
   static const char *kUsage =
-      "Usage: /poll <question>|<option1>|<option2>[|option3][|option4][|option5] or /poll to view current poll";
+      "Usage: /poll <question>|<option1>|<option2>[|option3][|option4][|option5], /poll activate <question>|<option1>|<option2>[|option3][|option4][|option5], /poll close, or /poll to view current poll";
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
@@ -11824,6 +11824,69 @@ static void session_handle_poll(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  if (strncasecmp(working, "close", 5) == 0 &&
+      (working[5] == '\0' || isspace((unsigned char)working[5]))) {
+    const char *extra = working + 5;
+    while (*extra != '\0' && isspace((unsigned char)*extra)) {
+      ++extra;
+    }
+    if (*extra != '\0') {
+      session_send_system_line(ctx, kUsage);
+      return;
+    }
+
+    if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
+      session_send_system_line(ctx, "Only operators may modify the main poll.");
+      return;
+    }
+
+    host_t *host = ctx->owner;
+    pthread_mutex_lock(&host->lock);
+    if (!host->poll.active) {
+      pthread_mutex_unlock(&host->lock);
+      session_send_system_line(ctx, "There is no active poll to close.");
+      return;
+    }
+
+    uint64_t poll_id = host->poll.id;
+    char question_preview[121] = {0};
+    int preview_len = (int)strnlen(host->poll.question, sizeof(host->poll.question));
+    if (preview_len > 120) {
+      preview_len = 120;
+    }
+    if (preview_len > 0) {
+      snprintf(question_preview, sizeof(question_preview), "%.*s", preview_len, host->poll.question);
+    }
+
+    poll_state_reset(&host->poll);
+    host_vote_state_save_locked(host);
+    pthread_mutex_unlock(&host->lock);
+
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    if (question_preview[0] != '\0') {
+      snprintf(message, sizeof(message), "* [%s] closed poll #%" PRIu64 ": %s", ctx->user.name, poll_id, question_preview);
+    } else {
+      snprintf(message, sizeof(message), "* [%s] closed poll #%" PRIu64 ".", ctx->user.name, poll_id);
+    }
+    chat_room_broadcast(&ctx->owner->room, message, NULL);
+    session_send_system_line(ctx, "Poll closed.");
+    session_send_poll_summary(ctx);
+    return;
+  }
+
+  char *definition = working;
+  if (strncasecmp(working, "activate", 8) == 0 &&
+      (working[8] == '\0' || isspace((unsigned char)working[8]))) {
+    definition = working + 8;
+    while (*definition != '\0' && isspace((unsigned char)*definition)) {
+      ++definition;
+    }
+    if (*definition == '\0') {
+      session_send_system_line(ctx, kUsage);
+      return;
+    }
+  }
+
   if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
     session_send_system_line(ctx, "Only operators may modify the main poll.");
     return;
@@ -11831,7 +11894,7 @@ static void session_handle_poll(session_ctx_t *ctx, const char *arguments) {
 
   char *tokens[1 + 5];
   size_t token_count = 0U;
-  char *cursor = working;
+  char *cursor = definition;
   while (cursor != NULL && token_count < sizeof(tokens) / sizeof(tokens[0])) {
     char *next = strchr(cursor, '|');
     if (next != NULL) {
