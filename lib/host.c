@@ -1334,7 +1334,10 @@ static const os_descriptor_t OS_CATALOG[] = {
     {"freebsd", "FreeBSD"},      {"ios", "iOS"},          {"android", "Android"},
     {"watchos", "watchOS"},      {"solaris", "Solaris"},  {"openbsd", "OpenBSD"},
     {"netbsd", "NetBSD"},        {"dragonflybsd", "DragonFlyBSD"},
-    {"reactos", "ReactOS"},      {"tyzen", "Tyzen"},
+    {"reactos", "ReactOS"},      {"tizen", "Tizen"}, {"bsd", "BSD"},
+    {"msdos", "MS-DOS"}, {"drdos", "DR-DOS"}, {"kdos", "K-DOS"},
+    {"templeos", "TempleOS"}, {"zealos", "ZealOS"},
+    {"haiku", "Haiku"}, {"pcdos", "PC-DOS"}
 };
 
 static const os_descriptor_t *session_lookup_os_descriptor(const char *name);
@@ -9301,7 +9304,7 @@ static bool chat_history_entry_build_reaction_summary(const chat_history_entry_t
 
     const reaction_descriptor_t *descriptor = &REACTION_DEFINITIONS[idx];
     char chunk[64];
-    snprintf(chunk, sizeof(chunk), "%s ×%u", descriptor->icon, count);
+    snprintf(chunk, sizeof(chunk), "%s x%u", descriptor->icon, count);
 
     size_t chunk_len = strlen(chunk);
     if (chunk_len + 1U >= length - offset) {
@@ -11167,7 +11170,7 @@ cleanup:
 
 static void session_handle_os(session_ctx_t *ctx, const char *arguments) {
   static const char *kUsage =
-      "Usage: /os <windows|macos|linux|freebsd|ios|android|watchos|solaris|openbsd|netbsd|dragonflybsd|reactos|tyzen>";
+      "Usage: /os <windows|macos|linux|freebsd|ios|android|watchos|solaris|openbsd|netbsd|dragonflybsd|reactos|tyzen|kdos|pcdos|msdos|drdos|bsd|haiku|zealos|templeos>";
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
