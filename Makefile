@@ -26,7 +26,6 @@ CFLAGS = -std=c2x -Ofast \
 	-fdata-sections \
        	-ffunction-sections \
 	-fno-asynchronous-unwind-tables \
-	-fno-stack-protector\
 	-fstrict-aliasing \
 	-fstrict-overflow \
 	-fno-trapping-math
