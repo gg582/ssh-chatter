@@ -3301,6 +3301,10 @@ static host_security_scan_result_t host_security_scan_payload(host_t *host, cons
     return HOST_SECURITY_SCAN_CLEAN;
   }
 
+  if (!atomic_load(&host->eliza_enabled)) {
+    return HOST_SECURITY_SCAN_CLEAN;
+  }
+
   char snippet[1024];
   size_t copy_length = length;
   if (copy_length >= sizeof(snippet)) {
@@ -6152,6 +6156,14 @@ static void host_bbs_state_load(host_t *host) {
 
 static void host_bbs_watchdog_scan(host_t *host) {
   if (host == NULL) {
+    return;
+  }
+
+  if (!atomic_load(&host->eliza_enabled)) {
+    return;
+  }
+
+  if (!atomic_load(&host->security_ai_enabled)) {
     return;
   }
 
