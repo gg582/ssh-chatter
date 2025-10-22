@@ -21,7 +21,7 @@
 #define HOST_GRANTS_CLEAR_SIZE 4512
 
 #define SSH_CHATTER_SOUND_URL_LEN 1024
-#define SSH_CHATTER_MESSAGE_LIMIT 1024
+#define SSH_CHATTER_MESSAGE_LIMIT 4096
 #define SSH_CHATTER_MAX_INPUT_LEN 1024
 #define SSH_CHATTER_USERNAME_LEN 24
 #define SSH_CHATTER_IP_LEN 64
@@ -58,8 +58,8 @@
 #define SSH_CHATTER_JOIN_BAR_MAX 17
 #define SSH_CHATTER_LANG_NAME_LEN 64
 #define SSH_CHATTER_STATUS_LEN 128
-#define SSH_CHATTER_ASCIIART_MAX_LINES 64
-#define SSH_CHATTER_ASCIIART_BUFFER_LEN 1024
+#define SSH_CHATTER_ASCIIART_MAX_LINES 128
+#define SSH_CHATTER_ASCIIART_BUFFER_LEN 4096
 #define SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS 600
 #define SSH_CHATTER_ELIZA_MEMORY_MAX 128
 #define SSH_CHATTER_TETRIS_WIDTH 10
@@ -431,6 +431,9 @@ typedef struct host {
   char version[64];
   char motd[4096];
   char motd_base[4096];
+  char motd_path[PATH_MAX];
+  bool motd_has_file;
+  struct timespec motd_last_modified;
   bool translation_quota_exhausted;
   size_t connection_count;
   chat_history_entry_t *history;
@@ -496,7 +499,7 @@ typedef struct host {
   size_t join_activity_capacity;
   uint64_t captcha_nonce;
   bool has_last_captcha;
-  char last_captcha_question[256];
+  char last_captcha_question[512];
   char last_captcha_answer[64];
   struct timespec last_captcha_generated;
   pthread_t rss_thread;
