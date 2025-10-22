@@ -379,6 +379,9 @@ static void host_maybe_reload_motd_from_file(host_t *host) {
 
   struct stat file_info;
   if (stat(path_to_try, &file_info) != 0 || !S_ISREG(file_info.st_mode)) {
+    if (!had_file) {
+      (void)host_try_load_motd_from_path(host, path_to_try);
+    }
     if (had_file) {
       pthread_mutex_lock(&host->lock);
       if (host->motd_has_file && strncmp(host->motd_path, stored_path, sizeof(host->motd_path)) == 0) {
@@ -16036,12 +16039,15 @@ static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
 
 static bool session_try_reload_motd_from_candidate_path(host_t *host, const char *candidate,
                                                         char *resolved_path, size_t resolved_len,
-                                                        bool *path_exists_out) {
+                                                        bool *path_exists_out, int *error_out) {
   if (resolved_path != NULL && resolved_len > 0U) {
     resolved_path[0] = '\0';
   }
   if (path_exists_out != NULL) {
     *path_exists_out = false;
+  }
+  if (error_out != NULL) {
+    *error_out = 0;
   }
   if (host == NULL || candidate == NULL) {
     return false;
@@ -16093,20 +16099,31 @@ static bool session_try_reload_motd_from_candidate_path(host_t *host, const char
       continue;
     }
 
-    struct stat info;
-    if (stat(path, &info) != 0 || !S_ISREG(info.st_mode)) {
-      continue;
-    }
-
-    if (path_exists_out != NULL) {
-      *path_exists_out = true;
-    }
-    if (resolved_path != NULL && resolved_len > 0U) {
-      snprintf(resolved_path, resolved_len, "%s", path);
-    }
-
     if (host_try_load_motd_from_path(host, path)) {
+      if (path_exists_out != NULL) {
+        *path_exists_out = true;
+      }
+      if (resolved_path != NULL && resolved_len > 0U) {
+        snprintf(resolved_path, resolved_len, "%s", path);
+      }
       return true;
+    }
+
+    if (error_out != NULL && *error_out == 0) {
+      const int load_error = errno;
+      if (load_error != 0) {
+        *error_out = load_error;
+      }
+    }
+
+    struct stat info;
+    if (stat(path, &info) == 0 && S_ISREG(info.st_mode)) {
+      if (path_exists_out != NULL) {
+        *path_exists_out = true;
+      }
+      if (resolved_path != NULL && resolved_len > 0U) {
+        snprintf(resolved_path, resolved_len, "%s", path);
+      }
     }
   }
 
@@ -16132,41 +16149,69 @@ static void session_handle_motd(session_ctx_t *ctx) {
   snprintf(configured_path, sizeof(configured_path), "%s", ctx->owner->motd_path);
   pthread_mutex_unlock(&ctx->owner->lock);
 
+  bool config_path_exists = false;
+  int config_error = 0;
+  char resolved_path[PATH_MAX];
+  resolved_path[0] = '\0';
+
+  bool fallback_path_exists = false;
+  int fallback_error = 0;
+  char fallback_path[PATH_MAX];
+  fallback_path[0] = '\0';
+
   if (!has_file) {
-    char resolved_path[PATH_MAX];
-    bool path_exists = false;
     if (configured_path[0] != '\0' &&
         session_try_reload_motd_from_candidate_path(ctx->owner, configured_path, resolved_path,
-                                                    sizeof(resolved_path), &path_exists)) {
+                                                    sizeof(resolved_path), &config_path_exists, &config_error)) {
       pthread_mutex_lock(&ctx->owner->lock);
       snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
       has_file = ctx->owner->motd_has_file;
       pthread_mutex_unlock(&ctx->owner->lock);
-    } else if (path_exists) {
-      char warning[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(warning, sizeof(warning), "Failed to load message of the day from %s.",
-               resolved_path[0] != '\0' ? resolved_path : configured_path);
-      session_send_system_line(ctx, warning);
-      return;
+    } else if (resolved_path[0] == '\0' && configured_path[0] != '\0') {
+      snprintf(resolved_path, sizeof(resolved_path), "%s", configured_path);
     }
 
-    if (!has_file) {
-      resolved_path[0] = '\0';
-      path_exists = false;
-      if (session_try_reload_motd_from_candidate_path(ctx->owner, motd, resolved_path, sizeof(resolved_path),
-                                                      &path_exists)) {
+    if (!has_file && motd[0] != '\0') {
+      if (session_try_reload_motd_from_candidate_path(ctx->owner, motd, fallback_path, sizeof(fallback_path),
+                                                      &fallback_path_exists, &fallback_error)) {
         pthread_mutex_lock(&ctx->owner->lock);
         snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
         has_file = ctx->owner->motd_has_file;
         pthread_mutex_unlock(&ctx->owner->lock);
-      } else if (path_exists) {
-        char warning[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(warning, sizeof(warning), "Failed to load message of the day from %s.",
-                 resolved_path[0] != '\0' ? resolved_path : motd);
-        session_send_system_line(ctx, warning);
-        return;
+      } else if (fallback_path[0] == '\0') {
+        snprintf(fallback_path, sizeof(fallback_path), "%s", motd);
       }
     }
+  }
+
+  if (!has_file && configured_path[0] != '\0') {
+    const char *failing_path = resolved_path[0] != '\0' ? resolved_path : configured_path;
+    const bool any_path_exists = config_path_exists || fallback_path_exists;
+    const int failing_error = config_error != 0 ? config_error : fallback_error;
+    char warning[SSH_CHATTER_MESSAGE_LIMIT];
+    if (failing_error != 0) {
+      snprintf(warning, sizeof(warning), "Failed to load message of the day from %s: %s.", failing_path,
+               strerror(failing_error));
+    } else if (any_path_exists) {
+      snprintf(warning, sizeof(warning), "Failed to load message of the day from %s.", failing_path);
+    } else {
+      snprintf(warning, sizeof(warning), "Message of the day file %s was not found.", failing_path);
+    }
+    session_send_system_line(ctx, warning);
+    return;
+  }
+
+  if (!has_file && configured_path[0] == '\0' && fallback_path_exists) {
+    const char *failing_path = fallback_path[0] != '\0' ? fallback_path : motd;
+    char warning[SSH_CHATTER_MESSAGE_LIMIT];
+    if (fallback_error != 0) {
+      snprintf(warning, sizeof(warning), "Failed to load message of the day from %s: %s.", failing_path,
+               strerror(fallback_error));
+    } else {
+      snprintf(warning, sizeof(warning), "Failed to load message of the day from %s.", failing_path);
+    }
+    session_send_system_line(ctx, warning);
+    return;
   }
 
   if (motd[0] == '\0') {
