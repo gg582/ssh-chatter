@@ -345,43 +345,62 @@ static void host_maybe_reload_motd_from_file(host_t *host) {
     return;
   }
 
-  char motd_path[PATH_MAX];
-  motd_path[0] = '\0';
+  char stored_path[PATH_MAX];
+  stored_path[0] = '\0';
   struct timespec last_loaded = {0, 0};
-  bool has_file = false;
+  bool had_file = false;
 
   pthread_mutex_lock(&host->lock);
-  if (host->motd_has_file && host->motd_path[0] != '\0') {
-    snprintf(motd_path, sizeof(motd_path), "%s", host->motd_path);
+  if (host->motd_path[0] != '\0') {
+    snprintf(stored_path, sizeof(stored_path), "%s", host->motd_path);
     last_loaded = host->motd_last_modified;
-    has_file = true;
+    had_file = host->motd_has_file;
   }
   pthread_mutex_unlock(&host->lock);
 
-  if (!has_file) {
+  if (stored_path[0] == '\0') {
     return;
   }
 
-  struct stat file_info;
-  if (stat(motd_path, &file_info) != 0) {
-    pthread_mutex_lock(&host->lock);
-    if (host->motd_has_file && strncmp(host->motd_path, motd_path, sizeof(host->motd_path)) == 0) {
-      host->motd_has_file = false;
-      host->motd_path[0] = '\0';
-      host->motd_last_modified.tv_sec = 0;
-      host->motd_last_modified.tv_nsec = 0L;
+  char resolved_path[PATH_MAX];
+  resolved_path[0] = '\0';
+
+  if (stored_path[0] == '~' && (stored_path[1] == '\0' || stored_path[1] == '/')) {
+    const char *home = getenv("HOME");
+    if (home != NULL && home[0] != '\0') {
+      int expanded = snprintf(resolved_path, sizeof(resolved_path), "%s%s", home, stored_path + 1);
+      if (expanded <= 0 || (size_t)expanded >= sizeof(resolved_path)) {
+        resolved_path[0] = '\0';
+      }
     }
-    pthread_mutex_unlock(&host->lock);
+  }
+
+  const char *path_to_try = resolved_path[0] != '\0' ? resolved_path : stored_path;
+
+  struct stat file_info;
+  if (stat(path_to_try, &file_info) != 0 || !S_ISREG(file_info.st_mode)) {
+    if (!had_file) {
+      (void)host_try_load_motd_from_path(host, path_to_try);
+    }
+    if (had_file) {
+      pthread_mutex_lock(&host->lock);
+      if (host->motd_has_file && strncmp(host->motd_path, stored_path, sizeof(host->motd_path)) == 0) {
+        host->motd_has_file = false;
+        host->motd_last_modified.tv_sec = 0;
+        host->motd_last_modified.tv_nsec = 0L;
+      }
+      pthread_mutex_unlock(&host->lock);
+    }
     return;
   }
 
   struct timespec modified = host_stat_mtime(&file_info);
 
-  if (modified.tv_sec == last_loaded.tv_sec && modified.tv_nsec == last_loaded.tv_nsec) {
+  if (had_file && modified.tv_sec == last_loaded.tv_sec && modified.tv_nsec == last_loaded.tv_nsec) {
     return;
   }
 
-  (void)host_try_load_motd_from_path(host, motd_path);
+  (void)host_try_load_motd_from_path(host, path_to_try);
 }
 
 static unsigned session_simple_hash(const char *text) {
@@ -16018,6 +16037,99 @@ static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
   }
 }
 
+static bool session_try_reload_motd_from_candidate_path(host_t *host, const char *candidate,
+                                                        char *resolved_path, size_t resolved_len,
+                                                        bool *path_exists_out, int *error_out) {
+  if (resolved_path != NULL && resolved_len > 0U) {
+    resolved_path[0] = '\0';
+  }
+  if (path_exists_out != NULL) {
+    *path_exists_out = false;
+  }
+  if (error_out != NULL) {
+    *error_out = 0;
+  }
+  if (host == NULL || candidate == NULL) {
+    return false;
+  }
+
+  if (candidate[0] == '\0') {
+    return false;
+  }
+
+  char trimmed[PATH_MAX];
+  int copied = snprintf(trimmed, sizeof(trimmed), "%s", candidate);
+  if (copied <= 0 || (size_t)copied >= sizeof(trimmed)) {
+    return false;
+  }
+
+  trim_whitespace_inplace(trimmed);
+
+  if (trimmed[0] == '\0') {
+    return false;
+  }
+
+  if (strchr(trimmed, '\n') != NULL || strchr(trimmed, '\r') != NULL) {
+    return false;
+  }
+
+  const size_t kMaxPaths = 2U;
+  const char *paths_to_try[2] = {NULL, NULL};
+  size_t path_count = 0U;
+
+  char expanded[PATH_MAX];
+  expanded[0] = '\0';
+  if (trimmed[0] == '~' && (trimmed[1] == '\0' || trimmed[1] == '/')) {
+    const char *home = getenv("HOME");
+    if (home != NULL && home[0] != '\0') {
+      int expanded_written = snprintf(expanded, sizeof(expanded), "%s%s", home, trimmed + 1);
+      if (expanded_written > 0 && (size_t)expanded_written < sizeof(expanded)) {
+        paths_to_try[path_count++] = expanded;
+      }
+    }
+  }
+
+  if (path_count < kMaxPaths) {
+    paths_to_try[path_count++] = trimmed;
+  }
+
+  for (size_t idx = 0U; idx < path_count; ++idx) {
+    const char *path = paths_to_try[idx];
+    if (path == NULL || path[0] == '\0') {
+      continue;
+    }
+
+    if (host_try_load_motd_from_path(host, path)) {
+      if (path_exists_out != NULL) {
+        *path_exists_out = true;
+      }
+      if (resolved_path != NULL && resolved_len > 0U) {
+        snprintf(resolved_path, resolved_len, "%s", path);
+      }
+      return true;
+    }
+
+    if (error_out != NULL && *error_out == 0) {
+      const int load_error = errno;
+      if (load_error != 0) {
+        *error_out = load_error;
+      }
+    }
+
+    struct stat info;
+    if (stat(path, &info) == 0 && S_ISREG(info.st_mode)) {
+      if (path_exists_out != NULL) {
+        *path_exists_out = true;
+      }
+      if (resolved_path != NULL && resolved_len > 0U) {
+        snprintf(resolved_path, resolved_len, "%s", path);
+      }
+    }
+  }
+
+  return false;
+}
+
 static void session_handle_motd(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;
@@ -16026,17 +16138,81 @@ static void session_handle_motd(session_ctx_t *ctx) {
   host_refresh_motd(ctx->owner);
 
   char motd[sizeof(ctx->owner->motd)];
+  motd[0] = '\0';
+  bool has_file = false;
+  char configured_path[PATH_MAX];
+  configured_path[0] = '\0';
 
   pthread_mutex_lock(&ctx->owner->lock);
-
-  FILE *f=fopen(ctx->owner->motd, "rt");
-  if(f == NULL) return;
-  static char read[SSH_CHATTER_MOTD_MAX_NOTIFICATION_LEN];
-  memset(read, 0, SSH_CHATTER_MOTD_MAX_NOTIFICATION_LEN);
-  char *r = fgets(read, SSH_CHATTER_MOTD_MAX_NOTIFICATION_LEN, f);
-  fclose(f);
-  snprintf(motd, sizeof(motd), "%s", r);
+  snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
+  has_file = ctx->owner->motd_has_file;
+  snprintf(configured_path, sizeof(configured_path), "%s", ctx->owner->motd_path);
   pthread_mutex_unlock(&ctx->owner->lock);
+
+  bool config_path_exists = false;
+  int config_error = 0;
+  char resolved_path[PATH_MAX];
+  resolved_path[0] = '\0';
+
+  bool fallback_path_exists = false;
+  int fallback_error = 0;
+  char fallback_path[PATH_MAX];
+  fallback_path[0] = '\0';
+
+  if (!has_file) {
+    if (configured_path[0] != '\0' &&
+        session_try_reload_motd_from_candidate_path(ctx->owner, configured_path, resolved_path,
+                                                    sizeof(resolved_path), &config_path_exists, &config_error)) {
+      pthread_mutex_lock(&ctx->owner->lock);
+      snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
+      has_file = ctx->owner->motd_has_file;
+      pthread_mutex_unlock(&ctx->owner->lock);
+    } else if (resolved_path[0] == '\0' && configured_path[0] != '\0') {
+      snprintf(resolved_path, sizeof(resolved_path), "%s", configured_path);
+    }
+
+    if (!has_file && motd[0] != '\0') {
+      if (session_try_reload_motd_from_candidate_path(ctx->owner, motd, fallback_path, sizeof(fallback_path),
+                                                      &fallback_path_exists, &fallback_error)) {
+        pthread_mutex_lock(&ctx->owner->lock);
+        snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
+        has_file = ctx->owner->motd_has_file;
+        pthread_mutex_unlock(&ctx->owner->lock);
+      } else if (fallback_path[0] == '\0') {
+        snprintf(fallback_path, sizeof(fallback_path), "%s", motd);
+      }
+    }
+  }
+
+  if (!has_file && configured_path[0] != '\0') {
+    const char *failing_path = resolved_path[0] != '\0' ? resolved_path : configured_path;
+    const bool any_path_exists = config_path_exists || fallback_path_exists;
+    const int failing_error = config_error != 0 ? config_error : fallback_error;
+    char warning[SSH_CHATTER_MESSAGE_LIMIT];
+    if (failing_error != 0) {
+      snprintf(warning, sizeof(warning), "Failed to load message of the day from %s: %s.", failing_path,
+               strerror(failing_error));
+    } else if (any_path_exists) {
+      snprintf(warning, sizeof(warning), "Failed to load message of the day from %s.", failing_path);
+    } else {
+      snprintf(warning, sizeof(warning), "Message of the day file %s was not found.", failing_path);
+    }
+    session_send_system_line(ctx, warning);
+    return;
+  }
+
+  if (!has_file && configured_path[0] == '\0' && fallback_path_exists) {
+    const char *failing_path = fallback_path[0] != '\0' ? fallback_path : motd;
+    char warning[SSH_CHATTER_MESSAGE_LIMIT];
+    if (fallback_error != 0) {
+      snprintf(warning, sizeof(warning), "Failed to load message of the day from %s: %s.", failing_path,
+               strerror(fallback_error));
+    } else {
+      snprintf(warning, sizeof(warning), "Failed to load message of the day from %s.", failing_path);
+    }
+    session_send_system_line(ctx, warning);
+    return;
+  }
 
   if (motd[0] == '\0') {
     session_send_system_line(ctx, "No message of the day is configured.");
@@ -19571,7 +19747,11 @@ void host_set_motd(host_t *host, const char *motd) {
   session_normalize_newlines(normalized);
 
   pthread_mutex_lock(&host->lock);
-  host->motd_path[0] = '\0';
+  if (motd_path[0] != '\0') {
+    snprintf(host->motd_path, sizeof(host->motd_path), "%s", motd_path);
+  } else {
+    host->motd_path[0] = '\0';
+  }
   host->motd_has_file = false;
   host->motd_last_modified.tv_sec = 0;
   host->motd_last_modified.tv_nsec = 0L;
