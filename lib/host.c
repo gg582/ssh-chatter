@@ -345,43 +345,59 @@ static void host_maybe_reload_motd_from_file(host_t *host) {
     return;
   }
 
-  char motd_path[PATH_MAX];
-  motd_path[0] = '\0';
+  char stored_path[PATH_MAX];
+  stored_path[0] = '\0';
   struct timespec last_loaded = {0, 0};
-  bool has_file = false;
+  bool had_file = false;
 
   pthread_mutex_lock(&host->lock);
-  if (host->motd_has_file && host->motd_path[0] != '\0') {
-    snprintf(motd_path, sizeof(motd_path), "%s", host->motd_path);
+  if (host->motd_path[0] != '\0') {
+    snprintf(stored_path, sizeof(stored_path), "%s", host->motd_path);
     last_loaded = host->motd_last_modified;
-    has_file = true;
+    had_file = host->motd_has_file;
   }
   pthread_mutex_unlock(&host->lock);
 
-  if (!has_file) {
+  if (stored_path[0] == '\0') {
     return;
   }
 
-  struct stat file_info;
-  if (stat(motd_path, &file_info) != 0) {
-    pthread_mutex_lock(&host->lock);
-    if (host->motd_has_file && strncmp(host->motd_path, motd_path, sizeof(host->motd_path)) == 0) {
-      host->motd_has_file = false;
-      host->motd_path[0] = '\0';
-      host->motd_last_modified.tv_sec = 0;
-      host->motd_last_modified.tv_nsec = 0L;
+  char resolved_path[PATH_MAX];
+  resolved_path[0] = '\0';
+
+  if (stored_path[0] == '~' && (stored_path[1] == '\0' || stored_path[1] == '/')) {
+    const char *home = getenv("HOME");
+    if (home != NULL && home[0] != '\0') {
+      int expanded = snprintf(resolved_path, sizeof(resolved_path), "%s%s", home, stored_path + 1);
+      if (expanded <= 0 || (size_t)expanded >= sizeof(resolved_path)) {
+        resolved_path[0] = '\0';
+      }
     }
-    pthread_mutex_unlock(&host->lock);
+  }
+
+  const char *path_to_try = resolved_path[0] != '\0' ? resolved_path : stored_path;
+
+  struct stat file_info;
+  if (stat(path_to_try, &file_info) != 0 || !S_ISREG(file_info.st_mode)) {
+    if (had_file) {
+      pthread_mutex_lock(&host->lock);
+      if (host->motd_has_file && strncmp(host->motd_path, stored_path, sizeof(host->motd_path)) == 0) {
+        host->motd_has_file = false;
+        host->motd_last_modified.tv_sec = 0;
+        host->motd_last_modified.tv_nsec = 0L;
+      }
+      pthread_mutex_unlock(&host->lock);
+    }
     return;
   }
 
   struct timespec modified = host_stat_mtime(&file_info);
 
-  if (modified.tv_sec == last_loaded.tv_sec && modified.tv_nsec == last_loaded.tv_nsec) {
+  if (had_file && modified.tv_sec == last_loaded.tv_sec && modified.tv_nsec == last_loaded.tv_nsec) {
     return;
   }
 
-  (void)host_try_load_motd_from_path(host, motd_path);
+  (void)host_try_load_motd_from_path(host, path_to_try);
 }
 
 static unsigned session_simple_hash(const char *text) {
@@ -16107,17 +16123,21 @@ static void session_handle_motd(session_ctx_t *ctx) {
   char motd[sizeof(ctx->owner->motd)];
   motd[0] = '\0';
   bool has_file = false;
+  char configured_path[PATH_MAX];
+  configured_path[0] = '\0';
 
   pthread_mutex_lock(&ctx->owner->lock);
   snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
   has_file = ctx->owner->motd_has_file;
+  snprintf(configured_path, sizeof(configured_path), "%s", ctx->owner->motd_path);
   pthread_mutex_unlock(&ctx->owner->lock);
 
   if (!has_file) {
     char resolved_path[PATH_MAX];
     bool path_exists = false;
-    if (session_try_reload_motd_from_candidate_path(ctx->owner, motd, resolved_path, sizeof(resolved_path),
-                                                    &path_exists)) {
+    if (configured_path[0] != '\0' &&
+        session_try_reload_motd_from_candidate_path(ctx->owner, configured_path, resolved_path,
+                                                    sizeof(resolved_path), &path_exists)) {
       pthread_mutex_lock(&ctx->owner->lock);
       snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
       has_file = ctx->owner->motd_has_file;
@@ -16125,9 +16145,27 @@ static void session_handle_motd(session_ctx_t *ctx) {
     } else if (path_exists) {
       char warning[SSH_CHATTER_MESSAGE_LIMIT];
       snprintf(warning, sizeof(warning), "Failed to load message of the day from %s.",
-               resolved_path[0] != '\0' ? resolved_path : motd);
+               resolved_path[0] != '\0' ? resolved_path : configured_path);
       session_send_system_line(ctx, warning);
       return;
+    }
+
+    if (!has_file) {
+      resolved_path[0] = '\0';
+      path_exists = false;
+      if (session_try_reload_motd_from_candidate_path(ctx->owner, motd, resolved_path, sizeof(resolved_path),
+                                                      &path_exists)) {
+        pthread_mutex_lock(&ctx->owner->lock);
+        snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
+        has_file = ctx->owner->motd_has_file;
+        pthread_mutex_unlock(&ctx->owner->lock);
+      } else if (path_exists) {
+        char warning[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(warning, sizeof(warning), "Failed to load message of the day from %s.",
+                 resolved_path[0] != '\0' ? resolved_path : motd);
+        session_send_system_line(ctx, warning);
+        return;
+      }
     }
   }
 
@@ -19664,7 +19702,11 @@ void host_set_motd(host_t *host, const char *motd) {
   session_normalize_newlines(normalized);
 
   pthread_mutex_lock(&host->lock);
-  host->motd_path[0] = '\0';
+  if (motd_path[0] != '\0') {
+    snprintf(host->motd_path, sizeof(host->motd_path), "%s", motd_path);
+  } else {
+    host->motd_path[0] = '\0';
+  }
   host->motd_has_file = false;
   host->motd_last_modified.tv_sec = 0;
   host->motd_last_modified.tv_nsec = 0L;
