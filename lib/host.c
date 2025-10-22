@@ -19525,8 +19525,38 @@ void host_set_motd(host_t *host, const char *motd) {
     return;
   }
 
-  if (host_try_load_motd_from_path(host, motd)) {
-    return;
+  char motd_path[PATH_MAX];
+  motd_path[0] = '\0';
+  snprintf(motd_path, sizeof(motd_path), "%s", motd);
+  trim_whitespace_inplace(motd_path);
+
+  const size_t max_paths = 2U;
+  const char *paths_to_try[2] = {NULL, NULL};
+  size_t path_count = 0U;
+
+  char expanded_path[PATH_MAX];
+  expanded_path[0] = '\0';
+  if (motd_path[0] == '~') {
+    const char *home = getenv("HOME");
+    if (home != NULL && home[0] != '\0' &&
+        (motd_path[1] == '\0' || motd_path[1] == '/')) {
+      const int written = snprintf(expanded_path, sizeof(expanded_path), "%s%s", home, motd_path + 1);
+      if (written > 0 && (size_t)written < sizeof(expanded_path) && path_count < max_paths) {
+        paths_to_try[path_count++] = expanded_path;
+      }
+    }
+  }
+
+  if (motd_path[0] != '\0') {
+    if (path_count < max_paths) {
+      paths_to_try[path_count++] = motd_path;
+    }
+  }
+
+  for (size_t idx = 0U; idx < path_count; ++idx) {
+    if (paths_to_try[idx] != NULL && host_try_load_motd_from_path(host, paths_to_try[idx])) {
+      return;
+    }
   }
 
   char normalized[sizeof(host->motd)];
