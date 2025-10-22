@@ -16026,16 +16026,10 @@ static void session_handle_motd(session_ctx_t *ctx) {
   host_refresh_motd(ctx->owner);
 
   char motd[sizeof(ctx->owner->motd)];
+  motd[0] = '\0';
 
   pthread_mutex_lock(&ctx->owner->lock);
-
-  FILE *f=fopen(ctx->owner->motd, "rt");
-  if(f == NULL) return;
-  static char read[SSH_CHATTER_MOTD_MAX_NOTIFICATION_LEN];
-  memset(read, 0, SSH_CHATTER_MOTD_MAX_NOTIFICATION_LEN);
-  char *r = fgets(read, SSH_CHATTER_MOTD_MAX_NOTIFICATION_LEN, f);
-  fclose(f);
-  snprintf(motd, sizeof(motd), "%s", r);
+  snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
   pthread_mutex_unlock(&ctx->owner->lock);
 
   if (motd[0] == '\0') {
