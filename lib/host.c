@@ -128,23 +128,36 @@ static const char kTranslationQuotaSystemMessage[] =
 typedef struct {
   char question_en[256];
   char question_ko[256];
+  char question_ru[256];
+  char question_zh[256];
   char answer[64];
 } captcha_prompt_t;
 
 typedef enum {
-  CAPTCHA_TEMPLATE_PRONOUN,
-  CAPTCHA_TEMPLATE_PET_SPECIES,
-} captcha_template_t;
+  CAPTCHA_NAME_LANGUAGE_KOREAN,
+  CAPTCHA_NAME_LANGUAGE_ENGLISH,
+  CAPTCHA_NAME_LANGUAGE_RUSSIAN,
+  CAPTCHA_NAME_LANGUAGE_CHINESE_TRADITIONAL,
+  CAPTCHA_NAME_LANGUAGE_COUNT,
+} captcha_name_language_t;
 
 typedef struct {
-  const char *person_name;
-  const char *descriptor;
-  bool is_male;
-  const char *pet_species;
-  const char *pet_name;
-  const char *pet_pronoun;
-  captcha_template_t template_type;
-} captcha_story_t;
+  const char *text;
+  captcha_name_language_t language;
+} captcha_name_entry_t;
+
+typedef struct {
+  const char *ko;
+  const char *en;
+  const char *ru;
+  const char *zh;
+} captcha_language_phrase_t;
+
+typedef struct {
+  const captcha_name_entry_t *names;
+  size_t name_count;
+  captcha_name_language_t target;
+} captcha_name_count_scenario_t;
 
 typedef enum {
   HOST_SECURITY_SCAN_CLEAN = 0,
@@ -152,41 +165,134 @@ typedef enum {
   HOST_SECURITY_SCAN_ERROR,
 } host_security_scan_result_t;
 
-static const captcha_story_t CAPTCHA_STORIES[] = {
-    {"Jiho", "software engineer", true, "cat", "Hodu", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Sujin", "middle school teacher", false, "cat", "Dubu", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Minseok", "photographer", true, "cat", "Mimi", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Haeun", "florist", false, "cat", "Bori", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Yuna", "product designer", false, "cat", "Choco", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Donghyun", "barista", true, "cat", "Gaeul", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Seojun", "research scientist", true, "cat", "Nuri", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Ara", "ceramic artist", false, "cat", "Bam", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Kyungmin", "chef", true, "cat", "Tori", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Jisoo", "translator", false, "cat", "Haneul", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Emily", "librarian", false, "cat", "Whiskers", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Jacob", "firefighter", true, "cat", "Shadow", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Olivia", "graphic designer", false, "cat", "Pumpkin", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Noah", "high school coach", true, "cat", "Midnight", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Ava", "nurse", false, "cat", "Sunny", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Ethan", "software architect", true, "cat", "Clover", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Sophia", "baker", false, "cat", "Pebble", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Liam", "paramedic", true, "cat", "Smokey", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Isabella", "journalist", false, "cat", "Luna", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Mason", "carpenter", true, "cat", "Tiger", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Anya", "interpreter", false, "cat", "Pushok", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Dmitri", "aerospace engineer", true, "cat", "Barsik", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Elena", "doctor", false, "cat", "Sneg", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Nikolai", "history professor", true, "cat", "Murzik", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Irina", "pianist", false, "cat", "Mishka", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Sergei", "marine biologist", true, "cat", "Ryzhik", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Tatiana", "architect", false, "cat", "Zvezda", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Alexei", "journalist", true, "cat", "Kotya", "he", CAPTCHA_TEMPLATE_PRONOUN},
-    {"Yulia", "theatre director", false, "cat", "Lapka", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Mikhail", "chef", true, "cat", "Tuman", NULL, CAPTCHA_TEMPLATE_PRONOUN},
-    {"Hyeri", "illustrator", false, "dog", "Gureum", NULL, CAPTCHA_TEMPLATE_PET_SPECIES},
-    {"Brandon", "park ranger", true, "dog", "Buddy", NULL, CAPTCHA_TEMPLATE_PET_SPECIES},
-    {"Oksana", "music teacher", false, "dog", "Volna", NULL, CAPTCHA_TEMPLATE_PET_SPECIES},
+static const captcha_language_phrase_t CAPTCHA_LANGUAGE_PHRASES[CAPTCHA_NAME_LANGUAGE_COUNT] = {
+    [CAPTCHA_NAME_LANGUAGE_KOREAN] = {
+        .ko = "한국어 이름",
+        .en = "Korean names",
+        .ru = "корейских имён",
+        .zh = "韓文名字",
+    },
+    [CAPTCHA_NAME_LANGUAGE_ENGLISH] = {
+        .ko = "영어 이름",
+        .en = "English names",
+        .ru = "английских имён",
+        .zh = "英文名字",
+    },
+    [CAPTCHA_NAME_LANGUAGE_RUSSIAN] = {
+        .ko = "러시아어 이름",
+        .en = "Russian names",
+        .ru = "русских имён",
+        .zh = "俄文名字",
+    },
+    [CAPTCHA_NAME_LANGUAGE_CHINESE_TRADITIONAL] = {
+        .ko = "중국어 이름",
+        .en = "Chinese names",
+        .ru = "китайских имён",
+        .zh = "中文姓名",
+    },
 };
+
+static const captcha_name_entry_t CAPTCHA_NAME_SCENARIO_1[] = {
+    {"민수", CAPTCHA_NAME_LANGUAGE_KOREAN},
+    {"Alice", CAPTCHA_NAME_LANGUAGE_ENGLISH},
+    {"Андрей", CAPTCHA_NAME_LANGUAGE_RUSSIAN},
+    {"張偉", CAPTCHA_NAME_LANGUAGE_CHINESE_TRADITIONAL},
+    {"지영", CAPTCHA_NAME_LANGUAGE_KOREAN},
+};
+
+static const captcha_name_entry_t CAPTCHA_NAME_SCENARIO_2[] = {
+    {"Sophie", CAPTCHA_NAME_LANGUAGE_ENGLISH},
+    {"서준", CAPTCHA_NAME_LANGUAGE_KOREAN},
+    {"Ольга", CAPTCHA_NAME_LANGUAGE_RUSSIAN},
+    {"陳美玲", CAPTCHA_NAME_LANGUAGE_CHINESE_TRADITIONAL},
+    {"Oliver", CAPTCHA_NAME_LANGUAGE_ENGLISH},
+};
+
+static const captcha_name_entry_t CAPTCHA_NAME_SCENARIO_3[] = {
+    {"민아", CAPTCHA_NAME_LANGUAGE_KOREAN},
+    {"Екатерина", CAPTCHA_NAME_LANGUAGE_RUSSIAN},
+    {"劉德華", CAPTCHA_NAME_LANGUAGE_CHINESE_TRADITIONAL},
+    {"John", CAPTCHA_NAME_LANGUAGE_ENGLISH},
+    {"Дмитрий", CAPTCHA_NAME_LANGUAGE_RUSSIAN},
+};
+
+static const captcha_name_entry_t CAPTCHA_NAME_SCENARIO_4[] = {
+    {"Grace", CAPTCHA_NAME_LANGUAGE_ENGLISH},
+    {"김서연", CAPTCHA_NAME_LANGUAGE_KOREAN},
+    {"Наталья", CAPTCHA_NAME_LANGUAGE_RUSSIAN},
+    {"王麗君", CAPTCHA_NAME_LANGUAGE_CHINESE_TRADITIONAL},
+    {"林嘉慧", CAPTCHA_NAME_LANGUAGE_CHINESE_TRADITIONAL},
+};
+
+static const captcha_name_count_scenario_t CAPTCHA_NAME_SCENARIOS[] = {
+    {CAPTCHA_NAME_SCENARIO_1, sizeof(CAPTCHA_NAME_SCENARIO_1) / sizeof(CAPTCHA_NAME_SCENARIO_1[0]), CAPTCHA_NAME_LANGUAGE_KOREAN},
+    {CAPTCHA_NAME_SCENARIO_2, sizeof(CAPTCHA_NAME_SCENARIO_2) / sizeof(CAPTCHA_NAME_SCENARIO_2[0]), CAPTCHA_NAME_LANGUAGE_ENGLISH},
+    {CAPTCHA_NAME_SCENARIO_3, sizeof(CAPTCHA_NAME_SCENARIO_3) / sizeof(CAPTCHA_NAME_SCENARIO_3[0]), CAPTCHA_NAME_LANGUAGE_RUSSIAN},
+    {CAPTCHA_NAME_SCENARIO_4, sizeof(CAPTCHA_NAME_SCENARIO_4) / sizeof(CAPTCHA_NAME_SCENARIO_4[0]),
+     CAPTCHA_NAME_LANGUAGE_CHINESE_TRADITIONAL},
+};
+
+static size_t session_count_target_names(const captcha_name_entry_t *names, size_t name_count,
+                                         captcha_name_language_t target) {
+  if (names == NULL) {
+    return 0U;
+  }
+
+  size_t total = 0U;
+  for (size_t idx = 0U; idx < name_count; ++idx) {
+    if (names[idx].language == target) {
+      ++total;
+    }
+  }
+
+  return total;
+}
+
+static void session_join_name_list(const captcha_name_entry_t *names, size_t name_count, char *buffer, size_t buffer_length) {
+  if (buffer == NULL || buffer_length == 0U) {
+    return;
+  }
+
+  buffer[0] = '\0';
+  size_t written = 0U;
+  for (size_t idx = 0U; idx < name_count; ++idx) {
+    const char *name = (names != NULL && names[idx].text != NULL) ? names[idx].text : NULL;
+    if (name == NULL) {
+      continue;
+    }
+
+    int append = 0;
+    if (written > 0U) {
+      append = snprintf(buffer + written, buffer_length - written, ", %s", name);
+    } else {
+      append = snprintf(buffer + written, buffer_length - written, "%s", name);
+    }
+    if (append < 0) {
+      buffer[buffer_length - 1U] = '\0';
+      return;
+    }
+
+    size_t appended = (size_t)append;
+    if (appended >= buffer_length - written) {
+      buffer[buffer_length - 1U] = '\0';
+      return;
+    }
+
+    written += appended;
+  }
+}
+
+static void session_fill_comparison_prompt(captcha_prompt_t *prompt) {
+  if (prompt == NULL) {
+    return;
+  }
+
+  snprintf(prompt->question_en, sizeof(prompt->question_en), "Which number is larger, 3.11 or 3.9?");
+  snprintf(prompt->question_ko, sizeof(prompt->question_ko), "3.11과 3.9 중 어떤 게 더 큰가요?");
+  snprintf(prompt->question_ru, sizeof(prompt->question_ru), "Какое число больше: 3.11 или 3.9?");
+  snprintf(prompt->question_zh, sizeof(prompt->question_zh), "3.11 和 3.9 中哪一個數字較大？");
+  snprintf(prompt->answer, sizeof(prompt->answer), "%s", "3.9");
+}
 
 static bool string_contains_case_insensitive(const char *haystack, const char *needle) {
   if (haystack == NULL || needle == NULL || *needle == '\0') {
@@ -415,71 +521,12 @@ static unsigned session_simple_hash(const char *text) {
   return hash;
 }
 
-static const char *session_translate_pet_species_ko(const char *species) {
-  if (species == NULL || species[0] == '\0') {
-    return "반려동물";
-  }
-
-  if (strcasecmp(species, "cat") == 0) {
-    return "고양이";
-  }
-  if (strcasecmp(species, "dog") == 0) {
-    return "개";
-  }
-  return species;
-}
-
-static const char *session_translate_pet_pronoun_ko(const char *pronoun) {
-  if (pronoun == NULL || pronoun[0] == '\0') {
-    return "그 반려동물";
-  }
-
-  if (strcasecmp(pronoun, "the pet") == 0) {
-    return "그 반려동물";
-  }
-  if (strcasecmp(pronoun, "he") == 0) {
-    return "그";
-  }
-  if (strcasecmp(pronoun, "she") == 0) {
-    return "그녀";
-  }
-  if (strcasecmp(pronoun, "they") == 0) {
-    return "그들";
-  }
-  if (strcasecmp(pronoun, "them") == 0) {
-    return "그들을";
-  }
-  if (strcasecmp(pronoun, "it") == 0) {
-    return "그것";
-  }
-  if (strcasecmp(pronoun, "him") == 0) {
-    return "그를";
-  }
-  if (strcasecmp(pronoun, "her") == 0) {
-    return "그녀를";
-  }
-  return pronoun;
-}
-
-static const char *session_get_person_pronoun_ko(bool is_male) {
-  return is_male ? "그 남자" : "그 여자";
-}
-
 static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *prompt) {
   if (prompt == NULL) {
     return;
   }
 
   memset(prompt, 0, sizeof(*prompt));
-  const size_t story_count = sizeof(CAPTCHA_STORIES) / sizeof(CAPTCHA_STORIES[0]);
-  if (story_count == 0U) {
-    snprintf(prompt->question_en, sizeof(prompt->question_en),
-             "Tom is a man who has a cat named Tom. \"the pet\" is adorable. Answer what the double-quoted text refers to.");
-    snprintf(prompt->question_ko, sizeof(prompt->question_ko),
-             "Tom은 고양이 Tom을 키우는 남성입니다. \"그 반려동물\"이 가리키는 대상을 입력하세요.");
-    snprintf(prompt->answer, sizeof(prompt->answer), "%s", "Tom");
-    return;
-  }
 
   unsigned basis = session_simple_hash(ctx != NULL ? ctx->user.name : "user");
   basis ^= session_simple_hash(ctx != NULL ? ctx->client_ip : "ip");
@@ -508,74 +555,36 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
 
   basis ^= entropy;
 
-  const captcha_story_t *story = &CAPTCHA_STORIES[basis % story_count];
-  const char *person_name = (story->person_name != NULL && story->person_name[0] != '\0') ? story->person_name : "Someone";
-  const char *descriptor = (story->descriptor != NULL && story->descriptor[0] != '\0') ? story->descriptor : "professional";
-  const bool is_male = story->is_male;
-  const char *pet_species = (story->pet_species != NULL && story->pet_species[0] != '\0') ? story->pet_species : "pet";
-  const char *pet_species_ko = session_translate_pet_species_ko(pet_species);
-  const char *pet_name = (story->pet_name != NULL && story->pet_name[0] != '\0') ? story->pet_name : "the pet";
-  const char *pet_pronoun_en = (story->pet_pronoun != NULL && story->pet_pronoun[0] != '\0') ? story->pet_pronoun : "the pet";
-  const char *pet_pronoun_ko = session_translate_pet_pronoun_ko(story->pet_pronoun);
-  const char *person_pronoun_en = is_male ? "the man" : "the woman";
-  const char *person_pronoun_ko = session_get_person_pronoun_ko(is_male);
+  const size_t scenario_count = sizeof(CAPTCHA_NAME_SCENARIOS) / sizeof(CAPTCHA_NAME_SCENARIOS[0]);
+  const unsigned variant_seed = basis ^ (basis >> 16U) ^ (entropy << 1U);
 
-  if (story->template_type == CAPTCHA_TEMPLATE_PRONOUN) {
-    unsigned variant = basis ^ entropy ^ (basis >> 16U) ^ (entropy >> 16U);
-    if (variant == 0U) {
-      variant = 0x5f3759dfU;  // fallback mixing constant to avoid a degenerate branch
-    }
-
-    const bool refer_pet = (variant & 1U) != 0U;
-    const bool use_pronoun = (variant & 2U) != 0U;
-
-    const char *answer = refer_pet ? pet_name : person_name;
-
-    char quoted_buffer[128];
-    const char *quoted_text = NULL;
-    if (use_pronoun) {
-      quoted_text = refer_pet ? pet_pronoun_en : person_pronoun_en;
-    } else {
-      if (refer_pet) {
-        snprintf(quoted_buffer, sizeof(quoted_buffer), "the %s", pet_species);
-      } else {
-        snprintf(quoted_buffer, sizeof(quoted_buffer), "the %s", descriptor);
-      }
-      quoted_text = quoted_buffer;
-    }
-
-    char quoted_buffer_ko[128];
-    const char *quoted_text_ko = NULL;
-    if (use_pronoun) {
-      quoted_text_ko = refer_pet ? pet_pronoun_ko : person_pronoun_ko;
-    } else {
-      if (refer_pet) {
-        snprintf(quoted_buffer_ko, sizeof(quoted_buffer_ko), "그 %s", pet_species_ko);
-      } else if (descriptor[0] != '\0') {
-        snprintf(quoted_buffer_ko, sizeof(quoted_buffer_ko), "그 %s", descriptor);
-      } else {
-        snprintf(quoted_buffer_ko, sizeof(quoted_buffer_ko), "%s", "그 사람");
-      }
-      quoted_text_ko = quoted_buffer_ko;
-    }
-
-    snprintf(prompt->question_en, sizeof(prompt->question_en),
-             "%s is a %s who has a %s named %s. \"%s\" is adorable. Answer with correct casing what the double-quoted text refers to.",
-             person_name, descriptor, pet_species, pet_name, quoted_text);
-    snprintf(prompt->question_ko, sizeof(prompt->question_ko),
-             "%s은(는) 직업이 %s이며 %s라는 이름의 %s을(를) 키우고 있습니다. \"%s\"는 사랑스럽습니다. 따옴표 안 표현이 가리키는 대상을 정확한 대소문자로 입력하세요.",
-             person_name, descriptor, pet_name, pet_species_ko, quoted_text_ko);
-    snprintf(prompt->answer, sizeof(prompt->answer), "%s", answer);
+  if (scenario_count == 0U || (variant_seed & 1U) == 0U) {
+    session_fill_comparison_prompt(prompt);
     return;
   }
 
-  snprintf(prompt->question_en, sizeof(prompt->question_en),
-           "%s is a %s who has a %s named %s. What kind of pet does %s have?",
-           person_name, descriptor, pet_species, pet_name, person_name);
+  const captcha_name_count_scenario_t *scenario = &CAPTCHA_NAME_SCENARIOS[variant_seed % scenario_count];
+  if (scenario == NULL || scenario->names == NULL || scenario->name_count == 0U ||
+      scenario->target >= CAPTCHA_NAME_LANGUAGE_COUNT) {
+    session_fill_comparison_prompt(prompt);
+    return;
+  }
+
+  char name_list[256];
+  session_join_name_list(scenario->names, scenario->name_count, name_list, sizeof(name_list));
+
+  const captcha_language_phrase_t *phrases = &CAPTCHA_LANGUAGE_PHRASES[scenario->target];
+  size_t answer_count = session_count_target_names(scenario->names, scenario->name_count, scenario->target);
+
   snprintf(prompt->question_ko, sizeof(prompt->question_ko),
-           "%s은(는) 직업이 %s이며 %s라는 이름의 %s을(를) 키우고 있습니다. %s은(는) 어떤 반려동물을 키우나요?",
-           person_name, descriptor, pet_name, pet_species_ko, person_name);
-  snprintf(prompt->answer, sizeof(prompt->answer), "%s", pet_species);
+           "다음 이름 목록에서 %s은(는) 몇 개입니까? 목록: %s", phrases->ko, name_list);
+  snprintf(prompt->question_en, sizeof(prompt->question_en),
+           "In the following list of names, how many %s are there? List: %s", phrases->en, name_list);
+  snprintf(prompt->question_ru, sizeof(prompt->question_ru),
+           "Сколько %s в следующем списке? Список: %s", phrases->ru, name_list);
+  snprintf(prompt->question_zh, sizeof(prompt->question_zh),
+           "在以下名字列表中，有多少個%s？名單：%s", phrases->zh, name_list);
+  snprintf(prompt->answer, sizeof(prompt->answer), "%zu", answer_count);
 }
 
 typedef struct {
@@ -10682,8 +10691,11 @@ static void host_update_last_captcha_prompt(host_t *host, const captcha_prompt_t
   }
 
   pthread_mutex_lock(&host->lock);
-  char combined_question[sizeof(prompt->question_en) + sizeof(prompt->question_ko) + 32];
-  snprintf(combined_question, sizeof(combined_question), "Captcha: %s\n캡챠: %s", prompt->question_en, prompt->question_ko);
+  char combined_question[sizeof(prompt->question_en) + sizeof(prompt->question_ko) + sizeof(prompt->question_ru) +
+                         sizeof(prompt->question_zh) + 48];
+  snprintf(combined_question, sizeof(combined_question),
+           "캡챠: %s\nCaptcha: %s\n驗證碼: %s\nКапча: %s", prompt->question_ko, prompt->question_en, prompt->question_zh,
+           prompt->question_ru);
   snprintf(host->last_captcha_question, sizeof(host->last_captcha_question), "%s", combined_question);
   snprintf(host->last_captcha_answer, sizeof(host->last_captcha_answer), "%s", prompt->answer);
   host->has_last_captcha = host->last_captcha_question[0] != '\0' && host->last_captcha_answer[0] != '\0';
@@ -10708,12 +10720,18 @@ static bool session_run_captcha(session_ctx_t *ctx) {
   session_build_captcha_prompt(ctx, &prompt);
   host_update_last_captcha_prompt(ctx->owner, &prompt);
   session_send_system_line(ctx, "Before entering the room, solve this small puzzle.");
-  char english_prompt_line[sizeof(prompt.question_en) + 16];
-  snprintf(english_prompt_line, sizeof(english_prompt_line), "Captcha: %s", prompt.question_en);
-  session_send_system_line(ctx, english_prompt_line);
   char korean_prompt_line[sizeof(prompt.question_ko) + 16];
   snprintf(korean_prompt_line, sizeof(korean_prompt_line), "캡챠: %s", prompt.question_ko);
   session_send_system_line(ctx, korean_prompt_line);
+  char english_prompt_line[sizeof(prompt.question_en) + 16];
+  snprintf(english_prompt_line, sizeof(english_prompt_line), "Captcha: %s", prompt.question_en);
+  session_send_system_line(ctx, english_prompt_line);
+  char chinese_prompt_line[sizeof(prompt.question_zh) + 16];
+  snprintf(chinese_prompt_line, sizeof(chinese_prompt_line), "驗證碼: %s", prompt.question_zh);
+  session_send_system_line(ctx, chinese_prompt_line);
+  char russian_prompt_line[sizeof(prompt.question_ru) + 16];
+  snprintf(russian_prompt_line, sizeof(russian_prompt_line), "Капча: %s", prompt.question_ru);
+  session_send_system_line(ctx, russian_prompt_line);
   session_send_system_line(ctx, "Type your answer and press Enter:");
 
   char answer[sizeof(prompt.answer)];

@@ -500,7 +500,7 @@ typedef struct host {
   size_t join_activity_capacity;
   uint64_t captcha_nonce;
   bool has_last_captcha;
-  char last_captcha_question[512];
+  char last_captcha_question[1024];
   char last_captcha_answer[64];
   struct timespec last_captcha_generated;
   pthread_t rss_thread;
