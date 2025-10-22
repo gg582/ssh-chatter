@@ -430,6 +430,7 @@ typedef struct host {
   size_t ban_count;
   char version[64];
   char motd[4096];
+  char motd_base[4096];
   bool translation_quota_exhausted;
   size_t connection_count;
   chat_history_entry_t *history;
