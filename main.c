@@ -58,12 +58,16 @@ int main(int argc, char **argv) {
   unsigned int restart_attempts = 0U;
 
   while (true) {
-    host_t host;
-    memset(&host, 0, sizeof(host));
-    host_init(&host, &default_profile);
+    host_t *host = calloc(1, sizeof(*host));
+    if (host == NULL) {
+      fprintf(stderr, "failed to allocate host state\n");
+      return EXIT_FAILURE;
+    }
+
+    host_init(host, &default_profile);
 
     if (motd != NULL) {
-      host_set_motd(&host, motd);
+      host_set_motd(host, motd);
     }
 
     const char *address = bind_address != NULL ? bind_address : "0.0.0.0";
@@ -71,10 +75,12 @@ int main(int argc, char **argv) {
     printf("Starting ssh-chatter on %s:%s\n", address, port);
 
     errno = 0;
-    const int serve_result = host_serve(&host, bind_address, bind_port, host_key_dir);
+    const int serve_result = host_serve(host, bind_address, bind_port, host_key_dir);
     const int serve_errno = errno;
 
-    host_shutdown(&host);
+    host_shutdown(host);
+    free(host);
+    host = NULL;
 
     if (serve_result == 0) {
       return EXIT_SUCCESS;

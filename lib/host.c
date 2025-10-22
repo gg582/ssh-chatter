@@ -126,7 +126,8 @@ static const char kTranslationQuotaSystemMessage[] =
 #endif
 
 typedef struct {
-  char question[256];
+  char question_en[256];
+  char question_ko[256];
   char answer[64];
 } captcha_prompt_t;
 
@@ -311,6 +312,78 @@ static int timespec_compare(const struct timespec *lhs, const struct timespec *r
   return 0;
 }
 
+static bool host_try_load_motd_from_path(host_t *host, const char *path);
+
+static struct timespec host_stat_mtime(const struct stat *info) {
+  struct timespec result = {0, 0};
+  if (info == NULL) {
+    return result;
+  }
+
+#if defined(__APPLE__)
+  result.tv_sec = info->st_mtimespec.tv_sec;
+  result.tv_nsec = info->st_mtimespec.tv_nsec;
+#elif defined(_BSD_SOURCE) || defined(_SVID_SOURCE) || defined(__USE_XOPEN2K8)
+  result.tv_sec = info->st_mtim.tv_sec;
+  result.tv_nsec = info->st_mtim.tv_nsec;
+#else
+  result.tv_sec = info->st_mtime;
+  result.tv_nsec = 0;
+#endif
+
+  if (result.tv_sec < 0) {
+    result.tv_sec = 0;
+  }
+  if (result.tv_nsec < 0) {
+    result.tv_nsec = 0;
+  }
+  return result;
+}
+
+static void host_maybe_reload_motd_from_file(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  char motd_path[PATH_MAX];
+  motd_path[0] = '\0';
+  struct timespec last_loaded = {0, 0};
+  bool has_file = false;
+
+  pthread_mutex_lock(&host->lock);
+  if (host->motd_has_file && host->motd_path[0] != '\0') {
+    snprintf(motd_path, sizeof(motd_path), "%s", host->motd_path);
+    last_loaded = host->motd_last_modified;
+    has_file = true;
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (!has_file) {
+    return;
+  }
+
+  struct stat file_info;
+  if (stat(motd_path, &file_info) != 0) {
+    pthread_mutex_lock(&host->lock);
+    if (host->motd_has_file && strncmp(host->motd_path, motd_path, sizeof(host->motd_path)) == 0) {
+      host->motd_has_file = false;
+      host->motd_path[0] = '\0';
+      host->motd_last_modified.tv_sec = 0;
+      host->motd_last_modified.tv_nsec = 0L;
+    }
+    pthread_mutex_unlock(&host->lock);
+    return;
+  }
+
+  struct timespec modified = host_stat_mtime(&file_info);
+
+  if (modified.tv_sec == last_loaded.tv_sec && modified.tv_nsec == last_loaded.tv_nsec) {
+    return;
+  }
+
+  (void)host_try_load_motd_from_path(host, motd_path);
+}
+
 static unsigned session_simple_hash(const char *text) {
   unsigned hash = 5381U;
   if (text == NULL) {
@@ -323,13 +396,54 @@ static unsigned session_simple_hash(const char *text) {
   return hash;
 }
 
-static char * session_convert_string_to_lowercase(const char *string) {
-  static char str[16];
-  strncpy(str, string, strnlen(string, 16) + 1);
-  for(char *c = str; *c != '\0'; c++) {
-    *c = (char)tolower((int)(*c));
+static const char *session_translate_pet_species_ko(const char *species) {
+  if (species == NULL || species[0] == '\0') {
+    return "반려동물";
   }
-  return str;
+
+  if (strcasecmp(species, "cat") == 0) {
+    return "고양이";
+  }
+  if (strcasecmp(species, "dog") == 0) {
+    return "개";
+  }
+  return species;
+}
+
+static const char *session_translate_pet_pronoun_ko(const char *pronoun) {
+  if (pronoun == NULL || pronoun[0] == '\0') {
+    return "그 반려동물";
+  }
+
+  if (strcasecmp(pronoun, "the pet") == 0) {
+    return "그 반려동물";
+  }
+  if (strcasecmp(pronoun, "he") == 0) {
+    return "그";
+  }
+  if (strcasecmp(pronoun, "she") == 0) {
+    return "그녀";
+  }
+  if (strcasecmp(pronoun, "they") == 0) {
+    return "그들";
+  }
+  if (strcasecmp(pronoun, "them") == 0) {
+    return "그들을";
+  }
+  if (strcasecmp(pronoun, "it") == 0) {
+    return "그것";
+  }
+  if (strcasecmp(pronoun, "him") == 0) {
+    return "그를";
+  }
+  if (strcasecmp(pronoun, "her") == 0) {
+    return "그녀를";
+  }
+  return pronoun;
+}
+
+static const char *session_get_person_pronoun_ko(bool is_male) {
+  return is_male ? "그 남자" : "그 여자";
 }
 
 static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *prompt) {
@@ -340,8 +454,10 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
   memset(prompt, 0, sizeof(*prompt));
   const size_t story_count = sizeof(CAPTCHA_STORIES) / sizeof(CAPTCHA_STORIES[0]);
   if (story_count == 0U) {
-    snprintf(prompt->question, sizeof(prompt->question),
+    snprintf(prompt->question_en, sizeof(prompt->question_en),
              "Tom is a man who has a cat named Tom. \"the pet\" is adorable. Answer what the double-quoted text refers to.");
+    snprintf(prompt->question_ko, sizeof(prompt->question_ko),
+             "Tom은 고양이 Tom을 키우는 남성입니다. \"그 반려동물\"이 가리키는 대상을 입력하세요.");
     snprintf(prompt->answer, sizeof(prompt->answer), "%s", "Tom");
     return;
   }
@@ -374,6 +490,16 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
   basis ^= entropy;
 
   const captcha_story_t *story = &CAPTCHA_STORIES[basis % story_count];
+  const char *person_name = (story->person_name != NULL && story->person_name[0] != '\0') ? story->person_name : "Someone";
+  const char *descriptor = (story->descriptor != NULL && story->descriptor[0] != '\0') ? story->descriptor : "professional";
+  const bool is_male = story->is_male;
+  const char *pet_species = (story->pet_species != NULL && story->pet_species[0] != '\0') ? story->pet_species : "pet";
+  const char *pet_species_ko = session_translate_pet_species_ko(pet_species);
+  const char *pet_name = (story->pet_name != NULL && story->pet_name[0] != '\0') ? story->pet_name : "the pet";
+  const char *pet_pronoun_en = (story->pet_pronoun != NULL && story->pet_pronoun[0] != '\0') ? story->pet_pronoun : "the pet";
+  const char *pet_pronoun_ko = session_translate_pet_pronoun_ko(story->pet_pronoun);
+  const char *person_pronoun_en = is_male ? "the man" : "the woman";
+  const char *person_pronoun_ko = session_get_person_pronoun_ko(is_male);
 
   if (story->template_type == CAPTCHA_TEMPLATE_PRONOUN) {
     unsigned variant = basis ^ entropy ^ (basis >> 16U) ^ (entropy >> 16U);
@@ -384,35 +510,53 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
     const bool refer_pet = (variant & 1U) != 0U;
     const bool use_pronoun = (variant & 2U) != 0U;
 
-    const char *person_pronoun = story->is_male ? "the man" : "the woman";
-    const char *pet_pronoun = (story->pet_pronoun != NULL) ? story->pet_pronoun : "the pet";
-    const char *answer = refer_pet ? story->pet_name : story->person_name;
+    const char *answer = refer_pet ? pet_name : person_name;
 
     char quoted_buffer[128];
     const char *quoted_text = NULL;
     if (use_pronoun) {
-      quoted_text = refer_pet ? pet_pronoun : person_pronoun;
+      quoted_text = refer_pet ? pet_pronoun_en : person_pronoun_en;
     } else {
       if (refer_pet) {
-        snprintf(quoted_buffer, sizeof(quoted_buffer), "the %s", story->pet_species);
+        snprintf(quoted_buffer, sizeof(quoted_buffer), "the %s", pet_species);
       } else {
-        snprintf(quoted_buffer, sizeof(quoted_buffer), "the %s", story->descriptor);
+        snprintf(quoted_buffer, sizeof(quoted_buffer), "the %s", descriptor);
       }
       quoted_text = quoted_buffer;
     }
 
-    snprintf(prompt->question, sizeof(prompt->question),
-             "%s is a %s who has a %s named %s. \"%s\" is adorable. Answer with correct casing what the double-quoted text refers to."
-	     " - e.g) %s (O) %s (X)",
-             story->person_name, story->descriptor, story->pet_species, story->pet_name, quoted_text, story->person_name, session_convert_string_to_lowercase(story->person_name));
+    char quoted_buffer_ko[128];
+    const char *quoted_text_ko = NULL;
+    if (use_pronoun) {
+      quoted_text_ko = refer_pet ? pet_pronoun_ko : person_pronoun_ko;
+    } else {
+      if (refer_pet) {
+        snprintf(quoted_buffer_ko, sizeof(quoted_buffer_ko), "그 %s", pet_species_ko);
+      } else if (descriptor[0] != '\0') {
+        snprintf(quoted_buffer_ko, sizeof(quoted_buffer_ko), "그 %s", descriptor);
+      } else {
+        snprintf(quoted_buffer_ko, sizeof(quoted_buffer_ko), "%s", "그 사람");
+      }
+      quoted_text_ko = quoted_buffer_ko;
+    }
+
+    snprintf(prompt->question_en, sizeof(prompt->question_en),
+             "%s is a %s who has a %s named %s. \"%s\" is adorable. Answer with correct casing what the double-quoted text refers to.",
+             person_name, descriptor, pet_species, pet_name, quoted_text);
+    snprintf(prompt->question_ko, sizeof(prompt->question_ko),
+             "%s은(는) 직업이 %s이며 %s라는 이름의 %s을(를) 키우고 있습니다. \"%s\"는 사랑스럽습니다. 따옴표 안 표현이 가리키는 대상을 정확한 대소문자로 입력하세요.",
+             person_name, descriptor, pet_name, pet_species_ko, quoted_text_ko);
     snprintf(prompt->answer, sizeof(prompt->answer), "%s", answer);
     return;
   }
 
-  snprintf(prompt->question, sizeof(prompt->question),
+  snprintf(prompt->question_en, sizeof(prompt->question_en),
            "%s is a %s who has a %s named %s. What kind of pet does %s have? Answer in lowercase.",
-           story->person_name, story->descriptor, story->pet_species, story->pet_name, story->person_name);
-  snprintf(prompt->answer, sizeof(prompt->answer), "%s", story->pet_species);
+           person_name, descriptor, pet_species, pet_name, person_name);
+  snprintf(prompt->question_ko, sizeof(prompt->question_ko),
+           "%s은(는) 직업이 %s이며 %s라는 이름의 %s을(를) 키우고 있습니다. %s은(는) 어떤 반려동물을 키우나요? 정답은 소문자로 입력하세요.",
+           person_name, descriptor, pet_name, pet_species_ko, person_name);
+  snprintf(prompt->answer, sizeof(prompt->answer), "%s", pet_species);
 }
 
 typedef struct {
@@ -10453,7 +10597,9 @@ static void host_update_last_captcha_prompt(host_t *host, const captcha_prompt_t
   }
 
   pthread_mutex_lock(&host->lock);
-  snprintf(host->last_captcha_question, sizeof(host->last_captcha_question), "%s", prompt->question);
+  char combined_question[sizeof(prompt->question_en) + sizeof(prompt->question_ko) + 32];
+  snprintf(combined_question, sizeof(combined_question), "Captcha: %s\n캡챠: %s", prompt->question_en, prompt->question_ko);
+  snprintf(host->last_captcha_question, sizeof(host->last_captcha_question), "%s", combined_question);
   snprintf(host->last_captcha_answer, sizeof(host->last_captcha_answer), "%s", prompt->answer);
   host->has_last_captcha = host->last_captcha_question[0] != '\0' && host->last_captcha_answer[0] != '\0';
   if (host->has_last_captcha) {
@@ -10477,7 +10623,12 @@ static bool session_run_captcha(session_ctx_t *ctx) {
   session_build_captcha_prompt(ctx, &prompt);
   host_update_last_captcha_prompt(ctx->owner, &prompt);
   session_send_system_line(ctx, "Before entering the room, solve this small puzzle.");
-  session_send_system_line(ctx, prompt.question);
+  char english_prompt_line[sizeof(prompt.question_en) + 16];
+  snprintf(english_prompt_line, sizeof(english_prompt_line), "Captcha: %s", prompt.question_en);
+  session_send_system_line(ctx, english_prompt_line);
+  char korean_prompt_line[sizeof(prompt.question_ko) + 16];
+  snprintf(korean_prompt_line, sizeof(korean_prompt_line), "캡챠: %s", prompt.question_ko);
+  session_send_system_line(ctx, korean_prompt_line);
   session_send_system_line(ctx, "Type your answer and press Enter:");
 
   char answer[sizeof(prompt.answer)];
@@ -10571,7 +10722,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/video <url> [caption] - share a video link",
       "/audio <url> [caption] - share an audio clip",
       "/files <url> [caption] - share a downloadable file",
-      "/asciiart           - open the ASCII art composer (max 64 lines, 1/10 min per IP)",
+      "/asciiart           - open the ASCII art composer (max 128 lines, 1/10 min per IP)",
       "/game <tetris|liargame> - start a minigame in the chat (use /suspend! or Ctrl+Z to exit)",
       "Up/Down arrows           - scroll recent chat history",
       "/color (text;highlight[;bold]) - style your handle",
@@ -14488,7 +14639,7 @@ static void session_asciiart_begin(session_ctx_t *ctx) {
   session_asciiart_reset(ctx);
   ctx->asciiart_pending = true;
 
-  session_send_system_line(ctx, "ASCII art composer ready (max 64 lines, 10-minute cooldown per IP).");
+  session_send_system_line(ctx, "ASCII art composer ready (max 128 lines, 10-minute cooldown per IP).");
   session_send_system_line(ctx,
                            "Type " SSH_CHATTER_ASCIIART_TERMINATOR " on a line by itself or press Ctrl+S to finish.");
   session_send_system_line(ctx, "Press Ctrl+A to cancel the draft.");
@@ -18938,6 +19089,10 @@ void host_init(host_t *host, auth_profile_t *auth) {
            "\033[1G                                                 \n"
            "\033[1G============================================\n");
   snprintf(host->motd, sizeof(host->motd), "%s", host->motd_base);
+  host->motd_path[0] = '\0';
+  host->motd_has_file = false;
+  host->motd_last_modified.tv_sec = 0;
+  host->motd_last_modified.tv_nsec = 0L;
 
 
   host->translation_quota_exhausted = false;
@@ -19196,6 +19351,8 @@ static void host_refresh_motd(host_t *host) {
     return;
   }
 
+  host_maybe_reload_motd_from_file(host);
+
   pthread_mutex_lock(&host->lock);
   host_refresh_motd_locked(host);
   pthread_mutex_unlock(&host->lock);
@@ -19209,6 +19366,22 @@ static bool host_try_load_motd_from_path(host_t *host, const char *path) {
   FILE *motd_file = fopen(path, "rb");
   if (motd_file == NULL) {
     return false;
+  }
+
+  struct stat file_info;
+  bool have_info = false;
+  struct timespec modified = {0, 0};
+  int descriptor = fileno(motd_file);
+  if (descriptor >= 0 && fstat(descriptor, &file_info) == 0) {
+    modified = host_stat_mtime(&file_info);
+    have_info = true;
+  } else {
+    time_t now = time(NULL);
+    if (now != (time_t)-1) {
+      modified.tv_sec = now;
+      modified.tv_nsec = 0L;
+      have_info = true;
+    }
   }
 
   char motd_buffer[sizeof(host->motd)];
@@ -19264,6 +19437,14 @@ static bool host_try_load_motd_from_path(host_t *host, const char *path) {
   }
   motd_clean[sizeof(motd_clean) - 1U] = '\0';
   snprintf(host->motd_base, sizeof(host->motd_base), "%s", motd_clean);
+  snprintf(host->motd_path, sizeof(host->motd_path), "%s", path);
+  host->motd_has_file = true;
+  if (have_info) {
+    host->motd_last_modified = modified;
+  } else {
+    host->motd_last_modified.tv_sec = 0;
+    host->motd_last_modified.tv_nsec = 0L;
+  }
   host_refresh_motd_locked(host);
   pthread_mutex_unlock(&host->lock);
   return true;
@@ -19283,6 +19464,10 @@ void host_set_motd(host_t *host, const char *motd) {
   session_normalize_newlines(normalized);
 
   pthread_mutex_lock(&host->lock);
+  host->motd_path[0] = '\0';
+  host->motd_has_file = false;
+  host->motd_last_modified.tv_sec = 0;
+  host->motd_last_modified.tv_nsec = 0L;
   snprintf(host->motd_base, sizeof(host->motd_base), "%s", normalized);
   host_refresh_motd_locked(host);
   pthread_mutex_unlock(&host->lock);
