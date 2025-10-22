@@ -19,7 +19,7 @@ SSH-Chatter has started from a C reimplementation of the Go [`ssh-chat`](https:/
 - `/asciiart` live composer with a 128-line limit, a ten-minute per-IP cooldown, multi-line output, and keyboard shortcuts for cancelling with Ctrl+A and submitting with Ctrl+S or `>/__ARTWORK_END>`.
 - `/birthday` to register birthdays, `/soulmate` to find matching dates, `/grant <ip>` so LAN operators can delegate privileges by address, and `/revoke <ip>` so top LAN admins can reclaim them.
 - Chat UI refresh with a clean divider between history and input, instant input clearing after send, and a friendly "Wait for a moment..." banner with a playful loading bar before each join.
-- Story-driven captcha covering regional cat and dog ownership prompts.
+- Friendly multilingual captcha featuring easy comparisons and language-based name counts.
 - Expanded nickname support for non-Latin characters plus `/ban` upgrades that accept raw IP addresses alongside usernames.
 - Profile status updates via `/status <message|clear>` and `/showstatus <username>`, plus `/weather <region> <city>` for quick global forecasts.
 
