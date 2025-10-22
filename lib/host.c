@@ -551,10 +551,10 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
   }
 
   snprintf(prompt->question_en, sizeof(prompt->question_en),
-           "%s is a %s who has a %s named %s. What kind of pet does %s have? Answer in lowercase.",
+           "%s is a %s who has a %s named %s. What kind of pet does %s have?",
            person_name, descriptor, pet_species, pet_name, person_name);
   snprintf(prompt->question_ko, sizeof(prompt->question_ko),
-           "%s은(는) 직업이 %s이며 %s라는 이름의 %s을(를) 키우고 있습니다. %s은(는) 어떤 반려동물을 키우나요? 정답은 소문자로 입력하세요.",
+           "%s은(는) 직업이 %s이며 %s라는 이름의 %s을(를) 키우고 있습니다. %s은(는) 어떤 반려동물을 키우나요?",
            person_name, descriptor, pet_name, pet_species_ko, person_name);
   snprintf(prompt->answer, sizeof(prompt->answer), "%s", pet_species);
 }
@@ -10666,6 +10666,10 @@ static bool session_run_captcha(session_ctx_t *ctx) {
   if (answer[0] == '\0') {
     session_send_system_line(ctx, "Captcha answer missing. Disconnecting.");
     return false;
+  }
+
+  if (strcasecmp(prompt.answer, "dog") == 0 && strcmp(answer, "개") == 0) {
+    snprintf(answer, sizeof(answer), "%s", "dog");
   }
 
   if (strcasecmp(answer, prompt.answer) == 0) {
