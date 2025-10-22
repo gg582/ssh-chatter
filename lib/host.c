@@ -7920,17 +7920,71 @@ static void session_translation_normalize_output(char *text) {
   }
 }
 
+static bool host_motd_contains_translation_notice(const char *motd_text) {
+  if (motd_text == NULL) {
+    return false;
+  }
+
+  const size_t notice_length = strlen(kTranslationQuotaNotice);
+  const char *cursor = motd_text;
+  while (*cursor != '\0') {
+    if (strncmp(cursor, "\033[1G", 4) == 0) {
+      cursor += 4;
+      continue;
+    }
+    if (*cursor == '\r' || *cursor == '\n') {
+      ++cursor;
+      continue;
+    }
+    if (strncmp(cursor, kTranslationQuotaNotice, notice_length) == 0) {
+      return true;
+    }
+    while (*cursor != '\0' && *cursor != '\n') {
+      ++cursor;
+    }
+  }
+
+  return false;
+}
+
+static void host_prepend_translation_notice_in_memory(host_t *host, const char *existing_motd) {
+  if (host == NULL) {
+    return;
+  }
+
+  char updated[sizeof(host->motd)];
+  if (existing_motd != NULL && existing_motd[0] != '\0') {
+    snprintf(updated, sizeof(updated), "\033[1G%s\n\033[1G\n%s", kTranslationQuotaNotice, existing_motd);
+  } else {
+    snprintf(updated, sizeof(updated), "\033[1G%s\n", kTranslationQuotaNotice);
+  }
+
+  pthread_mutex_lock(&host->lock);
+  snprintf(host->motd_base, sizeof(host->motd_base), "%s", updated);
+  host_refresh_motd_locked(host);
+  pthread_mutex_unlock(&host->lock);
+}
+
 static void host_handle_translation_quota_exhausted(host_t *host) {
   if (host == NULL) {
     return;
   }
 
   bool already_marked = false;
+  char motd_path[PATH_MAX];
+  motd_path[0] = '\0';
+  char motd_snapshot[sizeof(host->motd_base)];
+  motd_snapshot[0] = '\0';
+
   pthread_mutex_lock(&host->lock);
   if (host->translation_quota_exhausted) {
     already_marked = true;
   } else {
     host->translation_quota_exhausted = true;
+    if (host->motd_has_file && host->motd_path[0] != '\0') {
+      snprintf(motd_path, sizeof(motd_path), "%s", host->motd_path);
+    }
+    snprintf(motd_snapshot, sizeof(motd_snapshot), "%s", host->motd_base);
   }
   pthread_mutex_unlock(&host->lock);
 
@@ -7938,7 +7992,15 @@ static void host_handle_translation_quota_exhausted(host_t *host) {
     return;
   }
 
-  const char *motd_path = "/etc/ssh-chatter/motd";
+  if (motd_path[0] == '\0') {
+    if (host_motd_contains_translation_notice(motd_snapshot)) {
+      host_refresh_motd(host);
+      return;
+    }
+    host_prepend_translation_notice_in_memory(host, motd_snapshot);
+    return;
+  }
+
   char existing[8192];
   existing[0] = '\0';
   size_t existing_len = 0U;
@@ -7957,6 +8019,9 @@ static void host_handle_translation_quota_exhausted(host_t *host) {
       const int close_error = errno;
       humanized_log_error("host", "failed to close motd file", close_error);
     }
+  } else {
+    host_prepend_translation_notice_in_memory(host, motd_snapshot);
+    return;
   }
 
   const char *existing_start = existing;
@@ -7973,6 +8038,7 @@ static void host_handle_translation_quota_exhausted(host_t *host) {
   if (out == NULL) {
     const int write_error = errno != 0 ? errno : EIO;
     humanized_log_error("host", "failed to update motd file", write_error);
+    host_prepend_translation_notice_in_memory(host, motd_snapshot);
     return;
   }
 
