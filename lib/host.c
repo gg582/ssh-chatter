@@ -71,6 +71,7 @@
 #define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT ((unsigned int)INT_MAX)
 #define SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_DISPLAY \
   "ssh-rsa, ssh-ed25519, ecdsa-sha2-nistp256"
+#define SSH_CHATTER_BIRTHDAY_WINDOW_SECONDS (7 * 24 * 60 * 60)
 
 static const char *const SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS[] = {
     "ssh-rsa",
@@ -213,6 +214,20 @@ static bool string_contains_case_insensitive(const char *haystack, const char *n
   }
 
   return false;
+}
+
+static bool host_is_leap_year(int year) {
+  if (year <= 0) {
+    return false;
+  }
+
+  if ((year % 4) != 0) {
+    return false;
+  }
+  if ((year % 100) != 0) {
+    return true;
+  }
+  return (year % 400) == 0;
 }
 
 static struct timespec timespec_diff(const struct timespec *end, const struct timespec *start) {
@@ -758,6 +773,10 @@ static bool host_ip_has_grant(host_t *host, const char *ip);
 static bool host_add_operator_grant_locked(host_t *host, const char *ip);
 static bool host_remove_operator_grant_locked(host_t *host, const char *ip);
 static void host_apply_grant_to_ip(host_t *host, const char *ip);
+static void host_refresh_motd_locked(host_t *host);
+static void host_refresh_motd(host_t *host);
+static void host_build_birthday_notice_locked(host_t *host, char *line, size_t length);
+static bool host_is_leap_year(int year);
 static void host_revoke_grant_from_ip(host_t *host, const char *ip);
 static void host_history_normalize_entry(host_t *host, chat_history_entry_t *entry);
 static const char *chat_attachment_type_label(chat_attachment_type_t type);
@@ -2633,6 +2652,7 @@ static void host_store_birthday(host_t *host, const session_ctx_t *ctx, const ch
     snprintf(pref->birthday, sizeof(pref->birthday), "%s", birthday);
   }
   host_state_save_locked(host);
+  host_refresh_motd_locked(host);
   pthread_mutex_unlock(&host->lock);
 }
 
@@ -15779,6 +15799,8 @@ static void session_handle_motd(session_ctx_t *ctx) {
     return;
   }
 
+  host_refresh_motd(ctx->owner);
+
   char motd[sizeof(ctx->owner->motd)];
 
   pthread_mutex_lock(&ctx->owner->lock);
@@ -18569,6 +18591,7 @@ static void *session_thread(void *arg) {
 
     session_render_banner(ctx);
     session_send_history(ctx);
+    host_refresh_motd(ctx->owner);
     if (ctx->owner->motd[0] != '\0') {
       session_send_system_line(ctx, ctx->owner->motd);
     }
@@ -18899,18 +18922,19 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->eliza_memory_count = 0U;
   host->eliza_memory_next_id = 1U;
   snprintf(host->version, sizeof(host->version), "ssh-chatter (C, rolling release)");
-  snprintf(host->motd, sizeof(host->motd),
-  "Welcome to ssh-chat!\n"
-  "\033[1G- Be polite to each other\n"
-  "\033[1G- fun fact: this server is written in pure c.\n"
-  "\033[1G============================================\n"
-  "\033[1G _      ____  ____  _____ ____  _        ____  _ \n"
-  "\033[1G/ \\__/|/  _ \\/  _ \\/  __//  __\\/ \\  /|  /   _\\/ \\\n"
-  "\033[1G| |\\/||| / \\|| | \\||  \\  |  \\/|| |\\ ||  |  /  | |\n"
-  "\033[1G| |  ||| \\_/|| |_/||  /_ |    /| | \\||  |  \\__\\_/\n"
-  "\033[1G\\_/  \\|\\____/\\____/\\____\\\\_/\\_\\\\_/  \\|  \\____/(_)\n"
-  "\033[1G                                                 \n"
-  "\033[1G============================================\n");
+  snprintf(host->motd_base, sizeof(host->motd_base),
+           "Welcome to ssh-chat!\n"
+           "\033[1G- Be polite to each other\n"
+           "\033[1G- fun fact: this server is written in pure c.\n"
+           "\033[1G============================================\n"
+           "\033[1G _      ____  ____  _____ ____  _        ____  _ \n"
+           "\033[1G/ \\__/|/  _ \\/  _ \\/  __//  __\\/ \\  /|  /   _\\/ \\\n"
+           "\033[1G| |\\/||| / \\|| | \\||  \\  |  \\/|| |\\ ||  |  /  | |\n"
+           "\033[1G| |  ||| \\_/|| |_/||  /_ |    /| | \\||  |  \\__\\_/\n"
+           "\033[1G\\_/  \\|\\____/\\____/\\____\\\\_/\\_\\\\_/  \\|  \\____/(_)\n"
+           "\033[1G                                                 \n"
+           "\033[1G============================================\n");
+  snprintf(host->motd, sizeof(host->motd), "%s", host->motd_base);
 
 
   host->translation_quota_exhausted = false;
@@ -19012,6 +19036,8 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_eliza_memory_load(host);
   host_eliza_state_load(host);
 
+  host_refresh_motd(host);
+
   host->clients = client_manager_create(host);
   if (host->clients == NULL) {
     humanized_log_error("host", "failed to create client manager", ENOMEM);
@@ -19025,6 +19051,151 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_security_start_clamav_backend(host);
   host_bbs_start_watchdog(host);
   host_rss_start_backend(host);
+}
+
+static void host_build_birthday_notice_locked(host_t *host, char *line, size_t length) {
+  if (line == NULL || length == 0U) {
+    return;
+  }
+
+  line[0] = '\0';
+
+  if (host == NULL) {
+    return;
+  }
+
+  time_t now = time(NULL);
+  if (now == (time_t)-1) {
+    return;
+  }
+
+  struct tm local_now;
+  if (localtime_r(&now, &local_now) == NULL) {
+    return;
+  }
+
+  struct tm today_tm = local_now;
+  today_tm.tm_hour = 0;
+  today_tm.tm_min = 0;
+  today_tm.tm_sec = 0;
+  today_tm.tm_isdst = -1;
+  time_t today = mktime(&today_tm);
+  if (today == (time_t)-1) {
+    today = now;
+  }
+
+  char names[SSH_CHATTER_MESSAGE_LIMIT];
+  names[0] = '\0';
+  size_t name_count = 0U;
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_PREFERENCES; ++idx) {
+    const user_preference_t *pref = &host->preferences[idx];
+    if (!pref->in_use || !pref->has_birthday) {
+      continue;
+    }
+    if (pref->username[0] == '\0' || pref->birthday[0] == '\0') {
+      continue;
+    }
+
+    int month = 0;
+    int day = 0;
+    if (sscanf(pref->birthday, "%*d-%d-%d", &month, &day) != 2) {
+      continue;
+    }
+    if (month < 1 || month > 12 || day < 1 || day > 31) {
+      continue;
+    }
+
+    int use_day = day;
+    int use_month = month;
+    const int current_year = local_now.tm_year + 1900;
+    if (use_month == 2 && use_day == 29 && !host_is_leap_year(current_year)) {
+      use_day = 28;
+    }
+
+    struct tm birthday_tm = today_tm;
+    birthday_tm.tm_year = local_now.tm_year;
+    birthday_tm.tm_mon = use_month - 1;
+    birthday_tm.tm_mday = use_day;
+    birthday_tm.tm_hour = 0;
+    birthday_tm.tm_min = 0;
+    birthday_tm.tm_sec = 0;
+    birthday_tm.tm_isdst = -1;
+    time_t birthday_time = mktime(&birthday_tm);
+    if (birthday_time == (time_t)-1) {
+      continue;
+    }
+
+    time_t diff = today - birthday_time;
+    if (diff < 0) {
+      birthday_tm.tm_year -= 1;
+      birthday_tm.tm_isdst = -1;
+      birthday_time = mktime(&birthday_tm);
+      if (birthday_time == (time_t)-1) {
+        continue;
+      }
+      diff = today - birthday_time;
+    }
+
+    if (diff < 0 || diff >= (time_t)SSH_CHATTER_BIRTHDAY_WINDOW_SECONDS) {
+      continue;
+    }
+
+    size_t current_len = strnlen(names, sizeof(names));
+    const size_t name_len = strnlen(pref->username, sizeof(pref->username));
+    if (name_len == 0U) {
+      continue;
+    }
+
+    if (current_len > 0U) {
+      if (current_len + 2U >= sizeof(names)) {
+        continue;
+      }
+      names[current_len++] = ',';
+      names[current_len++] = ' ';
+      names[current_len] = '\0';
+    }
+
+    if (name_len >= sizeof(names) - current_len) {
+      continue;
+    }
+
+    memcpy(names + current_len, pref->username, name_len);
+    current_len += name_len;
+    names[current_len] = '\0';
+    ++name_count;
+  }
+
+  if (name_count == 0U) {
+    return;
+  }
+
+  snprintf(line, length, "%s🎉 Happy birthday to %s!\n", ANSI_CURSOR_COLUMN_RESET, names);
+}
+
+static void host_refresh_motd_locked(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  char birthday_line[SSH_CHATTER_MESSAGE_LIMIT];
+  host_build_birthday_notice_locked(host, birthday_line, sizeof(birthday_line));
+
+  if (birthday_line[0] != '\0') {
+    snprintf(host->motd, sizeof(host->motd), "%s%s", birthday_line, host->motd_base);
+  } else {
+    snprintf(host->motd, sizeof(host->motd), "%s", host->motd_base);
+  }
+}
+
+static void host_refresh_motd(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  host_refresh_motd_locked(host);
+  pthread_mutex_unlock(&host->lock);
 }
 
 static bool host_try_load_motd_from_path(host_t *host, const char *path) {
@@ -19089,7 +19260,8 @@ static bool host_try_load_motd_from_path(host_t *host, const char *path) {
     motd_line = strtok_r(NULL, "\n", &next_line);
   }
   motd_clean[sizeof(motd_clean) - 1U] = '\0';
-  snprintf(host->motd, sizeof(host->motd), "%s", motd_clean);
+  snprintf(host->motd_base, sizeof(host->motd_base), "%s", motd_clean);
+  host_refresh_motd_locked(host);
   pthread_mutex_unlock(&host->lock);
   return true;
 }
@@ -19108,7 +19280,8 @@ void host_set_motd(host_t *host, const char *motd) {
   session_normalize_newlines(normalized);
 
   pthread_mutex_lock(&host->lock);
-  snprintf(host->motd, sizeof(host->motd), "%s", normalized);
+  snprintf(host->motd_base, sizeof(host->motd_base), "%s", normalized);
+  host_refresh_motd_locked(host);
   pthread_mutex_unlock(&host->lock);
 }
 
