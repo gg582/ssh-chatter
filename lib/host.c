@@ -655,7 +655,7 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
   {"ulsan-steel", "Molten metal glow inside heavy industry furnace halls", "bright-red", "black", true, "bright-yellow", "black", "red", true},
 
   {"jeolla-seaside", "Quiet sea and horizon light of Mokpo and Yeosu nights", "bright-cyan", "black", false, "cyan", "black", "bright-blue", true},
-  {"gwangju-biennale", "Experimental art city: violet neon and philosophical blue", "bright-magenta", "black", true, "bright-blue", "black", "magenta", true},
+  {"gwangju-biennale", "Experimental art city with a heritage of democracy: violet neon and philosophical blue", "bright-magenta", "black", true, "bright-blue", "black", "magenta", true},
   {"jeonju-hanok", "The symbol of north jeolla. warm roofs and calm golden light", "bright-yellow", "black", false, "yellow", "black", "bright-white", false},
 
   {"daejeon-tech", "Futuristic research district glow: clean LED light on steel gray night", "white", "black", true, "white", "black", "bright-green", true},
