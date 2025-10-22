@@ -45,6 +45,14 @@
 #define SSH_CHATTER_BBS_MAX_TAGS 4
 #define SSH_CHATTER_BBS_MAX_COMMENTS 64
 #define SSH_CHATTER_BBS_COMMENT_LEN 512
+#define SSH_CHATTER_RSS_MAX_FEEDS 32
+#define SSH_CHATTER_RSS_TAG_LEN 32
+#define SSH_CHATTER_RSS_URL_LEN 512
+#define SSH_CHATTER_RSS_ITEM_KEY_LEN 512
+#define SSH_CHATTER_RSS_TITLE_LEN 256
+#define SSH_CHATTER_RSS_LINK_LEN 512
+#define SSH_CHATTER_RSS_SUMMARY_LEN 512
+#define SSH_CHATTER_RSS_MAX_ITEMS 32
 #define SSH_CHATTER_MAX_GRANTS 128
 #define SSH_CHATTER_MAX_BLOCKED 64
 #define SSH_CHATTER_JOIN_BAR_MAX 17
@@ -214,6 +222,31 @@ typedef struct session_game_state {
   bool rng_seeded;
 } session_game_state_t;
 
+typedef struct rss_feed {
+  bool in_use;
+  char tag[SSH_CHATTER_RSS_TAG_LEN];
+  char url[SSH_CHATTER_RSS_URL_LEN];
+  char last_item_key[SSH_CHATTER_RSS_ITEM_KEY_LEN];
+  char last_title[SSH_CHATTER_RSS_TITLE_LEN];
+  char last_link[SSH_CHATTER_RSS_LINK_LEN];
+  time_t last_checked;
+} rss_feed_t;
+
+typedef struct rss_session_item {
+  char id[SSH_CHATTER_RSS_ITEM_KEY_LEN];
+  char title[SSH_CHATTER_RSS_TITLE_LEN];
+  char link[SSH_CHATTER_RSS_LINK_LEN];
+  char summary[SSH_CHATTER_RSS_SUMMARY_LEN];
+} rss_session_item_t;
+
+typedef struct session_rss_view {
+  bool active;
+  char tag[SSH_CHATTER_RSS_TAG_LEN];
+  size_t item_count;
+  size_t cursor;
+  rss_session_item_t items[SSH_CHATTER_RSS_MAX_ITEMS];
+} session_rss_view_t;
+
 typedef struct session_ctx {
   ssh_session session;
   ssh_channel channel;
@@ -295,6 +328,8 @@ typedef struct session_ctx {
   session_block_entry_t block_entries[SSH_CHATTER_MAX_BLOCKED];
   size_t block_entry_count;
   session_block_prompt_t block_pending;
+  bool in_rss_mode;
+  session_rss_view_t rss_view;
 } session_ctx_t;
 
 typedef struct user_preference {
@@ -434,6 +469,8 @@ typedef struct host {
   bbs_post_t bbs_posts[SSH_CHATTER_BBS_MAX_POSTS];
   size_t bbs_post_count;
   uint64_t next_bbs_id;
+  rss_feed_t rss_feeds[SSH_CHATTER_RSS_MAX_FEEDS];
+  size_t rss_feed_count;
   bool random_seeded;
   client_manager_t *clients;
   webssh_client_t *web_client;
@@ -442,6 +479,7 @@ typedef struct host {
   struct timespec eliza_last_action;
   char eliza_state_file_path[PATH_MAX];
   char eliza_memory_file_path[PATH_MAX];
+  char rss_state_file_path[PATH_MAX];
   eliza_memory_entry_t eliza_memory[SSH_CHATTER_ELIZA_MEMORY_MAX];
   size_t eliza_memory_count;
   uint64_t eliza_memory_next_id;
@@ -460,6 +498,11 @@ typedef struct host {
   char last_captcha_question[256];
   char last_captcha_answer[64];
   struct timespec last_captcha_generated;
+  pthread_t rss_thread;
+  bool rss_thread_initialized;
+  _Atomic bool rss_thread_running;
+  _Atomic bool rss_thread_stop;
+  struct timespec rss_last_run;
 } host_t;
 
 void host_init(host_t *host, auth_profile_t *auth);
