@@ -10613,6 +10613,9 @@ static void session_print_help(session_ctx_t *ctx) {
       "/1 .. /5             - vote for an option in the active poll",
       "/bbs [list|read|post|comment|regen|delete] - open the bulletin board system (see /bbs for details, finish "
       SSH_CHATTER_BBS_TERMINATOR " to post)",
+      "/rss list             - list saved RSS feeds",
+      "/rss read <tag>       - open a saved feed in the inline reader",
+      "/rss add <url> <tag>  - register a feed (operator only)",
       "/suspend!            - suspend the active game (Ctrl+Z while playing)",
       "Regular messages are shared with everyone.",
   };
