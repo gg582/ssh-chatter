@@ -87,6 +87,10 @@ static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
 #define SESSION_CHANNEL_TIMEOUT (-2)
 #define SSH_CHATTER_CHANNEL_RECOVERY_LIMIT ((unsigned int)INT_MAX)
 #define SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS 200000000L
+#define SSH_CHATTER_CHANNEL_WRITE_TIMEOUT_MS 200
+#define SSH_CHATTER_CHANNEL_WRITE_MAX_STALLS 30U
+#define SSH_CHATTER_CHANNEL_WRITE_CHUNK 1024U
+#define SSH_CHATTER_CHANNEL_WRITE_BACKOFF_NS 20000000L
 #define SSH_CHATTER_TRANSLATION_SEGMENT_GUARD 32U
 #define SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS 150000000L
 #define SSH_CHATTER_JOIN_RAPID_WINDOW_NS 60000000000LL
@@ -925,6 +929,10 @@ static void resolve_accept_channel_once(void) {
 static void trim_whitespace_inplace(char *text);
 static const char *lookup_color_code(const color_entry_t *entries, size_t entry_count, const char *name);
 static bool parse_bool_token(const char *token, bool *value);
+static void session_channel_write(session_ctx_t *ctx, const void *data, size_t length);
+static bool session_channel_write_all(session_ctx_t *ctx, const void *data, size_t length);
+static bool session_channel_wait_writable(session_ctx_t *ctx, int timeout_ms);
+static void session_channel_log_write_failure(session_ctx_t *ctx, const char *reason);
 static void session_apply_background_fill(session_ctx_t *ctx);
 static void session_write_rendered_line(session_ctx_t *ctx, const char *render_source);
 static void session_send_caption_line(session_ctx_t *ctx, const char *message);
@@ -9015,6 +9023,128 @@ static void *session_translation_worker(void *arg) {
   return NULL;
 }
 
+static void session_channel_log_write_failure(session_ctx_t *ctx, const char *reason) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (reason == NULL || reason[0] == '\0') {
+    reason = "channel write failure";
+  }
+
+  const char *username = ctx->user.name[0] != '\0' ? ctx->user.name : "unknown";
+  printf("[session] channel write failure for %s: %s\n", username, reason);
+}
+
+static bool session_channel_wait_writable(session_ctx_t *ctx, int timeout_ms) {
+  if (ctx == NULL || ctx->session == NULL) {
+    return false;
+  }
+
+  int fd = ssh_get_fd(ctx->session);
+  if (fd < 0) {
+    struct timespec backoff = {
+        .tv_sec = 0,
+        .tv_nsec = SSH_CHATTER_CHANNEL_WRITE_BACKOFF_NS,
+    };
+    nanosleep(&backoff, NULL);
+    return true;
+  }
+
+  struct pollfd pfd;
+  pfd.fd = fd;
+  pfd.events = POLLOUT;
+  pfd.revents = 0;
+
+  for (;;) {
+    int result = poll(&pfd, 1, timeout_ms);
+    if (result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return false;
+    }
+
+    if (result == 0) {
+      return false;
+    }
+
+    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+      return false;
+    }
+
+    if (pfd.revents & POLLOUT) {
+      return true;
+    }
+
+    return false;
+  }
+}
+
+static bool session_channel_write_all(session_ctx_t *ctx, const void *data, size_t length) {
+  if (ctx == NULL || ctx->channel == NULL || data == NULL || length == 0U) {
+    return true;
+  }
+
+  const unsigned char *cursor = (const unsigned char *)data;
+  size_t remaining = length;
+  unsigned int stalled = 0U;
+
+  while (remaining > 0U) {
+    if (!session_channel_wait_writable(ctx, SSH_CHATTER_CHANNEL_WRITE_TIMEOUT_MS)) {
+      if (++stalled >= SSH_CHATTER_CHANNEL_WRITE_MAX_STALLS) {
+        session_channel_log_write_failure(ctx, "channel write timed out");
+        return false;
+      }
+      continue;
+    }
+
+    stalled = 0U;
+
+    size_t chunk = remaining;
+    if (chunk > SSH_CHATTER_CHANNEL_WRITE_CHUNK) {
+      chunk = SSH_CHATTER_CHANNEL_WRITE_CHUNK;
+    }
+
+    ssize_t written = ssh_channel_write(ctx->channel, cursor, (uint32_t)chunk);
+    if (written == SSH_ERROR) {
+      const char *error = ssh_get_error(ctx->session);
+      session_channel_log_write_failure(ctx,
+                                        (error != NULL && error[0] != '\0') ? error : "channel write error");
+      return false;
+    }
+
+    if (written == 0) {
+      if (ssh_channel_is_eof(ctx->channel) || !ssh_channel_is_open(ctx->channel)) {
+        session_channel_log_write_failure(ctx, "channel closed during write");
+        return false;
+      }
+
+      if (++stalled >= SSH_CHATTER_CHANNEL_WRITE_MAX_STALLS) {
+        session_channel_log_write_failure(ctx, "channel write stalled");
+        return false;
+      }
+
+      continue;
+    }
+
+    cursor += written;
+    remaining -= (size_t)written;
+  }
+
+  return true;
+}
+
+static void session_channel_write(session_ctx_t *ctx, const void *data, size_t length) {
+  if (ctx == NULL || ctx->channel == NULL || data == NULL || length == 0U || ctx->should_exit) {
+    return;
+  }
+
+  if (!session_channel_write_all(ctx, data, length)) {
+    ctx->should_exit = true;
+  }
+}
+
 // session_apply_background_fill reapplies the palette background to the
 // current terminal row so subsequent output starts from a clean, tinted
 // baseline.
@@ -9027,14 +9157,14 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
   const size_t bg_len = strlen(bg);
 
   if (bg_len > 0U) {
-    ssh_channel_write(ctx->channel, bg, bg_len);
+    session_channel_write(ctx, bg, bg_len);
   }
 
-  ssh_channel_write(ctx->channel, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
-  ssh_channel_write(ctx->channel, "\r", 1U);
+  session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
+  session_channel_write(ctx, "\r", 1U);
 
   if (bg_len > 0U) {
-    ssh_channel_write(ctx->channel, bg, bg_len);
+    session_channel_write(ctx, bg, bg_len);
   }
 }
 
@@ -9047,14 +9177,14 @@ static void session_write_rendered_line(session_ctx_t *ctx, const char *render_s
   const size_t bg_len = strlen(bg);
 
   if (bg_len == 0U) {
-    ssh_channel_write(ctx->channel, render_source, strlen(render_source));
-    ssh_channel_write(ctx->channel, "\r\n", 2U);
+    session_channel_write(ctx, render_source, strlen(render_source));
+    session_channel_write(ctx, "\r\n", 2U);
     return;
   }
 
-  ssh_channel_write(ctx->channel, bg, bg_len);
-  ssh_channel_write(ctx->channel, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
-  ssh_channel_write(ctx->channel, "\r", 1U);
+  session_channel_write(ctx, bg, bg_len);
+  session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
+  session_channel_write(ctx, "\r", 1U);
 
   char expanded[SSH_CHATTER_TRANSLATION_WORKING_LEN + SSH_CHATTER_MESSAGE_LIMIT];
   size_t out_idx = 0U;
@@ -9084,9 +9214,9 @@ static void session_write_rendered_line(session_ctx_t *ctx, const char *render_s
 
   expanded[out_idx] = '\0';
 
-  ssh_channel_write(ctx->channel, expanded, out_idx);
-  ssh_channel_write(ctx->channel, "\r\n", 2U);
-  ssh_channel_write(ctx->channel, bg, bg_len);
+  session_channel_write(ctx, expanded, out_idx);
+  session_channel_write(ctx, "\r\n", 2U);
+  session_channel_write(ctx, bg, bg_len);
 }
 
 static void session_send_caption_line(session_ctx_t *ctx, const char *message) {
@@ -9094,8 +9224,8 @@ static void session_send_caption_line(session_ctx_t *ctx, const char *message) {
     return;
   }
 
-  ssh_channel_write(ctx->channel, "\r", 1U);
-  ssh_channel_write(ctx->channel, ANSI_INSERT_LINE, sizeof(ANSI_INSERT_LINE) - 1U);
+  session_channel_write(ctx, "\r", 1U);
+  session_channel_write(ctx, ANSI_INSERT_LINE, sizeof(ANSI_INSERT_LINE) - 1U);
 
   session_write_rendered_line(ctx, message);
 }
@@ -9110,17 +9240,17 @@ static void session_render_caption_with_offset(session_ctx_t *ctx, const char *m
     return;
   }
 
-  ssh_channel_write(ctx->channel, "\033[s", 3U);
+  session_channel_write(ctx, "\033[s", 3U);
 
   char command[32];
   int written = snprintf(command, sizeof(command), "\033[%zuA", move_up);
   if (written > 0 && (size_t)written < sizeof(command)) {
-    ssh_channel_write(ctx->channel, command, (size_t)written);
+    session_channel_write(ctx, command, (size_t)written);
   }
 
-  ssh_channel_write(ctx->channel, "\r", 1U);
+  session_channel_write(ctx, "\r", 1U);
   session_write_rendered_line(ctx, message);
-  ssh_channel_write(ctx->channel, "\033[u", 3U);
+  session_channel_write(ctx, "\033[u", 3U);
 }
 
 static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *message) {
@@ -9849,7 +9979,7 @@ static void session_clear_screen(session_ctx_t *ctx) {
   }
 
   static const char kClearSequence[] = "\033[2J\033[H";
-  ssh_channel_write(ctx->channel, kClearSequence, sizeof(kClearSequence) - 1U);
+  session_channel_write(ctx, kClearSequence, sizeof(kClearSequence) - 1U);
 }
 
 static void session_bbs_prepare_canvas(session_ctx_t *ctx) {
@@ -10294,9 +10424,9 @@ static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
     offset = session_append_fragment(prompt, sizeof(prompt), offset, bold);
   }
 
-  ssh_channel_write(ctx->channel, prompt, offset);
+  session_channel_write(ctx, prompt, offset);
   if (ctx->input_length > 0U) {
-    ssh_channel_write(ctx->channel, ctx->input_buffer, ctx->input_length);
+    session_channel_write(ctx, ctx->input_buffer, ctx->input_length);
   }
 }
 
@@ -10307,14 +10437,14 @@ static void session_refresh_input_line(session_ctx_t *ctx) {
 
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   if (bg[0] != '\0') {
-    ssh_channel_write(ctx->channel, bg, strlen(bg));
+    session_channel_write(ctx, bg, strlen(bg));
   }
 
   static const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
-  ssh_channel_write(ctx->channel, clear_sequence, sizeof(clear_sequence) - 1U);
+  session_channel_write(ctx, clear_sequence, sizeof(clear_sequence) - 1U);
 
   if (bg[0] != '\0') {
-    ssh_channel_write(ctx->channel, bg, strlen(bg));
+    session_channel_write(ctx, bg, strlen(bg));
   }
 
   session_render_prompt(ctx, false);
@@ -10344,11 +10474,11 @@ static void session_local_echo_char(session_ctx_t *ctx, char ch) {
   }
 
   if (ch == '\r' || ch == '\n') {
-    ssh_channel_write(ctx->channel, "\r\n", 2U);
+    session_channel_write(ctx, "\r\n", 2U);
     return;
   }
 
-  ssh_channel_write(ctx->channel, &ch, 1U);
+  session_channel_write(ctx, &ch, 1U);
 }
 
 static size_t session_utf8_prev_char_len(const char *buffer, size_t length) {
@@ -10426,7 +10556,7 @@ static void session_local_backspace(session_ctx_t *ctx) {
   const int width = display_width > 0 ? display_width : 1;
   const char sequence[] = "\b \b";
   for (int idx = 0; idx < width; ++idx) {
-    ssh_channel_write(ctx->channel, sequence, sizeof(sequence) - 1U);
+    session_channel_write(ctx, sequence, sizeof(sequence) - 1U);
   }
 }
 
@@ -10590,8 +10720,8 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
   ctx->history_scroll_position = new_position;
 
   const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
-  ssh_channel_write(ctx->channel, clear_sequence, sizeof(clear_sequence) - 1U);
-  ssh_channel_write(ctx->channel, "\r\n", 2U);
+  session_channel_write(ctx, clear_sequence, sizeof(clear_sequence) - 1U);
+  session_channel_write(ctx, "\r\n", 2U);
 
   if (direction < 0 && at_boundary && new_position == 0U) {
     if (position == 0U) {
@@ -11839,7 +11969,7 @@ static void session_handle_poke(session_ctx_t *ctx, const char *arguments) {
   }
 
   printf("[poke] %s pokes %s\n", ctx->user.name, target->user.name);
-  ssh_channel_write(target->channel, "\a", 1U);
+  session_channel_write(target, "\a", 1U);
   session_send_system_line(ctx, "Poke sent.");
 }
 
