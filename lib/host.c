@@ -63,6 +63,8 @@
 #define SSH_CHATTER_BBS_DEFAULT_TAG "general"
 #define SSH_CHATTER_BBS_TERMINATOR ">/__BBS_END>"
 #define SSH_CHATTER_ASCIIART_TERMINATOR ">/__ARTWORK_END>"
+#define SSH_CHATTER_BBS_EDITOR_BODY_DIVIDER "----------Body---------------"
+#define SSH_CHATTER_BBS_EDITOR_END_DIVIDER "----------End-----------------"
 #define SSH_CHATTER_RSS_REFRESH_SECONDS 180U
 #define SSH_CHATTER_RSS_SLEEP_CHUNK_SECONDS 5U
 #define SSH_CHATTER_RSS_USER_AGENT "ssh-chatter/rss"
@@ -938,6 +940,14 @@ static void session_render_banner(session_ctx_t *ctx);
 static void session_render_separator(session_ctx_t *ctx, const char *label);
 static void session_clear_screen(session_ctx_t *ctx);
 static void session_bbs_prepare_canvas(session_ctx_t *ctx);
+static void session_bbs_render_editor(session_ctx_t *ctx, const char *status);
+static void session_bbs_recalculate_line_count(session_ctx_t *ctx);
+static bool session_bbs_get_line_range(const session_ctx_t *ctx, size_t line_index, size_t *start, size_t *length);
+static void session_bbs_copy_line(const session_ctx_t *ctx, size_t line_index, char *buffer, size_t length);
+static bool session_bbs_append_line(session_ctx_t *ctx, const char *line, char *status, size_t status_length);
+static bool session_bbs_replace_line(session_ctx_t *ctx, size_t line_index, const char *line, char *status,
+                                     size_t status_length);
+static void session_bbs_move_cursor(session_ctx_t *ctx, int direction);
 static void session_render_prompt(session_ctx_t *ctx, bool include_separator);
 static void session_refresh_input_line(session_ctx_t *ctx);
 static void session_set_input_text(session_ctx_t *ctx, const char *text);
@@ -9851,6 +9861,357 @@ static void session_bbs_prepare_canvas(session_ctx_t *ctx) {
   session_apply_background_fill(ctx);
 }
 
+static void session_bbs_recalculate_line_count(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  size_t count = 0U;
+  if (ctx->pending_bbs_body_length > 0U) {
+    count = 1U;
+    for (size_t idx = 0U; idx < ctx->pending_bbs_body_length; ++idx) {
+      if (ctx->pending_bbs_body[idx] == '\n') {
+        ++count;
+      }
+    }
+  }
+
+  ctx->pending_bbs_line_count = count;
+  if (ctx->pending_bbs_cursor_line > count) {
+    ctx->pending_bbs_cursor_line = count;
+    ctx->pending_bbs_editing_line = false;
+  }
+}
+
+static bool session_bbs_get_line_range(const session_ctx_t *ctx, size_t line_index, size_t *start, size_t *length) {
+  if (ctx == NULL || start == NULL || length == NULL) {
+    return false;
+  }
+
+  if (line_index >= ctx->pending_bbs_line_count) {
+    return false;
+  }
+
+  size_t offset = 0U;
+  size_t current = 0U;
+  while (current < line_index && offset < ctx->pending_bbs_body_length) {
+    const char *newline = memchr(ctx->pending_bbs_body + offset, '\n', ctx->pending_bbs_body_length - offset);
+    if (newline == NULL) {
+      return false;
+    }
+    offset = (size_t)(newline - ctx->pending_bbs_body) + 1U;
+    ++current;
+  }
+
+  if (offset > ctx->pending_bbs_body_length) {
+    return false;
+  }
+
+  size_t end = ctx->pending_bbs_body_length;
+  const char *newline = memchr(ctx->pending_bbs_body + offset, '\n', ctx->pending_bbs_body_length - offset);
+  if (newline != NULL) {
+    end = (size_t)(newline - ctx->pending_bbs_body);
+  }
+
+  *start = offset;
+  *length = end - offset;
+  return true;
+}
+
+static void session_bbs_copy_line(const session_ctx_t *ctx, size_t line_index, char *buffer, size_t length) {
+  if (buffer == NULL || length == 0U) {
+    return;
+  }
+
+  buffer[0] = '\0';
+  size_t start = 0U;
+  size_t line_length = 0U;
+  if (!session_bbs_get_line_range(ctx, line_index, &start, &line_length)) {
+    return;
+  }
+
+  if (line_length >= length) {
+    line_length = length - 1U;
+  }
+
+  if (line_length > 0U) {
+    memcpy(buffer, ctx->pending_bbs_body + start, line_length);
+  }
+  buffer[line_length] = '\0';
+}
+
+static bool session_bbs_append_line(session_ctx_t *ctx, const char *line, char *status, size_t status_length) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  if (status != NULL && status_length > 0U) {
+    status[0] = '\0';
+  }
+
+  if (line == NULL) {
+    line = "";
+  }
+
+  size_t available = sizeof(ctx->pending_bbs_body) - ctx->pending_bbs_body_length - 1U;
+  if (available == 0U) {
+    if (status != NULL && status_length > 0U) {
+      snprintf(status, status_length, "Post body length limit reached. Additional text ignored.");
+    }
+    return false;
+  }
+
+  bool needs_newline = ctx->pending_bbs_body_length > 0U;
+  if (needs_newline) {
+    ctx->pending_bbs_body[ctx->pending_bbs_body_length++] = '\n';
+    --available;
+  }
+
+  size_t line_length = strlen(line);
+  if (line_length > available) {
+    line_length = available;
+    if (status != NULL && status_length > 0U) {
+      snprintf(status, status_length, "Line truncated to fit within the post size limit.");
+    }
+  }
+
+  if (line_length > 0U) {
+    memcpy(ctx->pending_bbs_body + ctx->pending_bbs_body_length, line, line_length);
+    ctx->pending_bbs_body_length += line_length;
+  }
+
+  ctx->pending_bbs_body[ctx->pending_bbs_body_length] = '\0';
+  session_bbs_recalculate_line_count(ctx);
+  ctx->pending_bbs_cursor_line = ctx->pending_bbs_line_count;
+  ctx->pending_bbs_editing_line = false;
+  return true;
+}
+
+static bool session_bbs_replace_line(session_ctx_t *ctx, size_t line_index, const char *line, char *status,
+                                     size_t status_length) {
+  if (ctx == NULL || line == NULL) {
+    return false;
+  }
+
+  if (status != NULL && status_length > 0U) {
+    status[0] = '\0';
+  }
+
+  session_bbs_recalculate_line_count(ctx);
+  if (line_index >= ctx->pending_bbs_line_count) {
+    if (status != NULL && status_length > 0U) {
+      snprintf(status, status_length, "Unable to locate the selected line.");
+    }
+    return false;
+  }
+
+  size_t start = 0U;
+  size_t old_length = 0U;
+  if (!session_bbs_get_line_range(ctx, line_index, &start, &old_length)) {
+    if (status != NULL && status_length > 0U) {
+      snprintf(status, status_length, "Unable to locate the selected line.");
+    }
+    return false;
+  }
+
+  size_t current_length = ctx->pending_bbs_body_length;
+  size_t capacity = sizeof(ctx->pending_bbs_body) - 1U;
+  size_t base_length = current_length - old_length;
+  size_t max_allowed = capacity - base_length;
+
+  size_t new_length = strlen(line);
+  if (new_length > max_allowed) {
+    new_length = max_allowed;
+    if (status != NULL && status_length > 0U) {
+      snprintf(status, status_length, "Line truncated to fit within the post size limit.");
+    }
+  }
+
+  size_t tail_offset = start + old_length;
+  size_t tail_bytes = current_length - tail_offset + 1U;
+
+  if (new_length > old_length) {
+    size_t shift = new_length - old_length;
+    memmove(ctx->pending_bbs_body + tail_offset + shift, ctx->pending_bbs_body + tail_offset, tail_bytes);
+  } else if (old_length > new_length) {
+    size_t shift = old_length - new_length;
+    memmove(ctx->pending_bbs_body + tail_offset - shift, ctx->pending_bbs_body + tail_offset, tail_bytes);
+    tail_offset -= shift;
+  }
+
+  if (new_length > 0U) {
+    memcpy(ctx->pending_bbs_body + start, line, new_length);
+  }
+
+  ctx->pending_bbs_body_length = base_length + new_length;
+  ctx->pending_bbs_body[ctx->pending_bbs_body_length] = '\0';
+
+  session_bbs_recalculate_line_count(ctx);
+  size_t updated_count = ctx->pending_bbs_line_count;
+  if (line_index + 1U <= updated_count) {
+    ctx->pending_bbs_cursor_line = line_index + 1U;
+  } else {
+    ctx->pending_bbs_cursor_line = updated_count;
+  }
+  ctx->pending_bbs_editing_line = false;
+  return true;
+}
+
+static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  session_bbs_prepare_canvas(ctx);
+
+  char title_line[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(title_line, sizeof(title_line), "Composing '%s'", ctx->pending_bbs_title);
+  session_send_system_line(ctx, title_line);
+
+  char tag_buffer[SSH_CHATTER_BBS_MAX_TAGS * (SSH_CHATTER_BBS_TAG_LEN + 2U)];
+  tag_buffer[0] = '\0';
+  size_t offset = 0U;
+  for (size_t idx = 0U; idx < ctx->pending_bbs_tag_count; ++idx) {
+    size_t remaining = sizeof(tag_buffer) - offset;
+    if (remaining == 0U) {
+      break;
+    }
+    int written = snprintf(tag_buffer + offset, remaining, "%s%s", idx > 0U ? "," : "", ctx->pending_bbs_tags[idx]);
+    if (written < 0) {
+      break;
+    }
+    if ((size_t)written >= remaining) {
+      offset = sizeof(tag_buffer) - 1U;
+      break;
+    }
+    offset += (size_t)written;
+  }
+
+  char tags_line[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(tags_line, sizeof(tags_line), "Tags: %s", tag_buffer[0] != '\0' ? tag_buffer : "(none)");
+  session_send_system_line(ctx, tags_line);
+
+  session_send_system_line(ctx, SSH_CHATTER_BBS_EDITOR_BODY_DIVIDER);
+
+  session_bbs_recalculate_line_count(ctx);
+  if (ctx->pending_bbs_line_count == 0U) {
+    const char *prefix = ctx->pending_bbs_editing_line ? "> " : "> ";
+    session_send_line(ctx, prefix);
+  } else {
+    for (size_t idx = 0U; idx < ctx->pending_bbs_line_count; ++idx) {
+      char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
+      session_bbs_copy_line(ctx, idx, line_buffer, sizeof(line_buffer));
+      bool selected = ctx->pending_bbs_editing_line && ctx->pending_bbs_cursor_line == idx;
+      const char *prefix = selected ? "> " : "  ";
+      char display[SSH_CHATTER_MESSAGE_LIMIT];
+      if (line_buffer[0] == '\0') {
+        snprintf(display, sizeof(display), "%s", prefix);
+      } else {
+        snprintf(display, sizeof(display), "%s%s", prefix, line_buffer);
+      }
+      session_send_line(ctx, display);
+    }
+    if (!ctx->pending_bbs_editing_line) {
+      session_send_line(ctx, "> ");
+    }
+  }
+
+  session_send_system_line(ctx, SSH_CHATTER_BBS_EDITOR_END_DIVIDER);
+
+  size_t remaining = sizeof(ctx->pending_bbs_body) - ctx->pending_bbs_body_length - 1U;
+  char remaining_line[64];
+  snprintf(remaining_line, sizeof(remaining_line), "Remaining bytes: %zu", remaining);
+  session_send_system_line(ctx, remaining_line);
+
+  session_send_system_line(ctx,
+                           "Ctrl+S inserts " SSH_CHATTER_BBS_TERMINATOR ". Ctrl+A cancels the draft.");
+  session_send_system_line(ctx, "Use Up/Down arrows to revisit a saved line and press Enter to store changes.");
+  session_send_system_line(ctx,
+                           "Typing " SSH_CHATTER_BBS_TERMINATOR " on its own line will publish the post.");
+
+  if (status != NULL && status[0] != '\0') {
+    char working[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(working, sizeof(working), "%s", status);
+    char *cursor = working;
+    while (cursor != NULL && *cursor != '\0') {
+      char *newline = strchr(cursor, '\n');
+      if (newline != NULL) {
+        *newline = '\0';
+      }
+      if (*cursor != '\0') {
+        session_send_system_line(ctx, cursor);
+      }
+      if (newline == NULL) {
+        break;
+      }
+      cursor = newline + 1;
+    }
+  }
+
+  session_render_prompt(ctx, false);
+}
+
+static void session_bbs_move_cursor(session_ctx_t *ctx, int direction) {
+  if (ctx == NULL || direction == 0) {
+    return;
+  }
+
+  session_bbs_recalculate_line_count(ctx);
+  size_t line_count = ctx->pending_bbs_line_count;
+
+  if (line_count == 0U) {
+    ctx->pending_bbs_cursor_line = 0U;
+    ctx->pending_bbs_editing_line = false;
+    session_set_input_text(ctx, "");
+    session_bbs_render_editor(ctx, NULL);
+    return;
+  }
+
+  size_t target = ctx->pending_bbs_cursor_line;
+  bool editing = ctx->pending_bbs_editing_line;
+  if (target > line_count) {
+    target = line_count;
+  }
+
+  if (direction < 0) {
+    if (!editing) {
+      target = line_count - 1U;
+      editing = true;
+    } else {
+      if (target > 0U) {
+        --target;
+      }
+    }
+  } else {
+    if (editing) {
+      if (target + 1U < line_count) {
+        ++target;
+      } else {
+        target = line_count;
+        editing = false;
+      }
+    }
+  }
+
+  ctx->pending_bbs_cursor_line = target;
+  ctx->pending_bbs_editing_line = editing;
+
+  char status[64];
+  status[0] = '\0';
+
+  if (editing && target < line_count) {
+    char line_buffer[SSH_CHATTER_MAX_INPUT_LEN];
+    session_bbs_copy_line(ctx, target, line_buffer, sizeof(line_buffer));
+    session_set_input_text(ctx, line_buffer);
+    snprintf(status, sizeof(status), "Editing line %zu of %zu.", target + 1U, line_count);
+  } else {
+    session_set_input_text(ctx, "");
+    snprintf(status, sizeof(status), "Editing new line %zu.", line_count + 1U);
+  }
+
+  session_bbs_render_editor(ctx, status);
+}
+
 static void session_render_banner(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return;
@@ -10320,13 +10681,21 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
       return true;
     }
     if (sequence[1] == 'k') {
-      session_history_navigate(ctx, -1);
+      if (ctx->bbs_post_pending) {
+        session_bbs_move_cursor(ctx, -1);
+      } else {
+        session_history_navigate(ctx, -1);
+      }
       ctx->input_escape_active = false;
       ctx->input_escape_length = 0U;
       return true;
     }
     if (sequence[1] == 'j') {
-      session_history_navigate(ctx, 1);
+      if (ctx->bbs_post_pending) {
+        session_bbs_move_cursor(ctx, 1);
+      } else {
+        session_history_navigate(ctx, 1);
+      }
       ctx->input_escape_active = false;
       ctx->input_escape_length = 0U;
       return true;
@@ -10335,6 +10704,12 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
 
   if (length == 3U && sequence[1] == '[') {
     if (sequence[2] == 'A') {
+      if (ctx->bbs_post_pending) {
+        session_bbs_move_cursor(ctx, -1);
+        ctx->input_escape_active = false;
+        ctx->input_escape_length = 0U;
+        return true;
+      }
       if (ctx->in_rss_mode && session_rss_move(ctx, -1)) {
         ctx->input_escape_active = false;
         ctx->input_escape_length = 0U;
@@ -10346,6 +10721,12 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
       return true;
     }
     if (sequence[2] == 'B') {
+      if (ctx->bbs_post_pending) {
+        session_bbs_move_cursor(ctx, 1);
+        ctx->input_escape_active = false;
+        ctx->input_escape_length = 0U;
+        return true;
+      }
       if (ctx->in_rss_mode && session_rss_move(ctx, 1)) {
         ctx->input_escape_active = false;
         ctx->input_escape_length = 0U;
@@ -10360,6 +10741,12 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
 
   if (length == 3U && sequence[1] == 'O') {
     if (sequence[2] == 'A') {
+      if (ctx->bbs_post_pending) {
+        session_bbs_move_cursor(ctx, -1);
+        ctx->input_escape_active = false;
+        ctx->input_escape_length = 0U;
+        return true;
+      }
       if (ctx->in_rss_mode && session_rss_move(ctx, -1)) {
         ctx->input_escape_active = false;
         ctx->input_escape_length = 0U;
@@ -10371,6 +10758,12 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
       return true;
     }
     if (sequence[2] == 'B') {
+      if (ctx->bbs_post_pending) {
+        session_bbs_move_cursor(ctx, 1);
+        ctx->input_escape_active = false;
+        ctx->input_escape_length = 0U;
+        return true;
+      }
       if (ctx->in_rss_mode && session_rss_move(ctx, 1)) {
         ctx->input_escape_active = false;
         ctx->input_escape_length = 0U;
@@ -14070,6 +14463,9 @@ static void session_bbs_reset_pending_post(session_ctx_t *ctx) {
   ctx->pending_bbs_body[0] = '\0';
   ctx->pending_bbs_body_length = 0U;
   ctx->pending_bbs_tag_count = 0U;
+  ctx->pending_bbs_line_count = 0U;
+  ctx->pending_bbs_cursor_line = 0U;
+  ctx->pending_bbs_editing_line = false;
   for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_TAGS; ++idx) {
     ctx->pending_bbs_tags[idx][0] = '\0';
   }
@@ -14260,41 +14656,20 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
   ctx->pending_bbs_body_length = 0U;
   ctx->bbs_post_pending = true;
 
-  char title_line[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(title_line, sizeof(title_line), "Composing '%s'", ctx->pending_bbs_title);
-  session_send_system_line(ctx, title_line);
-  char tag_buffer[SSH_CHATTER_BBS_MAX_TAGS * (SSH_CHATTER_BBS_TAG_LEN + 2)];
-  tag_buffer[0] = '\0';
-  size_t offset = 0U;
-  for (size_t idx = 0U; idx < tag_count; ++idx) {
-    size_t remaining = sizeof(tag_buffer) - offset;
-    if (remaining == 0U) {
-      break;
-    }
-    int written = snprintf(tag_buffer + offset, remaining, "%s%s", idx > 0U ? "," : "", ctx->pending_bbs_tags[idx]);
-    if (written < 0) {
-      break;
-    }
-    if ((size_t)written >= remaining) {
-      offset = sizeof(tag_buffer) - 1U;
-      break;
-    }
-    offset += (size_t)written;
-  }
-  char tags_line[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(tags_line, sizeof(tags_line), "Tags: %s", tag_buffer);
-  session_send_system_line(ctx, tags_line);
+  char notice[SSH_CHATTER_MESSAGE_LIMIT];
+  notice[0] = '\0';
   if (default_tag_applied) {
-    char default_line[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(default_line, sizeof(default_line), "No tags provided; default tag '%s' applied.", SSH_CHATTER_BBS_DEFAULT_TAG);
-    session_send_system_line(ctx, default_line);
+    snprintf(notice, sizeof(notice), "No tags provided; default tag '%s' applied.", SSH_CHATTER_BBS_DEFAULT_TAG);
   }
-  session_send_system_line(ctx, "Enter your post body. Type " SSH_CHATTER_BBS_TERMINATOR
-                               " on a line by itself when you are finished (Ctrl+S inserts it automatically).");
-  session_send_system_line(ctx, "Sending the terminator immediately will cancel the draft.");
   if (discarded_tags) {
-    session_send_system_line(ctx, "Only the first four tags were kept. Extra tags were ignored.");
+    if (notice[0] != '\0') {
+      strncat(notice, "\n", sizeof(notice) - strlen(notice) - 1U);
+    }
+    strncat(notice, "Only the first four tags were kept. Extra tags were ignored.",
+            sizeof(notice) - strlen(notice) - 1U);
   }
+
+  session_bbs_render_editor(ctx, notice[0] != '\0' ? notice : NULL);
 }
 
 static void session_bbs_capture_body_line(session_ctx_t *ctx, const char *line) {
@@ -14314,34 +14689,24 @@ static void session_bbs_capture_body_line(session_ctx_t *ctx, const char *line) 
     line = "";
   }
 
-  size_t available = sizeof(ctx->pending_bbs_body) - ctx->pending_bbs_body_length - 1U;
-  if (available == 0U) {
-    session_send_system_line(ctx, "Post body length limit reached. Additional text ignored.");
-    return;
+  char status[SSH_CHATTER_MESSAGE_LIMIT];
+  status[0] = '\0';
+
+  session_bbs_recalculate_line_count(ctx);
+  bool editing_line = ctx->pending_bbs_editing_line && ctx->pending_bbs_cursor_line < ctx->pending_bbs_line_count;
+
+  bool updated = false;
+  if (editing_line) {
+    updated = session_bbs_replace_line(ctx, ctx->pending_bbs_cursor_line, line, status, sizeof(status));
+  } else {
+    updated = session_bbs_append_line(ctx, line, status, sizeof(status));
   }
 
-  size_t line_length = strlen(line);
-  bool needs_newline = ctx->pending_bbs_body_length > 0U;
-  if (needs_newline) {
-    if (available == 0U) {
-      session_send_system_line(ctx, "Post body length limit reached. Additional text ignored.");
-      return;
-    }
-    ctx->pending_bbs_body[ctx->pending_bbs_body_length++] = '\n';
-    available--;
+  if (!updated && status[0] == '\0') {
+    snprintf(status, sizeof(status), "Unable to update the draft right now.");
   }
 
-  if (line_length > available) {
-    line_length = available;
-    session_send_system_line(ctx, "Line truncated to fit within the post size limit.");
-  }
-
-  if (line_length > 0U) {
-    memcpy(ctx->pending_bbs_body + ctx->pending_bbs_body_length, line, line_length);
-    ctx->pending_bbs_body_length += line_length;
-  }
-
-  ctx->pending_bbs_body[ctx->pending_bbs_body_length] = '\0';
+  session_bbs_render_editor(ctx, status[0] != '\0' ? status : NULL);
 }
 
 // Append a comment to a post.

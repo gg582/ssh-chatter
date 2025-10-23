@@ -296,6 +296,9 @@ typedef struct session_ctx {
   size_t pending_bbs_tag_count;
   char pending_bbs_body[SSH_CHATTER_BBS_BODY_LEN];
   size_t pending_bbs_body_length;
+  size_t pending_bbs_line_count;
+  size_t pending_bbs_cursor_line;
+  bool pending_bbs_editing_line;
   bool translation_enabled;
   bool output_translation_enabled;
   char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
