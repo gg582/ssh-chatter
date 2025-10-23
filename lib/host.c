@@ -19130,7 +19130,7 @@ static void *session_thread(void *arg) {
       if (ch == 0x01) {
         if (ctx->bbs_post_pending || ctx->asciiart_pending) {
           ctx->input_buffer[ctx->input_length] = '\0';
-          session_local_echo_char(ctx, '\n');
+          session_apply_background_fill(ctx);
           if (ctx->bbs_post_pending) {
             session_bbs_reset_pending_post(ctx);
             session_send_system_line(ctx, "BBS draft canceled.");
@@ -19148,7 +19148,7 @@ static void *session_thread(void *arg) {
 
       if (ch == 0x03) {
         ctx->input_buffer[ctx->input_length] = '\0';
-        session_local_echo_char(ctx, '\n');
+        session_apply_background_fill(ctx);
         session_handle_exit(ctx);
         session_clear_input(ctx);
         if (ctx->should_exit) {
@@ -19160,7 +19160,7 @@ static void *session_thread(void *arg) {
 
       if (ch == 0x1a) {
         ctx->input_buffer[ctx->input_length] = '\0';
-        session_local_echo_char(ctx, '\n');
+        session_apply_background_fill(ctx);
         if (ctx->in_rss_mode) {
           session_rss_exit(ctx, NULL);
           session_clear_input(ctx);
@@ -19223,7 +19223,7 @@ static void *session_thread(void *arg) {
       }
 
       if (ch == '\r' || ch == '\n') {
-        session_local_echo_char(ctx, '\n');
+        session_apply_background_fill(ctx);
         if (ctx->input_length > 0U) {
           ctx->input_buffer[ctx->input_length] = '\0';
           session_history_record(ctx, ctx->input_buffer);
