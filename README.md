@@ -6,12 +6,12 @@ SSH-Chatter has started from a C reimplementation of the Go [`ssh-chat`](https:/
 > **✨ Highlights from the latest builds**
 > - Named polls got quality-of-life upgrades: run `/vote <label> <question>|<choices...>` for multi-choice ballots, or `/vote-single <label> <question>|<choices...>` when you only need one pick.
 > - `/eliza-chat` now keeps shared memories in `eliza_memory.dat`, letting everyone continue a persistent conversation with the resident Eliza persona.
-> - Follow communities from inside the terminal with the `/rss` reader (`/rss list`, `/rss read <tag>`, operators add feeds with `/rss add <url> <tag>`).
+> - Follow communities from inside the terminal with the `/rss` reader (`/rss list`, `/rss read <tag>`, operators manage feeds with `/rss add <url> <tag>` and `/rss del <tag>`).
 
 ## Recent enhancements
 
 - Named poll management via `/vote` for multiple-choice polls (vote with `/1 <label>` or `/elect <label> <choice>`) plus `/vote-single` for classic single-choice runs, including graceful shutdown with `/vote @close <label>`.
-- Terminal-friendly RSS reader accessible with `/rss list`, `/rss read <tag>`, and `/rss add <url> <tag>` (operators only) so the room can browse headlines together.
+- Terminal-friendly RSS reader accessible with `/rss list`, `/rss read <tag>`, plus `/rss add <url> <tag>` and `/rss del <tag>` (operators only) so the room can browse headlines together.
 - Shared eliza memory store powering `/eliza-chat <message>`, letting everyone chat with the eliza persona while grounding replies in prior conversations persisted to `eliza_memory.dat`.
 - Background BBS watchdog thread that uses the Gemini/Ollama moderation backends to remove posts that advertise crimes or harmful material, plus `/delete-msg` for targeted chat history cleanup.
 - Poll state persistence to `vote_state.dat` (overridable via `CHATTER_VOTE_FILE`) so active polls and their votes survive restarts.
