@@ -10130,7 +10130,7 @@ static void session_render_separator(session_ctx_t *ctx, const char *label) {
   const char *hl = ctx->system_highlight_code != NULL ? ctx->system_highlight_code : "";
   const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
 
-  const size_t total_width = 60U;
+  const size_t total_width = 80U;
   char label_block[96];
   snprintf(label_block, sizeof(label_block), " %s ", label);
   size_t label_len = strnlen(label_block, sizeof(label_block) - 1U);
@@ -10539,18 +10539,19 @@ static void session_render_banner(session_ctx_t *ctx) {
   session_apply_background_fill(ctx);
 
   static const char *kBanner[] = {
-    "+====================================================+",
-    "|    ____ _           _   _                          |",
-    "|   / ___| |__   __ _| |_| |_ ___ _ __               |",
-    "|  | |   | '_ \\ / _` | __| __/ _ \\ '__|              |",
-    "|  | |___| | | | (_| | |_| ||  __/ |                 |",
-    "|   \\____|_| |_|\\__,_|\\__|\\__\\___|_|                 |",
-    "|                                                    |",
-    "|   cute and tiny SSH chat written in C language.    |",
-    "|   Type /help to see available commands.            |",
-    "+====================================================+",
-};
-
+    "\033[1;35m+===================================================================+\033[0m",
+    "\033[1;36m|  ██████╗██╗  ██╗ █████╗ ████████╗████████╗███████╗██████╗         |\033[0m",
+    "\033[1;36m| ██╔════╝██║  ██║██╔══██╗╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗        |\033[0m",
+    "\033[1;34m| ██║     ███████║███████║   ██║      ██║   █████╗  ██████╔╝        |\033[0m",
+    "\033[1;34m| ██║     ██╔══██║██╔══██║   ██║      ██║   ██╔══╝  ██╔══██╗        |\033[0m",
+    "\033[1;32m| ╚██████╗██║  ██║██║  ██║   ██║      ██║   ███████╗██║  ██║        |\033[0m",
+    "\033[1;32m|  ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝      ╚═╝   ╚══════╝╚═╝  ╚═╝        |\033[0m",
+    "\033[1;35m+===================================================================+\033[0m",
+    "\033[1;36m|        *** Welcome to CHATTER (2025) ***                          |\033[0m",
+    "\033[1;35m|   Cute and tiny SSH chat written in C.                            |\033[0m",
+    "\033[1;36m|   Type \033[1;33m/help\033[0;37m to see available commands.                           |\033[0m",
+    "\033[1;35m+===================================================================+\033[0m",
+  };
 
   for (size_t idx = 0; idx < sizeof(kBanner) / sizeof(kBanner[0]); ++idx) {
     session_send_system_line(ctx, kBanner[idx]);
@@ -10560,23 +10561,23 @@ static void session_render_banner(session_ctx_t *ctx) {
   size_t name_len = 0;
   if (ctx->user.name[0] != '\0')
     name_len = strlen(ctx->user.name);
-  int welcome_padding = 40 - (int)name_len;
+  int welcome_padding = 55 - (int)name_len;
   if (welcome_padding < 0) {
     welcome_padding = 0;
   }
 
-  snprintf(welcome, sizeof(welcome), "|  Welcome, %s!%*s|", ctx->user.name, welcome_padding, "");
+  snprintf(welcome, sizeof(welcome), "\033[1;32m|  Welcome, %s!%*s|\033[0m", ctx->user.name, welcome_padding, "");
   session_send_system_line(ctx, welcome);
 
   char version_line[SSH_CHATTER_MESSAGE_LIMIT];
   size_t version_len = strlen(ctx->owner->version);
-  int version_padding = 50 - (int)version_len;
+  int version_padding = 65 - (int)version_len;
   if (version_padding < 0) {
     version_padding = 0;
   }
-  snprintf(version_line, sizeof(version_line), "|  %s%*s|", ctx->owner->version, version_padding, "");
+  snprintf(version_line, sizeof(version_line), "\033[1;32m|  %s%*s|\033[0m", ctx->owner->version, version_padding, "");
   session_send_system_line(ctx, version_line);
-  session_send_system_line(ctx, "+====================================================+");
+  session_send_system_line(ctx, "\033[1;32m+===================================================================+\033[0m");
   session_render_separator(ctx, "Chatroom");
 }
 
