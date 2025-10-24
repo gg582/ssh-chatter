@@ -4486,6 +4486,40 @@ static void host_reply_state_resolve_path(host_t *host) {
   }
 }
 
+static bool host_user_data_bootstrap_username_is_valid(const char *username) {
+  if (username == NULL) {
+    return false;
+  }
+
+  const char *cursor = username;
+  while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
+    ++cursor;
+  }
+
+  if (*cursor == '\0') {
+    return false;
+  }
+
+  char sanitized[SSH_CHATTER_USERNAME_LEN * 2U];
+  if (!user_data_sanitize_username(username, sanitized, sizeof(sanitized))) {
+    return false;
+  }
+
+  return sanitized[0] != '\0';
+}
+
+static void host_user_data_bootstrap_visit(host_t *host, const char *username) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (!host_user_data_bootstrap_username_is_valid(username)) {
+    return;
+  }
+
+  (void)host_user_data_load_existing(host, username, NULL, true);
+}
+
 static void host_user_data_bootstrap(host_t *host) {
   if (host == NULL) {
     return;
@@ -4514,12 +4548,64 @@ static void host_user_data_bootstrap(host_t *host) {
     return;
   }
 
+  if (host->history != NULL) {
+    for (size_t idx = 0U; idx < host->history_count; ++idx) {
+      const chat_history_entry_t *entry = &host->history[idx];
+      if (!entry->is_user_message) {
+        continue;
+      }
+      host_user_data_bootstrap_visit(host, entry->username);
+    }
+  }
+
   for (size_t idx = 0U; idx < SSH_CHATTER_MAX_PREFERENCES; ++idx) {
     const user_preference_t *pref = &host->preferences[idx];
     if (!pref->in_use || pref->username[0] == '\0') {
       continue;
     }
-    (void)host_user_data_load_existing(host, pref->username, NULL, true);
+    host_user_data_bootstrap_visit(host, pref->username);
+  }
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_REPLIES; ++idx) {
+    const chat_reply_entry_t *reply = &host->replies[idx];
+    if (!reply->in_use) {
+      continue;
+    }
+    host_user_data_bootstrap_visit(host, reply->username);
+  }
+
+  for (size_t idx = 0U; idx < host->ban_count && idx < SSH_CHATTER_MAX_BANS; ++idx) {
+    host_user_data_bootstrap_visit(host, host->bans[idx].username);
+  }
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_NAMED_POLLS; ++idx) {
+    const named_poll_state_t *poll = &host->named_polls[idx];
+    if (poll->label[0] == '\0') {
+      continue;
+    }
+    host_user_data_bootstrap_visit(host, poll->owner);
+    size_t voter_count = poll->voter_count;
+    if (voter_count > SSH_CHATTER_MAX_NAMED_VOTERS) {
+      voter_count = SSH_CHATTER_MAX_NAMED_VOTERS;
+    }
+    for (size_t voter = 0U; voter < voter_count; ++voter) {
+      host_user_data_bootstrap_visit(host, poll->voters[voter].username);
+    }
+  }
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+    const bbs_post_t *post = &host->bbs_posts[idx];
+    if (!post->in_use) {
+      continue;
+    }
+    host_user_data_bootstrap_visit(host, post->author);
+    size_t comment_count = post->comment_count;
+    if (comment_count > SSH_CHATTER_BBS_MAX_COMMENTS) {
+      comment_count = SSH_CHATTER_BBS_MAX_COMMENTS;
+    }
+    for (size_t comment = 0U; comment < comment_count; ++comment) {
+      host_user_data_bootstrap_visit(host, post->comments[comment].author);
+    }
   }
 }
 
@@ -8082,6 +8168,15 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
   snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s",
            snapshot.input_translation_language);
   }
+  ctx->output_translation_enabled = snapshot.output_translation_enabled;
+  snprintf(ctx->output_translation_language, sizeof(ctx->output_translation_language), "%s",
+           snapshot.output_translation_language);
+  ctx->input_translation_enabled = snapshot.input_translation_enabled;
+  snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s",
+           snapshot.input_translation_language);
+  }
+
+  (void)session_user_data_load(ctx);
 
   (void)session_user_data_load(ctx);
 
