@@ -27,6 +27,8 @@
 #define SSH_CHATTER_USERNAME_LEN 24
 #define SSH_CHATTER_IP_LEN 64
 #define SSH_CHATTER_COLOR_NAME_LEN 32
+#define ALPHA_GRAVITY_NAME_LEN 32
+#define ALPHA_MAX_GRAVITY_SOURCES 16
 #define SSH_CHATTER_MAX_BANS 128
 #define SSH_CHATTER_HISTORY_LIMIT 64
 #define SSH_CHATTER_INPUT_HISTORY_LIMIT 64
@@ -219,6 +221,15 @@ typedef struct liar_game_state {
   bool awaiting_guess;
 } liar_game_state_t;
 
+typedef struct alpha_gravity_source {
+  int x;
+  int y;
+  int influence_radius;
+  double mu;
+  char symbol;
+  char name[ALPHA_GRAVITY_NAME_LEN];
+} alpha_gravity_source_t;
+
 typedef struct alpha_centauri_game_state {
   bool active;
   unsigned stage;
@@ -233,10 +244,16 @@ typedef struct alpha_centauri_game_state {
   double radiation_msv;
   int nav_x;
   int nav_y;
+  double nav_fx;
+  double nav_fy;
+  double nav_vx;
+  double nav_vy;
   int nav_target_x;
   int nav_target_y;
   unsigned nav_stable_ticks;
   unsigned nav_required_ticks;
+  unsigned gravity_source_count;
+  alpha_gravity_source_t gravity_sources[ALPHA_MAX_GRAVITY_SOURCES];
 } alpha_centauri_game_state_t;
 
 typedef struct session_game_state {
