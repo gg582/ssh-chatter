@@ -231,6 +231,12 @@ typedef struct alpha_centauri_game_state {
   double oxygen_days;
   double mission_time_years;
   double radiation_msv;
+  int nav_x;
+  int nav_y;
+  int nav_target_x;
+  int nav_target_y;
+  unsigned nav_stable_ticks;
+  unsigned nav_required_ticks;
 } alpha_centauri_game_state_t;
 
 typedef struct session_game_state {

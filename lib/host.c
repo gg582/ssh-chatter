@@ -132,6 +132,8 @@ static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
 #define ALPHA_LY_TO_KM 9460730472580.8
 #define ALPHA_LY_TO_AU 63241.077
 #define ALPHA_SPEED_OF_LIGHT_MPS 299792458.0
+#define ALPHA_NAV_WIDTH 13
+#define ALPHA_NAV_HEIGHT 9
 
 #define TELNET_IAC 255
 #define TELNET_CMD_SE 240
@@ -1513,11 +1515,20 @@ static void session_game_liar_present_round(session_ctx_t *ctx);
 static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line);
 static void session_game_start_alpha(session_ctx_t *ctx);
 static void session_game_alpha_reset(alpha_centauri_game_state_t *state);
+static void session_game_alpha_prepare_navigation(alpha_centauri_game_state_t *state);
 static void session_game_alpha_sync_from_save(session_ctx_t *ctx);
 static void session_game_alpha_sync_to_save(session_ctx_t *ctx);
 static void session_game_alpha_present_stage(session_ctx_t *ctx);
 static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line);
 static void session_game_alpha_log_completion(session_ctx_t *ctx);
+static void session_game_alpha_render_navigation(session_ctx_t *ctx);
+static void session_game_alpha_refresh_navigation(session_ctx_t *ctx);
+static bool session_game_alpha_handle_arrow(session_ctx_t *ctx, int dx, int dy);
+static void session_game_alpha_execute_ignite(session_ctx_t *ctx);
+static void session_game_alpha_execute_trim(session_ctx_t *ctx);
+static void session_game_alpha_execute_flip(session_ctx_t *ctx);
+static void session_game_alpha_execute_retro(session_ctx_t *ctx);
+static void session_game_alpha_execute_eva(session_ctx_t *ctx);
 static void host_update_last_captcha_prompt(host_t *host, const captcha_prompt_t *prompt);
 
 typedef struct liar_prompt {
@@ -11825,6 +11836,29 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
   }
 
   if (length == 3U && sequence[1] == '[') {
+    int dx = 0;
+    int dy = 0;
+    switch (sequence[2]) {
+      case 'A':
+        dy = -1;
+        break;
+      case 'B':
+        dy = 1;
+        break;
+      case 'C':
+        dx = 1;
+        break;
+      case 'D':
+        dx = -1;
+        break;
+      default:
+        break;
+    }
+    if ((dx != 0 || dy != 0) && session_game_alpha_handle_arrow(ctx, dx, dy)) {
+      ctx->input_escape_active = false;
+      ctx->input_escape_length = 0U;
+      return true;
+    }
     if (sequence[2] == 'A') {
       if (ctx->bbs_post_pending) {
         session_bbs_move_cursor(ctx, -1);
@@ -11884,6 +11918,29 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
   }
 
   if (length == 3U && sequence[1] == 'O') {
+    int dx = 0;
+    int dy = 0;
+    switch (sequence[2]) {
+      case 'A':
+        dy = -1;
+        break;
+      case 'B':
+        dy = 1;
+        break;
+      case 'C':
+        dx = 1;
+        break;
+      case 'D':
+        dx = -1;
+        break;
+      default:
+        break;
+    }
+    if ((dx != 0 || dy != 0) && session_game_alpha_handle_arrow(ctx, dx, dy)) {
+      ctx->input_escape_active = false;
+      ctx->input_escape_length = 0U;
+      return true;
+    }
     if (sequence[2] == 'A') {
       if (ctx->bbs_post_pending) {
         session_bbs_move_cursor(ctx, -1);
@@ -18143,6 +18200,76 @@ static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line) 
   session_game_liar_present_round(ctx);
 }
 
+static void session_game_alpha_prepare_navigation(alpha_centauri_game_state_t *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  const int center_x = ALPHA_NAV_WIDTH / 2;
+  const int center_y = ALPHA_NAV_HEIGHT / 2;
+
+  state->nav_stable_ticks = 0U;
+  state->nav_required_ticks = 1U;
+  state->nav_x = center_x;
+  state->nav_y = center_y;
+  state->nav_target_x = center_x;
+  state->nav_target_y = center_y;
+
+  switch (state->stage) {
+    case 0:
+      state->nav_x = center_x;
+      state->nav_y = ALPHA_NAV_HEIGHT - 1;
+      state->nav_target_x = center_x;
+      state->nav_target_y = 1;
+      state->nav_required_ticks = 2U;
+      break;
+    case 1:
+      state->nav_x = center_x;
+      state->nav_y = center_y + 1;
+      state->nav_target_x = ALPHA_NAV_WIDTH - 2;
+      state->nav_target_y = center_y;
+      state->nav_required_ticks = 3U;
+      break;
+    case 2:
+      state->nav_x = ALPHA_NAV_WIDTH - 3;
+      state->nav_y = center_y;
+      state->nav_target_x = 1;
+      state->nav_target_y = center_y;
+      state->nav_required_ticks = 3U;
+      break;
+    case 3:
+      state->nav_x = center_x;
+      state->nav_y = 1;
+      state->nav_target_x = center_x;
+      state->nav_target_y = ALPHA_NAV_HEIGHT - 2;
+      state->nav_required_ticks = 4U;
+      break;
+    case 4:
+      if (!state->eva_ready) {
+        state->nav_x = center_x;
+        state->nav_y = 1;
+        state->nav_target_x = center_x;
+        state->nav_target_y = ALPHA_NAV_HEIGHT - 2;
+        state->nav_required_ticks = 3U;
+      } else if (state->awaiting_flag) {
+        state->nav_x = center_x;
+        state->nav_y = center_y - 1;
+        state->nav_target_x = center_x;
+        state->nav_target_y = ALPHA_NAV_HEIGHT - 1;
+        state->nav_required_ticks = 2U;
+      } else {
+        state->nav_x = center_x;
+        state->nav_y = ALPHA_NAV_HEIGHT - 1;
+        state->nav_target_x = center_x;
+        state->nav_target_y = 1;
+        state->nav_required_ticks = 2U;
+      }
+      break;
+    default:
+      break;
+  }
+}
+
 static void session_game_alpha_reset(alpha_centauri_game_state_t *state) {
   if (state == NULL) {
     return;
@@ -18160,6 +18287,7 @@ static void session_game_alpha_reset(alpha_centauri_game_state_t *state) {
   state->active = false;
   state->eva_ready = false;
   state->awaiting_flag = false;
+  session_game_alpha_prepare_navigation(state);
 }
 
 static void session_game_alpha_sync_from_save(session_ctx_t *ctx) {
@@ -18193,6 +18321,7 @@ static void session_game_alpha_sync_from_save(session_ctx_t *ctx) {
   state->oxygen_days = save->oxygen_days;
   state->mission_time_years = save->mission_time_years;
   state->radiation_msv = save->radiation_msv;
+  session_game_alpha_prepare_navigation(state);
 }
 
 static void session_game_alpha_sync_to_save(session_ctx_t *ctx) {
@@ -18250,6 +18379,101 @@ static void session_game_alpha_report_state(session_ctx_t *ctx, const char *labe
   ctx->translation_suppress_output = previous_translation;
 }
 
+static const char *session_game_alpha_phase_label(const alpha_centauri_game_state_t *state) {
+  if (state == NULL) {
+    return "Guidance";
+  }
+
+  switch (state->stage) {
+    case 0:
+      return "Launch corridor beacon";
+    case 1:
+      return "Barycenter alignment";
+    case 2:
+      return "Turnover marker";
+    case 3:
+      return "Retro burn beacon";
+    case 4:
+      if (!state->eva_ready) {
+        return "Deorbit corridor";
+      }
+      if (state->awaiting_flag) {
+        return "Landing beacon";
+      }
+      return "Orbit standby";
+    default:
+      break;
+  }
+  return "Guidance";
+}
+
+static void session_game_alpha_render_navigation(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
+    return;
+  }
+
+  const alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  const char *phase_label = session_game_alpha_phase_label(state);
+
+  char header[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(header, sizeof(header), "Guidance: %s (lock %u/%u)", phase_label, state->nav_stable_ticks,
+           state->nav_required_ticks);
+  session_send_system_line(ctx, header);
+
+  char border[ALPHA_NAV_WIDTH + 3];
+  border[0] = '+';
+  for (int idx = 0; idx < ALPHA_NAV_WIDTH; ++idx) {
+    border[idx + 1] = '-';
+  }
+  border[ALPHA_NAV_WIDTH + 1] = '+';
+  border[ALPHA_NAV_WIDTH + 2] = '\0';
+  session_send_system_line(ctx, border);
+
+  for (int y = 0; y < ALPHA_NAV_HEIGHT; ++y) {
+    char row[ALPHA_NAV_WIDTH + 1];
+    for (int x = 0; x < ALPHA_NAV_WIDTH; ++x) {
+      row[x] = '.';
+    }
+
+    if (state->nav_target_x >= 0 && state->nav_target_x < ALPHA_NAV_WIDTH && state->nav_target_y >= 0 &&
+        state->nav_target_y < ALPHA_NAV_HEIGHT && y == state->nav_target_y) {
+      row[state->nav_target_x] = '+';
+    }
+
+    if (state->nav_x >= 0 && state->nav_x < ALPHA_NAV_WIDTH && state->nav_y >= 0 && state->nav_y < ALPHA_NAV_HEIGHT &&
+        y == state->nav_y) {
+      if (state->nav_target_x == state->nav_x && state->nav_target_y == state->nav_y) {
+        row[state->nav_x] = '*';
+      } else {
+        row[state->nav_x] = '@';
+      }
+    }
+
+    char line[ALPHA_NAV_WIDTH + 4];
+    line[0] = '|';
+    for (int x = 0; x < ALPHA_NAV_WIDTH; ++x) {
+      line[x + 1] = row[x];
+    }
+    line[ALPHA_NAV_WIDTH + 1] = '|';
+    line[ALPHA_NAV_WIDTH + 2] = '\0';
+    session_send_system_line(ctx, line);
+  }
+
+  session_send_system_line(ctx, border);
+}
+
+static void session_game_alpha_refresh_navigation(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
+    return;
+  }
+
+  bool previous_translation = ctx->translation_suppress_output;
+  ctx->translation_suppress_output = true;
+  session_game_alpha_render_navigation(ctx);
+  session_game_alpha_report_state(ctx, "Current status:");
+  ctx->translation_suppress_output = previous_translation;
+}
+
 static void session_game_alpha_present_stage(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
     return;
@@ -18264,29 +18488,36 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
   switch (state->stage) {
     case 0:
       session_send_system_line(ctx,
-                               "Stage 0 — Launch stack ready. Type 'ignite' to fire the antimatter booster and leave Sol.");
+                               "Stage 0 — Launch stack ready. Use arrow keys to ride the ascent beacon and hold until the"
+                               " antimatter booster lights.");
       break;
     case 1:
       session_send_system_line(ctx,
-                               "Stage 1 — Mid-course trim. Type 'trim' to vector toward the Alpha Centauri barycenter.");
+                               "Stage 1 — Mid-course trim. Glide onto the barycenter beacon with arrow keys and hold until"
+                               " guidance reports a lock.");
       break;
     case 2:
       session_send_system_line(ctx,
-                               "Stage 2 — Turnover. Type 'flip' to rotate the ship for deceleration burn.");
+                               "Stage 2 — Turnover. Line up with the retrograde marker using arrow keys and hold to flip"
+                               " the ship for braking.");
       break;
     case 3:
       session_send_system_line(ctx,
-                               "Stage 3 — Braking burn. Type 'retro' to bleed velocity into Proxima's gravity well.");
+                               "Stage 3 — Braking burn. Drop onto the braking beacon with arrow keys and hold while the"
+                               " ship bleeds velocity.");
       break;
     case 4:
       if (!state->eva_ready) {
         session_send_system_line(ctx,
-                                 "Stage 4 — High orbit over Proxima b. Type 'eva' to begin the descent walk.");
+                                 "Stage 4 — High orbit over Proxima b. Thread the deorbit corridor with arrow keys and hold"
+                                 " to initiate the EVA.");
       } else if (state->awaiting_flag) {
         session_send_system_line(ctx,
-                                 "Stage 4 — Final step. Type 'plant flag' to raise '이주자의 깃발' on Proxima b.");
+                                 "Stage 4 — Surface EVA. Guide the suit to the landing beacon with arrow keys and hold to"
+                                 " plant '이주자의 깃발'.");
       } else {
-        session_send_system_line(ctx, "Stage 4 — Mission reset. Type 'ignite' to launch again or /suspend! to exit.");
+        session_send_system_line(ctx,
+                                 "Stage 4 — Mission reset. Realign with the beacons for another run or exit with /suspend!.");
       }
       break;
     default:
@@ -18294,6 +18525,9 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
       break;
   }
 
+  session_game_alpha_render_navigation(ctx);
+  session_send_system_line(ctx, "Legend: @ craft, + beacon, * locked alignment.");
+  session_send_system_line(ctx, "Use arrow keys (↑ ↓ ← →) to nudge the craft and keep it steady over the beacon.");
   session_game_alpha_report_state(ctx, "Current status:");
   ctx->translation_suppress_output = previous_translation;
 }
@@ -18358,6 +18592,190 @@ static void session_game_alpha_log_completion(session_ctx_t *ctx) {
   session_game_alpha_present_stage(ctx);
 }
 
+static void session_game_alpha_execute_ignite(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || ctx->game.alpha.stage != 0U) {
+    return;
+  }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  state->stage = 1U;
+  state->active = true;
+  state->velocity_fraction_c = 0.04;
+  state->distance_travelled_ly = 0.05;
+  state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
+  state->fuel_percent = 82.0;
+  if (state->oxygen_days > 10.0) {
+    state->oxygen_days -= 10.0;
+  }
+  state->mission_time_years += 0.02;
+  state->radiation_msv += 12.0;
+  session_game_alpha_prepare_navigation(state);
+  session_game_alpha_sync_to_save(ctx);
+  session_game_alpha_present_stage(ctx);
+}
+
+static void session_game_alpha_execute_trim(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || ctx->game.alpha.stage != 1U) {
+    return;
+  }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  state->stage = 2U;
+  state->velocity_fraction_c = 0.18;
+  state->distance_travelled_ly = 1.90;
+  state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
+  state->fuel_percent = 58.0;
+  if (state->oxygen_days > 110.0) {
+    state->oxygen_days -= 110.0;
+  } else {
+    state->oxygen_days = 0.0;
+  }
+  state->mission_time_years += 0.55;
+  state->radiation_msv += 28.0;
+  session_game_alpha_prepare_navigation(state);
+  session_game_alpha_sync_to_save(ctx);
+  session_game_alpha_present_stage(ctx);
+}
+
+static void session_game_alpha_execute_flip(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || ctx->game.alpha.stage != 2U) {
+    return;
+  }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  state->stage = 3U;
+  state->distance_travelled_ly = 3.60;
+  state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
+  state->fuel_percent = 45.0;
+  if (state->oxygen_days > 220.0) {
+    state->oxygen_days -= 220.0;
+  } else {
+    state->oxygen_days = 0.0;
+  }
+  state->mission_time_years += 1.80;
+  state->radiation_msv += 18.0;
+  session_game_alpha_prepare_navigation(state);
+  session_game_alpha_sync_to_save(ctx);
+  session_game_alpha_present_stage(ctx);
+}
+
+static void session_game_alpha_execute_retro(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || ctx->game.alpha.stage != 3U) {
+    return;
+  }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  state->stage = 4U;
+  state->velocity_fraction_c = 0.01;
+  state->distance_travelled_ly = 4.22;
+  state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
+  state->fuel_percent = 18.0;
+  if (state->oxygen_days > 150.0) {
+    state->oxygen_days -= 150.0;
+  } else {
+    state->oxygen_days = 0.0;
+  }
+  state->mission_time_years += 1.20;
+  state->radiation_msv += 12.0;
+  state->eva_ready = false;
+  state->awaiting_flag = false;
+  session_game_alpha_prepare_navigation(state);
+  session_game_alpha_sync_to_save(ctx);
+  session_game_alpha_present_stage(ctx);
+}
+
+static void session_game_alpha_execute_eva(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || ctx->game.alpha.stage != 4U ||
+      ctx->game.alpha.eva_ready) {
+    return;
+  }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  state->eva_ready = true;
+  state->awaiting_flag = true;
+  if (state->oxygen_days > 30.0) {
+    state->oxygen_days -= 30.0;
+  } else {
+    state->oxygen_days = 0.0;
+  }
+  state->mission_time_years += 0.05;
+  state->radiation_msv += 6.0;
+  session_game_alpha_prepare_navigation(state);
+  session_game_alpha_sync_to_save(ctx);
+  session_game_alpha_present_stage(ctx);
+}
+
+static bool session_game_alpha_handle_arrow(session_ctx_t *ctx, int dx, int dy) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
+    return false;
+  }
+
+  if (dx == 0 && dy == 0) {
+    return false;
+  }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+
+  int new_x = state->nav_x + dx;
+  if (new_x < 0) {
+    new_x = 0;
+  } else if (new_x >= ALPHA_NAV_WIDTH) {
+    new_x = ALPHA_NAV_WIDTH - 1;
+  }
+
+  int new_y = state->nav_y + dy;
+  if (new_y < 0) {
+    new_y = 0;
+  } else if (new_y >= ALPHA_NAV_HEIGHT) {
+    new_y = ALPHA_NAV_HEIGHT - 1;
+  }
+
+  state->nav_x = new_x;
+  state->nav_y = new_y;
+
+  if (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y) {
+    if (state->nav_stable_ticks < state->nav_required_ticks) {
+      ++state->nav_stable_ticks;
+    }
+  } else {
+    state->nav_stable_ticks = 0U;
+  }
+
+  bool completed = false;
+  if (state->nav_required_ticks == 0U) {
+    state->nav_required_ticks = 1U;
+  }
+
+  if (state->stage == 0U && state->nav_stable_ticks >= state->nav_required_ticks) {
+    session_game_alpha_execute_ignite(ctx);
+    completed = true;
+  } else if (state->stage == 1U && state->nav_stable_ticks >= state->nav_required_ticks) {
+    session_game_alpha_execute_trim(ctx);
+    completed = true;
+  } else if (state->stage == 2U && state->nav_stable_ticks >= state->nav_required_ticks) {
+    session_game_alpha_execute_flip(ctx);
+    completed = true;
+  } else if (state->stage == 3U && state->nav_stable_ticks >= state->nav_required_ticks) {
+    session_game_alpha_execute_retro(ctx);
+    completed = true;
+  } else if (state->stage == 4U) {
+    if (!state->eva_ready && state->nav_stable_ticks >= state->nav_required_ticks) {
+      session_game_alpha_execute_eva(ctx);
+      completed = true;
+    } else if (state->eva_ready && state->awaiting_flag &&
+               state->nav_stable_ticks >= state->nav_required_ticks) {
+      session_game_alpha_log_completion(ctx);
+      completed = true;
+    }
+  }
+
+  if (!completed) {
+    session_game_alpha_refresh_navigation(ctx);
+  }
+
+  return true;
+}
+
 static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line) {
   if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
     return;
@@ -18372,90 +18790,47 @@ static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line)
   }
   trim_whitespace_inplace(command);
 
+  if (command[0] == '\0') {
+    session_game_alpha_refresh_navigation(ctx);
+    return;
+  }
+
   if (state->stage == 0U) {
     if (strcasecmp(command, "ignite") == 0 || strcasecmp(command, "launch") == 0) {
-      state->stage = 1U;
-      state->active = true;
-      state->velocity_fraction_c = 0.04;
-      state->distance_travelled_ly = 0.05;
-      state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
-      state->fuel_percent = 82.0;
-      if (state->oxygen_days > 10.0) {
-        state->oxygen_days -= 10.0;
-      }
-      state->mission_time_years += 0.02;
-      state->radiation_msv += 12.0;
-      session_game_alpha_sync_to_save(ctx);
-      session_game_alpha_present_stage(ctx);
+      session_game_alpha_execute_ignite(ctx);
     } else {
-      session_send_system_line(ctx, "Type 'ignite' to begin the interstellar boost.");
+      session_send_system_line(ctx, "Line up with the ascent beacon using arrow keys or type 'ignite'.");
+      session_game_alpha_refresh_navigation(ctx);
     }
     return;
   }
 
   if (state->stage == 1U) {
     if (strcasecmp(command, "trim") == 0 || strcasecmp(command, "align") == 0) {
-      state->stage = 2U;
-      state->velocity_fraction_c = 0.18;
-      state->distance_travelled_ly = 1.90;
-      state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
-      state->fuel_percent = 58.0;
-      if (state->oxygen_days > 110.0) {
-        state->oxygen_days -= 110.0;
-      } else {
-        state->oxygen_days = 0.0;
-      }
-      state->mission_time_years += 0.55;
-      state->radiation_msv += 28.0;
-      session_game_alpha_sync_to_save(ctx);
-      session_game_alpha_present_stage(ctx);
+      session_game_alpha_execute_trim(ctx);
     } else {
-      session_send_system_line(ctx, "Use 'trim' to adjust the cruise vector.");
+      session_send_system_line(ctx, "Hold the barycenter beacon with arrow keys or type 'trim'.");
+      session_game_alpha_refresh_navigation(ctx);
     }
     return;
   }
 
   if (state->stage == 2U) {
     if (strcasecmp(command, "flip") == 0 || strcasecmp(command, "turnover") == 0) {
-      state->stage = 3U;
-      state->distance_travelled_ly = 3.60;
-      state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
-      state->fuel_percent = 45.0;
-      if (state->oxygen_days > 220.0) {
-        state->oxygen_days -= 220.0;
-      } else {
-        state->oxygen_days = 0.0;
-      }
-      state->mission_time_years += 1.80;
-      state->radiation_msv += 18.0;
-      session_game_alpha_sync_to_save(ctx);
-      session_game_alpha_present_stage(ctx);
+      session_game_alpha_execute_flip(ctx);
     } else {
-      session_send_system_line(ctx, "Rotate the ship with 'flip' to prepare for braking.");
+      session_send_system_line(ctx, "Rotate into retrograde by holding the marker with arrow keys or type 'flip'.");
+      session_game_alpha_refresh_navigation(ctx);
     }
     return;
   }
 
   if (state->stage == 3U) {
     if (strcasecmp(command, "retro") == 0 || strcasecmp(command, "brake") == 0) {
-      state->stage = 4U;
-      state->velocity_fraction_c = 0.01;
-      state->distance_travelled_ly = 4.22;
-      state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
-      state->fuel_percent = 18.0;
-      if (state->oxygen_days > 150.0) {
-        state->oxygen_days -= 150.0;
-      } else {
-        state->oxygen_days = 0.0;
-      }
-      state->mission_time_years += 1.20;
-      state->radiation_msv += 12.0;
-      state->eva_ready = false;
-      state->awaiting_flag = false;
-      session_game_alpha_sync_to_save(ctx);
-      session_game_alpha_present_stage(ctx);
+      session_game_alpha_execute_retro(ctx);
     } else {
-      session_send_system_line(ctx, "Fire retros with 'retro' to fall toward Proxima b.");
+      session_send_system_line(ctx, "Drop onto the braking beacon with arrow keys or type 'retro'.");
+      session_game_alpha_refresh_navigation(ctx);
     }
     return;
   }
@@ -18463,34 +18838,28 @@ static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line)
   if (state->stage == 4U) {
     if (!state->eva_ready) {
       if (strcasecmp(command, "eva") == 0 || strcasecmp(command, "descend") == 0) {
-        state->eva_ready = true;
-        state->awaiting_flag = true;
-        if (state->oxygen_days > 30.0) {
-          state->oxygen_days -= 30.0;
-        } else {
-          state->oxygen_days = 0.0;
-        }
-        state->mission_time_years += 0.05;
-        state->radiation_msv += 6.0;
-        session_game_alpha_sync_to_save(ctx);
-        session_game_alpha_present_stage(ctx);
+        session_game_alpha_execute_eva(ctx);
       } else {
-        session_send_system_line(ctx, "Type 'eva' to leave the spacecraft.");
+        session_send_system_line(ctx, "Follow the descent beacon with arrow keys or type 'eva'.");
+        session_game_alpha_refresh_navigation(ctx);
       }
     } else if (state->awaiting_flag) {
       if (strcasecmp(command, "plant") == 0 || strcasecmp(command, "plant flag") == 0 ||
           strcasecmp(command, "flag") == 0) {
         session_game_alpha_log_completion(ctx);
       } else {
-        session_send_system_line(ctx, "Plant '이주자의 깃발' by typing 'plant flag'.");
+        session_send_system_line(ctx, "Guide the suit with arrow keys or type 'plant flag' to finish.");
+        session_game_alpha_refresh_navigation(ctx);
       }
     } else {
       session_send_system_line(ctx, "Launch again with 'ignite' or exit with /suspend!.");
+      session_game_alpha_refresh_navigation(ctx);
     }
     return;
   }
 
   session_send_system_line(ctx, "Hold position for the next maneuver.");
+  session_game_alpha_refresh_navigation(ctx);
 }
 
 static void session_game_start_alpha(session_ctx_t *ctx) {
