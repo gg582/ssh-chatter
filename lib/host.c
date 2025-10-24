@@ -19252,7 +19252,7 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
                              "Legend: @ craft, + beacon, * locked alignment, B black hole, S star, P planet, D debris.");
   }
   session_send_system_line(ctx, "Navigation grid spans 60×60 sectors; each maneuver reshuffles the gravity field.");
-  session_send_system_line(ctx, "Use arrow keys (↑ ↓ ← →) to nudge the craft and keep it steady over the beacon.");
+  session_send_system_line(ctx, "Use arrow keys to nudge the craft and keep it steady over the beacon.");
   session_send_system_line(ctx,
                            "Press Alt+L once aligned to lock the maneuver; press Ctrl+S anytime to save the mission log.");
   session_send_system_line(ctx, "Stuck? Type 'reset' to reroll the field with a fresh gravimetric solution.");
@@ -20568,7 +20568,7 @@ static void session_handle_mode(session_ctx_t *ctx, const char *arguments) {
     session_send_system_line(ctx, status_line);
     if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
       session_send_system_line(ctx,
-                               "Command mode: type commands without '/', use ↑/↓ for history, Tab for completion.");
+                               "Command mode: type commands without '/', use UpArrow/DownArrow for history, Tab for completion.");
     } else {
       session_send_system_line(ctx,
                                "Chat mode: send messages normally. Prefix commands with '/'. Switch with /mode command.");
@@ -20590,13 +20590,13 @@ static void session_handle_mode(session_ctx_t *ctx, const char *arguments) {
   if (strcasecmp(working, "command") == 0) {
     if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
       session_send_system_line(ctx,
-                               "Command mode already active. Enter commands without '/', use ↑/↓ for history, Tab to autocomplete.");
+                               "Command mode already active. Enter commands without '/', use /DownArrow for history, Tab to autocomplete.");
       return;
     }
     ctx->input_mode = SESSION_INPUT_MODE_COMMAND;
     session_refresh_input_line(ctx);
     session_send_system_line(ctx,
-                             "Command mode enabled. Enter commands without '/', use ↑/↓ for history and Tab for completion.");
+                             "Command mode enabled. Enter commands without '/', use UpArrow/DownArrow for history and Tab for completion.");
     return;
   }
 
@@ -20606,7 +20606,7 @@ static void session_handle_mode(session_ctx_t *ctx, const char *arguments) {
     session_refresh_input_line(ctx);
     if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
       session_send_system_line(ctx,
-                               "Command mode enabled. Enter commands without '/', use ↑/↓ for history and Tab for completion.");
+                               "Command mode enabled. Enter commands without '/', use UpArrow/DownArrow for history and Tab for completion.");
     } else {
       session_send_system_line(ctx, "Chat mode enabled. Commands once again require the '/' prefix.");
     }
@@ -23562,7 +23562,7 @@ static void *session_thread(void *arg) {
     }
     session_send_system_line(ctx, "Type /help to explore available commands.");
     session_send_system_line(ctx,
-                             "Tip: /mode command lets you run commands without '/' and unlocks history (↑/↓) and Tab completion.");
+                             "Tip: /mode command lets you run commands without '/' and unlocks history (UpArrow/DownArrow) and Tab completion.");
 
     char join_message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(join_message, sizeof(join_message), "* [%s] has joined the chat", ctx->user.name);
