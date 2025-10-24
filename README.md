@@ -135,8 +135,8 @@ Common examples:
 # Start the chat server on port 2022, loading host keys from /etc/ssh
 ./ssh-chatter -p 2022 -k /etc/ssh
 
-# Enable telnet access on port 4242 alongside SSH
-./ssh-chatter -T 4242
+# Enable telnet access on 0.0.0.0:4242 alongside SSH
+./ssh-chatter -T 0.0.0.0:4242
 
 # Serve a custom MOTD from a file and bind to localhost
 ./ssh-chatter -a 127.0.0.1 -m /etc/ssh-chatter/motd
@@ -160,7 +160,7 @@ ssh -p 22 yourname@chat.korokorok.com
 
 Usernames provided at the SSH prompt are used as your chat nickname.
 
-Telnet clients can join with the same feature set. Telnet listening is enabled by default on port `2323` and can be adjusted or disabled with the `-T` flag. For example, to join over telnet from a retro terminal:
+Telnet clients can join with the same feature set. Telnet listening is enabled by default on port `2323` and can be adjusted or disabled with the `-T` flag. Provide `-T address:port` to override the bind address (it inherits the SSH bind when omitted; use an empty host like `-T :4242` to listen on all interfaces). For example, to join over telnet from a retro terminal:
 
 ```bash
 telnet server-address 2323

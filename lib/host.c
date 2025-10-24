@@ -21803,16 +21803,25 @@ void host_shutdown(host_t *host) {
 }
 
 int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory,
-               const char *telnet_port) {
+               const char *telnet_bind_addr, const char *telnet_port) {
   if (host == NULL) {
     return -1;
   }
 
-  const char *address = bind_addr != NULL ? bind_addr : "0.0.0.0";
-  const char *bind_port = port != NULL ? port : "2222";
+  const char *address = (bind_addr != NULL && bind_addr[0] != '\0') ? bind_addr : "0.0.0.0";
+  const char *bind_port = (port != NULL && port[0] != '\0') ? port : "2222";
+  const char *telnet_bind = NULL;
+  if (telnet_bind_addr != NULL) {
+    telnet_bind = telnet_bind_addr;
+  } else if (bind_addr != NULL && bind_addr[0] != '\0') {
+    telnet_bind = bind_addr;
+  } else {
+    telnet_bind = address;
+  }
   if (telnet_port != NULL && telnet_port[0] != '\0') {
-    if (!host_telnet_listener_start(host, address, telnet_port)) {
-      printf("[telnet] telnet listener unavailable on %s:%s\n", address, telnet_port);
+    if (!host_telnet_listener_start(host, telnet_bind, telnet_port)) {
+      const char *display_addr = (telnet_bind != NULL && telnet_bind[0] != '\0') ? telnet_bind : "*";
+      printf("[telnet] telnet listener unavailable on %s:%s\n", display_addr, telnet_port);
     }
   } else {
     host_telnet_listener_stop(host);
