@@ -11539,7 +11539,9 @@ static void session_clear_input(session_ctx_t *ctx) {
   ctx->input_history_position = -1;
   ctx->input_escape_active = false;
   ctx->input_escape_length = 0U;
-  session_refresh_input_line(ctx);
+  if (!ctx->bracket_paste_active) {
+    session_refresh_input_line(ctx);
+  }
 }
 
 static bool session_try_command_completion(session_ctx_t *ctx) {
@@ -12182,6 +12184,21 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
   }
 
   const bool bracket_sequence = (length >= 2U && sequence[1] == '[');
+  if (bracket_sequence) {
+    const char final = sequence[length - 1U];
+    if (final != '~' && !(length == 3U && isalpha((unsigned char)sequence[2]))) {
+      return true;
+    }
+    if (final == '~') {
+      if (length >= 5U && strncmp(&sequence[2], "200", 3) == 0) {
+        ctx->bracket_paste_active = true;
+      } else if (length >= 5U && strncmp(&sequence[2], "201", 3) == 0) {
+        ctx->bracket_paste_active = false;
+        session_refresh_input_line(ctx);
+      }
+    }
+  }
+
   ctx->input_escape_active = false;
   ctx->input_escape_length = 0U;
   if (bracket_sequence) {
@@ -13014,6 +13031,15 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
     now.tv_nsec = 0L;
   }
 
+  bool ascii_profile_command = false;
+  if (normalized[0] == '/') {
+    const char *command_args = NULL;
+    if (session_parse_command(normalized, "/asciiart", &command_args) ||
+        session_parse_command(normalized, "/profilepic", &command_args)) {
+      ascii_profile_command = true;
+    }
+  }
+
   const bool translation_throttle =
       ctx->translation_enabled && ctx->input_translation_enabled && ctx->input_translation_language[0] != '\0';
   const bool chat_throttle = ctx->input_mode == SESSION_INPUT_MODE_CHAT;
@@ -13028,7 +13054,8 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
       session_send_system_line(ctx, "Please wait at least one second before sending another message.");
       return;
     }
-    if (!translation_throttle && chat_throttle && (sec_delta < 0 || (sec_delta == 0 && nsec_delta < 300000000L))) {
+    if (!translation_throttle && chat_throttle && !ascii_profile_command && !ctx->bracket_paste_active &&
+        (sec_delta < 0 || (sec_delta == 0 && nsec_delta < 300000000L))) {
       session_send_system_line(ctx, "Please wait at least 300 milliseconds before sending another chat message.");
       return;
     }
@@ -17225,7 +17252,7 @@ static void session_asciiart_begin(session_ctx_t *ctx, session_asciiart_target_t
                              "Type " SSH_CHATTER_ASCIIART_TERMINATOR " on a line by itself or press Ctrl+S to finish.");
     session_send_system_line(ctx, "Press Ctrl+A to cancel the draft.");
   } else {
-    session_send_system_line(ctx, "Profile picture composer ready (max 128 lines, stored privately).");
+    session_send_system_line(ctx, "Profile picture composer ready (max 128 lines, up to 4096 bytes, stored privately).");
     session_send_system_line(ctx,
                              "Type " SSH_CHATTER_ASCIIART_TERMINATOR " on a line by itself or press Ctrl+S to save.");
     session_send_system_line(ctx, "Press Ctrl+A to cancel the draft.");
@@ -23755,7 +23782,9 @@ static void *session_thread(void *arg) {
         if (ctx->should_exit) {
           break;
         }
-        session_render_prompt(ctx, false);
+        if (!ctx->bracket_paste_active) {
+          session_render_prompt(ctx, false);
+        }
         continue;
       }
 
