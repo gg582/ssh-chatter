@@ -136,13 +136,16 @@ static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
 #define ALPHA_NAV_WIDTH 80
 #define ALPHA_NAV_HEIGHT 80
 #define ALPHA_NAV_MARGIN 6
-#define ALPHA_THRUST_DELTA 0.75
-#define ALPHA_GRAVITY_DAMPING 0.90
-#define ALPHA_GRAVITY_MIN_DISTANCE 1.0
-#define ALPHA_BLACK_HOLE_MU 2.5e6
-#define ALPHA_STAR_MU 4.5e5
-#define ALPHA_PLANET_MU 7.5e4
-#define ALPHA_DEBRIS_MU 1.0e4
+#define ALPHA_THRUST_DELTA 0.45
+#define ALPHA_THRUST_POSITION_STEP 0.5
+#define ALPHA_GRAVITY_DAMPING 0.97
+#define ALPHA_GRAVITY_MIN_DISTANCE 2.5
+#define ALPHA_GRAVITY_MAX_ACCEL 0.30
+#define ALPHA_NAV_MAX_SPEED 1.20
+#define ALPHA_BLACK_HOLE_MU 1800.0
+#define ALPHA_STAR_MU 360.0
+#define ALPHA_PLANET_MU 65.0
+#define ALPHA_DEBRIS_MU 12.0
 
 #define TELNET_IAC 255
 #define TELNET_CMD_SE 240
@@ -1525,6 +1528,7 @@ static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line);
 static void session_game_start_alpha(session_ctx_t *ctx);
 static void session_game_alpha_reset(session_ctx_t *ctx);
 static void session_game_alpha_prepare_navigation(session_ctx_t *ctx);
+static void session_game_alpha_reroll_navigation(session_ctx_t *ctx);
 static void session_game_alpha_add_gravity_source(alpha_centauri_game_state_t *state, int x, int y, double mu,
                                                   int influence_radius, char symbol, const char *name);
 static void session_game_alpha_configure_gravity(session_ctx_t *ctx);
@@ -18460,8 +18464,22 @@ static void session_game_alpha_apply_gravity(alpha_centauri_game_state_t *state)
     ay += force * (dy / distance);
   }
 
+  double accel_magnitude = hypot(ax, ay);
+  if (accel_magnitude > ALPHA_GRAVITY_MAX_ACCEL && accel_magnitude > 0.0) {
+    double accel_scale = ALPHA_GRAVITY_MAX_ACCEL / accel_magnitude;
+    ax *= accel_scale;
+    ay *= accel_scale;
+  }
+
   state->nav_vx = (state->nav_vx + ax) * ALPHA_GRAVITY_DAMPING;
   state->nav_vy = (state->nav_vy + ay) * ALPHA_GRAVITY_DAMPING;
+
+  double speed = hypot(state->nav_vx, state->nav_vy);
+  if (speed > ALPHA_NAV_MAX_SPEED && speed > 0.0) {
+    double speed_scale = ALPHA_NAV_MAX_SPEED / speed;
+    state->nav_vx *= speed_scale;
+    state->nav_vy *= speed_scale;
+  }
 
   state->nav_fx += state->nav_vx;
   state->nav_fy += state->nav_vy;
@@ -18610,6 +18628,17 @@ static void session_game_alpha_prepare_navigation(session_ctx_t *ctx) {
   state->nav_fy = (double)state->nav_y;
 
   session_game_alpha_configure_gravity(ctx);
+}
+
+static void session_game_alpha_reroll_navigation(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
+    return;
+  }
+
+  session_send_system_line(ctx, "Mission control: Recomputing the navigation solution...");
+  session_game_alpha_prepare_navigation(ctx);
+  session_game_alpha_sync_to_save(ctx);
+  session_game_alpha_present_stage(ctx);
 }
 
 static void session_game_alpha_reset(session_ctx_t *ctx) {
@@ -18916,6 +18945,7 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
                            "Legend: @ craft, + beacon, * locked alignment, B black hole, S star, P planet, D debris.");
   session_send_system_line(ctx, "Navigation grid spans 80×80 sectors; each maneuver reshuffles the gravity field.");
   session_send_system_line(ctx, "Use arrow keys (↑ ↓ ← →) to nudge the craft and keep it steady over the beacon.");
+  session_send_system_line(ctx, "Stuck? Type 'reset' to reroll the field with a fresh gravimetric solution.");
   session_game_alpha_report_state(ctx, "Current status:");
   ctx->translation_suppress_output = previous_translation;
 }
@@ -19106,8 +19136,8 @@ static bool session_game_alpha_handle_arrow(session_ctx_t *ctx, int dx, int dy) 
 
   state->nav_vx += (double)dx * ALPHA_THRUST_DELTA;
   state->nav_vy += (double)dy * ALPHA_THRUST_DELTA;
-  state->nav_fx += (double)dx;
-  state->nav_fy += (double)dy;
+  state->nav_fx += (double)dx * ALPHA_THRUST_POSITION_STEP;
+  state->nav_fy += (double)dy * ALPHA_THRUST_POSITION_STEP;
 
   double max_x = (double)(ALPHA_NAV_WIDTH - 1);
   double max_y = (double)(ALPHA_NAV_HEIGHT - 1);
@@ -19200,6 +19230,12 @@ static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line)
 
   if (command[0] == '\0') {
     session_game_alpha_refresh_navigation(ctx);
+    return;
+  }
+
+  if (strcasecmp(command, "reset") == 0 || strcasecmp(command, "reroll") == 0 ||
+      strcasecmp(command, "rescan") == 0) {
+    session_game_alpha_reroll_navigation(ctx);
     return;
   }
 
