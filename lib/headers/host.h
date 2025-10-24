@@ -289,6 +289,12 @@ typedef enum session_input_mode {
   SESSION_INPUT_MODE_COMMAND,
 } session_input_mode_t;
 
+typedef enum session_asciiart_target {
+  SESSION_ASCIIART_TARGET_NONE = 0,
+  SESSION_ASCIIART_TARGET_CHAT,
+  SESSION_ASCIIART_TARGET_PROFILE_PICTURE,
+} session_asciiart_target_t;
+
 typedef struct rss_feed {
   bool in_use;
   char tag[SSH_CHATTER_RSS_TAG_LEN];
@@ -405,6 +411,7 @@ typedef struct session_ctx {
   struct translation_result *translation_ready_tail;
   char status_message[SSH_CHATTER_STATUS_LEN];
   bool asciiart_pending;
+  session_asciiart_target_t asciiart_target;
   char asciiart_buffer[SSH_CHATTER_ASCIIART_BUFFER_LEN];
   size_t asciiart_length;
   size_t asciiart_line_count;
