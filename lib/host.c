@@ -20,6 +20,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <math.h>
 #include <libgen.h>
 #include <limits.h>
 #include <wchar.h>
@@ -132,8 +133,16 @@ static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
 #define ALPHA_LY_TO_KM 9460730472580.8
 #define ALPHA_LY_TO_AU 63241.077
 #define ALPHA_SPEED_OF_LIGHT_MPS 299792458.0
-#define ALPHA_NAV_WIDTH 13
-#define ALPHA_NAV_HEIGHT 9
+#define ALPHA_NAV_WIDTH 80
+#define ALPHA_NAV_HEIGHT 80
+#define ALPHA_NAV_MARGIN 6
+#define ALPHA_THRUST_DELTA 0.75
+#define ALPHA_GRAVITY_DAMPING 0.90
+#define ALPHA_GRAVITY_MIN_DISTANCE 1.0
+#define ALPHA_BLACK_HOLE_MU 2.5e6
+#define ALPHA_STAR_MU 4.5e5
+#define ALPHA_PLANET_MU 7.5e4
+#define ALPHA_DEBRIS_MU 1.0e4
 
 #define TELNET_IAC 255
 #define TELNET_CMD_SE 240
@@ -1514,12 +1523,126 @@ static void session_game_start_liargame(session_ctx_t *ctx);
 static void session_game_liar_present_round(session_ctx_t *ctx);
 static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line);
 static void session_game_start_alpha(session_ctx_t *ctx);
-static void session_game_alpha_reset(alpha_centauri_game_state_t *state);
-static void session_game_alpha_prepare_navigation(alpha_centauri_game_state_t *state);
-static void session_game_alpha_add_gravity_source(alpha_centauri_game_state_t *state, int x, int y, int strength,
-                                                  char symbol, const char *name);
-static void session_game_alpha_configure_gravity(alpha_centauri_game_state_t *state);
+static void session_game_alpha_reset(session_ctx_t *ctx);
+static void session_game_alpha_prepare_navigation(session_ctx_t *ctx);
+static void session_game_alpha_add_gravity_source(alpha_centauri_game_state_t *state, int x, int y, double mu,
+                                                  int influence_radius, char symbol, const char *name);
+static void session_game_alpha_configure_gravity(session_ctx_t *ctx);
 static void session_game_alpha_apply_gravity(alpha_centauri_game_state_t *state);
+static const char *const kAlphaStarCatalog[] = {
+    "Midway Star",
+    "Binary Torch",
+    "Turnover Sun",
+    "Arrival Flare",
+    "Relay Star",
+    "Shepherd Star",
+};
+
+static const char *const kAlphaPlanetCatalog[] = {
+    "Departure World",
+    "Drift Planet",
+    "Relay Outpost",
+    "Approach World",
+    "Proxima b",
+    "Immigrants' Harbor",
+};
+
+static const char *const kAlphaDebrisCatalog[] = {
+    "Comet Trail",
+    "Asteroid Swarm",
+    "Ice Shard",
+    "Dust Ribbon",
+    "Sail Wreck",
+};
+
+#define ALPHA_STAR_CATALOG_COUNT (sizeof(kAlphaStarCatalog) / sizeof(kAlphaStarCatalog[0]))
+#define ALPHA_PLANET_CATALOG_COUNT (sizeof(kAlphaPlanetCatalog) / sizeof(kAlphaPlanetCatalog[0]))
+#define ALPHA_DEBRIS_CATALOG_COUNT (sizeof(kAlphaDebrisCatalog) / sizeof(kAlphaDebrisCatalog[0]))
+
+static bool session_game_alpha_position_occupied(const alpha_centauri_game_state_t *state, int x, int y) {
+  if (state == NULL) {
+    return true;
+  }
+  if (state->nav_x == x && state->nav_y == y) {
+    return true;
+  }
+  if (state->nav_target_x == x && state->nav_target_y == y) {
+    return true;
+  }
+  for (unsigned idx = 0U; idx < state->gravity_source_count; ++idx) {
+    const alpha_gravity_source_t *existing = &state->gravity_sources[idx];
+    if (existing->x == x && existing->y == y) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void session_game_alpha_place_random_source(session_ctx_t *ctx, alpha_centauri_game_state_t *state, int margin,
+                                                   double mu, int radius, char symbol, const char *name) {
+  if (ctx == NULL || state == NULL) {
+    return;
+  }
+
+  int attempts = 0;
+  int min_margin = margin >= 0 ? margin : 0;
+  int usable_width = ALPHA_NAV_WIDTH - (min_margin * 2);
+  int usable_height = ALPHA_NAV_HEIGHT - (min_margin * 2);
+  if (usable_width <= 0) {
+    usable_width = ALPHA_NAV_WIDTH;
+    min_margin = 0;
+  }
+  if (usable_height <= 0) {
+    usable_height = ALPHA_NAV_HEIGHT;
+    min_margin = 0;
+  }
+
+  while (attempts < 128) {
+    int x = min_margin + session_game_random_range(ctx, usable_width);
+    int y = min_margin + session_game_random_range(ctx, usable_height);
+    if (!session_game_alpha_position_occupied(state, x, y)) {
+      session_game_alpha_add_gravity_source(state, x, y, mu, radius, symbol, name);
+      return;
+    }
+    ++attempts;
+  }
+
+  int fallback_x = min_margin < ALPHA_NAV_WIDTH ? min_margin : 0;
+  int fallback_y = min_margin < ALPHA_NAV_HEIGHT ? min_margin : 0;
+  session_game_alpha_add_gravity_source(state, fallback_x, fallback_y, mu, radius, symbol, name);
+}
+
+static double session_game_alpha_random_double(session_ctx_t *ctx, double min_value, double max_value) {
+  if (ctx == NULL) {
+    return min_value;
+  }
+  if (max_value <= min_value) {
+    return min_value;
+  }
+  double fraction = (double)session_game_random(ctx) / (double)UINT32_MAX;
+  if (fraction < 0.0) {
+    fraction = 0.0;
+  } else if (fraction > 1.0) {
+    fraction = 1.0;
+  }
+  return min_value + (max_value - min_value) * fraction;
+}
+
+static int session_game_alpha_random_with_margin(session_ctx_t *ctx, int extent, int margin) {
+  if (extent <= 0) {
+    return 0;
+  }
+  int safe_margin = margin;
+  if (safe_margin < 0) {
+    safe_margin = 0;
+  }
+  int usable = extent - (safe_margin * 2);
+  if (usable <= 0) {
+    usable = extent;
+    safe_margin = 0;
+  }
+  return safe_margin + session_game_random_range(ctx, usable);
+}
 static void session_game_alpha_sync_from_save(session_ctx_t *ctx);
 static void session_game_alpha_sync_to_save(session_ctx_t *ctx);
 static void session_game_alpha_present_stage(session_ctx_t *ctx);
@@ -8092,7 +8215,7 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
   }
 
   host_t *host = ctx->owner;
-  user_preference_t snapshot = {0};
+  user_preference_t snapshot = (user_preference_t){0};
   bool has_snapshot = false;
 
   pthread_mutex_lock(&host->lock);
@@ -8169,32 +8292,25 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
     } else {
       ctx->birthday[0] = '\0';
     }
+
     ctx->translation_caption_spacing = snapshot.translation_caption_spacing;
     if (ctx->translation_caption_spacing > 8U) {
       ctx->translation_caption_spacing = 8U;
     }
-  if (snapshot.translation_master_explicit) {
-    ctx->translation_enabled = snapshot.translation_master_enabled;
-  }
-  ctx->output_translation_enabled = snapshot.output_translation_enabled;
-  snprintf(ctx->output_translation_language, sizeof(ctx->output_translation_language), "%s",
-           snapshot.output_translation_language);
-  ctx->input_translation_enabled = snapshot.input_translation_enabled;
-  snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s",
-           snapshot.input_translation_language);
-  }
-  ctx->output_translation_enabled = snapshot.output_translation_enabled;
-  snprintf(ctx->output_translation_language, sizeof(ctx->output_translation_language), "%s",
-           snapshot.output_translation_language);
-  ctx->input_translation_enabled = snapshot.input_translation_enabled;
-  snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s",
-           snapshot.input_translation_language);
+
+    if (snapshot.translation_master_explicit) {
+      ctx->translation_enabled = snapshot.translation_master_enabled;
+    }
+
+    ctx->output_translation_enabled = snapshot.output_translation_enabled;
+    snprintf(ctx->output_translation_language, sizeof(ctx->output_translation_language), "%s",
+             snapshot.output_translation_language);
+    ctx->input_translation_enabled = snapshot.input_translation_enabled;
+    snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s",
+             snapshot.input_translation_language);
   }
 
   (void)session_user_data_load(ctx);
-
-  (void)session_user_data_load(ctx);
-
   session_force_dark_mode_foreground(ctx);
 }
 
@@ -18204,8 +18320,8 @@ static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line) 
   session_game_liar_present_round(ctx);
 }
 
-static void session_game_alpha_add_gravity_source(alpha_centauri_game_state_t *state, int x, int y, int strength,
-                                                  char symbol, const char *name) {
+static void session_game_alpha_add_gravity_source(alpha_centauri_game_state_t *state, int x, int y, double mu,
+                                                  int influence_radius, char symbol, const char *name) {
   if (state == NULL || state->gravity_source_count >= ALPHA_MAX_GRAVITY_SOURCES) {
     return;
   }
@@ -18225,7 +18341,8 @@ static void session_game_alpha_add_gravity_source(alpha_centauri_game_state_t *s
   alpha_gravity_source_t *source = &state->gravity_sources[state->gravity_source_count++];
   source->x = x;
   source->y = y;
-  source->strength = strength > 0 ? strength : 0;
+  source->mu = mu >= 0.0 ? mu : 0.0;
+  source->influence_radius = influence_radius > 0 ? influence_radius : 0;
   source->symbol = symbol;
   if (name != NULL) {
     snprintf(source->name, sizeof(source->name), "%s", name);
@@ -18234,43 +18351,70 @@ static void session_game_alpha_add_gravity_source(alpha_centauri_game_state_t *s
   }
 }
 
-static void session_game_alpha_configure_gravity(alpha_centauri_game_state_t *state) {
-  if (state == NULL) {
+static void session_game_alpha_configure_gravity(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA) {
     return;
   }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
 
   for (unsigned idx = 0U; idx < ALPHA_MAX_GRAVITY_SOURCES; ++idx) {
     state->gravity_sources[idx] = (alpha_gravity_source_t){0};
   }
   state->gravity_source_count = 0U;
 
-  int center_x = ALPHA_NAV_WIDTH / 2;
-  int center_y = ALPHA_NAV_HEIGHT / 2;
+  double stage_multiplier = 1.0 + (double)state->stage * 0.25;
+  const char *hole_name = state->stage >= 3 ? "Proxima Abyss" : "Core Singularity";
+  double hole_mu = ALPHA_BLACK_HOLE_MU * session_game_alpha_random_double(ctx, stage_multiplier,
+                                                                          stage_multiplier + 0.75);
+  session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN, hole_mu, ALPHA_NAV_MARGIN * 3, 'B', hole_name);
 
-  session_game_alpha_add_gravity_source(state, 1, center_y, 4, 'B', "Black Hole");
+  int star_count = 2 + (int)state->stage;
+  int planet_count = 2 + (int)(state->stage / 2);
+  int debris_count = 1 + (int)state->stage;
+  if (state->stage >= 4 && state->awaiting_flag) {
+    planet_count += 1;
+    debris_count += 2;
+  }
 
-  switch (state->stage) {
-    case 0:
-      session_game_alpha_add_gravity_source(state, center_x + 2, 2, 3, 'S', "Launch Star");
-      session_game_alpha_add_gravity_source(state, center_x, ALPHA_NAV_HEIGHT - 2, 2, 'P', "Departure Planet");
-      break;
-    case 1:
-      session_game_alpha_add_gravity_source(state, ALPHA_NAV_WIDTH - 3, center_y - 1, 3, 'S', "Binary Star");
-      session_game_alpha_add_gravity_source(state, center_x - 1, center_y + 2, 2, 'P', "Rogue Planet");
-      break;
-    case 2:
-      session_game_alpha_add_gravity_source(state, 2, 2, 3, 'S', "Turnover Star");
-      session_game_alpha_add_gravity_source(state, center_x + 1, ALPHA_NAV_HEIGHT - 3, 2, 'P', "Stray Planet");
-      break;
-    case 3:
-      session_game_alpha_add_gravity_source(state, center_x, 2, 2, 'S', "Approach Star");
-      session_game_alpha_add_gravity_source(state, center_x + 2, ALPHA_NAV_HEIGHT - 2, 2, 'P', "Proxima b");
-      break;
-    case 4:
-    default:
-      session_game_alpha_add_gravity_source(state, center_x, 1, 2, 'S', "Proxima Star");
-      session_game_alpha_add_gravity_source(state, center_x, ALPHA_NAV_HEIGHT - 2, 2, 'P', "Landing Planet");
-      break;
+  int available_slots = (int)ALPHA_MAX_GRAVITY_SOURCES - 1;
+  if (available_slots < 0) {
+    available_slots = 0;
+  }
+  if (star_count > available_slots) {
+    star_count = available_slots;
+  }
+  available_slots -= star_count;
+  if (available_slots < 0) {
+    available_slots = 0;
+  }
+  if (planet_count > available_slots) {
+    planet_count = available_slots;
+  }
+  available_slots -= planet_count;
+  if (available_slots < 0) {
+    available_slots = 0;
+  }
+  if (debris_count > available_slots) {
+    debris_count = available_slots;
+  }
+
+  for (int idx = 0; idx < star_count; ++idx) {
+    const char *name = kAlphaStarCatalog[session_game_random_range(ctx, (int)ALPHA_STAR_CATALOG_COUNT)];
+    double mu = ALPHA_STAR_MU * session_game_alpha_random_double(ctx, stage_multiplier * 0.7, stage_multiplier * 1.3);
+    session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN / 2, mu, ALPHA_NAV_MARGIN * 2, 'S', name);
+  }
+
+  for (int idx = 0; idx < planet_count; ++idx) {
+    const char *name = kAlphaPlanetCatalog[session_game_random_range(ctx, (int)ALPHA_PLANET_CATALOG_COUNT)];
+    double mu = ALPHA_PLANET_MU * session_game_alpha_random_double(ctx, stage_multiplier * 0.6, stage_multiplier * 1.4);
+    session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN / 2, mu, ALPHA_NAV_MARGIN * 2, 'P', name);
+  }
+
+  for (int idx = 0; idx < debris_count; ++idx) {
+    const char *name = kAlphaDebrisCatalog[session_game_random_range(ctx, (int)ALPHA_DEBRIS_CATALOG_COUNT)];
+    double mu = ALPHA_DEBRIS_MU * session_game_alpha_random_double(ctx, 0.5, 1.8) * stage_multiplier;
+    session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN / 3, mu, ALPHA_NAV_MARGIN, 'D', name);
   }
 }
 
@@ -18279,133 +18423,201 @@ static void session_game_alpha_apply_gravity(alpha_centauri_game_state_t *state)
     return;
   }
 
-  bool on_target = (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y);
+  double fx = state->nav_fx;
+  double fy = state->nav_fy;
+  double ax = 0.0;
+  double ay = 0.0;
+
   for (unsigned idx = 0U; idx < state->gravity_source_count; ++idx) {
     const alpha_gravity_source_t *source = &state->gravity_sources[idx];
-    if (source->strength <= 0) {
+    if (source->mu <= 0.0) {
       continue;
     }
 
-    if (on_target) {
-      break;
+    double dx = (double)source->x - fx;
+    double dy = (double)source->y - fy;
+    double distance_sq = (dx * dx) + (dy * dy);
+    double distance = sqrt(distance_sq);
+    if (distance < ALPHA_GRAVITY_MIN_DISTANCE) {
+      distance = ALPHA_GRAVITY_MIN_DISTANCE;
     }
 
-    int dx = source->x - state->nav_x;
-    int dy = source->y - state->nav_y;
-    int abs_dx = dx < 0 ? -dx : dx;
-    int abs_dy = dy < 0 ? -dy : dy;
-    int distance = abs_dx + abs_dy;
-    if (distance == 0 || distance > source->strength) {
+    double radius = source->influence_radius > 0 ? (double)source->influence_radius : (double)ALPHA_NAV_MARGIN;
+    double attenuation = 1.0;
+    if (radius > 0.0) {
+      double normalized = distance / radius;
+      if (normalized > 1.0) {
+        attenuation = 1.0 / (normalized * normalized);
+      }
+    }
+
+    double force = (source->mu * attenuation) / (distance * distance);
+    if (force <= 0.0) {
       continue;
     }
 
-    if (dx > 0) {
-      ++state->nav_x;
-    } else if (dx < 0) {
-      --state->nav_x;
-    }
-
-    if (dy > 0) {
-      ++state->nav_y;
-    } else if (dy < 0) {
-      --state->nav_y;
-    }
-
-    if (state->nav_x < 0) {
-      state->nav_x = 0;
-    } else if (state->nav_x >= ALPHA_NAV_WIDTH) {
-      state->nav_x = ALPHA_NAV_WIDTH - 1;
-    }
-
-    if (state->nav_y < 0) {
-      state->nav_y = 0;
-    } else if (state->nav_y >= ALPHA_NAV_HEIGHT) {
-      state->nav_y = ALPHA_NAV_HEIGHT - 1;
-    }
-
-    if (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y) {
-      on_target = true;
-    }
+    ax += force * (dx / distance);
+    ay += force * (dy / distance);
   }
+
+  state->nav_vx = (state->nav_vx + ax) * ALPHA_GRAVITY_DAMPING;
+  state->nav_vy = (state->nav_vy + ay) * ALPHA_GRAVITY_DAMPING;
+
+  state->nav_fx += state->nav_vx;
+  state->nav_fy += state->nav_vy;
+
+  double max_x = (double)(ALPHA_NAV_WIDTH - 1);
+  double max_y = (double)(ALPHA_NAV_HEIGHT - 1);
+
+  if (state->nav_fx < 0.0) {
+    state->nav_fx = 0.0;
+    state->nav_vx = 0.0;
+  } else if (state->nav_fx > max_x) {
+    state->nav_fx = max_x;
+    state->nav_vx = 0.0;
+  }
+
+  if (state->nav_fy < 0.0) {
+    state->nav_fy = 0.0;
+    state->nav_vy = 0.0;
+  } else if (state->nav_fy > max_y) {
+    state->nav_fy = max_y;
+    state->nav_vy = 0.0;
+  }
+
+  long rounded_x = lround(state->nav_fx);
+  long rounded_y = lround(state->nav_fy);
+  if (rounded_x < 0) {
+    rounded_x = 0;
+  } else if (rounded_x > (long)(ALPHA_NAV_WIDTH - 1)) {
+    rounded_x = (long)(ALPHA_NAV_WIDTH - 1);
+  }
+  if (rounded_y < 0) {
+    rounded_y = 0;
+  } else if (rounded_y > (long)(ALPHA_NAV_HEIGHT - 1)) {
+    rounded_y = (long)(ALPHA_NAV_HEIGHT - 1);
+  }
+
+  state->nav_x = (int)rounded_x;
+  state->nav_y = (int)rounded_y;
 }
 
-static void session_game_alpha_prepare_navigation(alpha_centauri_game_state_t *state) {
-  if (state == NULL) {
+static void session_game_alpha_prepare_navigation(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA) {
     return;
   }
 
-  const int center_x = ALPHA_NAV_WIDTH / 2;
-  const int center_y = ALPHA_NAV_HEIGHT / 2;
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  int safe_margin = ALPHA_NAV_MARGIN;
 
   state->nav_stable_ticks = 0U;
-  state->nav_required_ticks = 1U;
-  state->nav_x = center_x;
-  state->nav_y = center_y;
-  state->nav_target_x = center_x;
-  state->nav_target_y = center_y;
+  state->nav_required_ticks = 3U;
+  state->nav_vx = 0.0;
+  state->nav_vy = 0.0;
 
   switch (state->stage) {
     case 0:
-      state->nav_x = center_x;
-      state->nav_y = ALPHA_NAV_HEIGHT - 1;
-      state->nav_target_x = center_x;
-      state->nav_target_y = 1;
-      state->nav_required_ticks = 2U;
+      state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
+      state->nav_y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, safe_margin + 4);
+      if (state->nav_y < safe_margin) {
+        state->nav_y = safe_margin;
+      }
+      state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
+      state->nav_target_y = session_game_random_range(ctx, safe_margin + 4);
+      state->nav_required_ticks = 3U;
       break;
     case 1:
-      state->nav_x = center_x;
-      state->nav_y = center_y + 1;
-      state->nav_target_x = ALPHA_NAV_WIDTH - 2;
-      state->nav_target_y = center_y;
-      state->nav_required_ticks = 3U;
+      state->nav_x = session_game_random_range(ctx, (ALPHA_NAV_WIDTH / 2)) + safe_margin;
+      if (state->nav_x >= ALPHA_NAV_WIDTH) {
+        state->nav_x = ALPHA_NAV_WIDTH - 1;
+      }
+      state->nav_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
+      state->nav_target_x = ALPHA_NAV_WIDTH - 1 - session_game_random_range(ctx, safe_margin + 5);
+      state->nav_target_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
+      state->nav_required_ticks = 4U;
       break;
     case 2:
-      state->nav_x = ALPHA_NAV_WIDTH - 3;
-      state->nav_y = center_y;
-      state->nav_target_x = 1;
-      state->nav_target_y = center_y;
-      state->nav_required_ticks = 3U;
+      state->nav_x = ALPHA_NAV_WIDTH - 1 - session_game_random_range(ctx, safe_margin + 5);
+      state->nav_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
+      state->nav_target_x = session_game_random_range(ctx, safe_margin + 5);
+      state->nav_target_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
+      state->nav_required_ticks = 4U;
       break;
     case 3:
-      state->nav_x = center_x;
-      state->nav_y = 1;
-      state->nav_target_x = center_x;
-      state->nav_target_y = ALPHA_NAV_HEIGHT - 2;
-      state->nav_required_ticks = 4U;
+      state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
+      state->nav_y = session_game_random_range(ctx, safe_margin + 5);
+      state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
+      state->nav_target_y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, safe_margin + 5);
+      state->nav_required_ticks = 5U;
       break;
     case 4:
       if (!state->eva_ready) {
-        state->nav_x = center_x;
-        state->nav_y = 1;
-        state->nav_target_x = center_x;
-        state->nav_target_y = ALPHA_NAV_HEIGHT - 2;
-        state->nav_required_ticks = 3U;
+        state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
+        state->nav_y = session_game_random_range(ctx, safe_margin + 5);
+        state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
+        state->nav_target_y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, safe_margin + 5);
+        state->nav_required_ticks = 4U;
       } else if (state->awaiting_flag) {
-        state->nav_x = center_x;
-        state->nav_y = center_y - 1;
-        state->nav_target_x = center_x;
-        state->nav_target_y = ALPHA_NAV_HEIGHT - 1;
-        state->nav_required_ticks = 2U;
+        state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
+        state->nav_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
+        state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
+        state->nav_target_y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, safe_margin + 3);
+        state->nav_required_ticks = 3U;
       } else {
-        state->nav_x = center_x;
-        state->nav_y = ALPHA_NAV_HEIGHT - 1;
-        state->nav_target_x = center_x;
-        state->nav_target_y = 1;
-        state->nav_required_ticks = 2U;
+        state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
+        state->nav_y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, safe_margin + 3);
+        state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
+        state->nav_target_y = session_game_random_range(ctx, safe_margin + 3);
+        state->nav_required_ticks = 3U;
       }
       break;
     default:
+      state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
+      state->nav_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
+      state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
+      state->nav_target_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
       break;
   }
 
-  session_game_alpha_configure_gravity(state);
+  if (state->nav_target_x < 0) {
+    state->nav_target_x = 0;
+  } else if (state->nav_target_x >= ALPHA_NAV_WIDTH) {
+    state->nav_target_x = ALPHA_NAV_WIDTH - 1;
+  }
+  if (state->nav_target_y < 0) {
+    state->nav_target_y = 0;
+  } else if (state->nav_target_y >= ALPHA_NAV_HEIGHT) {
+    state->nav_target_y = ALPHA_NAV_HEIGHT - 1;
+  }
+
+  if (state->nav_x < 0) {
+    state->nav_x = 0;
+  } else if (state->nav_x >= ALPHA_NAV_WIDTH) {
+    state->nav_x = ALPHA_NAV_WIDTH - 1;
+  }
+  if (state->nav_y < 0) {
+    state->nav_y = 0;
+  } else if (state->nav_y >= ALPHA_NAV_HEIGHT) {
+    state->nav_y = ALPHA_NAV_HEIGHT - 1;
+  }
+
+  if (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y) {
+    state->nav_target_x = (state->nav_target_x + (ALPHA_NAV_WIDTH / 2)) % ALPHA_NAV_WIDTH;
+    state->nav_target_y = (state->nav_target_y + (ALPHA_NAV_HEIGHT / 2)) % ALPHA_NAV_HEIGHT;
+  }
+
+  state->nav_fx = (double)state->nav_x;
+  state->nav_fy = (double)state->nav_y;
+
+  session_game_alpha_configure_gravity(ctx);
 }
 
-static void session_game_alpha_reset(alpha_centauri_game_state_t *state) {
-  if (state == NULL) {
+static void session_game_alpha_reset(session_ctx_t *ctx) {
+  if (ctx == NULL) {
     return;
   }
 
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
   *state = (alpha_centauri_game_state_t){0};
   state->stage = 0U;
   state->velocity_fraction_c = 0.0;
@@ -18418,7 +18630,7 @@ static void session_game_alpha_reset(alpha_centauri_game_state_t *state) {
   state->active = false;
   state->eva_ready = false;
   state->awaiting_flag = false;
-  session_game_alpha_prepare_navigation(state);
+  session_game_alpha_prepare_navigation(ctx);
 }
 
 static void session_game_alpha_sync_from_save(session_ctx_t *ctx) {
@@ -18427,7 +18639,7 @@ static void session_game_alpha_sync_from_save(session_ctx_t *ctx) {
   }
 
   alpha_centauri_game_state_t *state = &ctx->game.alpha;
-  session_game_alpha_reset(state);
+  session_game_alpha_reset(ctx);
 
   if (!session_user_data_load(ctx)) {
     return;
@@ -18452,7 +18664,7 @@ static void session_game_alpha_sync_from_save(session_ctx_t *ctx) {
   state->oxygen_days = save->oxygen_days;
   state->mission_time_years = save->mission_time_years;
   state->radiation_msv = save->radiation_msv;
-  session_game_alpha_prepare_navigation(state);
+  session_game_alpha_prepare_navigation(ctx);
 }
 
 static void session_game_alpha_sync_to_save(session_ctx_t *ctx) {
@@ -18617,8 +18829,8 @@ static void session_game_alpha_render_navigation(session_ctx_t *ctx) {
       const alpha_gravity_source_t *source = &state->gravity_sources[idx];
       const char *name = source->name[0] != '\0' ? source->name : "Gravity Source";
       char symbol = source->symbol != '\0' ? source->symbol : 'G';
-      written = snprintf(gravity_line + offset, sizeof(gravity_line) - offset, "%s%c=%s",
-                         idx == 0U ? "" : ", ", symbol, name);
+      written = snprintf(gravity_line + offset, sizeof(gravity_line) - offset, "%s%c=%s(μ=%.2e)",
+                         idx == 0U ? "" : ", ", symbol, name, source->mu);
       if (written < 0) {
         break;
       }
@@ -18698,9 +18910,11 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
   }
 
   session_send_system_line(ctx,
-                           "Gravitational pulls: B=black hole, S=star, P=planet — stay steady against their drift.");
+                           "Gravitational pulls: B=black hole, S=star, P=planet, D=debris — each mass tugs with its own μ.");
   session_game_alpha_render_navigation(ctx);
-  session_send_system_line(ctx, "Legend: @ craft, + beacon, * locked alignment, B black hole, S star, P planet.");
+  session_send_system_line(ctx,
+                           "Legend: @ craft, + beacon, * locked alignment, B black hole, S star, P planet, D debris.");
+  session_send_system_line(ctx, "Navigation grid spans 80×80 sectors; each maneuver reshuffles the gravity field.");
   session_send_system_line(ctx, "Use arrow keys (↑ ↓ ← →) to nudge the craft and keep it steady over the beacon.");
   session_game_alpha_report_state(ctx, "Current status:");
   ctx->translation_suppress_output = previous_translation;
@@ -18760,7 +18974,7 @@ static void session_game_alpha_log_completion(session_ctx_t *ctx) {
 
   ctx->translation_suppress_output = previous_translation;
 
-  session_game_alpha_reset(state);
+  session_game_alpha_reset(ctx);
   state->active = true;
   session_game_alpha_sync_to_save(ctx);
   session_game_alpha_present_stage(ctx);
@@ -18783,7 +18997,7 @@ static void session_game_alpha_execute_ignite(session_ctx_t *ctx) {
   }
   state->mission_time_years += 0.02;
   state->radiation_msv += 12.0;
-  session_game_alpha_prepare_navigation(state);
+  session_game_alpha_prepare_navigation(ctx);
   session_game_alpha_sync_to_save(ctx);
   session_game_alpha_present_stage(ctx);
 }
@@ -18806,7 +19020,7 @@ static void session_game_alpha_execute_trim(session_ctx_t *ctx) {
   }
   state->mission_time_years += 0.55;
   state->radiation_msv += 28.0;
-  session_game_alpha_prepare_navigation(state);
+  session_game_alpha_prepare_navigation(ctx);
   session_game_alpha_sync_to_save(ctx);
   session_game_alpha_present_stage(ctx);
 }
@@ -18828,7 +19042,7 @@ static void session_game_alpha_execute_flip(session_ctx_t *ctx) {
   }
   state->mission_time_years += 1.80;
   state->radiation_msv += 18.0;
-  session_game_alpha_prepare_navigation(state);
+  session_game_alpha_prepare_navigation(ctx);
   session_game_alpha_sync_to_save(ctx);
   session_game_alpha_present_stage(ctx);
 }
@@ -18853,7 +19067,7 @@ static void session_game_alpha_execute_retro(session_ctx_t *ctx) {
   state->radiation_msv += 12.0;
   state->eva_ready = false;
   state->awaiting_flag = false;
-  session_game_alpha_prepare_navigation(state);
+  session_game_alpha_prepare_navigation(ctx);
   session_game_alpha_sync_to_save(ctx);
   session_game_alpha_present_stage(ctx);
 }
@@ -18874,7 +19088,7 @@ static void session_game_alpha_execute_eva(session_ctx_t *ctx) {
   }
   state->mission_time_years += 0.05;
   state->radiation_msv += 6.0;
-  session_game_alpha_prepare_navigation(state);
+  session_game_alpha_prepare_navigation(ctx);
   session_game_alpha_sync_to_save(ctx);
   session_game_alpha_present_stage(ctx);
 }
@@ -18890,22 +19104,40 @@ static bool session_game_alpha_handle_arrow(session_ctx_t *ctx, int dx, int dy) 
 
   alpha_centauri_game_state_t *state = &ctx->game.alpha;
 
-  int new_x = state->nav_x + dx;
-  if (new_x < 0) {
-    new_x = 0;
-  } else if (new_x >= ALPHA_NAV_WIDTH) {
-    new_x = ALPHA_NAV_WIDTH - 1;
+  state->nav_vx += (double)dx * ALPHA_THRUST_DELTA;
+  state->nav_vy += (double)dy * ALPHA_THRUST_DELTA;
+  state->nav_fx += (double)dx;
+  state->nav_fy += (double)dy;
+
+  double max_x = (double)(ALPHA_NAV_WIDTH - 1);
+  double max_y = (double)(ALPHA_NAV_HEIGHT - 1);
+  if (state->nav_fx < 0.0) {
+    state->nav_fx = 0.0;
+    state->nav_vx = 0.0;
+  } else if (state->nav_fx > max_x) {
+    state->nav_fx = max_x;
+    state->nav_vx = 0.0;
+  }
+  if (state->nav_fy < 0.0) {
+    state->nav_fy = 0.0;
+    state->nav_vy = 0.0;
+  } else if (state->nav_fy > max_y) {
+    state->nav_fy = max_y;
+    state->nav_vy = 0.0;
   }
 
-  int new_y = state->nav_y + dy;
-  if (new_y < 0) {
-    new_y = 0;
-  } else if (new_y >= ALPHA_NAV_HEIGHT) {
-    new_y = ALPHA_NAV_HEIGHT - 1;
+  state->nav_x = (int)lround(state->nav_fx);
+  state->nav_y = (int)lround(state->nav_fy);
+  if (state->nav_x < 0) {
+    state->nav_x = 0;
+  } else if (state->nav_x >= ALPHA_NAV_WIDTH) {
+    state->nav_x = ALPHA_NAV_WIDTH - 1;
   }
-
-  state->nav_x = new_x;
-  state->nav_y = new_y;
+  if (state->nav_y < 0) {
+    state->nav_y = 0;
+  } else if (state->nav_y >= ALPHA_NAV_HEIGHT) {
+    state->nav_y = ALPHA_NAV_HEIGHT - 1;
+  }
 
   session_game_alpha_apply_gravity(state);
 
@@ -19142,7 +19374,7 @@ static void session_game_suspend(session_ctx_t *ctx, const char *reason) {
     snprintf(summary, sizeof(summary), "Alpha Centauri mission paused at stage %u with %.2f ly remaining.",
              ctx->game.alpha.stage, ctx->game.alpha.distance_remaining_ly);
     session_send_system_line(ctx, summary);
-    session_game_alpha_reset(&ctx->game.alpha);
+    session_game_alpha_reset(ctx);
     session_game_alpha_sync_to_save(ctx);
   }
 
