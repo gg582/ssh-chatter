@@ -73,6 +73,10 @@
 #define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT ((unsigned int)INT_MAX)
 #define SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_DISPLAY \
   "ssh-rsa, ssh-ed25519, ecdsa-sha2-nistp256"
+#define SSH_CHATTER_SUPPORTED_KEX_ALGORITHMS                                                     \
+  "curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,"       \
+  "ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256,"      \
+  "diffie-hellman-group14-sha1"
 #define SSH_CHATTER_BIRTHDAY_WINDOW_SECONDS (7 * 24 * 60 * 60)
 
 static const char *const SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS[] = {
@@ -80,6 +84,13 @@ static const char *const SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS[] = {
     "ssh-ed25519",
     "ecdsa-sha2-nistp256",
 };
+
+typedef struct host_key_definition {
+  const char *algorithm;
+  const char *filename;
+  ssh_bind_options_e option;
+  bool requires_import;
+} host_key_definition_t;
 
 static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
     sizeof(SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS) /
@@ -558,6 +569,146 @@ static bool host_listener_attempt_recover(host_t *host, ssh_bind bind_handle, co
   }
   printf("[listener] in-place recovery failed: %s\n", error_message);
   return false;
+}
+
+static bool host_join_key_path(const char *directory, const char *filename, char *buffer, size_t buffer_len) {
+  if (directory == NULL || filename == NULL || buffer == NULL || buffer_len == 0U) {
+    return false;
+  }
+
+  const size_t dir_len = strlen(directory);
+  const bool needs_separator = dir_len > 0U && directory[dir_len - 1U] != '/';
+  const int written = snprintf(buffer, buffer_len, "%s%s%s", directory, needs_separator ? "/" : "",
+                               filename);
+  if (written < 0 || (size_t)written >= buffer_len) {
+    return false;
+  }
+
+  return true;
+}
+
+static void host_bind_append_algorithm(char *buffer, size_t buffer_len, size_t *current_len,
+                                       const char *algorithm) {
+  if (buffer == NULL || current_len == NULL || algorithm == NULL || algorithm[0] == '\0' || buffer_len == 0U) {
+    return;
+  }
+
+  const size_t usable_length = buffer_len - 1U;
+  if (*current_len > usable_length) {
+    *current_len = usable_length;
+    buffer[usable_length] = '\0';
+    return;
+  }
+
+  if (*current_len > 0U) {
+    if (*current_len >= usable_length) {
+      buffer[usable_length] = '\0';
+      return;
+    }
+    buffer[*current_len] = ',';
+    ++(*current_len);
+  }
+
+  size_t remaining = usable_length - *current_len;
+  if (remaining == 0U) {
+    buffer[*current_len] = '\0';
+    return;
+  }
+
+  size_t algorithm_length = strlen(algorithm);
+  if (algorithm_length > remaining) {
+    algorithm_length = remaining;
+  }
+
+  memcpy(buffer + *current_len, algorithm, algorithm_length);
+  *current_len += algorithm_length;
+  buffer[*current_len] = '\0';
+}
+
+static bool host_bind_import_key(ssh_bind bind_handle, const char *algorithm, const char *key_path) {
+  if (bind_handle == NULL || algorithm == NULL || key_path == NULL) {
+    return false;
+  }
+
+  ssh_key imported_key = NULL;
+  if (ssh_pki_import_privkey_file(key_path, NULL, NULL, NULL, &imported_key) != SSH_OK || imported_key == NULL) {
+    char message[256];
+    snprintf(message, sizeof(message), "failed to import %s host key", algorithm);
+    humanized_log_error("host", message, errno != 0 ? errno : EIO);
+    if (imported_key != NULL) {
+      ssh_key_free(imported_key);
+    }
+    return false;
+  }
+
+  errno = 0;
+  const int import_result = ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_IMPORT_KEY, imported_key);
+  ssh_key_free(imported_key);
+  if (import_result != SSH_OK) {
+    const char *error_message = ssh_get_error(bind_handle);
+    char message[256];
+    snprintf(message, sizeof(message), "failed to register %s host key", algorithm);
+    humanized_log_error("host", error_message != NULL ? error_message : message, errno != 0 ? errno : EIO);
+    return false;
+  }
+
+  return true;
+}
+
+static bool host_bind_load_key(ssh_bind bind_handle, const host_key_definition_t *definition,
+                               const char *key_path) {
+  if (bind_handle == NULL || definition == NULL || key_path == NULL) {
+    return false;
+  }
+
+  bool require_import = definition->requires_import;
+  if (!require_import) {
+    errno = 0;
+    const int set_result = ssh_bind_options_set(bind_handle, definition->option, key_path);
+    if (set_result == SSH_OK) {
+      return true;
+    }
+
+    const char *error_message = ssh_get_error(bind_handle);
+    const bool unsupported_option =
+        (error_message != NULL && strstr(error_message, "Unknown ssh option") != NULL) || errno == ENOTSUP;
+    if (!unsupported_option) {
+      char message[256];
+      snprintf(message, sizeof(message), "failed to load %s host key", definition->algorithm);
+      humanized_log_error("host", error_message != NULL ? error_message : message, errno != 0 ? errno : EIO);
+      return false;
+    }
+    require_import = true;
+  }
+
+  if (require_import && !definition->requires_import) {
+    printf("[listener] importing %s host key due to limited libssh support\n", definition->algorithm);
+  }
+
+  return host_bind_import_key(bind_handle, definition->algorithm, key_path);
+}
+
+static void host_bind_set_optional_string(ssh_bind bind_handle, ssh_bind_options_e option, const char *value,
+                                          const char *label) {
+  if (bind_handle == NULL || value == NULL || value[0] == '\0') {
+    return;
+  }
+
+  errno = 0;
+  if (ssh_bind_options_set(bind_handle, option, value) == SSH_OK) {
+    return;
+  }
+
+  const char *error_message = ssh_get_error(bind_handle);
+  const bool unsupported_option =
+      (error_message != NULL && strstr(error_message, "Unknown ssh option") != NULL) || errno == ENOTSUP;
+  if (unsupported_option) {
+    return;
+  }
+
+  char message[256];
+  snprintf(message, sizeof(message), "%s", label != NULL ? label : "failed to configure listener option");
+  humanized_log_error("host", error_message != NULL ? error_message : message, errno != 0 ? errno : EIO);
 }
 
 static struct timespec timespec_add_ms(const struct timespec *start, long milliseconds) {
@@ -20637,50 +20788,15 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 
   const char *address = bind_addr != NULL ? bind_addr : "0.0.0.0";
   const char *bind_port = port != NULL ? port : "2222";
-  const char *rsa_filename = "ssh_host_rsa_key";
+  const bool key_dir_specified = key_directory != NULL && key_directory[0] != '\0';
+  const host_key_definition_t host_key_definitions[] = {
+      {"ssh-ed25519", "ssh_host_ed25519_key", SSH_BIND_OPTIONS_IMPORT_KEY, true},
+      {"ecdsa-sha2-nistp256", "ssh_host_ecdsa_key", SSH_BIND_OPTIONS_ECDSAKEY, false},
+      {"ssh-rsa", "ssh_host_rsa_key", SSH_BIND_OPTIONS_RSAKEY, false},
+  };
+  const size_t host_key_count = sizeof(host_key_definitions) / sizeof(host_key_definitions[0]);
 
   while (true) {
-    const char *rsa_key_path = NULL;
-    char resolved_rsa_key[PATH_MAX];
-
-    if (key_directory != NULL && key_directory[0] != '\0') {
-      const size_t dir_len = strlen(key_directory);
-      if (dir_len >= sizeof(resolved_rsa_key)) {
-        humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
-        host_sleep_after_error();
-        continue;
-      }
-      const bool needs_separator = dir_len > 0 && key_directory[dir_len - 1U] != '/';
-      int written = snprintf(resolved_rsa_key, sizeof(resolved_rsa_key), "%s%s%s", key_directory,
-                             needs_separator ? "/" : "", rsa_filename);
-      if (written < 0 || (size_t)written >= sizeof(resolved_rsa_key)) {
-        humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
-        host_sleep_after_error();
-        continue;
-      }
-      rsa_key_path = resolved_rsa_key;
-      if (access(rsa_key_path, R_OK) != 0) {
-        const int access_error = errno;
-        humanized_log_error("host", "unable to access RSA host key",
-                            access_error != 0 ? access_error : EIO);
-        host_sleep_after_error();
-        continue;
-      }
-    } else {
-      const char *candidates[] = {rsa_filename, "/etc/ssh/ssh_host_rsa_key"};
-      for (size_t idx = 0; idx < sizeof(candidates) / sizeof(candidates[0]); ++idx) {
-        if (access(candidates[idx], R_OK) == 0) {
-          rsa_key_path = candidates[idx];
-          break;
-        }
-      }
-      if (rsa_key_path == NULL) {
-        humanized_log_error("host", "unable to locate RSA host key", ENOENT);
-        host_sleep_after_error();
-        continue;
-      }
-    }
-
     ssh_bind bind_handle = ssh_bind_new();
     if (bind_handle == NULL) {
       humanized_log_error("host", "failed to allocate ssh_bind", ENOMEM);
@@ -20690,51 +20806,93 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 
     ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDADDR, address);
     ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_BINDPORT_STR, bind_port);
-    ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, "ssh-rsa");
-    errno = 0;
+
+    bool fatal_key_error = false;
     bool key_loaded = false;
-    if (ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_RSAKEY, rsa_key_path) == SSH_OK) {
+    char preferred_algorithm[64];
+    preferred_algorithm[0] = '\0';
+    char algorithm_buffer[256];
+    algorithm_buffer[0] = '\0';
+    size_t algorithm_length = 0U;
+
+    for (size_t idx = 0; idx < host_key_count; ++idx) {
+      const host_key_definition_t *definition = &host_key_definitions[idx];
+      char key_path[PATH_MAX];
+      bool path_valid = false;
+      char custom_candidate[PATH_MAX];
+      bool attempted_custom = false;
+
+      if (key_dir_specified) {
+        attempted_custom = true;
+        if (!host_join_key_path(key_directory, definition->filename, custom_candidate, sizeof(custom_candidate))) {
+          humanized_log_error("host", "host key directory path is too long", ENAMETOOLONG);
+          fatal_key_error = true;
+          break;
+        }
+        if (access(custom_candidate, R_OK) == 0) {
+          snprintf(key_path, sizeof(key_path), "%s", custom_candidate);
+          path_valid = true;
+        }
+      }
+
+      if (!path_valid) {
+        if (access(definition->filename, R_OK) == 0) {
+          snprintf(key_path, sizeof(key_path), "%s", definition->filename);
+          path_valid = true;
+        } else {
+          char fallback_path[PATH_MAX];
+          const int written = snprintf(fallback_path, sizeof(fallback_path), "/etc/ssh/%s", definition->filename);
+          if (written >= 0 && (size_t)written < sizeof(fallback_path) && access(fallback_path, R_OK) == 0) {
+            snprintf(key_path, sizeof(key_path), "%s", fallback_path);
+            path_valid = true;
+          }
+        }
+      }
+
+      if (!path_valid) {
+        if (attempted_custom) {
+          printf("[listener] %s host key not found at %s (skipping)\n", definition->algorithm, custom_candidate);
+        }
+        continue;
+      }
+
+      if (attempted_custom && strcmp(key_path, custom_candidate) != 0) {
+        printf("[listener] using fallback %s host key from %s\n", definition->algorithm, key_path);
+      }
+
+      if (!host_bind_load_key(bind_handle, definition, key_path)) {
+        continue;
+      }
+
+      if (!key_loaded) {
+        snprintf(preferred_algorithm, sizeof(preferred_algorithm), "%s", definition->algorithm);
+      }
+      host_bind_append_algorithm(algorithm_buffer, sizeof(algorithm_buffer), &algorithm_length, definition->algorithm);
       key_loaded = true;
-    } else {
-      const char *error_message = ssh_get_error(bind_handle);
-      const bool unsupported_option = (error_message != NULL &&
-                                       strstr(error_message, "Unknown ssh option") != NULL) ||
-                                      errno == ENOTSUP;
-      if (!unsupported_option) {
-        humanized_log_error("host", error_message, errno != 0 ? errno : EIO);
-        ssh_bind_free(bind_handle);
-        host_sleep_after_error();
-        continue;
-      }
-
-      ssh_key imported_key = NULL;
-      if (ssh_pki_import_privkey_file(rsa_key_path, NULL, NULL, NULL, &imported_key) != SSH_OK ||
-          imported_key == NULL) {
-        humanized_log_error("host", "failed to import RSA host key", EIO);
-        ssh_bind_free(bind_handle);
-        host_sleep_after_error();
-        continue;
-      }
-
-      const int import_result =
-          ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_IMPORT_KEY, imported_key);
-      ssh_key_free(imported_key);
-      if (import_result != SSH_OK) {
-        humanized_log_error("host", ssh_get_error(bind_handle), errno != 0 ? errno : EIO);
-        ssh_bind_free(bind_handle);
-        host_sleep_after_error();
-        continue;
-      }
-
-      key_loaded = true;
+      printf("[listener] loaded %s host key from %s\n", definition->algorithm, key_path);
     }
 
-    if (!key_loaded) {
-      humanized_log_error("host", "failed to configure host key", EIO);
+    if (fatal_key_error) {
       ssh_bind_free(bind_handle);
       host_sleep_after_error();
       continue;
     }
+
+    if (!key_loaded) {
+      humanized_log_error("host", "no usable host keys found", ENOENT);
+      ssh_bind_free(bind_handle);
+      host_sleep_after_error();
+      continue;
+    }
+
+    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_HOSTKEY_ALGORITHMS, algorithm_buffer,
+                                  "failed to configure host key algorithms");
+    if (preferred_algorithm[0] != '\0') {
+      host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, preferred_algorithm,
+                                    "failed to configure preferred host key");
+    }
+    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_KEY_EXCHANGE, SSH_CHATTER_SUPPORTED_KEX_ALGORITHMS,
+                                  "failed to configure key exchange algorithms");
 
     if (ssh_bind_listen(bind_handle) < 0) {
       humanized_log_error("host", ssh_get_error(bind_handle), EIO);
@@ -20860,6 +21018,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 
       if (ssh_handle_key_exchange(session) != SSH_OK) {
         humanized_log_error("host", ssh_get_error(session), EPROTO);
+        ssh_disconnect(session);
         ssh_free(session);
         continue;
       }
