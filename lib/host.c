@@ -140,6 +140,22 @@ static const char kTranslationQuotaNotice[] =
 static const char kTranslationQuotaSystemMessage[] =
     "Translation quota exhausted. Translation has been disabled. Try again later.";
 
+static const char *const kSessionCommandNames[] = {
+    "asciiart",      "audio",       "ban",          "banlist",     "bbs",
+    "birthday",      "block",       "chat",         "chat-spacing", "color",
+    "connected",     "date",        "delete-msg",   "elect",       "eliza",
+    "eliza-chat",    "exit",        "files",        "game",        "gemini",
+    "gemini-unfreeze","getos",      "grant",        "help",        "image",
+    "kick",          "mode",        "motd",         "nick",        "os",
+    "pair",          "palette",     "pardon",       "pm",          "poke",
+    "poll",          "reply",       "revoke",       "rss",         "search",
+    "set-target-lang","set-trans-lang","showstatus", "soulmate",    "status",
+    "suspend!",      "systemcolor", "today",        "translate",   "translate-scope",
+    "unblock",       "users",       "video",        "vote",        "vote-single",
+    "weather",
+};
+#define SSH_CHATTER_COMMAND_COUNT (sizeof(kSessionCommandNames) / sizeof(kSessionCommandNames[0]))
+
 #ifndef MSG_DONTWAIT
 #define MSG_DONTWAIT 0
 #endif
@@ -1133,6 +1149,7 @@ static void session_set_input_text(session_ctx_t *ctx, const char *text);
 static void session_local_echo_char(session_ctx_t *ctx, char ch);
 static void session_local_backspace(session_ctx_t *ctx);
 static void session_clear_input(session_ctx_t *ctx);
+static bool session_try_command_completion(session_ctx_t *ctx);
 static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch);
 static void session_history_record(session_ctx_t *ctx, const char *line);
 static void session_history_navigate(session_ctx_t *ctx, int direction);
@@ -1205,6 +1222,7 @@ static void session_handle_gemini(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_target_lang(session_ctx_t *ctx, const char *arguments);
 static void session_handle_chat_spacing(session_ctx_t *ctx, const char *arguments);
+static void session_handle_mode(session_ctx_t *ctx, const char *arguments);
 static void session_handle_eliza(session_ctx_t *ctx, const char *arguments);
 static void session_handle_eliza_chat(session_ctx_t *ctx, const char *arguments);
 static void session_handle_status(session_ctx_t *ctx, const char *arguments);
@@ -10577,13 +10595,14 @@ static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
   const char *hl = ctx->system_highlight_code != NULL ? ctx->system_highlight_code : "";
   const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
+  const char *mode_prompt = ctx->input_mode == SESSION_INPUT_MODE_COMMAND ? "│ cmd> " : "│ > ";
 
   char prompt[128];
   size_t offset = 0U;
   offset = session_append_fragment(prompt, sizeof(prompt), offset, hl);
   offset = session_append_fragment(prompt, sizeof(prompt), offset, fg);
   offset = session_append_fragment(prompt, sizeof(prompt), offset, bold);
-  offset = session_append_fragment(prompt, sizeof(prompt), offset, "│ > ");
+  offset = session_append_fragment(prompt, sizeof(prompt), offset, mode_prompt);
   offset = session_append_fragment(prompt, sizeof(prompt), offset, ANSI_RESET);
   if (bg[0] != '\0') {
     offset = session_append_fragment(prompt, sizeof(prompt), offset, bg);
@@ -10742,6 +10761,181 @@ static void session_clear_input(session_ctx_t *ctx) {
   ctx->input_escape_active = false;
   ctx->input_escape_length = 0U;
   session_refresh_input_line(ctx);
+}
+
+static bool session_try_command_completion(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  if (ctx->input_length == 0U) {
+    return false;
+  }
+
+  size_t first_visible = 0U;
+  while (first_visible < ctx->input_length && isspace((unsigned char)ctx->input_buffer[first_visible])) {
+    ++first_visible;
+  }
+  if (first_visible >= ctx->input_length) {
+    return false;
+  }
+
+  const bool has_slash = ctx->input_buffer[first_visible] == '/';
+  if (!has_slash && ctx->input_mode != SESSION_INPUT_MODE_COMMAND) {
+    return false;
+  }
+
+  size_t command_start = first_visible + (has_slash ? 1U : 0U);
+  if (command_start > ctx->input_length) {
+    command_start = ctx->input_length;
+  }
+
+  size_t command_end = command_start;
+  while (command_end < ctx->input_length && !isspace((unsigned char)ctx->input_buffer[command_end])) {
+    ++command_end;
+  }
+
+  const size_t token_len = command_end - command_start;
+  char prefix[SSH_CHATTER_MAX_INPUT_LEN];
+  size_t copy_len = token_len < sizeof(prefix) - 1U ? token_len : sizeof(prefix) - 1U;
+  if (copy_len > 0U) {
+    memcpy(prefix, &ctx->input_buffer[command_start], copy_len);
+  }
+  prefix[copy_len] = '\0';
+
+  const size_t prefix_len = strlen(prefix);
+  const char *matches[SSH_CHATTER_COMMAND_COUNT];
+  size_t match_count = 0U;
+  for (size_t idx = 0U; idx < SSH_CHATTER_COMMAND_COUNT; ++idx) {
+    const char *candidate = kSessionCommandNames[idx];
+    if (prefix_len == 0U || strncasecmp(candidate, prefix, prefix_len) == 0) {
+      matches[match_count++] = candidate;
+    }
+  }
+
+  if (match_count == 0U) {
+    if (ctx->channel != NULL) {
+      const char bell = '\a';
+      session_channel_write(ctx, &bell, 1U);
+    }
+    session_refresh_input_line(ctx);
+    return true;
+  }
+
+  char updated[SSH_CHATTER_MAX_INPUT_LEN];
+  size_t updated_len = 0U;
+  const size_t prefix_copy_len = command_start < sizeof(updated) ? command_start : sizeof(updated) - 1U;
+  if (prefix_copy_len > 0U) {
+    memcpy(updated, ctx->input_buffer, prefix_copy_len);
+    updated_len = prefix_copy_len;
+  }
+
+  if (match_count == 1U) {
+    const char *completion = matches[0];
+    size_t completion_len = strlen(completion);
+    if (updated_len + completion_len >= sizeof(updated)) {
+      completion_len = sizeof(updated) - 1U - updated_len;
+    }
+    memcpy(&updated[updated_len], completion, completion_len);
+    updated_len += completion_len;
+
+    size_t suffix_len = ctx->input_length - command_end;
+    if (suffix_len > 0U) {
+      size_t copy_suffix = suffix_len;
+      if (updated_len + copy_suffix >= sizeof(updated)) {
+        copy_suffix = sizeof(updated) - 1U - updated_len;
+      }
+      memcpy(&updated[updated_len], &ctx->input_buffer[command_end], copy_suffix);
+      updated_len += copy_suffix;
+    } else if (updated_len + 1U < sizeof(updated)) {
+      updated[updated_len++] = ' ';
+    }
+
+    updated[updated_len] = '\0';
+    session_set_input_text(ctx, updated);
+    ctx->input_history_position = -1;
+    ctx->history_scroll_position = 0U;
+    return true;
+  }
+
+  size_t common_len = strlen(matches[0]);
+  for (size_t idx = 1U; idx < match_count && common_len > 0U; ++idx) {
+    const char *candidate = matches[idx];
+    size_t candidate_len = strlen(candidate);
+    if (candidate_len < common_len) {
+      common_len = candidate_len;
+    }
+    size_t compare_len = common_len;
+    size_t match_prefix = 0U;
+    for (; match_prefix < compare_len; ++match_prefix) {
+      unsigned char lhs = (unsigned char)tolower((unsigned char)matches[0][match_prefix]);
+      unsigned char rhs = (unsigned char)tolower((unsigned char)candidate[match_prefix]);
+      if (lhs != rhs) {
+        break;
+      }
+    }
+    common_len = match_prefix;
+  }
+
+  if (common_len > prefix_len) {
+    size_t completion_len = common_len;
+    if (updated_len + completion_len >= sizeof(updated)) {
+      completion_len = sizeof(updated) - 1U - updated_len;
+    }
+    memcpy(&updated[updated_len], matches[0], completion_len);
+    updated_len += completion_len;
+
+    size_t suffix_len = ctx->input_length - command_end;
+    if (suffix_len > 0U) {
+      size_t copy_suffix = suffix_len;
+      if (updated_len + copy_suffix >= sizeof(updated)) {
+        copy_suffix = sizeof(updated) - 1U - updated_len;
+      }
+      memcpy(&updated[updated_len], &ctx->input_buffer[command_end], copy_suffix);
+      updated_len += copy_suffix;
+    }
+
+    updated[updated_len] = '\0';
+    session_set_input_text(ctx, updated);
+    ctx->input_history_position = -1;
+    ctx->history_scroll_position = 0U;
+    return true;
+  }
+
+  session_send_system_line(ctx, "Possible commands:");
+  char line[SSH_CHATTER_MESSAGE_LIMIT];
+  size_t offset = 0U;
+  for (size_t idx = 0U; idx < match_count; ++idx) {
+    char entry[64];
+    snprintf(entry, sizeof(entry), "/%s", matches[idx]);
+    size_t entry_len = strlen(entry);
+    if (offset != 0U) {
+      if (offset + 1U >= sizeof(line)) {
+        line[offset] = '\0';
+        session_send_system_line(ctx, line);
+        offset = 0U;
+      }
+      line[offset++] = ' ';
+    }
+    if (entry_len >= sizeof(line)) {
+      session_send_system_line(ctx, entry);
+      offset = 0U;
+      continue;
+    }
+    if (offset + entry_len >= sizeof(line)) {
+      line[offset] = '\0';
+      session_send_system_line(ctx, line);
+      offset = 0U;
+    }
+    memcpy(&line[offset], entry, entry_len);
+    offset += entry_len;
+  }
+  if (offset > 0U) {
+    line[offset] = '\0';
+    session_send_system_line(ctx, line);
+  }
+  session_refresh_input_line(ctx);
+  return true;
 }
 
 static void session_history_record(session_ctx_t *ctx, const char *line) {
@@ -11016,6 +11210,12 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
         ctx->input_escape_length = 0U;
         return true;
       }
+      if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
+        session_history_navigate(ctx, -1);
+        ctx->input_escape_active = false;
+        ctx->input_escape_length = 0U;
+        return true;
+      }
       session_scrollback_navigate(ctx, 1);
       ctx->input_escape_active = false;
       ctx->input_escape_length = 0U;
@@ -11029,6 +11229,12 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
         return true;
       }
       if (ctx->in_rss_mode && session_rss_move(ctx, 1)) {
+        ctx->input_escape_active = false;
+        ctx->input_escape_length = 0U;
+        return true;
+      }
+      if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
+        session_history_navigate(ctx, 1);
         ctx->input_escape_active = false;
         ctx->input_escape_length = 0U;
         return true;
@@ -11053,6 +11259,12 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
         ctx->input_escape_length = 0U;
         return true;
       }
+      if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
+        session_history_navigate(ctx, -1);
+        ctx->input_escape_active = false;
+        ctx->input_escape_length = 0U;
+        return true;
+      }
       session_scrollback_navigate(ctx, 1);
       ctx->input_escape_active = false;
       ctx->input_escape_length = 0U;
@@ -11066,6 +11278,12 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
         return true;
       }
       if (ctx->in_rss_mode && session_rss_move(ctx, 1)) {
+        ctx->input_escape_active = false;
+        ctx->input_escape_length = 0U;
+        return true;
+      }
+      if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
+        session_history_navigate(ctx, 1);
         ctx->input_escape_active = false;
         ctx->input_escape_length = 0U;
         return true;
@@ -11720,7 +11938,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/files <url> [caption] - share a downloadable file",
       "/asciiart           - open the ASCII art composer (max 128 lines, 1/10 min per IP)",
       "/game <tetris|liargame> - start a minigame in the chat (use /suspend! or Ctrl+Z to exit)",
-      "Up/Down arrows           - scroll recent chat history",
+      "Up/Down arrows           - scroll chat (chat mode) or browse command history (command mode)",
       "/color (text;highlight[;bold]) - style your handle",
       "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may be highlight or bold; use /systemcolor reset to restore defaults)",
       "/set-trans-lang <language|off> - translate terminal output to a target language",
@@ -11733,6 +11951,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/eliza <on|off>        - toggle the eliza moderator persona (operator only)",
       "/eliza-chat <message>  - chat with eliza using shared memories",
       "/chat-spacing <0-5>    - reserve blank lines before translated captions in chat",
+      "/mode <chat|command|toggle> - switch between chat mode and command mode (no '/' needed in command mode)",
       "/palette <name>        - apply a predefined interface palette (/palette list)",
       "/today               - discover today's function (once per day)",
       "/date <timezone>     - view the server time in another timezone",
@@ -11892,6 +12111,25 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
 
   if (!translation_bypass && normalized[0] == '/') {
     session_dispatch_command(ctx, normalized);
+    return;
+  }
+
+  const char *trimmed = normalized;
+  while (*trimmed == ' ' || *trimmed == '\t') {
+    ++trimmed;
+  }
+
+  if (!translation_bypass && ctx->input_mode == SESSION_INPUT_MODE_COMMAND && *trimmed != '\0') {
+    const char *command_text = trimmed;
+    char command_buffer[SSH_CHATTER_MAX_INPUT_LEN];
+    if (command_text[0] != '/') {
+      command_buffer[0] = '/';
+      size_t command_len = strnlen(command_text, sizeof(command_buffer) - 2U);
+      memcpy(&command_buffer[1], command_text, command_len);
+      command_buffer[command_len + 1U] = '\0';
+      command_text = command_buffer;
+    }
+    session_dispatch_command(ctx, command_text);
     return;
   }
 
@@ -17496,6 +17734,75 @@ static void session_handle_chat_spacing(session_ctx_t *ctx, const char *argument
   }
 }
 
+static void session_handle_mode(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  const char *current_label = ctx->input_mode == SESSION_INPUT_MODE_COMMAND ? "command" : "chat";
+
+  char working[32];
+  if (arguments == NULL) {
+    working[0] = '\0';
+  } else {
+    snprintf(working, sizeof(working), "%s", arguments);
+  }
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    char status_line[128];
+    snprintf(status_line, sizeof(status_line), "Current input mode: %s.", current_label);
+    session_send_system_line(ctx, status_line);
+    if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
+      session_send_system_line(ctx,
+                               "Command mode: type commands without '/', use ↑/↓ for history, Tab for completion.");
+    } else {
+      session_send_system_line(ctx,
+                               "Chat mode: send messages normally. Prefix commands with '/'. Switch with /mode command.");
+    }
+    return;
+  }
+
+  if (strcasecmp(working, "chat") == 0) {
+    if (ctx->input_mode == SESSION_INPUT_MODE_CHAT) {
+      session_send_system_line(ctx, "Already in chat mode. Commands require the '/' prefix.");
+      return;
+    }
+    ctx->input_mode = SESSION_INPUT_MODE_CHAT;
+    session_refresh_input_line(ctx);
+    session_send_system_line(ctx, "Chat mode enabled. Commands once again require the '/' prefix.");
+    return;
+  }
+
+  if (strcasecmp(working, "command") == 0) {
+    if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
+      session_send_system_line(ctx,
+                               "Command mode already active. Enter commands without '/', use ↑/↓ for history, Tab to autocomplete.");
+      return;
+    }
+    ctx->input_mode = SESSION_INPUT_MODE_COMMAND;
+    session_refresh_input_line(ctx);
+    session_send_system_line(ctx,
+                             "Command mode enabled. Enter commands without '/', use ↑/↓ for history and Tab for completion.");
+    return;
+  }
+
+  if (strcasecmp(working, "toggle") == 0) {
+    ctx->input_mode =
+        (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) ? SESSION_INPUT_MODE_CHAT : SESSION_INPUT_MODE_COMMAND;
+    session_refresh_input_line(ctx);
+    if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
+      session_send_system_line(ctx,
+                               "Command mode enabled. Enter commands without '/', use ↑/↓ for history and Tab for completion.");
+    } else {
+      session_send_system_line(ctx, "Chat mode enabled. Commands once again require the '/' prefix.");
+    }
+    return;
+  }
+
+  session_send_system_line(ctx, "Usage: /mode <chat|command|toggle>");
+}
+
 typedef struct session_weather_buffer {
   char *data;
   size_t length;
@@ -18919,6 +19226,10 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_chat_spacing(ctx, args);
     return;
   }
+  else if (session_parse_command(line, "/mode", &args)) {
+    session_handle_mode(ctx, args);
+    return;
+  }
   else if (strncmp(line, "/palette", 8) == 0) {
     const char *arguments = line + 8;
     while (*arguments == ' ' || *arguments == '\t') {
@@ -19915,6 +20226,8 @@ static void *session_thread(void *arg) {
       session_send_system_line(ctx, ctx->owner->motd);
     }
     session_send_system_line(ctx, "Type /help to explore available commands.");
+    session_send_system_line(ctx,
+                             "Tip: /mode command lets you run commands without '/' and unlocks history (↑/↓) and Tab completion.");
 
     char join_message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(join_message, sizeof(join_message), "* [%s] has joined the chat", ctx->user.name);
@@ -20139,6 +20452,9 @@ static void *session_thread(void *arg) {
       }
 
       if (ch == '\t') {
+        if (session_try_command_completion(ctx)) {
+          continue;
+        }
         if (ctx->input_length + 1U < sizeof(ctx->input_buffer)) {
           ctx->input_history_position = -1;
           ctx->history_scroll_position = 0U;
@@ -21065,6 +21381,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       ctx->owner = host;
       ctx->auth = (auth_profile_t){0};
       snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
+      ctx->input_mode = SESSION_INPUT_MODE_CHAT;
 
       pthread_mutex_lock(&host->lock);
       ++host->connection_count;

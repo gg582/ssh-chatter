@@ -223,6 +223,11 @@ typedef struct session_game_state {
   bool rng_seeded;
 } session_game_state_t;
 
+typedef enum session_input_mode {
+  SESSION_INPUT_MODE_CHAT = 0,
+  SESSION_INPUT_MODE_COMMAND,
+} session_input_mode_t;
+
 typedef struct rss_feed {
   bool in_use;
   char tag[SSH_CHATTER_RSS_TAG_LEN];
@@ -259,6 +264,7 @@ typedef struct session_ctx {
   char input_history[SSH_CHATTER_INPUT_HISTORY_LIMIT][SSH_CHATTER_MAX_INPUT_LEN];
   size_t input_history_count;
   int input_history_position;
+  session_input_mode_t input_mode;
   bool input_escape_active;
   char input_escape_buffer[8];
   size_t input_escape_length;
