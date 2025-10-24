@@ -36,7 +36,7 @@ LDFLAGS = $(COMMON_LDFLAGS) -lssh
 TARGET := ssh-chatter
 SHARED_TARGET := libssh_chatter_backend.so
 SRC := main.c lib/host.c lib/client.c lib/webssh_client.c lib/translator.c \
-       lib/translation_helpers.c lib/ssh_chatter_backend.c
+       lib/translation_helpers.c lib/ssh_chatter_backend.c lib/user_data.c
 OBJ := $(SRC:.c=.o)
 SHARED_SRC := lib/translator.c lib/translation_helpers.c lib/ssh_chatter_backend.c
 SHARED_OBJ := $(SHARED_SRC:.c=.o)

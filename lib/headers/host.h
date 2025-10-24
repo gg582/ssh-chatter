@@ -74,6 +74,8 @@
 #define SSH_CHATTER_TETRIS_MAX_ROUNDS 3U
 #define SSH_CHATTER_MAX_REPLIES 1024
 
+#include "user_data.h"
+
 struct host;
 struct session_ctx;
 struct client_manager;
@@ -181,6 +183,7 @@ typedef enum session_game_type {
   SESSION_GAME_NONE = 0,
   SESSION_GAME_TETRIS,
   SESSION_GAME_LIARGAME,
+  SESSION_GAME_ALPHA,
 } session_game_type_t;
 
 typedef struct tetris_game_state {
@@ -216,11 +219,26 @@ typedef struct liar_game_state {
   bool awaiting_guess;
 } liar_game_state_t;
 
+typedef struct alpha_centauri_game_state {
+  bool active;
+  unsigned stage;
+  bool eva_ready;
+  bool awaiting_flag;
+  double velocity_fraction_c;
+  double distance_travelled_ly;
+  double distance_remaining_ly;
+  double fuel_percent;
+  double oxygen_days;
+  double mission_time_years;
+  double radiation_msv;
+} alpha_centauri_game_state_t;
+
 typedef struct session_game_state {
   bool active;
   session_game_type_t type;
   tetris_game_state_t tetris;
   liar_game_state_t liar;
+  alpha_centauri_game_state_t alpha;
   uint64_t rng_state;
   bool rng_seeded;
 } session_game_state_t;
@@ -362,6 +380,8 @@ typedef struct session_ctx {
   session_block_prompt_t block_pending;
   bool in_rss_mode;
   session_rss_view_t rss_view;
+  bool user_data_loaded;
+  user_data_record_t user_data;
 } session_ctx_t;
 
 typedef struct user_preference {
@@ -495,6 +515,10 @@ typedef struct host {
   char vote_state_file_path[PATH_MAX];
   char ban_state_file_path[PATH_MAX];
   char reply_state_file_path[PATH_MAX];
+  char user_data_root[PATH_MAX];
+  bool user_data_ready;
+  pthread_mutex_t user_data_lock;
+  bool user_data_lock_initialized;
   _Atomic bool security_filter_enabled;
   _Atomic bool security_filter_failure_logged;
   _Atomic bool security_ai_enabled;
