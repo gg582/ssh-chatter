@@ -1516,6 +1516,10 @@ static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line);
 static void session_game_start_alpha(session_ctx_t *ctx);
 static void session_game_alpha_reset(alpha_centauri_game_state_t *state);
 static void session_game_alpha_prepare_navigation(alpha_centauri_game_state_t *state);
+static void session_game_alpha_add_gravity_source(alpha_centauri_game_state_t *state, int x, int y, int strength,
+                                                  char symbol, const char *name);
+static void session_game_alpha_configure_gravity(alpha_centauri_game_state_t *state);
+static void session_game_alpha_apply_gravity(alpha_centauri_game_state_t *state);
 static void session_game_alpha_sync_from_save(session_ctx_t *ctx);
 static void session_game_alpha_sync_to_save(session_ctx_t *ctx);
 static void session_game_alpha_present_stage(session_ctx_t *ctx);
@@ -18200,6 +18204,131 @@ static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line) 
   session_game_liar_present_round(ctx);
 }
 
+static void session_game_alpha_add_gravity_source(alpha_centauri_game_state_t *state, int x, int y, int strength,
+                                                  char symbol, const char *name) {
+  if (state == NULL || state->gravity_source_count >= ALPHA_MAX_GRAVITY_SOURCES) {
+    return;
+  }
+
+  if (x < 0) {
+    x = 0;
+  } else if (x >= ALPHA_NAV_WIDTH) {
+    x = ALPHA_NAV_WIDTH - 1;
+  }
+
+  if (y < 0) {
+    y = 0;
+  } else if (y >= ALPHA_NAV_HEIGHT) {
+    y = ALPHA_NAV_HEIGHT - 1;
+  }
+
+  alpha_gravity_source_t *source = &state->gravity_sources[state->gravity_source_count++];
+  source->x = x;
+  source->y = y;
+  source->strength = strength > 0 ? strength : 0;
+  source->symbol = symbol;
+  if (name != NULL) {
+    snprintf(source->name, sizeof(source->name), "%s", name);
+  } else {
+    source->name[0] = '\0';
+  }
+}
+
+static void session_game_alpha_configure_gravity(alpha_centauri_game_state_t *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  for (unsigned idx = 0U; idx < ALPHA_MAX_GRAVITY_SOURCES; ++idx) {
+    state->gravity_sources[idx] = (alpha_gravity_source_t){0};
+  }
+  state->gravity_source_count = 0U;
+
+  int center_x = ALPHA_NAV_WIDTH / 2;
+  int center_y = ALPHA_NAV_HEIGHT / 2;
+
+  session_game_alpha_add_gravity_source(state, 1, center_y, 4, 'B', "Black Hole");
+
+  switch (state->stage) {
+    case 0:
+      session_game_alpha_add_gravity_source(state, center_x + 2, 2, 3, 'S', "Launch Star");
+      session_game_alpha_add_gravity_source(state, center_x, ALPHA_NAV_HEIGHT - 2, 2, 'P', "Departure Planet");
+      break;
+    case 1:
+      session_game_alpha_add_gravity_source(state, ALPHA_NAV_WIDTH - 3, center_y - 1, 3, 'S', "Binary Star");
+      session_game_alpha_add_gravity_source(state, center_x - 1, center_y + 2, 2, 'P', "Rogue Planet");
+      break;
+    case 2:
+      session_game_alpha_add_gravity_source(state, 2, 2, 3, 'S', "Turnover Star");
+      session_game_alpha_add_gravity_source(state, center_x + 1, ALPHA_NAV_HEIGHT - 3, 2, 'P', "Stray Planet");
+      break;
+    case 3:
+      session_game_alpha_add_gravity_source(state, center_x, 2, 2, 'S', "Approach Star");
+      session_game_alpha_add_gravity_source(state, center_x + 2, ALPHA_NAV_HEIGHT - 2, 2, 'P', "Proxima b");
+      break;
+    case 4:
+    default:
+      session_game_alpha_add_gravity_source(state, center_x, 1, 2, 'S', "Proxima Star");
+      session_game_alpha_add_gravity_source(state, center_x, ALPHA_NAV_HEIGHT - 2, 2, 'P', "Landing Planet");
+      break;
+  }
+}
+
+static void session_game_alpha_apply_gravity(alpha_centauri_game_state_t *state) {
+  if (state == NULL || state->gravity_source_count == 0U) {
+    return;
+  }
+
+  bool on_target = (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y);
+  for (unsigned idx = 0U; idx < state->gravity_source_count; ++idx) {
+    const alpha_gravity_source_t *source = &state->gravity_sources[idx];
+    if (source->strength <= 0) {
+      continue;
+    }
+
+    if (on_target) {
+      break;
+    }
+
+    int dx = source->x - state->nav_x;
+    int dy = source->y - state->nav_y;
+    int abs_dx = dx < 0 ? -dx : dx;
+    int abs_dy = dy < 0 ? -dy : dy;
+    int distance = abs_dx + abs_dy;
+    if (distance == 0 || distance > source->strength) {
+      continue;
+    }
+
+    if (dx > 0) {
+      ++state->nav_x;
+    } else if (dx < 0) {
+      --state->nav_x;
+    }
+
+    if (dy > 0) {
+      ++state->nav_y;
+    } else if (dy < 0) {
+      --state->nav_y;
+    }
+
+    if (state->nav_x < 0) {
+      state->nav_x = 0;
+    } else if (state->nav_x >= ALPHA_NAV_WIDTH) {
+      state->nav_x = ALPHA_NAV_WIDTH - 1;
+    }
+
+    if (state->nav_y < 0) {
+      state->nav_y = 0;
+    } else if (state->nav_y >= ALPHA_NAV_HEIGHT) {
+      state->nav_y = ALPHA_NAV_HEIGHT - 1;
+    }
+
+    if (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y) {
+      on_target = true;
+    }
+  }
+}
+
 static void session_game_alpha_prepare_navigation(alpha_centauri_game_state_t *state) {
   if (state == NULL) {
     return;
@@ -18268,6 +18397,8 @@ static void session_game_alpha_prepare_navigation(alpha_centauri_game_state_t *s
     default:
       break;
   }
+
+  session_game_alpha_configure_gravity(state);
 }
 
 static void session_game_alpha_reset(alpha_centauri_game_state_t *state) {
@@ -18435,6 +18566,14 @@ static void session_game_alpha_render_navigation(session_ctx_t *ctx) {
       row[x] = '.';
     }
 
+    for (unsigned idx = 0U; idx < state->gravity_source_count; ++idx) {
+      const alpha_gravity_source_t *source = &state->gravity_sources[idx];
+      if (source->x >= 0 && source->x < ALPHA_NAV_WIDTH && source->y == y) {
+        char symbol = source->symbol != '\0' ? source->symbol : 'G';
+        row[source->x] = symbol;
+      }
+    }
+
     if (state->nav_target_x >= 0 && state->nav_target_x < ALPHA_NAV_WIDTH && state->nav_target_y >= 0 &&
         state->nav_target_y < ALPHA_NAV_HEIGHT && y == state->nav_target_y) {
       row[state->nav_target_x] = '+';
@@ -18460,6 +18599,39 @@ static void session_game_alpha_render_navigation(session_ctx_t *ctx) {
   }
 
   session_send_system_line(ctx, border);
+
+  if (state->gravity_source_count > 0U) {
+    char gravity_line[SSH_CHATTER_MESSAGE_LIMIT];
+    int written = snprintf(gravity_line, sizeof(gravity_line), "Gravity wells: ");
+    size_t offset = 0U;
+    if (written >= 0) {
+      offset = (size_t)written;
+      if (offset >= sizeof(gravity_line)) {
+        offset = sizeof(gravity_line) - 1U;
+      }
+    } else {
+      gravity_line[0] = '\0';
+    }
+
+    for (unsigned idx = 0U; idx < state->gravity_source_count && offset < sizeof(gravity_line) - 1U; ++idx) {
+      const alpha_gravity_source_t *source = &state->gravity_sources[idx];
+      const char *name = source->name[0] != '\0' ? source->name : "Gravity Source";
+      char symbol = source->symbol != '\0' ? source->symbol : 'G';
+      written = snprintf(gravity_line + offset, sizeof(gravity_line) - offset, "%s%c=%s",
+                         idx == 0U ? "" : ", ", symbol, name);
+      if (written < 0) {
+        break;
+      }
+      if ((size_t)written >= sizeof(gravity_line) - offset) {
+        offset = sizeof(gravity_line) - 1U;
+        break;
+      }
+      offset += (size_t)written;
+    }
+
+    gravity_line[sizeof(gravity_line) - 1U] = '\0';
+    session_send_system_line(ctx, gravity_line);
+  }
 }
 
 static void session_game_alpha_refresh_navigation(session_ctx_t *ctx) {
@@ -18514,7 +18686,7 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
       } else if (state->awaiting_flag) {
         session_send_system_line(ctx,
                                  "Stage 4 — Surface EVA. Guide the suit to the landing beacon with arrow keys and hold to"
-                                 " plant '이주자의 깃발'.");
+                                 " plant \"Immigrants' Flag\".");
       } else {
         session_send_system_line(ctx,
                                  "Stage 4 — Mission reset. Realign with the beacons for another run or exit with /suspend!.");
@@ -18525,8 +18697,10 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
       break;
   }
 
+  session_send_system_line(ctx,
+                           "Gravitational pulls: B=black hole, S=star, P=planet — stay steady against their drift.");
   session_game_alpha_render_navigation(ctx);
-  session_send_system_line(ctx, "Legend: @ craft, + beacon, * locked alignment.");
+  session_send_system_line(ctx, "Legend: @ craft, + beacon, * locked alignment, B black hole, S star, P planet.");
   session_send_system_line(ctx, "Use arrow keys (↑ ↓ ← →) to nudge the craft and keep it steady over the beacon.");
   session_game_alpha_report_state(ctx, "Current status:");
   ctx->translation_suppress_output = previous_translation;
@@ -18575,12 +18749,12 @@ static void session_game_alpha_log_completion(session_ctx_t *ctx) {
 
   char success[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(success, sizeof(success),
-           "Mission complete! '이주자의 깃발' is registered for %s. Flight time %.2f years, exposure %.1f mSv.",
+           "Mission complete! \"Immigrants' Flag\" is registered for %s. Flight time %.2f years, exposure %.1f mSv.",
            ctx->user.name, total_years, total_radiation);
   session_send_system_line(ctx, success);
 
   char notice[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(notice, sizeof(notice), "* [alpha-centauri] 이주자의 깃발 planted by %s.", ctx->user.name);
+  snprintf(notice, sizeof(notice), "* [alpha-centauri] Immigrants' Flag planted by %s.", ctx->user.name);
   host_history_record_system(ctx->owner, notice);
   chat_room_broadcast(&ctx->owner->room, notice, NULL);
 
@@ -18732,6 +18906,8 @@ static bool session_game_alpha_handle_arrow(session_ctx_t *ctx, int dx, int dy) 
 
   state->nav_x = new_x;
   state->nav_y = new_y;
+
+  session_game_alpha_apply_gravity(state);
 
   if (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y) {
     if (state->nav_stable_ticks < state->nav_required_ticks) {
