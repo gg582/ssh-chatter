@@ -128,6 +128,11 @@ static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
 #define SSH_CHATTER_ELIZA_PROMPT_BUFFER ((SSH_CHATTER_ELIZA_CONTEXT_BUFFER * 2U) + (SSH_CHATTER_MESSAGE_LIMIT * 3U))
 #define SSH_CHATTER_ELIZA_TOKEN_LIMIT 16U
 
+#define ALPHA_TOTAL_DISTANCE_LY 4.24
+#define ALPHA_LY_TO_KM 9460730472580.8
+#define ALPHA_LY_TO_AU 63241.077
+#define ALPHA_SPEED_OF_LIGHT_MPS 299792458.0
+
 #define TELNET_IAC 255
 #define TELNET_CMD_SE 240
 #define TELNET_CMD_NOP 241
@@ -1275,6 +1280,8 @@ static void session_handle_video(session_ctx_t *ctx, const char *arguments);
 static void session_handle_audio(session_ctx_t *ctx, const char *arguments);
 static void session_handle_files(session_ctx_t *ctx, const char *arguments);
 static void session_handle_reaction(session_ctx_t *ctx, size_t reaction_index, const char *arguments);
+static void session_handle_mail(session_ctx_t *ctx, const char *arguments);
+static void session_handle_profile_picture(session_ctx_t *ctx, const char *arguments);
 static void session_handle_today(session_ctx_t *ctx);
 static void session_handle_date(session_ctx_t *ctx, const char *arguments);
 static void session_handle_os(session_ctx_t *ctx, const char *arguments);
@@ -1315,6 +1322,16 @@ static void session_handle_elect_command(session_ctx_t *ctx, const char *argumen
 static void session_handle_vote_command(session_ctx_t *ctx, const char *arguments, bool allow_multiple);
 static bool session_line_is_exit_command(const char *line);
 static void session_handle_username_conflict_input(session_ctx_t *ctx, const char *line);
+static const char *session_consume_token(const char *input, char *token, size_t length);
+static bool session_user_data_available(session_ctx_t *ctx);
+static bool session_user_data_load(session_ctx_t *ctx);
+static bool session_user_data_commit(session_ctx_t *ctx);
+static void session_user_data_touch(session_ctx_t *ctx);
+static bool host_user_data_send_mail(host_t *host, const char *recipient, const char *sender, const char *message,
+                                    char *error, size_t error_length);
+static bool host_user_data_load_existing(host_t *host, const char *username, user_data_record_t *record,
+                                        bool create_if_missing);
+static void host_user_data_bootstrap(host_t *host);
 static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count);
 static size_t session_utf8_prev_char_len(const char *buffer, size_t length);
 static int session_utf8_char_width(const char *bytes, size_t length);
@@ -1494,6 +1511,13 @@ static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line
 static void session_game_start_liargame(session_ctx_t *ctx);
 static void session_game_liar_present_round(session_ctx_t *ctx);
 static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line);
+static void session_game_start_alpha(session_ctx_t *ctx);
+static void session_game_alpha_reset(alpha_centauri_game_state_t *state);
+static void session_game_alpha_sync_from_save(session_ctx_t *ctx);
+static void session_game_alpha_sync_to_save(session_ctx_t *ctx);
+static void session_game_alpha_present_stage(session_ctx_t *ctx);
+static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line);
+static void session_game_alpha_log_completion(session_ctx_t *ctx);
 static void host_update_last_captcha_prompt(host_t *host, const captcha_prompt_t *prompt);
 
 typedef struct liar_prompt {
@@ -4459,6 +4483,129 @@ static void host_reply_state_resolve_path(host_t *host) {
   if (written < 0 || (size_t)written >= sizeof(host->reply_state_file_path)) {
     humanized_log_error("host", "reply state file path is too long", ENAMETOOLONG);
     host->reply_state_file_path[0] = '\0';
+  }
+}
+
+static bool host_user_data_bootstrap_username_is_valid(const char *username) {
+  if (username == NULL) {
+    return false;
+  }
+
+  const char *cursor = username;
+  while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
+    ++cursor;
+  }
+
+  if (*cursor == '\0') {
+    return false;
+  }
+
+  char sanitized[SSH_CHATTER_USERNAME_LEN * 2U];
+  if (!user_data_sanitize_username(username, sanitized, sizeof(sanitized))) {
+    return false;
+  }
+
+  return sanitized[0] != '\0';
+}
+
+static void host_user_data_bootstrap_visit(host_t *host, const char *username) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (!host_user_data_bootstrap_username_is_valid(username)) {
+    return;
+  }
+
+  (void)host_user_data_load_existing(host, username, NULL, true);
+}
+
+static void host_user_data_bootstrap(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (!host->user_data_ready) {
+    if (user_data_ensure_root(host->user_data_root)) {
+      host->user_data_ready = true;
+    } else {
+      humanized_log_error("mailbox", "failed to prepare mailbox directory", errno != 0 ? errno : EIO);
+      return;
+    }
+  }
+
+  if (!host->user_data_lock_initialized) {
+    if (pthread_mutex_init(&host->user_data_lock, NULL) != 0) {
+      humanized_log_error("mailbox", "failed to initialise mailbox lock", errno != 0 ? errno : ENOMEM);
+      host->user_data_lock_initialized = false;
+      host->user_data_ready = false;
+      return;
+    }
+    host->user_data_lock_initialized = true;
+  }
+
+  if (!host->user_data_ready) {
+    return;
+  }
+
+  if (host->history != NULL) {
+    for (size_t idx = 0U; idx < host->history_count; ++idx) {
+      const chat_history_entry_t *entry = &host->history[idx];
+      if (!entry->is_user_message) {
+        continue;
+      }
+      host_user_data_bootstrap_visit(host, entry->username);
+    }
+  }
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_PREFERENCES; ++idx) {
+    const user_preference_t *pref = &host->preferences[idx];
+    if (!pref->in_use || pref->username[0] == '\0') {
+      continue;
+    }
+    host_user_data_bootstrap_visit(host, pref->username);
+  }
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_REPLIES; ++idx) {
+    const chat_reply_entry_t *reply = &host->replies[idx];
+    if (!reply->in_use) {
+      continue;
+    }
+    host_user_data_bootstrap_visit(host, reply->username);
+  }
+
+  for (size_t idx = 0U; idx < host->ban_count && idx < SSH_CHATTER_MAX_BANS; ++idx) {
+    host_user_data_bootstrap_visit(host, host->bans[idx].username);
+  }
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_MAX_NAMED_POLLS; ++idx) {
+    const named_poll_state_t *poll = &host->named_polls[idx];
+    if (poll->label[0] == '\0') {
+      continue;
+    }
+    host_user_data_bootstrap_visit(host, poll->owner);
+    size_t voter_count = poll->voter_count;
+    if (voter_count > SSH_CHATTER_MAX_NAMED_VOTERS) {
+      voter_count = SSH_CHATTER_MAX_NAMED_VOTERS;
+    }
+    for (size_t voter = 0U; voter < voter_count; ++voter) {
+      host_user_data_bootstrap_visit(host, poll->voters[voter].username);
+    }
+  }
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+    const bbs_post_t *post = &host->bbs_posts[idx];
+    if (!post->in_use) {
+      continue;
+    }
+    host_user_data_bootstrap_visit(host, post->author);
+    size_t comment_count = post->comment_count;
+    if (comment_count > SSH_CHATTER_BBS_MAX_COMMENTS) {
+      comment_count = SSH_CHATTER_BBS_MAX_COMMENTS;
+    }
+    for (size_t comment = 0U; comment < comment_count; ++comment) {
+      host_user_data_bootstrap_visit(host, post->comments[comment].author);
+    }
   }
 }
 
@@ -8011,16 +8158,18 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
     if (ctx->translation_caption_spacing > 8U) {
       ctx->translation_caption_spacing = 8U;
     }
-    if (snapshot.translation_master_explicit) {
-      ctx->translation_enabled = snapshot.translation_master_enabled;
-    }
-    ctx->output_translation_enabled = snapshot.output_translation_enabled;
-    snprintf(ctx->output_translation_language, sizeof(ctx->output_translation_language), "%s",
-             snapshot.output_translation_language);
-    ctx->input_translation_enabled = snapshot.input_translation_enabled;
-    snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s",
-             snapshot.input_translation_language);
+  if (snapshot.translation_master_explicit) {
+    ctx->translation_enabled = snapshot.translation_master_enabled;
   }
+  ctx->output_translation_enabled = snapshot.output_translation_enabled;
+  snprintf(ctx->output_translation_language, sizeof(ctx->output_translation_language), "%s",
+           snapshot.output_translation_language);
+  ctx->input_translation_enabled = snapshot.input_translation_enabled;
+  snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s",
+           snapshot.input_translation_language);
+  }
+
+  (void)session_user_data_load(ctx);
 
   session_force_dark_mode_foreground(ctx);
 }
@@ -12435,8 +12584,10 @@ static void session_print_help(session_ctx_t *ctx) {
       "/video <url> [caption] - share a video link",
       "/audio <url> [caption] - share an audio clip",
       "/files <url> [caption] - share a downloadable file",
+      "/mail [inbox|send <user> <message>|clear] - manage your mailbox",
+      "/profilepic [show [user]|set <text>|clear] - set or view profile pictures",
       "/asciiart           - open the ASCII art composer (max 128 lines, 1/10 min per IP)",
-      "/game <tetris|liargame> - start a minigame in the chat (use /suspend! or Ctrl+Z to exit)",
+      "/game <tetris|liargame|alpha> - start a minigame in the chat (use /suspend! or Ctrl+Z to exit)",
       "Up/Down arrows           - scroll chat (chat mode) or browse command history (command mode)",
       "/color (text;highlight[;bold]) - style your handle",
       "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may be highlight or bold; use /systemcolor reset to restore defaults)",
@@ -12568,6 +12719,8 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
       session_game_tetris_handle_line(ctx, normalized);
     } else if (ctx->game.type == SESSION_GAME_LIARGAME) {
       session_game_liar_handle_line(ctx, normalized);
+    } else if (ctx->game.type == SESSION_GAME_ALPHA) {
+      session_game_alpha_handle_line(ctx, normalized);
     }
     return;
   }
@@ -13763,6 +13916,280 @@ static void session_handle_files(session_ctx_t *ctx, const char *arguments) {
   session_send_history_entry(ctx, &stored);
   chat_room_broadcast_entry(&ctx->owner->room, &stored, ctx);
   host_notify_external_clients(ctx->owner, &stored);
+}
+
+static void session_mail_render_inbox(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (!session_user_data_load(ctx)) {
+    session_send_system_line(ctx, "Mailbox storage is unavailable.");
+    return;
+  }
+
+  if (ctx->user_data.mailbox_count == 0U) {
+    session_send_system_line(ctx, "Your mailbox is empty.");
+    return;
+  }
+
+  char header[128];
+  snprintf(header, sizeof(header), "Mailbox (%u message%s):", (unsigned int)ctx->user_data.mailbox_count,
+           ctx->user_data.mailbox_count == 1U ? "" : "s");
+  session_send_system_line(ctx, header);
+
+  for (size_t idx = 0U; idx < ctx->user_data.mailbox_count; ++idx) {
+    const user_data_mail_entry_t *entry = &ctx->user_data.mailbox[idx];
+    time_t stamp = (time_t)entry->timestamp;
+    struct tm when;
+    char stamp_text[32];
+    if (stamp != 0 && localtime_r(&stamp, &when) != NULL) {
+      if (strftime(stamp_text, sizeof(stamp_text), "%Y-%m-%d %H:%M", &when) == 0U) {
+        snprintf(stamp_text, sizeof(stamp_text), "%s", "(time unknown)");
+      }
+    } else {
+      snprintf(stamp_text, sizeof(stamp_text), "%s", "(time unknown)");
+    }
+
+    char body[USER_DATA_MAILBOX_MESSAGE_LEN];
+    snprintf(body, sizeof(body), "%s", entry->message);
+    for (size_t pos = 0U; body[pos] != '\0'; ++pos) {
+      unsigned char ch = (unsigned char)body[pos];
+      if (ch < ' ' && ch != '\n' && ch != '\t') {
+        body[pos] = ' ';
+      }
+      if (body[pos] == '\n') {
+        body[pos] = ' ';
+      }
+    }
+
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(line, sizeof(line), "[%s] %s: %s", stamp_text,
+             entry->sender[0] != '\0' ? entry->sender : "(unknown)", body);
+    session_send_system_line(ctx, line);
+  }
+}
+
+static void session_handle_mail(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (!session_user_data_available(ctx) && !ctx->owner->user_data_ready) {
+    session_send_system_line(ctx, "Mailbox storage is unavailable.");
+    return;
+  }
+
+  const char *cursor = arguments != NULL ? arguments : "";
+  char command[16];
+  cursor = session_consume_token(cursor, command, sizeof(command));
+
+  if (command[0] == '\0' || strcasecmp(command, "inbox") == 0) {
+    session_mail_render_inbox(ctx);
+    return;
+  }
+
+  if (strcasecmp(command, "send") == 0) {
+    char target[SSH_CHATTER_USERNAME_LEN];
+    cursor = session_consume_token(cursor, target, sizeof(target));
+    if (target[0] == '\0' || cursor == NULL || cursor[0] == '\0') {
+      session_send_system_line(ctx, "Usage: /mail send <user> <message>");
+      return;
+    }
+
+    char message[USER_DATA_MAILBOX_MESSAGE_LEN];
+    snprintf(message, sizeof(message), "%s", cursor);
+    trim_whitespace_inplace(message);
+    if (message[0] == '\0') {
+      session_send_system_line(ctx, "Mailbox message cannot be empty.");
+      return;
+    }
+
+    char error[128];
+    if (!host_user_data_send_mail(ctx->owner, target, ctx->user.name, message, error, sizeof(error))) {
+      if (error[0] != '\0') {
+        session_send_system_line(ctx, error);
+      } else {
+        session_send_system_line(ctx, "Unable to deliver mailbox message.");
+      }
+      return;
+    }
+
+    if (strcasecmp(target, ctx->user.name) == 0) {
+      (void)session_user_data_load(ctx);
+    }
+
+    char confirmation[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(confirmation, sizeof(confirmation), "Delivered mailbox message to %s.", target);
+    session_send_system_line(ctx, confirmation);
+    return;
+  }
+
+  if (strcasecmp(command, "clear") == 0) {
+    if (!session_user_data_load(ctx)) {
+      session_send_system_line(ctx, "Mailbox storage is unavailable.");
+      return;
+    }
+
+    ctx->user_data.mailbox_count = 0U;
+    memset(ctx->user_data.mailbox, 0, sizeof(ctx->user_data.mailbox));
+    if (session_user_data_commit(ctx)) {
+      session_send_system_line(ctx, "Mailbox cleared.");
+    } else {
+      session_send_system_line(ctx, "Failed to update mailbox.");
+    }
+    return;
+  }
+
+  session_send_system_line(ctx, "Usage: /mail [inbox|send <user> <message>|clear]");
+}
+
+static void session_profile_picture_normalize(const char *input, char *output, size_t length) {
+  if (output == NULL || length == 0U) {
+    return;
+  }
+
+  output[0] = '\0';
+  if (input == NULL) {
+    return;
+  }
+
+  size_t out_idx = 0U;
+  for (size_t idx = 0U; input[idx] != '\0'; ++idx) {
+    unsigned char ch = (unsigned char)input[idx];
+    if (ch == '\r') {
+      continue;
+    }
+    if (ch >= 32U || ch == '\n' || ch == '\t') {
+      if (out_idx + 1U < length) {
+        output[out_idx++] = (char)ch;
+      }
+    }
+  }
+
+  if (out_idx < length) {
+    output[out_idx] = '\0';
+  } else {
+    output[length - 1U] = '\0';
+  }
+}
+
+static void session_profile_picture_show(session_ctx_t *ctx, const char *username) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  user_data_record_t record;
+  bool is_self = username == NULL || username[0] == '\0' || strcasecmp(username, ctx->user.name) == 0;
+  const user_data_record_t *source = NULL;
+
+  if (is_self) {
+    if (!session_user_data_load(ctx)) {
+      session_send_system_line(ctx, "Profile storage is unavailable.");
+      return;
+    }
+    source = &ctx->user_data;
+  } else if (host_user_data_load_existing(ctx->owner, username, &record, false)) {
+    source = &record;
+  } else {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "No stored profile picture for %s.", username);
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  if (source == NULL || source->profile_picture[0] == '\0') {
+    if (is_self) {
+      session_send_system_line(ctx, "You have not set a profile picture.");
+    } else {
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(message, sizeof(message), "%s has not set a profile picture.", username);
+      session_send_system_line(ctx, message);
+    }
+    return;
+  }
+
+  char header[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(header, sizeof(header), "Profile picture for %s:", is_self ? ctx->user.name : username);
+  session_send_system_line(ctx, header);
+
+  char buffer[USER_DATA_PROFILE_PICTURE_LEN];
+  snprintf(buffer, sizeof(buffer), "%s", source->profile_picture);
+  char *line = buffer;
+  while (line != NULL && *line != '\0') {
+    char *next = strchr(line, '\n');
+    if (next != NULL) {
+      *next = '\0';
+      ++next;
+    }
+    session_send_system_line(ctx, line);
+    line = next;
+  }
+}
+
+static void session_handle_profile_picture(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (!session_user_data_available(ctx) && !ctx->owner->user_data_ready) {
+    session_send_system_line(ctx, "Profile storage is unavailable.");
+    return;
+  }
+
+  const char *cursor = arguments != NULL ? arguments : "";
+  char command[16];
+  cursor = session_consume_token(cursor, command, sizeof(command));
+
+  if (command[0] == '\0' || strcasecmp(command, "show") == 0) {
+    char target[SSH_CHATTER_USERNAME_LEN];
+    cursor = session_consume_token(cursor, target, sizeof(target));
+    session_profile_picture_show(ctx, target);
+    return;
+  }
+
+  if (strcasecmp(command, "set") == 0) {
+    if (cursor == NULL || *cursor == '\0') {
+      session_send_system_line(ctx, "Usage: /profilepic set <text>");
+      return;
+    }
+    if (!session_user_data_load(ctx)) {
+      session_send_system_line(ctx, "Profile storage is unavailable.");
+      return;
+    }
+
+    char normalized[USER_DATA_PROFILE_PICTURE_LEN];
+    session_profile_picture_normalize(cursor, normalized, sizeof(normalized));
+    trim_whitespace_inplace(normalized);
+    if (normalized[0] == '\0') {
+      session_send_system_line(ctx, "Profile picture text cannot be empty.");
+      return;
+    }
+
+    snprintf(ctx->user_data.profile_picture, sizeof(ctx->user_data.profile_picture), "%s", normalized);
+    if (session_user_data_commit(ctx)) {
+      session_send_system_line(ctx, "Profile picture updated.");
+    } else {
+      session_send_system_line(ctx, "Failed to save profile picture.");
+    }
+    return;
+  }
+
+  if (strcasecmp(command, "clear") == 0) {
+    if (!session_user_data_load(ctx)) {
+      session_send_system_line(ctx, "Profile storage is unavailable.");
+      return;
+    }
+    ctx->user_data.profile_picture[0] = '\0';
+    if (session_user_data_commit(ctx)) {
+      session_send_system_line(ctx, "Profile picture cleared.");
+    } else {
+      session_send_system_line(ctx, "Failed to clear profile picture.");
+    }
+    return;
+  }
+
+  session_send_system_line(ctx, "Usage: /profilepic [show [user]|set <text>|clear]");
 }
 
 static void session_handle_reaction(session_ctx_t *ctx, size_t reaction_index, const char *arguments) {
@@ -17707,6 +18134,385 @@ static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line) 
   session_game_liar_present_round(ctx);
 }
 
+static void session_game_alpha_reset(alpha_centauri_game_state_t *state) {
+  if (state == NULL) {
+    return;
+  }
+
+  *state = (alpha_centauri_game_state_t){0};
+  state->stage = 0U;
+  state->velocity_fraction_c = 0.0;
+  state->distance_travelled_ly = 0.0;
+  state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY;
+  state->fuel_percent = 100.0;
+  state->oxygen_days = 730.0;
+  state->mission_time_years = 0.0;
+  state->radiation_msv = 0.0;
+  state->active = false;
+  state->eva_ready = false;
+  state->awaiting_flag = false;
+}
+
+static void session_game_alpha_sync_from_save(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  session_game_alpha_reset(state);
+
+  if (!session_user_data_load(ctx)) {
+    return;
+  }
+
+  const alpha_centauri_save_t *save = &ctx->user_data.alpha;
+  if (!save->active) {
+    return;
+  }
+
+  state->active = true;
+  state->stage = save->stage <= 4U ? save->stage : 0U;
+  state->eva_ready = save->eva_ready != 0U;
+  state->awaiting_flag = save->awaiting_flag != 0U;
+  state->velocity_fraction_c = save->velocity_fraction_c;
+  state->distance_travelled_ly = save->distance_travelled_ly;
+  state->distance_remaining_ly = save->distance_remaining_ly;
+  if (state->distance_remaining_ly < 0.0) {
+    state->distance_remaining_ly = 0.0;
+  }
+  state->fuel_percent = save->fuel_percent;
+  state->oxygen_days = save->oxygen_days;
+  state->mission_time_years = save->mission_time_years;
+  state->radiation_msv = save->radiation_msv;
+}
+
+static void session_game_alpha_sync_to_save(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (!session_user_data_load(ctx)) {
+    return;
+  }
+
+  alpha_centauri_save_t *save = &ctx->user_data.alpha;
+  const alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  save->active = state->active ? 1U : 0U;
+  save->stage = (uint8_t)(state->stage <= 4U ? state->stage : 0U);
+  save->eva_ready = state->eva_ready ? 1U : 0U;
+  save->awaiting_flag = state->awaiting_flag ? 1U : 0U;
+  save->velocity_fraction_c = state->velocity_fraction_c;
+  save->distance_travelled_ly = state->distance_travelled_ly;
+  save->distance_remaining_ly = state->distance_remaining_ly;
+  save->fuel_percent = state->fuel_percent;
+  save->oxygen_days = state->oxygen_days;
+  save->mission_time_years = state->mission_time_years;
+  save->radiation_msv = state->radiation_msv;
+  session_user_data_commit(ctx);
+}
+
+static void session_game_alpha_report_state(session_ctx_t *ctx, const char *label) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  const alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  bool previous_translation = ctx->translation_suppress_output;
+  ctx->translation_suppress_output = true;
+
+  if (label != NULL && label[0] != '\0') {
+    session_send_system_line(ctx, label);
+  }
+
+  double velocity_kms = state->velocity_fraction_c * ALPHA_SPEED_OF_LIGHT_MPS / 1000.0;
+  double distance_au = state->distance_remaining_ly * ALPHA_LY_TO_AU;
+
+  char line[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(line, sizeof(line),
+           "Velocity: %.2f%% c (%.0f km/s) | Fuel %.1f%% | Radiation %.1f mSv",
+           state->velocity_fraction_c * 100.0, velocity_kms, state->fuel_percent, state->radiation_msv);
+  session_send_system_line(ctx, line);
+
+  snprintf(line, sizeof(line),
+           "Distance remaining: %.2f ly (%.0f AU) | Oxygen %.0f days | Mission clock %.2f years",
+           state->distance_remaining_ly, distance_au, state->oxygen_days, state->mission_time_years);
+  session_send_system_line(ctx, line);
+
+  ctx->translation_suppress_output = previous_translation;
+}
+
+static void session_game_alpha_present_stage(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
+    return;
+  }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  bool previous_translation = ctx->translation_suppress_output;
+  ctx->translation_suppress_output = true;
+
+  session_render_separator(ctx, "Alpha Centauri Expedition");
+
+  switch (state->stage) {
+    case 0:
+      session_send_system_line(ctx,
+                               "Stage 0 — Launch stack ready. Type 'ignite' to fire the antimatter booster and leave Sol.");
+      break;
+    case 1:
+      session_send_system_line(ctx,
+                               "Stage 1 — Mid-course trim. Type 'trim' to vector toward the Alpha Centauri barycenter.");
+      break;
+    case 2:
+      session_send_system_line(ctx,
+                               "Stage 2 — Turnover. Type 'flip' to rotate the ship for deceleration burn.");
+      break;
+    case 3:
+      session_send_system_line(ctx,
+                               "Stage 3 — Braking burn. Type 'retro' to bleed velocity into Proxima's gravity well.");
+      break;
+    case 4:
+      if (!state->eva_ready) {
+        session_send_system_line(ctx,
+                                 "Stage 4 — High orbit over Proxima b. Type 'eva' to begin the descent walk.");
+      } else if (state->awaiting_flag) {
+        session_send_system_line(ctx,
+                                 "Stage 4 — Final step. Type 'plant flag' to raise '이주자의 깃발' on Proxima b.");
+      } else {
+        session_send_system_line(ctx, "Stage 4 — Mission reset. Type 'ignite' to launch again or /suspend! to exit.");
+      }
+      break;
+    default:
+      session_send_system_line(ctx, "Awaiting next burn sequence.");
+      break;
+  }
+
+  session_game_alpha_report_state(ctx, "Current status:");
+  ctx->translation_suppress_output = previous_translation;
+}
+
+static void session_game_alpha_log_completion(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  state->velocity_fraction_c = 0.0;
+  state->distance_travelled_ly = ALPHA_TOTAL_DISTANCE_LY;
+  state->distance_remaining_ly = 0.0;
+  if (state->fuel_percent > 5.0) {
+    state->fuel_percent = 5.0;
+  }
+  if (state->oxygen_days > 20.0) {
+    state->oxygen_days -= 20.0;
+  } else {
+    state->oxygen_days = 0.0;
+  }
+  state->mission_time_years += 0.05;
+  state->radiation_msv += 5.0;
+  state->eva_ready = true;
+  state->awaiting_flag = false;
+
+  double total_years = state->mission_time_years;
+  double total_radiation = state->radiation_msv;
+
+  if (session_user_data_load(ctx)) {
+    ctx->user_data.flag_count += 1U;
+    uint64_t timestamp = (uint64_t)time(NULL);
+    if (ctx->user_data.flag_history_count < USER_DATA_FLAG_HISTORY_LIMIT) {
+      ctx->user_data.flag_history[ctx->user_data.flag_history_count++] = timestamp;
+    } else {
+      for (size_t idx = 1U; idx < USER_DATA_FLAG_HISTORY_LIMIT; ++idx) {
+        ctx->user_data.flag_history[idx - 1U] = ctx->user_data.flag_history[idx];
+      }
+      ctx->user_data.flag_history[USER_DATA_FLAG_HISTORY_LIMIT - 1U] = timestamp;
+    }
+  }
+
+  bool previous_translation = ctx->translation_suppress_output;
+  ctx->translation_suppress_output = true;
+
+  char success[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(success, sizeof(success),
+           "Mission complete! '이주자의 깃발' is registered for %s. Flight time %.2f years, exposure %.1f mSv.",
+           ctx->user.name, total_years, total_radiation);
+  session_send_system_line(ctx, success);
+
+  char notice[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(notice, sizeof(notice), "* [alpha-centauri] 이주자의 깃발 planted by %s.", ctx->user.name);
+  host_history_record_system(ctx->owner, notice);
+  chat_room_broadcast(&ctx->owner->room, notice, NULL);
+
+  ctx->translation_suppress_output = previous_translation;
+
+  session_game_alpha_reset(state);
+  state->active = true;
+  session_game_alpha_sync_to_save(ctx);
+  session_game_alpha_present_stage(ctx);
+}
+
+static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
+    return;
+  }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  char command[SSH_CHATTER_MAX_INPUT_LEN];
+  if (line == NULL) {
+    command[0] = '\0';
+  } else {
+    snprintf(command, sizeof(command), "%s", line);
+  }
+  trim_whitespace_inplace(command);
+
+  if (state->stage == 0U) {
+    if (strcasecmp(command, "ignite") == 0 || strcasecmp(command, "launch") == 0) {
+      state->stage = 1U;
+      state->active = true;
+      state->velocity_fraction_c = 0.04;
+      state->distance_travelled_ly = 0.05;
+      state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
+      state->fuel_percent = 82.0;
+      if (state->oxygen_days > 10.0) {
+        state->oxygen_days -= 10.0;
+      }
+      state->mission_time_years += 0.02;
+      state->radiation_msv += 12.0;
+      session_game_alpha_sync_to_save(ctx);
+      session_game_alpha_present_stage(ctx);
+    } else {
+      session_send_system_line(ctx, "Type 'ignite' to begin the interstellar boost.");
+    }
+    return;
+  }
+
+  if (state->stage == 1U) {
+    if (strcasecmp(command, "trim") == 0 || strcasecmp(command, "align") == 0) {
+      state->stage = 2U;
+      state->velocity_fraction_c = 0.18;
+      state->distance_travelled_ly = 1.90;
+      state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
+      state->fuel_percent = 58.0;
+      if (state->oxygen_days > 110.0) {
+        state->oxygen_days -= 110.0;
+      } else {
+        state->oxygen_days = 0.0;
+      }
+      state->mission_time_years += 0.55;
+      state->radiation_msv += 28.0;
+      session_game_alpha_sync_to_save(ctx);
+      session_game_alpha_present_stage(ctx);
+    } else {
+      session_send_system_line(ctx, "Use 'trim' to adjust the cruise vector.");
+    }
+    return;
+  }
+
+  if (state->stage == 2U) {
+    if (strcasecmp(command, "flip") == 0 || strcasecmp(command, "turnover") == 0) {
+      state->stage = 3U;
+      state->distance_travelled_ly = 3.60;
+      state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
+      state->fuel_percent = 45.0;
+      if (state->oxygen_days > 220.0) {
+        state->oxygen_days -= 220.0;
+      } else {
+        state->oxygen_days = 0.0;
+      }
+      state->mission_time_years += 1.80;
+      state->radiation_msv += 18.0;
+      session_game_alpha_sync_to_save(ctx);
+      session_game_alpha_present_stage(ctx);
+    } else {
+      session_send_system_line(ctx, "Rotate the ship with 'flip' to prepare for braking.");
+    }
+    return;
+  }
+
+  if (state->stage == 3U) {
+    if (strcasecmp(command, "retro") == 0 || strcasecmp(command, "brake") == 0) {
+      state->stage = 4U;
+      state->velocity_fraction_c = 0.01;
+      state->distance_travelled_ly = 4.22;
+      state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
+      state->fuel_percent = 18.0;
+      if (state->oxygen_days > 150.0) {
+        state->oxygen_days -= 150.0;
+      } else {
+        state->oxygen_days = 0.0;
+      }
+      state->mission_time_years += 1.20;
+      state->radiation_msv += 12.0;
+      state->eva_ready = false;
+      state->awaiting_flag = false;
+      session_game_alpha_sync_to_save(ctx);
+      session_game_alpha_present_stage(ctx);
+    } else {
+      session_send_system_line(ctx, "Fire retros with 'retro' to fall toward Proxima b.");
+    }
+    return;
+  }
+
+  if (state->stage == 4U) {
+    if (!state->eva_ready) {
+      if (strcasecmp(command, "eva") == 0 || strcasecmp(command, "descend") == 0) {
+        state->eva_ready = true;
+        state->awaiting_flag = true;
+        if (state->oxygen_days > 30.0) {
+          state->oxygen_days -= 30.0;
+        } else {
+          state->oxygen_days = 0.0;
+        }
+        state->mission_time_years += 0.05;
+        state->radiation_msv += 6.0;
+        session_game_alpha_sync_to_save(ctx);
+        session_game_alpha_present_stage(ctx);
+      } else {
+        session_send_system_line(ctx, "Type 'eva' to leave the spacecraft.");
+      }
+    } else if (state->awaiting_flag) {
+      if (strcasecmp(command, "plant") == 0 || strcasecmp(command, "plant flag") == 0 ||
+          strcasecmp(command, "flag") == 0) {
+        session_game_alpha_log_completion(ctx);
+      } else {
+        session_send_system_line(ctx, "Plant '이주자의 깃발' by typing 'plant flag'.");
+      }
+    } else {
+      session_send_system_line(ctx, "Launch again with 'ignite' or exit with /suspend!.");
+    }
+    return;
+  }
+
+  session_send_system_line(ctx, "Hold position for the next maneuver.");
+}
+
+static void session_game_start_alpha(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (!session_user_data_load(ctx)) {
+    session_send_system_line(ctx, "Profile storage unavailable; cannot start the mission.");
+    return;
+  }
+
+  session_game_alpha_sync_from_save(ctx);
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  ctx->game.type = SESSION_GAME_ALPHA;
+  ctx->game.active = true;
+  state->active = true;
+
+  if (state->stage == 0U) {
+    session_send_system_line(ctx,
+                             "Mission control: Alpha Centauri expedition primed. Complete each maneuver to reach Proxima b.");
+  } else {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "Mission control: Resuming expedition at stage %u.", state->stage);
+    session_send_system_line(ctx, message);
+  }
+
+  session_game_alpha_sync_to_save(ctx);
+  session_game_alpha_present_stage(ctx);
+}
+
 static void session_handle_game(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL) {
     return;
@@ -17718,7 +18524,7 @@ static void session_handle_game(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (arguments == NULL) {
-    session_send_system_line(ctx, "Usage: /game <tetris|liargame>");
+    session_send_system_line(ctx, "Usage: /game <tetris|liargame|alpha>");
     return;
   }
 
@@ -17726,7 +18532,7 @@ static void session_handle_game(session_ctx_t *ctx, const char *arguments) {
   snprintf(working, sizeof(working), "%s", arguments);
   trim_whitespace_inplace(working);
   if (working[0] == '\0') {
-    session_send_system_line(ctx, "Usage: /game <tetris|liargame>");
+    session_send_system_line(ctx, "Usage: /game <tetris|liargame|alpha>");
     return;
   }
 
@@ -17738,8 +18544,10 @@ static void session_handle_game(session_ctx_t *ctx, const char *arguments) {
     session_game_start_tetris(ctx);
   } else if (strcmp(working, "liargame") == 0) {
     session_game_start_liargame(ctx);
+  } else if (strcmp(working, "alpha") == 0 || strcmp(working, "alphacentauri") == 0) {
+    session_game_start_alpha(ctx);
   } else {
-    session_send_system_line(ctx, "Unknown game. Available options: tetris, liargame.");
+    session_send_system_line(ctx, "Unknown game. Available options: tetris, liargame, alpha.");
   }
 }
 
@@ -17775,6 +18583,13 @@ static void session_game_suspend(session_ctx_t *ctx, const char *reason) {
     ctx->game.liar.awaiting_guess = false;
     ctx->game.liar.round_number = 0U;
     ctx->game.liar.score = 0U;
+  } else if (ctx->game.type == SESSION_GAME_ALPHA) {
+    char summary[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(summary, sizeof(summary), "Alpha Centauri mission paused at stage %u with %.2f ly remaining.",
+             ctx->game.alpha.stage, ctx->game.alpha.distance_remaining_ly);
+    session_send_system_line(ctx, summary);
+    session_game_alpha_reset(&ctx->game.alpha);
+    session_game_alpha_sync_to_save(ctx);
   }
 
   ctx->game.active = false;
@@ -19916,6 +20731,16 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
+  else if (session_parse_command(line, "/mail", &args)) {
+    session_handle_mail(ctx, args);
+    return;
+  }
+
+  else if (session_parse_command(line, "/profilepic", &args)) {
+    session_handle_profile_picture(ctx, args);
+    return;
+  }
+
   else if (session_parse_command(line, "/game", &args)) {
     session_handle_game(ctx, args);
     return;
@@ -20258,6 +21083,204 @@ static void trim_whitespace_inplace(char *text) {
     memmove(text, start, length);
   }
   text[length] = '\0';
+}
+
+static const char *session_consume_token(const char *input, char *token, size_t length) {
+  if (token == NULL || length == 0U) {
+    return input;
+  }
+
+  token[0] = '\0';
+  if (input == NULL) {
+    return NULL;
+  }
+
+  while (*input == ' ' || *input == '\t') {
+    ++input;
+  }
+
+  size_t out_idx = 0U;
+  while (*input != '\0' && !isspace((unsigned char)*input)) {
+    if (out_idx + 1U < length) {
+      token[out_idx++] = *input;
+    }
+    ++input;
+  }
+  token[out_idx] = '\0';
+
+  while (*input == ' ' || *input == '\t') {
+    ++input;
+  }
+
+  return input;
+}
+
+static bool session_user_data_available(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return false;
+  }
+
+  if (!ctx->owner->user_data_ready) {
+    return false;
+  }
+
+  if (ctx->user.name[0] == '\0') {
+    return false;
+  }
+
+  return true;
+}
+
+static void session_user_data_touch(session_ctx_t *ctx) {
+  if (ctx == NULL || !ctx->user_data_loaded) {
+    return;
+  }
+
+  time_t now = time(NULL);
+  if (now == (time_t)-1) {
+    now = 0;
+  }
+  ctx->user_data.last_updated = (uint64_t)now;
+}
+
+static bool host_user_data_load_existing(host_t *host, const char *username, user_data_record_t *record,
+                                        bool create_if_missing) {
+  if (host == NULL || username == NULL || username[0] == '\0') {
+    return false;
+  }
+
+  if (!host->user_data_ready) {
+    return false;
+  }
+
+  bool success = false;
+  if (host->user_data_lock_initialized) {
+    pthread_mutex_lock(&host->user_data_lock);
+  }
+
+  if (create_if_missing) {
+    success = user_data_ensure_exists(host->user_data_root, username, record);
+  } else {
+    success = user_data_load(host->user_data_root, username, record);
+  }
+
+  if (host->user_data_lock_initialized) {
+    pthread_mutex_unlock(&host->user_data_lock);
+  }
+
+  return success;
+}
+
+static bool session_user_data_load(session_ctx_t *ctx) {
+  if (!session_user_data_available(ctx)) {
+    return false;
+  }
+
+  if (ctx->user_data_loaded) {
+    return true;
+  }
+
+  user_data_record_t record;
+  if (!host_user_data_load_existing(ctx->owner, ctx->user.name, &record, true)) {
+    return false;
+  }
+
+  ctx->user_data = record;
+  ctx->user_data_loaded = true;
+  return true;
+}
+
+static bool session_user_data_commit(session_ctx_t *ctx) {
+  if (!session_user_data_available(ctx) || !ctx->user_data_loaded) {
+    return false;
+  }
+
+  session_user_data_touch(ctx);
+
+  host_t *host = ctx->owner;
+  bool success = false;
+  if (host->user_data_lock_initialized) {
+    pthread_mutex_lock(&host->user_data_lock);
+  }
+  success = user_data_save(host->user_data_root, &ctx->user_data);
+  if (host->user_data_lock_initialized) {
+    pthread_mutex_unlock(&host->user_data_lock);
+  }
+
+  if (!success) {
+    humanized_log_error("mailbox", "failed to persist user data", errno != 0 ? errno : EIO);
+  }
+
+  return success;
+}
+
+static bool host_user_data_send_mail(host_t *host, const char *recipient, const char *sender, const char *message,
+                                    char *error, size_t error_length) {
+  if (error != NULL && error_length > 0U) {
+    error[0] = '\0';
+  }
+
+  if (host == NULL || recipient == NULL || recipient[0] == '\0' || message == NULL || message[0] == '\0') {
+    if (error != NULL && error_length > 0U) {
+      snprintf(error, error_length, "%s", "Invalid mailbox parameters.");
+    }
+    return false;
+  }
+
+  if (!host->user_data_ready) {
+    if (error != NULL && error_length > 0U) {
+      snprintf(error, error_length, "%s", "Mailbox storage unavailable.");
+    }
+    return false;
+  }
+
+  user_data_record_t record;
+  if (!host_user_data_load_existing(host, recipient, &record, true)) {
+    if (error != NULL && error_length > 0U) {
+      snprintf(error, error_length, "Unable to open mailbox for %s.", recipient);
+    }
+    return false;
+  }
+
+  if (record.mailbox_count >= USER_DATA_MAILBOX_LIMIT) {
+    for (size_t idx = 1U; idx < USER_DATA_MAILBOX_LIMIT; ++idx) {
+      record.mailbox[idx - 1U] = record.mailbox[idx];
+    }
+    record.mailbox_count = USER_DATA_MAILBOX_LIMIT - 1U;
+  }
+
+  user_data_mail_entry_t *entry = &record.mailbox[record.mailbox_count++];
+  time_t now = time(NULL);
+  if (now == (time_t)-1) {
+    now = 0;
+  }
+  entry->timestamp = (uint64_t)now;
+  if (sender != NULL && sender[0] != '\0') {
+    snprintf(entry->sender, sizeof(entry->sender), "%s", sender);
+  } else {
+    snprintf(entry->sender, sizeof(entry->sender), "%s", "system");
+  }
+  snprintf(entry->message, sizeof(entry->message), "%s", message);
+  record.last_updated = (uint64_t)now;
+
+  bool success;
+  if (host->user_data_lock_initialized) {
+    pthread_mutex_lock(&host->user_data_lock);
+  }
+  success = user_data_save(host->user_data_root, &record);
+  if (host->user_data_lock_initialized) {
+    pthread_mutex_unlock(&host->user_data_lock);
+  }
+
+  if (!success) {
+    if (error != NULL && error_length > 0U) {
+      snprintf(error, error_length, "%s", "Failed to write mailbox file.");
+    }
+    humanized_log_error("mailbox", "failed to persist mailbox entry", errno != 0 ? errno : EIO);
+    return false;
+  }
+
+  return true;
 }
 
 static void rss_trim_whitespace(char *text) {
@@ -20900,12 +21923,15 @@ static void session_reset_for_retry(session_ctx_t *ctx) {
   ctx->game.type = SESSION_GAME_NONE;
   ctx->game.rng_seeded = false;
   ctx->game.rng_state = 0U;
+  ctx->game.alpha = (alpha_centauri_game_state_t){0};
   ctx->input_history_count = 0U;
   ctx->input_history_position = -1;
   ctx->history_scroll_position = 0U;
   ctx->has_last_message_time = false;
   ctx->last_message_time.tv_sec = 0;
   ctx->last_message_time.tv_nsec = 0;
+  ctx->user_data_loaded = false;
+  memset(&ctx->user_data, 0, sizeof(ctx->user_data));
 }
 
 static int host_telnet_open_socket(host_t *host) {
@@ -21170,6 +22196,10 @@ static bool session_attempt_handshake_restart(session_ctx_t *ctx, unsigned int *
 static void session_cleanup(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return;
+  }
+
+  if (ctx->user_data_loaded) {
+    (void)session_user_data_commit(ctx);
   }
 
   session_translation_worker_shutdown(ctx);
@@ -21690,6 +22720,15 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_ban_resolve_path(host);
   host->reply_state_file_path[0] = '\0';
   host_reply_state_resolve_path(host);
+  snprintf(host->user_data_root, sizeof(host->user_data_root), "%s", "/var/lib/mailbox");
+  host->user_data_ready = user_data_ensure_root(host->user_data_root);
+  if (pthread_mutex_init(&host->user_data_lock, NULL) == 0) {
+    host->user_data_lock_initialized = true;
+  } else {
+    humanized_log_error("mailbox", "failed to initialise mailbox lock", errno != 0 ? errno : ENOMEM);
+    host->user_data_lock_initialized = false;
+    host->user_data_ready = false;
+  }
   host->rss_state_file_path[0] = '\0';
   host_rss_resolve_path(host);
   host->eliza_memory_file_path[0] = '\0';
@@ -21770,6 +22809,8 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_rss_state_load(host);
   host_eliza_memory_load(host);
   host_eliza_state_load(host);
+
+  host_user_data_bootstrap(host);
 
   host_refresh_motd(host);
 
@@ -22213,6 +23254,10 @@ void host_shutdown(host_t *host) {
   host->room.member_capacity = 0U;
   host->room.member_count = 0U;
   pthread_mutex_unlock(&host->room.lock);
+  if (host->user_data_lock_initialized) {
+    pthread_mutex_destroy(&host->user_data_lock);
+    host->user_data_lock_initialized = false;
+  }
 }
 
 int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory,
