@@ -46,6 +46,8 @@
 #define SSH_CHATTER_BBS_MAX_TAGS 4
 #define SSH_CHATTER_BBS_MAX_COMMENTS 64
 #define SSH_CHATTER_BBS_COMMENT_LEN 512
+#define SSH_CHATTER_BBS_VIEW_WINDOW SSH_CHATTER_SCROLLBACK_CHUNK
+#define SSH_CHATTER_BBS_BREAKING_MAX 4
 #define SSH_CHATTER_RSS_MAX_FEEDS 32
 #define SSH_CHATTER_RSS_TAG_LEN 32
 #define SSH_CHATTER_RSS_URL_LEN 512
@@ -316,6 +318,15 @@ typedef struct session_ctx {
   size_t pending_bbs_line_count;
   size_t pending_bbs_cursor_line;
   bool pending_bbs_editing_line;
+  bool bbs_view_active;
+  uint64_t bbs_view_post_id;
+  size_t bbs_view_scroll_offset;
+  size_t bbs_view_total_lines;
+  bool bbs_view_notice_pending;
+  char bbs_view_notice[SSH_CHATTER_MESSAGE_LIMIT];
+  bool bbs_rendering_editor;
+  char bbs_breaking_messages[SSH_CHATTER_BBS_BREAKING_MAX][SSH_CHATTER_MESSAGE_LIMIT];
+  size_t bbs_breaking_count;
   bool translation_enabled;
   bool output_translation_enabled;
   char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
