@@ -12808,7 +12808,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/audio <url> [caption] - share an audio clip",
       "/files <url> [caption] - share a downloadable file",
       "/mail [inbox|send <user> <message>|clear] - manage your mailbox",
-      "/profilepic [show [user]|set <text>|ascii|clear] - set or view profile pictures",
+      "/profilepic            - open the ASCII art profile picture composer",
       "/asciiart           - open the ASCII art composer (max 128 lines, 1/10 min per IP)",
       "/game <tetris|liargame|alpha> - start a minigame in the chat (use /suspend! or Ctrl+Z to exit)",
       "Up/Down arrows           - scroll chat (chat mode) or browse command history (command mode)",
@@ -14302,59 +14302,6 @@ static void session_profile_picture_normalize(const char *input, char *output, s
   }
 }
 
-static void session_profile_picture_show(session_ctx_t *ctx, const char *username) {
-  if (ctx == NULL || ctx->owner == NULL) {
-    return;
-  }
-
-  user_data_record_t record;
-  bool is_self = username == NULL || username[0] == '\0' || strcasecmp(username, ctx->user.name) == 0;
-  const user_data_record_t *source = NULL;
-
-  if (is_self) {
-    if (!session_user_data_load(ctx)) {
-      session_send_system_line(ctx, "Profile storage is unavailable.");
-      return;
-    }
-    source = &ctx->user_data;
-  } else if (host_user_data_load_existing(ctx->owner, username, &record, false)) {
-    source = &record;
-  } else {
-    char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "No stored profile picture for %s.", username);
-    session_send_system_line(ctx, message);
-    return;
-  }
-
-  if (source == NULL || source->profile_picture[0] == '\0') {
-    if (is_self) {
-      session_send_system_line(ctx, "You have not set a profile picture.");
-    } else {
-      char message[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(message, sizeof(message), "%s has not set a profile picture.", username);
-      session_send_system_line(ctx, message);
-    }
-    return;
-  }
-
-  char header[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(header, sizeof(header), "Profile picture for %s:", is_self ? ctx->user.name : username);
-  session_send_system_line(ctx, header);
-
-  char buffer[USER_DATA_PROFILE_PICTURE_LEN];
-  snprintf(buffer, sizeof(buffer), "%s", source->profile_picture);
-  char *line = buffer;
-  while (line != NULL && *line != '\0') {
-    char *next = strchr(line, '\n');
-    if (next != NULL) {
-      *next = '\0';
-      ++next;
-    }
-    session_send_system_line(ctx, line);
-    line = next;
-  }
-}
-
 static void session_handle_profile_picture(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;
@@ -14366,67 +14313,20 @@ static void session_handle_profile_picture(session_ctx_t *ctx, const char *argum
   }
 
   const char *cursor = arguments != NULL ? arguments : "";
-  char command[16];
-  cursor = session_consume_token(cursor, command, sizeof(command));
+  char mode[16];
+  cursor = session_consume_token(cursor, mode, sizeof(mode));
 
-  if (command[0] == '\0' || strcasecmp(command, "show") == 0) {
-    char target[SSH_CHATTER_USERNAME_LEN];
-    cursor = session_consume_token(cursor, target, sizeof(target));
-    session_profile_picture_show(ctx, target);
+  if (mode[0] != '\0' && strcasecmp(mode, "ascii") != 0) {
+    session_send_system_line(ctx, "Usage: /profilepic");
     return;
   }
 
-  if (strcasecmp(command, "ascii") == 0) {
-    if (cursor != NULL && *cursor != '\0') {
-      session_send_system_line(ctx, "Usage: /profilepic ascii");
-      return;
-    }
-    session_asciiart_begin(ctx, SESSION_ASCIIART_TARGET_PROFILE_PICTURE);
+  if (cursor != NULL && *cursor != '\0') {
+    session_send_system_line(ctx, "Usage: /profilepic");
     return;
   }
 
-  if (strcasecmp(command, "set") == 0) {
-    if (cursor == NULL || *cursor == '\0') {
-      session_send_system_line(ctx, "Usage: /profilepic set <text>");
-      return;
-    }
-    if (!session_user_data_load(ctx)) {
-      session_send_system_line(ctx, "Profile storage is unavailable.");
-      return;
-    }
-
-    char normalized[USER_DATA_PROFILE_PICTURE_LEN];
-    session_profile_picture_normalize(cursor, normalized, sizeof(normalized));
-    trim_whitespace_inplace(normalized);
-    if (normalized[0] == '\0') {
-      session_send_system_line(ctx, "Profile picture text cannot be empty.");
-      return;
-    }
-
-    snprintf(ctx->user_data.profile_picture, sizeof(ctx->user_data.profile_picture), "%s", normalized);
-    if (session_user_data_commit(ctx)) {
-      session_send_system_line(ctx, "Profile picture updated.");
-    } else {
-      session_send_system_line(ctx, "Failed to save profile picture.");
-    }
-    return;
-  }
-
-  if (strcasecmp(command, "clear") == 0) {
-    if (!session_user_data_load(ctx)) {
-      session_send_system_line(ctx, "Profile storage is unavailable.");
-      return;
-    }
-    ctx->user_data.profile_picture[0] = '\0';
-    if (session_user_data_commit(ctx)) {
-      session_send_system_line(ctx, "Profile picture cleared.");
-    } else {
-      session_send_system_line(ctx, "Failed to clear profile picture.");
-    }
-    return;
-  }
-
-  session_send_system_line(ctx, "Usage: /profilepic [show [user]|set <text>|ascii|clear]");
+  session_asciiart_begin(ctx, SESSION_ASCIIART_TARGET_PROFILE_PICTURE);
 }
 
 static void session_handle_reaction(session_ctx_t *ctx, size_t reaction_index, const char *arguments) {
