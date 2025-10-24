@@ -10915,7 +10915,8 @@ static void session_render_banner(session_ctx_t *ctx) {
     "\033[1;35m+===================================================================+\033[0m",
     "\033[1;36m|        *** Welcome to CHATTER (2025) ***                          |\033[0m",
     "\033[1;35m|   Cute and tiny SSH chat written in C.                            |\033[0m",
-    "\033[1;36m|   Type \033[1;33m/help\033[0;37m to see available commands.                           |\033[0m",
+    "\033[1;36m|   Type \033[1;33m/help\033[1;36m to see available commands.                           |\033[0m",
+    "\033[1;36m|   Type \033[1;33m/mode\033[1;36m to switch input modes.                               |\033[0m",
     "\033[1;35m+===================================================================+\033[0m",
   };
 
@@ -21492,7 +21493,7 @@ static void host_build_birthday_notice_locked(host_t *host, char *line, size_t l
     return;
   }
 
-  snprintf(line, length, "%s🎉 Happy birthday to %s!\n", ANSI_CURSOR_COLUMN_RESET, names);
+  snprintf(line, length, "%sHappy birthday to %s!\n", ANSI_CURSOR_COLUMN_RESET, names);
 }
 
 static void host_refresh_motd_locked(host_t *host) {
