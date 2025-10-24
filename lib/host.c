@@ -13031,8 +13031,9 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
     now.tv_nsec = 0L;
   }
 
-  bool ascii_profile_command = false;
-  if (normalized[0] == '/') {
+  const bool asciiart_active = ctx->asciiart_pending;
+  bool ascii_profile_command = asciiart_active;
+  if (!ascii_profile_command && normalized[0] == '/') {
     const char *command_args = NULL;
     if (session_parse_command(normalized, "/asciiart", &command_args) ||
         session_parse_command(normalized, "/profilepic", &command_args)) {
