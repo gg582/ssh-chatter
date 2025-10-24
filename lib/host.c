@@ -25,6 +25,7 @@
 #include <wchar.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <netdb.h>
 #include <poll.h>
 #include <pthread.h>
@@ -126,6 +127,28 @@ static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
 #define SSH_CHATTER_ELIZA_BBS_PREVIEW_LEN 160U
 #define SSH_CHATTER_ELIZA_PROMPT_BUFFER ((SSH_CHATTER_ELIZA_CONTEXT_BUFFER * 2U) + (SSH_CHATTER_MESSAGE_LIMIT * 3U))
 #define SSH_CHATTER_ELIZA_TOKEN_LIMIT 16U
+
+#define TELNET_IAC 255
+#define TELNET_CMD_SE 240
+#define TELNET_CMD_NOP 241
+#define TELNET_CMD_DM 242
+#define TELNET_CMD_BREAK 243
+#define TELNET_CMD_WILL 251
+#define TELNET_CMD_WONT 252
+#define TELNET_CMD_DO 253
+#define TELNET_CMD_DONT 254
+#define TELNET_CMD_SB 250
+#define TELNET_OPT_ECHO 1
+#define TELNET_OPT_SUPPRESS_GO_AHEAD 3
+#define TELNET_OPT_STATUS 5
+#define TELNET_OPT_TERMINAL_TYPE 24
+#define TELNET_OPT_NAWS 31
+#define TELNET_OPT_TERMINAL_SPEED 32
+#define TELNET_OPT_LINEMODE 34
+
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
 
 #ifndef O_NOFOLLOW
 #define O_NOFOLLOW 0
@@ -1116,10 +1139,15 @@ static void resolve_accept_channel_once(void) {
 static void trim_whitespace_inplace(char *text);
 static const char *lookup_color_code(const color_entry_t *entries, size_t entry_count, const char *name);
 static bool parse_bool_token(const char *token, bool *value);
+static bool session_transport_active(const session_ctx_t *ctx);
+static void session_transport_request_close(session_ctx_t *ctx);
 static void session_channel_write(session_ctx_t *ctx, const void *data, size_t length);
 static bool session_channel_write_all(session_ctx_t *ctx, const void *data, size_t length);
 static bool session_channel_wait_writable(session_ctx_t *ctx, int timeout_ms);
 static void session_channel_log_write_failure(session_ctx_t *ctx, const char *reason);
+static int session_transport_read(session_ctx_t *ctx, void *buffer, size_t length, int timeout_ms);
+static bool session_transport_is_open(const session_ctx_t *ctx);
+static bool session_transport_is_eof(const session_ctx_t *ctx);
 static void session_apply_background_fill(session_ctx_t *ctx);
 static void session_write_rendered_line(session_ctx_t *ctx, const char *render_source);
 static void session_send_caption_line(session_ctx_t *ctx, const char *message);
@@ -1151,6 +1179,9 @@ static void session_local_backspace(session_ctx_t *ctx);
 static void session_clear_input(session_ctx_t *ctx);
 static bool session_try_command_completion(session_ctx_t *ctx);
 static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch);
+static void session_cleanup(session_ctx_t *ctx);
+static void *session_thread(void *arg);
+static void host_telnet_listener_stop(host_t *host);
 static void session_history_record(session_ctx_t *ctx, const char *line);
 static void session_history_navigate(session_ctx_t *ctx, int direction);
 static void session_scrollback_navigate(session_ctx_t *ctx, int direction);
@@ -2021,6 +2052,26 @@ static void session_describe_peer(ssh_session session, char *buffer, size_t len)
   }
 
   snprintf(buffer, len, "%s", host);
+}
+
+static void host_format_sockaddr(const struct sockaddr *addr, socklen_t len, char *buffer, size_t size) {
+  if (buffer == NULL || size == 0U) {
+    return;
+  }
+
+  buffer[0] = '\0';
+  if (addr == NULL) {
+    return;
+  }
+
+  socklen_t host_len = (socklen_t)(size > (size_t)UINT_MAX ? UINT_MAX : size);
+  if (host_len == 0) {
+    return;
+  }
+
+  if (getnameinfo(addr, len, buffer, host_len, NULL, 0, NI_NUMERICHOST) != 0) {
+    buffer[0] = '\0';
+  }
 }
 
 typedef enum {
@@ -8192,7 +8243,7 @@ static bool session_translation_queue_caption(session_ctx_t *ctx, const char *me
 }
 
 static void session_translation_reserve_placeholders(session_ctx_t *ctx, size_t placeholder_lines) {
-  if (ctx == NULL || ctx->channel == NULL || placeholder_lines == 0U) {
+  if (ctx == NULL || !session_transport_active(ctx) || placeholder_lines == 0U) {
     return;
   }
 
@@ -9218,15 +9269,91 @@ static void session_channel_log_write_failure(session_ctx_t *ctx, const char *re
   }
 
   if (reason == NULL || reason[0] == '\0') {
-    reason = "channel write failure";
+    reason = "transport write failure";
   }
 
   const char *username = ctx->user.name[0] != '\0' ? ctx->user.name : "unknown";
-  printf("[session] channel write failure for %s: %s\n", username, reason);
+  printf("[session] transport write failure for %s: %s\n", username, reason);
+}
+
+static bool session_telnet_write_block(session_ctx_t *ctx, const unsigned char *data, size_t length) {
+  if (ctx == NULL || data == NULL || length == 0U || ctx->telnet_fd < 0) {
+    return true;
+  }
+
+  while (length > 0U) {
+    size_t chunk = length;
+    if (chunk > SSH_CHATTER_CHANNEL_WRITE_CHUNK) {
+      chunk = SSH_CHATTER_CHANNEL_WRITE_CHUNK;
+    }
+
+    unsigned char buffer[SSH_CHATTER_CHANNEL_WRITE_CHUNK * 2U];
+    size_t expanded = 0U;
+    for (size_t idx = 0U; idx < chunk; ++idx) {
+      unsigned char byte = data[idx];
+      buffer[expanded++] = byte;
+      if (byte == TELNET_IAC) {
+        buffer[expanded++] = TELNET_IAC;
+      }
+    }
+
+    size_t offset = 0U;
+    while (offset < expanded) {
+      ssize_t written = send(ctx->telnet_fd, buffer + offset, expanded - offset, MSG_NOSIGNAL);
+      if (written < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        return false;
+      }
+      offset += (size_t)written;
+    }
+
+    data += chunk;
+    length -= chunk;
+  }
+
+  return true;
 }
 
 static bool session_channel_wait_writable(session_ctx_t *ctx, int timeout_ms) {
-  if (ctx == NULL || ctx->session == NULL) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+    if (ctx->telnet_fd < 0) {
+      return false;
+    }
+
+    struct pollfd pfd = {
+        .fd = ctx->telnet_fd,
+        .events = POLLOUT,
+        .revents = 0,
+    };
+
+    for (;;) {
+      int result = poll(&pfd, 1, timeout_ms);
+      if (result < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        return false;
+      }
+      if (result == 0) {
+        return false;
+      }
+      if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        return false;
+      }
+      if (pfd.revents & POLLOUT) {
+        return true;
+      }
+      return false;
+    }
+  }
+
+  if (ctx->session == NULL) {
     return false;
   }
 
@@ -9240,10 +9367,11 @@ static bool session_channel_wait_writable(session_ctx_t *ctx, int timeout_ms) {
     return true;
   }
 
-  struct pollfd pfd;
-  pfd.fd = fd;
-  pfd.events = POLLOUT;
-  pfd.revents = 0;
+  struct pollfd pfd = {
+      .fd = fd,
+      .events = POLLOUT,
+      .revents = 0,
+  };
 
   for (;;) {
     int result = poll(&pfd, 1, timeout_ms);
@@ -9253,25 +9381,21 @@ static bool session_channel_wait_writable(session_ctx_t *ctx, int timeout_ms) {
       }
       return false;
     }
-
     if (result == 0) {
       return false;
     }
-
     if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
       return false;
     }
-
     if (pfd.revents & POLLOUT) {
       return true;
     }
-
     return false;
   }
 }
 
 static bool session_channel_write_all(session_ctx_t *ctx, const void *data, size_t length) {
-  if (ctx == NULL || ctx->channel == NULL || data == NULL || length == 0U) {
+  if (ctx == NULL || data == NULL || length == 0U || !session_transport_active(ctx)) {
     return true;
   }
 
@@ -9282,7 +9406,7 @@ static bool session_channel_write_all(session_ctx_t *ctx, const void *data, size
   while (remaining > 0U) {
     if (!session_channel_wait_writable(ctx, SSH_CHATTER_CHANNEL_WRITE_TIMEOUT_MS)) {
       if (++stalled >= SSH_CHATTER_CHANNEL_WRITE_MAX_STALLS) {
-        session_channel_log_write_failure(ctx, "channel write timed out");
+        session_channel_log_write_failure(ctx, "write timed out");
         return false;
       }
       continue;
@@ -9293,6 +9417,16 @@ static bool session_channel_write_all(session_ctx_t *ctx, const void *data, size
     size_t chunk = remaining;
     if (chunk > SSH_CHATTER_CHANNEL_WRITE_CHUNK) {
       chunk = SSH_CHATTER_CHANNEL_WRITE_CHUNK;
+    }
+
+    if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+      if (!session_telnet_write_block(ctx, cursor, chunk)) {
+        session_channel_log_write_failure(ctx, "telnet write error");
+        return false;
+      }
+      cursor += chunk;
+      remaining -= chunk;
+      continue;
     }
 
     ssize_t written = ssh_channel_write(ctx->channel, cursor, (uint32_t)chunk);
@@ -9325,7 +9459,7 @@ static bool session_channel_write_all(session_ctx_t *ctx, const void *data, size
 }
 
 static void session_channel_write(session_ctx_t *ctx, const void *data, size_t length) {
-  if (ctx == NULL || ctx->channel == NULL || data == NULL || length == 0U || ctx->should_exit) {
+  if (ctx == NULL || data == NULL || length == 0U || ctx->should_exit || !session_transport_active(ctx)) {
     return;
   }
 
@@ -9334,11 +9468,8 @@ static void session_channel_write(session_ctx_t *ctx, const void *data, size_t l
   }
 }
 
-// session_apply_background_fill reapplies the palette background to the
-// current terminal row so subsequent output starts from a clean, tinted
-// baseline.
 static void session_apply_background_fill(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->channel == NULL) {
+  if (ctx == NULL || !session_transport_active(ctx)) {
     return;
   }
 
@@ -9358,7 +9489,7 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
 }
 
 static void session_write_rendered_line(session_ctx_t *ctx, const char *render_source) {
-  if (ctx == NULL || ctx->channel == NULL || render_source == NULL) {
+  if (ctx == NULL || render_source == NULL || !session_transport_active(ctx)) {
     return;
   }
 
@@ -9409,7 +9540,7 @@ static void session_write_rendered_line(session_ctx_t *ctx, const char *render_s
 }
 
 static void session_send_caption_line(session_ctx_t *ctx, const char *message) {
-  if (ctx == NULL || ctx->channel == NULL || message == NULL) {
+  if (ctx == NULL || message == NULL || !session_transport_active(ctx)) {
     return;
   }
 
@@ -9420,7 +9551,7 @@ static void session_send_caption_line(session_ctx_t *ctx, const char *message) {
 }
 
 static void session_render_caption_with_offset(session_ctx_t *ctx, const char *message, size_t move_up) {
-  if (ctx == NULL || ctx->channel == NULL || message == NULL) {
+  if (ctx == NULL || message == NULL || !session_transport_active(ctx)) {
     return;
   }
 
@@ -9440,6 +9571,241 @@ static void session_render_caption_with_offset(session_ctx_t *ctx, const char *m
   session_channel_write(ctx, "\r", 1U);
   session_write_rendered_line(ctx, message);
   session_channel_write(ctx, "\033[u", 3U);
+}
+
+static void session_telnet_send_option(session_ctx_t *ctx, unsigned char command, unsigned char option) {
+  if (ctx == NULL || ctx->telnet_fd < 0) {
+    return;
+  }
+
+  unsigned char payload[3] = {TELNET_IAC, command, option};
+  send(ctx->telnet_fd, payload, sizeof(payload), MSG_NOSIGNAL);
+}
+
+static void session_telnet_handle_option(session_ctx_t *ctx, unsigned char command, unsigned char option) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  switch (command) {
+    case TELNET_CMD_DO:
+      if (option == TELNET_OPT_SUPPRESS_GO_AHEAD || option == TELNET_OPT_ECHO) {
+        session_telnet_send_option(ctx, TELNET_CMD_WILL, option);
+      } else {
+        session_telnet_send_option(ctx, TELNET_CMD_WONT, option);
+      }
+      break;
+    case TELNET_CMD_DONT:
+      session_telnet_send_option(ctx, TELNET_CMD_WONT, option);
+      break;
+    case TELNET_CMD_WILL:
+      if (option == TELNET_OPT_SUPPRESS_GO_AHEAD) {
+        session_telnet_send_option(ctx, TELNET_CMD_DO, option);
+      } else {
+        session_telnet_send_option(ctx, TELNET_CMD_DONT, option);
+      }
+      break;
+    case TELNET_CMD_WONT:
+      session_telnet_send_option(ctx, TELNET_CMD_DONT, option);
+      break;
+    default:
+      break;
+  }
+}
+
+static void session_telnet_initialize(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->telnet_fd < 0 || ctx->telnet_negotiated) {
+    return;
+  }
+
+  session_telnet_send_option(ctx, TELNET_CMD_WILL, TELNET_OPT_ECHO);
+  session_telnet_send_option(ctx, TELNET_CMD_WILL, TELNET_OPT_SUPPRESS_GO_AHEAD);
+  session_telnet_send_option(ctx, TELNET_CMD_DO, TELNET_OPT_SUPPRESS_GO_AHEAD);
+  session_telnet_send_option(ctx, TELNET_CMD_DONT, TELNET_OPT_LINEMODE);
+  session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_STATUS);
+  session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_TERMINAL_TYPE);
+  session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_TERMINAL_SPEED);
+  session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_NAWS);
+
+  ctx->telnet_negotiated = true;
+}
+
+static int session_telnet_read_byte(session_ctx_t *ctx, unsigned char *out, int timeout_ms) {
+  if (ctx == NULL || out == NULL || ctx->telnet_fd < 0) {
+    return SSH_ERROR;
+  }
+
+  if (ctx->telnet_pending_valid) {
+    ctx->telnet_pending_valid = false;
+    *out = (unsigned char)ctx->telnet_pending_char;
+    return 1;
+  }
+
+  for (;;) {
+    struct pollfd pfd = {
+        .fd = ctx->telnet_fd,
+        .events = POLLIN,
+        .revents = 0,
+    };
+
+    int poll_result = poll(&pfd, 1, timeout_ms);
+    if (poll_result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return SSH_ERROR;
+    }
+    if (poll_result == 0) {
+      return SSH_AGAIN;
+    }
+    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+      ctx->telnet_eof = true;
+      return 0;
+    }
+
+    unsigned char byte = 0U;
+    ssize_t read_result = recv(ctx->telnet_fd, &byte, 1, 0);
+    if (read_result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        continue;
+      }
+      return SSH_ERROR;
+    }
+    if (read_result == 0) {
+      ctx->telnet_eof = true;
+      return 0;
+    }
+
+    if (byte == TELNET_IAC) {
+      unsigned char command = 0U;
+      ssize_t command_result = recv(ctx->telnet_fd, &command, 1, 0);
+      if (command_result <= 0) {
+        if (command_result < 0 && errno == EINTR) {
+          continue;
+        }
+        ctx->telnet_eof = (command_result == 0);
+        return ctx->telnet_eof ? 0 : SSH_ERROR;
+      }
+
+      if (command == TELNET_IAC) {
+        *out = TELNET_IAC;
+        return 1;
+      }
+
+      if (command == TELNET_CMD_DO || command == TELNET_CMD_DONT || command == TELNET_CMD_WILL ||
+          command == TELNET_CMD_WONT) {
+        unsigned char option = 0U;
+        ssize_t option_result = recv(ctx->telnet_fd, &option, 1, 0);
+        if (option_result <= 0) {
+          if (option_result < 0 && errno == EINTR) {
+            continue;
+          }
+          ctx->telnet_eof = (option_result == 0);
+          return ctx->telnet_eof ? 0 : SSH_ERROR;
+        }
+        session_telnet_handle_option(ctx, command, option);
+        continue;
+      }
+
+      if (command == TELNET_CMD_SB) {
+        unsigned char prev = 0U;
+        for (;;) {
+          unsigned char chunk = 0U;
+          ssize_t chunk_result = recv(ctx->telnet_fd, &chunk, 1, 0);
+          if (chunk_result < 0) {
+            if (errno == EINTR) {
+              continue;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+              continue;
+            }
+            return SSH_ERROR;
+          }
+          if (chunk_result == 0) {
+            ctx->telnet_eof = true;
+            return 0;
+          }
+          if (prev == TELNET_IAC && chunk == TELNET_CMD_SE) {
+            break;
+          }
+          prev = (chunk == TELNET_IAC) ? TELNET_IAC : 0U;
+        }
+        continue;
+      }
+
+      if (command == TELNET_CMD_NOP || command == TELNET_CMD_DM || command == TELNET_CMD_BREAK) {
+        continue;
+      }
+
+      continue;
+    }
+
+    if (byte == '\r') {
+      unsigned char next = 0U;
+      ssize_t next_result = recv(ctx->telnet_fd, &next, 1, MSG_PEEK);
+      if (next_result > 0) {
+        if (next == '\n' || next == '\0') {
+          recv(ctx->telnet_fd, &next, 1, 0);
+        } else {
+          recv(ctx->telnet_fd, &next, 1, 0);
+          ctx->telnet_pending_char = (int)next;
+          ctx->telnet_pending_valid = true;
+        }
+      }
+
+      *out = '\n';
+      return 1;
+    }
+
+    *out = byte;
+    return 1;
+  }
+}
+
+static int session_transport_read(session_ctx_t *ctx, void *buffer, size_t length, int timeout_ms) {
+  if (ctx == NULL || buffer == NULL || length == 0U) {
+    return SSH_ERROR;
+  }
+
+  if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+    unsigned char *output = (unsigned char *)buffer;
+    size_t produced = 0U;
+
+    while (produced < length) {
+      unsigned char byte = 0U;
+      int read_result = session_telnet_read_byte(ctx, &byte, timeout_ms);
+      if (read_result == SSH_AGAIN) {
+        if (produced > 0U) {
+          return (int)produced;
+        }
+        return SSH_AGAIN;
+      }
+      if (read_result <= 0) {
+        if (produced > 0U) {
+          return (int)produced;
+        }
+        return read_result;
+      }
+
+      output[produced++] = byte;
+      if (timeout_ms >= 0) {
+        break;
+      }
+    }
+
+    return (int)produced;
+  }
+
+  const uint32_t chunk = (length > UINT32_MAX) ? UINT32_MAX : (uint32_t)length;
+
+  if (timeout_ms >= 0) {
+    return ssh_channel_read_timeout(ctx->channel, buffer, chunk, 0, timeout_ms);
+  }
+
+  return ssh_channel_read(ctx->channel, buffer, chunk, 0);
 }
 
 static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *message) {
@@ -9470,7 +9836,7 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *mes
 // background color even when individual strings reset their ANSI attributes by
 // clearing the row with the palette tint before printing.
 static void session_send_line(session_ctx_t *ctx, const char *message) {
-  if (ctx == NULL || ctx->channel == NULL || message == NULL) {
+  if (ctx == NULL || !session_transport_active(ctx) || message == NULL) {
     return;
   }
 
@@ -9547,7 +9913,7 @@ static size_t session_append_fragment(char *dest, size_t dest_size, size_t offse
 }
 
 static void session_send_plain_line(session_ctx_t *ctx, const char *message) {
-  if (ctx == NULL || ctx->channel == NULL || message == NULL) {
+  if (ctx == NULL || !session_transport_active(ctx) || message == NULL) {
     return;
   }
 
@@ -9884,7 +10250,7 @@ static bool session_should_hide_entry(session_ctx_t *ctx, const chat_history_ent
 }
 
 static void session_send_system_line(session_ctx_t *ctx, const char *message) {
-  if (ctx == NULL || ctx->channel == NULL || message == NULL) {
+  if (ctx == NULL || !session_transport_active(ctx) || message == NULL) {
     return;
   }
 
@@ -9993,7 +10359,7 @@ static void session_send_system_line_with_column_reset(session_ctx_t *ctx, const
 }
 
 static void session_send_raw_text(session_ctx_t *ctx, const char *text) {
-  if (ctx == NULL || ctx->channel == NULL || text == NULL) {
+  if (ctx == NULL || !session_transport_active(ctx) || text == NULL) {
     return;
   }
 
@@ -10163,7 +10529,7 @@ static void session_render_separator(session_ctx_t *ctx, const char *label) {
 }
 
 static void session_clear_screen(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->channel == NULL) {
+  if (ctx == NULL || !session_transport_active(ctx)) {
     return;
   }
 
@@ -10582,7 +10948,7 @@ static void session_render_banner(session_ctx_t *ctx) {
 }
 
 static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
-  if (ctx == NULL || ctx->channel == NULL) {
+  if (ctx == NULL || !session_transport_active(ctx)) {
     return;
   }
 
@@ -10622,7 +10988,7 @@ static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
 }
 
 static void session_refresh_input_line(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->channel == NULL) {
+  if (ctx == NULL || !session_transport_active(ctx)) {
     return;
   }
 
@@ -10660,7 +11026,7 @@ static void session_set_input_text(session_ctx_t *ctx, const char *text) {
 }
 
 static void session_local_echo_char(session_ctx_t *ctx, char ch) {
-  if (ctx == NULL || ctx->channel == NULL) {
+  if (ctx == NULL || !session_transport_active(ctx)) {
     return;
   }
 
@@ -10729,7 +11095,7 @@ static int session_utf8_char_width(const char *bytes, size_t length) {
 }
 
 static void session_local_backspace(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->channel == NULL || ctx->input_length == 0U) {
+  if (ctx == NULL || !session_transport_active(ctx) || ctx->input_length == 0U) {
     return;
   }
 
@@ -10815,7 +11181,7 @@ static bool session_try_command_completion(session_ctx_t *ctx) {
   }
 
   if (match_count == 0U) {
-    if (ctx->channel != NULL) {
+    if (session_transport_active(ctx)) {
       const char bell = '\a';
       session_channel_write(ctx, &bell, 1U);
     }
@@ -11014,7 +11380,7 @@ static void session_history_navigate(session_ctx_t *ctx, int direction) {
 }
 
 static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
-  if (ctx == NULL || ctx->owner == NULL || ctx->channel == NULL || direction == 0) {
+  if (ctx == NULL || ctx->owner == NULL || !session_transport_active(ctx) || direction == 0) {
     return;
   }
 
@@ -11322,7 +11688,7 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch) {
 
 static void session_send_private_message_line(session_ctx_t *ctx, const session_ctx_t *color_source, const char *label,
                                               const char *message) {
-  if (ctx == NULL || ctx->channel == NULL || color_source == NULL || label == NULL || message == NULL) {
+  if (ctx == NULL || !session_transport_active(ctx) || color_source == NULL || label == NULL || message == NULL) {
     return;
   }
 
@@ -11340,7 +11706,7 @@ static void session_send_private_message_line(session_ctx_t *ctx, const session_
 }
 
 static void session_send_history_entry(session_ctx_t *ctx, const chat_history_entry_t *entry) {
-  if (ctx == NULL || ctx->channel == NULL || entry == NULL) {
+  if (ctx == NULL || !session_transport_active(ctx) || entry == NULL) {
     return;
   }
 
@@ -11631,7 +11997,7 @@ static const char *chat_attachment_type_label(chat_attachment_type_t type) {
 }
 
 static void session_send_history(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->owner == NULL || ctx->channel == NULL) {
+  if (ctx == NULL || ctx->owner == NULL || !session_transport_active(ctx)) {
     return;
   }
 
@@ -11766,7 +12132,7 @@ static int session_accept_channel(session_ctx_t *ctx) {
     ssh_message_free(message);
   }
 
-  return ctx->channel != NULL ? 0 : -1;
+  return session_transport_active(ctx) ? 0 : -1;
 }
 
 static int session_prepare_shell(session_ctx_t *ctx) {
@@ -11820,7 +12186,7 @@ static void host_update_last_captcha_prompt(host_t *host, const captcha_prompt_t
 }
 
 static bool session_run_captcha(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->channel == NULL) {
+  if (ctx == NULL || !session_transport_active(ctx)) {
     return false;
   }
 
@@ -11846,7 +12212,7 @@ static bool session_run_captcha(session_ctx_t *ctx) {
   size_t length = 0U;
   while (length + 1U < sizeof(answer)) {
     char ch = '\0';
-    const int read_result = ssh_channel_read(ctx->channel, &ch, 1, 0);
+    const int read_result = session_transport_read(ctx, &ch, 1, -1);
     if (read_result <= 0) {
       return false;
     }
@@ -12211,7 +12577,8 @@ static void session_handle_kick(session_ctx_t *ctx, const char *arguments) {
   host_history_record_system(ctx->owner, notice);
   chat_room_broadcast(&ctx->owner->room, notice, NULL);
 
-  if (target->channel == NULL || target->session == NULL) {
+  const bool target_active = session_transport_active(target);
+  if (!target_active || (target->transport_kind == SESSION_TRANSPORT_SSH && target->session == NULL)) {
     target->should_exit = true;
     target->has_joined_room = false;
     chat_room_remove(&ctx->owner->room, target);
@@ -12219,8 +12586,7 @@ static void session_handle_kick(session_ctx_t *ctx, const char *arguments) {
   } else {
     session_send_system_line(target, "You have been kicked by an operator.");
     target->should_exit = true;
-    ssh_channel_send_eof(target->channel);
-    ssh_channel_close(target->channel);
+    session_transport_request_close(target);
     target->has_joined_room = false;
     chat_room_remove(&ctx->owner->room, target);
     session_send_system_line(ctx, "User removed from the chat.");
@@ -12286,13 +12652,12 @@ static void session_handle_ban(session_ctx_t *ctx, const char *arguments) {
   session_send_system_line(ctx, "Ban applied.");
   printf("[ban] %s banned %s (%s)\n", ctx->user.name, target->user.name, target_ip[0] != '\0' ? target_ip : "unknown");
 
-  if (target->channel != NULL) {
+  if (session_transport_active(target)) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(message, sizeof(message), "You have been banned by [%s].", ctx->user.name);
     session_send_system_line(target, message);
     target->should_exit = true;
-    ssh_channel_send_eof(target->channel);
-    ssh_channel_close(target->channel);
+    session_transport_request_close(target);
   }
 }
 
@@ -17013,13 +17378,21 @@ static void session_game_suspend(session_ctx_t *ctx, const char *reason) {
 }
 
 static int session_channel_read_poll(session_ctx_t *ctx, char *buffer, size_t length, int timeout_ms) {
-  if (ctx == NULL || ctx->channel == NULL || buffer == NULL || length == 0U) {
+  if (ctx == NULL || buffer == NULL || length == 0U || !session_transport_active(ctx)) {
     return SSH_ERROR;
+  }
+
+  if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+    int result = session_transport_read(ctx, buffer, length, timeout_ms);
+    if (result == SSH_AGAIN) {
+      return SESSION_CHANNEL_TIMEOUT;
+    }
+    return result;
   }
 
   int fd = ssh_get_fd(ctx->session);
   if (fd < 0) {
-    return ssh_channel_read(ctx->channel, buffer, length, 0);
+    return session_transport_read(ctx, buffer, length, -1);
   }
 
   struct pollfd pfd;
@@ -17048,7 +17421,7 @@ static int session_channel_read_poll(session_ctx_t *ctx, char *buffer, size_t le
     return SESSION_CHANNEL_TIMEOUT;
   }
 
-  return ssh_channel_read(ctx->channel, buffer, length, 0);
+  return session_transport_read(ctx, buffer, length, -1);
 }
 
 static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count) {
@@ -18662,9 +19035,7 @@ static void session_force_disconnect(session_ctx_t *ctx, const char *reason) {
   }
   session_translation_clear_queue(ctx);
 
-  if (ctx->channel != NULL) {
-    ssh_channel_send_eof(ctx->channel);
-  }
+  session_transport_request_close(ctx);
 }
 
 static void session_handle_exit(session_ctx_t *ctx) {
@@ -20005,15 +20376,76 @@ static bool parse_bool_token(const char *token, bool *value) {
 }
 
 static bool session_transport_active(const session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->session == NULL) {
+  if (ctx == NULL) {
     return false;
   }
 
-  return ssh_get_fd(ctx->session) >= 0;
+  if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+    return ctx->telnet_fd >= 0 && !ctx->telnet_eof;
+  }
+
+  return ctx->channel != NULL;
+}
+
+static bool session_transport_is_open(const session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+    return ctx->telnet_fd >= 0 && !ctx->telnet_eof;
+  }
+
+  return ctx->channel != NULL && ssh_channel_is_open(ctx->channel);
+}
+
+static bool session_transport_is_eof(const session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return true;
+  }
+
+  if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+    return ctx->telnet_eof || ctx->telnet_fd < 0;
+  }
+
+  return ctx->channel == NULL || ssh_channel_is_eof(ctx->channel);
+}
+
+static void session_transport_request_close(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+    if (ctx->telnet_fd >= 0) {
+      shutdown(ctx->telnet_fd, SHUT_RDWR);
+    }
+    ctx->telnet_eof = true;
+    return;
+  }
+
+  if (ctx->channel != NULL) {
+    ssh_channel_send_eof(ctx->channel);
+    ssh_channel_close(ctx->channel);
+  }
 }
 
 static void session_close_channel(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->channel == NULL) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+    if (ctx->telnet_fd >= 0) {
+      shutdown(ctx->telnet_fd, SHUT_RDWR);
+      close(ctx->telnet_fd);
+      ctx->telnet_fd = -1;
+    }
+    ctx->telnet_eof = true;
+    return;
+  }
+
+  if (ctx->channel == NULL) {
     return;
   }
 
@@ -20063,6 +20495,240 @@ static void session_reset_for_retry(session_ctx_t *ctx) {
   ctx->last_message_time.tv_nsec = 0;
 }
 
+static int host_telnet_open_socket(host_t *host) {
+  if (host == NULL || host->telnet.port[0] == '\0') {
+    return -1;
+  }
+
+  struct addrinfo hints;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;
+
+  const char *bind_addr = host->telnet.bind_address[0] != '\0' ? host->telnet.bind_address : NULL;
+  struct addrinfo *result = NULL;
+  int rc = getaddrinfo(bind_addr, host->telnet.port, &hints, &result);
+  if (rc != 0) {
+    printf("[telnet] failed to resolve %s:%s (%s)\n", bind_addr != NULL ? bind_addr : "*", host->telnet.port,
+           gai_strerror(rc));
+    return -1;
+  }
+
+  int fd = -1;
+  for (struct addrinfo *ai = result; ai != NULL; ai = ai->ai_next) {
+    int candidate = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (candidate < 0) {
+      continue;
+    }
+
+    int enable = 1;
+    setsockopt(candidate, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable));
+
+    if (bind(candidate, ai->ai_addr, ai->ai_addrlen) != 0) {
+      close(candidate);
+      continue;
+    }
+
+    if (listen(candidate, 16) != 0) {
+      close(candidate);
+      continue;
+    }
+
+    fd = candidate;
+    break;
+  }
+
+  freeaddrinfo(result);
+  return fd;
+}
+
+static void *host_telnet_thread(void *arg) {
+  host_t *host = (host_t *)arg;
+  if (host == NULL) {
+    return NULL;
+  }
+
+  atomic_store(&host->telnet.running, true);
+
+  while (!atomic_load(&host->telnet.stop)) {
+    if (host->telnet.fd < 0) {
+      int fd = host_telnet_open_socket(host);
+      if (fd < 0) {
+        struct timespec backoff = {.tv_sec = 1, .tv_nsec = 0};
+        nanosleep(&backoff, NULL);
+        continue;
+      }
+
+      host->telnet.fd = fd;
+      const char *display_addr = host->telnet.bind_address[0] != '\0' ? host->telnet.bind_address : "*";
+      printf("[telnet] listening on %s:%s\n", display_addr, host->telnet.port);
+    }
+
+    struct sockaddr_storage addr;
+    socklen_t addr_len = sizeof(addr);
+    int client_fd = accept(host->telnet.fd, (struct sockaddr *)&addr, &addr_len);
+    if (client_fd < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      if (atomic_load(&host->telnet.stop)) {
+        break;
+      }
+      humanized_log_error("telnet", "accept failed", errno);
+      struct timespec backoff = {.tv_sec = 1, .tv_nsec = 0};
+      nanosleep(&backoff, NULL);
+      continue;
+    }
+
+    if (atomic_load(&host->telnet.stop)) {
+      close(client_fd);
+      break;
+    }
+
+    int flag = 1;
+    setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+
+    char peer_address[NI_MAXHOST];
+    host_format_sockaddr((struct sockaddr *)&addr, addr_len, peer_address, sizeof(peer_address));
+    if (peer_address[0] == '\0') {
+      snprintf(peer_address, sizeof(peer_address), "%s", "unknown");
+    }
+
+    printf("[telnet] accepted client from %s\n", peer_address);
+
+    session_ctx_t *ctx = calloc(1U, sizeof(session_ctx_t));
+    if (ctx == NULL) {
+      humanized_log_error("telnet", "failed to allocate session context", ENOMEM);
+      close(client_fd);
+      continue;
+    }
+
+    ctx->transport_kind = SESSION_TRANSPORT_TELNET;
+    ctx->telnet_fd = client_fd;
+    ctx->telnet_negotiated = false;
+    ctx->telnet_eof = false;
+    ctx->telnet_pending_valid = false;
+    ctx->owner = host;
+    ctx->auth = (auth_profile_t){0};
+    snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
+    ctx->input_mode = SESSION_INPUT_MODE_CHAT;
+
+    pthread_mutex_lock(&host->lock);
+    ++host->connection_count;
+    snprintf(ctx->user.name, sizeof(ctx->user.name), "Guest%zu", host->connection_count);
+    ctx->user.is_operator = false;
+    ctx->user.is_lan_operator = false;
+    pthread_mutex_unlock(&host->lock);
+
+    pthread_t thread_id;
+    if (pthread_create(&thread_id, NULL, session_thread, ctx) != 0) {
+      humanized_log_error("telnet", "failed to spawn session thread", errno);
+      session_cleanup(ctx);
+      continue;
+    }
+
+    pthread_detach(thread_id);
+  }
+
+  int listener_fd = host->telnet.fd;
+  host->telnet.fd = -1;
+  if (listener_fd >= 0) {
+    close(listener_fd);
+  }
+
+  atomic_store(&host->telnet.running, false);
+  return NULL;
+}
+
+static bool host_telnet_listener_start(host_t *host, const char *bind_addr, const char *port) {
+  if (host == NULL || port == NULL || port[0] == '\0') {
+    return false;
+  }
+
+  if (host->telnet.thread_initialized) {
+    const bool same_port = strncmp(host->telnet.port, port, sizeof(host->telnet.port)) == 0;
+    bool same_bind = false;
+    if (bind_addr == NULL || bind_addr[0] == '\0') {
+      same_bind = host->telnet.bind_address[0] == '\0';
+    } else {
+      same_bind = strncmp(host->telnet.bind_address, bind_addr, sizeof(host->telnet.bind_address)) == 0;
+    }
+
+    if (same_port && same_bind && atomic_load(&host->telnet.running)) {
+      const char *display_addr = host->telnet.bind_address[0] != '\0' ? host->telnet.bind_address : "*";
+      printf("[telnet] listener already active on %s:%s\n", display_addr, host->telnet.port);
+      return true;
+    }
+
+    host_telnet_listener_stop(host);
+  }
+
+  if (bind_addr != NULL && bind_addr[0] != '\0') {
+    snprintf(host->telnet.bind_address, sizeof(host->telnet.bind_address), "%s", bind_addr);
+  } else {
+    host->telnet.bind_address[0] = '\0';
+  }
+  snprintf(host->telnet.port, sizeof(host->telnet.port), "%s", port);
+  host->telnet.enabled = true;
+  host->telnet.fd = -1;
+  host->telnet.restart_attempts = 0U;
+  host->telnet.last_error_time.tv_sec = 0;
+  host->telnet.last_error_time.tv_nsec = 0L;
+  atomic_store(&host->telnet.stop, false);
+
+  if (pthread_create(&host->telnet.thread, NULL, host_telnet_thread, host) != 0) {
+    humanized_log_error("telnet", "failed to start telnet listener", errno);
+    host->telnet.enabled = false;
+    return false;
+  }
+
+  host->telnet.thread_initialized = true;
+  return true;
+}
+
+static void host_telnet_listener_stop(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (!host->telnet.thread_initialized) {
+    host->telnet.enabled = false;
+    host->telnet.fd = -1;
+    host->telnet.bind_address[0] = '\0';
+    host->telnet.port[0] = '\0';
+    atomic_store(&host->telnet.running, false);
+    atomic_store(&host->telnet.stop, false);
+    return;
+  }
+
+  const char *display_addr = host->telnet.bind_address[0] != '\0' ? host->telnet.bind_address : "*";
+  printf("[telnet] stopping listener on %s:%s\n", display_addr, host->telnet.port);
+
+  atomic_store(&host->telnet.stop, true);
+  if (host->telnet.fd >= 0) {
+    shutdown(host->telnet.fd, SHUT_RDWR);
+  }
+
+  int join_result = pthread_join(host->telnet.thread, NULL);
+  if (join_result != 0) {
+    humanized_log_error("telnet", "failed to join telnet listener", join_result);
+  }
+
+  host->telnet.thread_initialized = false;
+  host->telnet.enabled = false;
+  atomic_store(&host->telnet.running, false);
+  atomic_store(&host->telnet.stop, false);
+
+  if (host->telnet.fd >= 0) {
+    close(host->telnet.fd);
+    host->telnet.fd = -1;
+  }
+
+  host->telnet.bind_address[0] = '\0';
+  host->telnet.port[0] = '\0';
+}
+
 static bool session_attempt_handshake_restart(session_ctx_t *ctx, unsigned int *attempts) {
   if (ctx == NULL || attempts == NULL) {
     return false;
@@ -20094,7 +20760,7 @@ static void session_cleanup(session_ctx_t *ctx) {
   }
 
   session_translation_worker_shutdown(ctx);
-  if (ctx->channel != NULL) {
+  if (ctx->transport_kind == SESSION_TRANSPORT_SSH && ctx->channel != NULL) {
     ssh_channel_request_send_exit_status(ctx->channel, ctx->exit_status);
   }
   session_close_channel(ctx);
@@ -20119,7 +20785,12 @@ static void *session_thread(void *arg) {
 
   bool authenticated = false;
   unsigned int handshake_retries = 0U;
-  while (true) {
+  if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+    session_telnet_initialize(ctx);
+    authenticated = true;
+  }
+
+  while (ctx->transport_kind == SESSION_TRANSPORT_SSH) {
     if (!authenticated) {
       if (session_authenticate(ctx) != 0) {
         humanized_log_error("session", "authentication failed", EACCES);
@@ -20244,27 +20915,17 @@ static void *session_thread(void *arg) {
   while (!ctx->should_exit) {
     session_translation_flush_ready(ctx);
 
-    int read_result = ssh_channel_read_timeout(ctx->channel, buffer, sizeof(buffer) - 1U, 0, 200);
+    int read_result = session_transport_read(ctx, buffer, sizeof(buffer) - 1U, 200);
     if (read_result == SSH_AGAIN) {
       if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS) {
         session_game_tetris_process_timeout(ctx);
       }
       continue;
     }
-    if (read_result == SSH_ERROR || read_result == SSH_EOF) {
-      break;
-    }
-    if (read_result == 0) {
-      if (ctx->channel != NULL && (ssh_channel_is_eof(ctx->channel) || !ssh_channel_is_open(ctx->channel))) {
+    if (read_result == SSH_ERROR) {
+      if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
         break;
       }
-      if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS) {
-        session_game_tetris_process_timeout(ctx);
-      }
-      continue;
-    }
-
-    if (read_result < 0) {
       read_result = session_channel_read_poll(ctx, buffer, sizeof(buffer) - 1U, poll_timeout_ms);
       if (read_result == SESSION_CHANNEL_TIMEOUT) {
         ctx->channel_error_retries = 0U;
@@ -20311,6 +20972,17 @@ static void *session_thread(void *arg) {
         }
         break;
       }
+      continue;
+    }
+
+    if (read_result == 0) {
+      if (!session_transport_is_open(ctx) || session_transport_is_eof(ctx)) {
+        break;
+      }
+      if (ctx->game.active && ctx->game.type == SESSION_GAME_TETRIS) {
+        session_game_tetris_process_timeout(ctx);
+      }
+      continue;
     }
 
     ctx->channel_error_retries = 0U;
@@ -20529,6 +21201,16 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->listener.restart_attempts = 0U;
   host->listener.last_error_time.tv_sec = 0;
   host->listener.last_error_time.tv_nsec = 0L;
+  host->telnet.enabled = false;
+  host->telnet.fd = -1;
+  host->telnet.thread_initialized = false;
+  atomic_store(&host->telnet.running, false);
+  atomic_store(&host->telnet.stop, false);
+  host->telnet.restart_attempts = 0U;
+  host->telnet.last_error_time.tv_sec = 0;
+  host->telnet.last_error_time.tv_nsec = 0L;
+  host->telnet.bind_address[0] = '\0';
+  host->telnet.port[0] = '\0';
   host->auth = auth;
   host->clients = NULL;
   host->web_client = NULL;
@@ -21071,6 +21753,8 @@ void host_shutdown(host_t *host) {
     return;
   }
 
+  host_telnet_listener_stop(host);
+
   if (host->rss_thread_initialized) {
     atomic_store(&host->rss_thread_stop, true);
     pthread_join(host->rss_thread, NULL);
@@ -21118,13 +21802,30 @@ void host_shutdown(host_t *host) {
   pthread_mutex_unlock(&host->room.lock);
 }
 
-int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory) {
+int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory,
+               const char *telnet_bind_addr, const char *telnet_port) {
   if (host == NULL) {
     return -1;
   }
 
-  const char *address = bind_addr != NULL ? bind_addr : "0.0.0.0";
-  const char *bind_port = port != NULL ? port : "2222";
+  const char *address = (bind_addr != NULL && bind_addr[0] != '\0') ? bind_addr : "0.0.0.0";
+  const char *bind_port = (port != NULL && port[0] != '\0') ? port : "2222";
+  const char *telnet_bind = NULL;
+  if (telnet_bind_addr != NULL) {
+    telnet_bind = telnet_bind_addr;
+  } else if (bind_addr != NULL && bind_addr[0] != '\0') {
+    telnet_bind = bind_addr;
+  } else {
+    telnet_bind = address;
+  }
+  if (telnet_port != NULL && telnet_port[0] != '\0') {
+    if (!host_telnet_listener_start(host, telnet_bind, telnet_port)) {
+      const char *display_addr = (telnet_bind != NULL && telnet_bind[0] != '\0') ? telnet_bind : "*";
+      printf("[telnet] telnet listener unavailable on %s:%s\n", display_addr, telnet_port);
+    }
+  } else {
+    host_telnet_listener_stop(host);
+  }
   const bool key_dir_specified = key_directory != NULL && key_directory[0] != '\0';
   const host_key_definition_t host_key_definitions[] = {
       {"ssh-ed25519", "ssh_host_ed25519_key", SSH_BIND_OPTIONS_IMPORT_KEY, true},
@@ -21379,6 +22080,10 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 
       ctx->session = session;
       ctx->channel = NULL;
+      ctx->transport_kind = SESSION_TRANSPORT_SSH;
+      ctx->telnet_fd = -1;
+      ctx->telnet_eof = false;
+      ctx->telnet_pending_valid = false;
       ctx->owner = host;
       ctx->auth = (auth_profile_t){0};
       snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);

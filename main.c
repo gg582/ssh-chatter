@@ -13,7 +13,7 @@
 
 static void print_usage(const char *prog_name) {
   fprintf(stderr,
-          "Usage: %s [-a address] [-p port] [-m motd_file] [-k host_key_dir]\n"
+          "Usage: %s [-a address] [-p port] [-m motd_file] [-k host_key_dir] [-T telnet_port|off]\n"
           "       %s [-h]\n"
           "       %s [-V]\n",
           prog_name, prog_name, prog_name);
@@ -26,9 +26,16 @@ int main(int argc, char **argv) {
   const char *bind_port = NULL;
   const char *motd = NULL;
   const char *host_key_dir = NULL;
+  const char *telnet_port = "2323";
+  bool telnet_enabled = true;
+  char telnet_bind_storage[64];
+  telnet_bind_storage[0] = '\0';
+  bool telnet_bind_overridden = false;
+  char telnet_port_storage[16];
+  telnet_port_storage[0] = '\0';
 
   int opt = 0;
-  while ((opt = getopt(argc, argv, "a:p:m:k:hV")) != -1) {
+  while ((opt = getopt(argc, argv, "a:p:m:k:T:hV")) != -1) {
     switch (opt) {
       case 'a':
         bind_address = optarg;
@@ -42,6 +49,55 @@ int main(int argc, char **argv) {
       case 'k':
         host_key_dir = optarg;
         break;
+      case 'T':
+        if (optarg != NULL &&
+            (strcmp(optarg, "off") == 0 || strcmp(optarg, "disable") == 0 || strcmp(optarg, "none") == 0)) {
+          telnet_enabled = false;
+          telnet_port = NULL;
+          telnet_bind_overridden = false;
+        } else if (optarg != NULL) {
+          const char *value = optarg;
+          const char *colon = strchr(value, ':');
+          if (colon != NULL) {
+            size_t host_len = (size_t)(colon - value);
+            if (host_len >= sizeof(telnet_bind_storage)) {
+              fprintf(stderr, "telnet bind address is too long\n");
+              return EXIT_FAILURE;
+            }
+
+            memcpy(telnet_bind_storage, value, host_len);
+            telnet_bind_storage[host_len] = '\0';
+            telnet_bind_overridden = true;
+
+            const char *port_part = colon + 1;
+            if (port_part[0] == '\0') {
+              telnet_port = "2323";
+            } else {
+              size_t port_len = strlen(port_part);
+              if (port_len >= sizeof(telnet_port_storage)) {
+                fprintf(stderr, "telnet port is too long\n");
+                return EXIT_FAILURE;
+              }
+              memcpy(telnet_port_storage, port_part, port_len + 1);
+              telnet_port = telnet_port_storage;
+            }
+          } else {
+            telnet_bind_overridden = false;
+            if (value[0] == '\0') {
+              telnet_port = "2323";
+            } else {
+              size_t port_len = strlen(value);
+              if (port_len >= sizeof(telnet_port_storage)) {
+                fprintf(stderr, "telnet port is too long\n");
+                return EXIT_FAILURE;
+              }
+              memcpy(telnet_port_storage, value, port_len + 1);
+              telnet_port = telnet_port_storage;
+            }
+          }
+          telnet_enabled = true;
+        }
+        break;
       case 'h':
         print_usage(argv[0]);
         return EXIT_SUCCESS;
@@ -53,6 +109,15 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
   }
+
+  if (!telnet_enabled) {
+    telnet_port = NULL;
+    telnet_bind_overridden = false;
+  } else if (telnet_port != NULL && telnet_port[0] == '\0') {
+    telnet_port = "2323";
+  }
+
+  const char *telnet_bind_address = telnet_bind_overridden ? telnet_bind_storage : NULL;
 
   auth_profile_t default_profile = {0};
   unsigned int restart_attempts = 0U;
@@ -75,7 +140,7 @@ int main(int argc, char **argv) {
     printf("Starting ssh-chatter on %s:%s\n", address, port);
 
     errno = 0;
-    const int serve_result = host_serve(host, bind_address, bind_port, host_key_dir);
+    const int serve_result = host_serve(host, bind_address, bind_port, host_key_dir, telnet_bind_address, telnet_port);
     const int serve_errno = errno;
 
     host_shutdown(host);
