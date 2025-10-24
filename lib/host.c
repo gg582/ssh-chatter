@@ -72,7 +72,7 @@
 #define SSH_CHATTER_TETROMINO_SIZE 4
 #define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT ((unsigned int)INT_MAX)
 #define SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_DISPLAY \
-  "ssh-rsa, ssh-ed25519, ecdsa-sha2-nistp256"
+  "rsa-sha2-512, rsa-sha2-256, ssh-rsa, ssh-ed25519, ecdsa-sha2-nistp256"
 #define SSH_CHATTER_SUPPORTED_KEX_ALGORITHMS                                                     \
   "curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,"       \
   "ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256,"      \
@@ -80,6 +80,8 @@
 #define SSH_CHATTER_BIRTHDAY_WINDOW_SECONDS (7 * 24 * 60 * 60)
 
 static const char *const SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS[] = {
+    "rsa-sha2-512",
+    "rsa-sha2-256",
     "ssh-rsa",
     "ssh-ed25519",
     "ecdsa-sha2-nistp256",
@@ -587,8 +589,12 @@ static bool host_join_key_path(const char *directory, const char *filename, char
   return true;
 }
 
-static void host_bind_append_algorithm(char *buffer, size_t buffer_len, size_t *current_len,
-                                       const char *algorithm) {
+static bool host_bind_algorithm_is_rsa(const char *algorithm) {
+  return algorithm != NULL && strcmp(algorithm, "ssh-rsa") == 0;
+}
+
+static void host_bind_append_single_algorithm(char *buffer, size_t buffer_len, size_t *current_len,
+                                              const char *algorithm) {
   if (buffer == NULL || current_len == NULL || algorithm == NULL || algorithm[0] == '\0' || buffer_len == 0U) {
     return;
   }
@@ -623,6 +629,20 @@ static void host_bind_append_algorithm(char *buffer, size_t buffer_len, size_t *
   memcpy(buffer + *current_len, algorithm, algorithm_length);
   *current_len += algorithm_length;
   buffer[*current_len] = '\0';
+}
+
+static void host_bind_append_algorithm(char *buffer, size_t buffer_len, size_t *current_len,
+                                       const char *algorithm) {
+  if (buffer == NULL || current_len == NULL || algorithm == NULL || algorithm[0] == '\0' || buffer_len == 0U) {
+    return;
+  }
+
+  if (host_bind_algorithm_is_rsa(algorithm)) {
+    host_bind_append_single_algorithm(buffer, buffer_len, current_len, "rsa-sha2-512");
+    host_bind_append_single_algorithm(buffer, buffer_len, current_len, "rsa-sha2-256");
+  }
+
+  host_bind_append_single_algorithm(buffer, buffer_len, current_len, algorithm);
 }
 
 static bool host_bind_import_key(ssh_bind bind_handle, const char *algorithm, const char *key_path) {
