@@ -122,7 +122,7 @@ Set `GEMINI_API_KEY` (and optionally `GEMINI_API_BASE` or `GEMINI_MODEL`) in the
 The server defaults to listening on `0.0.0.0:2222`.  You can adjust runtime parameters with the available flags:
 
 ```
-Usage: ./ssh-chatter [-a address] [-p port] [-m motd_file] [-k host_key_dir]
+Usage: ./ssh-chatter [-a address] [-p port] [-m motd_file] [-k host_key_dir] [-T telnet_port|off]
        ./ssh-chatter [-h]
        ./ssh-chatter [-V]
 ```
@@ -134,6 +134,9 @@ Common examples:
 ```bash
 # Start the chat server on port 2022, loading host keys from /etc/ssh
 ./ssh-chatter -p 2022 -k /etc/ssh
+
+# Enable telnet access on port 4242 alongside SSH
+./ssh-chatter -T 4242
 
 # Serve a custom MOTD from a file and bind to localhost
 ./ssh-chatter -a 127.0.0.1 -m /etc/ssh-chatter/motd
@@ -156,6 +159,14 @@ ssh -p 22 yourname@chat.korokorok.com
 ```
 
 Usernames provided at the SSH prompt are used as your chat nickname.
+
+Telnet clients can join with the same feature set. Telnet listening is enabled by default on port `2323` and can be adjusted or disabled with the `-T` flag. For example, to join over telnet from a retro terminal:
+
+```bash
+telnet server-address 2323
+```
+
+Pass `-T off` (or `-T disable`) to turn the telnet listener off entirely.
 
 ## Installing as a systemd service
 

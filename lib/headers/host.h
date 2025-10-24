@@ -223,6 +223,11 @@ typedef struct session_game_state {
   bool rng_seeded;
 } session_game_state_t;
 
+typedef enum session_transport_kind {
+  SESSION_TRANSPORT_SSH = 0,
+  SESSION_TRANSPORT_TELNET,
+} session_transport_kind_t;
+
 typedef enum session_input_mode {
   SESSION_INPUT_MODE_CHAT = 0,
   SESSION_INPUT_MODE_COMMAND,
@@ -256,6 +261,12 @@ typedef struct session_rss_view {
 typedef struct session_ctx {
   ssh_session session;
   ssh_channel channel;
+  session_transport_kind_t transport_kind;
+  int telnet_fd;
+  bool telnet_negotiated;
+  bool telnet_eof;
+  bool telnet_pending_valid;
+  int telnet_pending_char;
   chat_user_t user;
   auth_profile_t auth;
   struct host *owner;
@@ -425,6 +436,18 @@ typedef struct bbs_post {
 typedef struct host {
   chat_room_t room;
   ssh_listener_t listener;
+  struct {
+    bool enabled;
+    int fd;
+    pthread_t thread;
+    bool thread_initialized;
+    _Atomic bool running;
+    _Atomic bool stop;
+    unsigned int restart_attempts;
+    struct timespec last_error_time;
+    char bind_address[64];
+    char port[16];
+  } telnet;
   auth_profile_t *auth;
   UserTheme user_theme;
   SystemTheme system_theme;
@@ -521,7 +544,8 @@ typedef struct host {
 
 void host_init(host_t *host, auth_profile_t *auth);
 void host_set_motd(host_t *host, const char *motd);
-int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory);
+int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory,
+               const char *telnet_port);
 bool host_post_client_message(host_t *host, const char *username, const char *message, const char *color_name,
                              const char *highlight_name, bool is_bold);
 void host_shutdown(host_t *host);

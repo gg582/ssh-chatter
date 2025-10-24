@@ -13,7 +13,7 @@
 
 static void print_usage(const char *prog_name) {
   fprintf(stderr,
-          "Usage: %s [-a address] [-p port] [-m motd_file] [-k host_key_dir]\n"
+          "Usage: %s [-a address] [-p port] [-m motd_file] [-k host_key_dir] [-T telnet_port|off]\n"
           "       %s [-h]\n"
           "       %s [-V]\n",
           prog_name, prog_name, prog_name);
@@ -26,9 +26,11 @@ int main(int argc, char **argv) {
   const char *bind_port = NULL;
   const char *motd = NULL;
   const char *host_key_dir = NULL;
+  const char *telnet_port = "2323";
+  bool telnet_enabled = true;
 
   int opt = 0;
-  while ((opt = getopt(argc, argv, "a:p:m:k:hV")) != -1) {
+  while ((opt = getopt(argc, argv, "a:p:m:k:T:hV")) != -1) {
     switch (opt) {
       case 'a':
         bind_address = optarg;
@@ -42,6 +44,16 @@ int main(int argc, char **argv) {
       case 'k':
         host_key_dir = optarg;
         break;
+      case 'T':
+        if (optarg != NULL &&
+            (strcmp(optarg, "off") == 0 || strcmp(optarg, "disable") == 0 || strcmp(optarg, "none") == 0)) {
+          telnet_enabled = false;
+          telnet_port = NULL;
+        } else {
+          telnet_port = optarg;
+          telnet_enabled = true;
+        }
+        break;
       case 'h':
         print_usage(argv[0]);
         return EXIT_SUCCESS;
@@ -52,6 +64,12 @@ int main(int argc, char **argv) {
         print_usage(argv[0]);
         return EXIT_FAILURE;
     }
+  }
+
+  if (!telnet_enabled) {
+    telnet_port = NULL;
+  } else if (telnet_port != NULL && telnet_port[0] == '\0') {
+    telnet_port = "2323";
   }
 
   auth_profile_t default_profile = {0};
@@ -75,7 +93,7 @@ int main(int argc, char **argv) {
     printf("Starting ssh-chatter on %s:%s\n", address, port);
 
     errno = 0;
-    const int serve_result = host_serve(host, bind_address, bind_port, host_key_dir);
+    const int serve_result = host_serve(host, bind_address, bind_port, host_key_dir, telnet_port);
     const int serve_errno = errno;
 
     host_shutdown(host);
