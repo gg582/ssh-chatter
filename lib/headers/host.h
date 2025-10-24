@@ -29,6 +29,7 @@
 #define SSH_CHATTER_COLOR_NAME_LEN 32
 #define ALPHA_GRAVITY_NAME_LEN 32
 #define ALPHA_MAX_GRAVITY_SOURCES 16
+#define ALPHA_MAX_WAYPOINTS 4U
 #define SSH_CHATTER_MAX_BANS 128
 #define SSH_CHATTER_HISTORY_LIMIT 64
 #define SSH_CHATTER_INPUT_HISTORY_LIMIT 64
@@ -230,6 +231,14 @@ typedef struct alpha_gravity_source {
   char name[ALPHA_GRAVITY_NAME_LEN];
 } alpha_gravity_source_t;
 
+typedef struct alpha_waypoint {
+  int x;
+  int y;
+  char symbol;
+  bool visited;
+  char name[ALPHA_GRAVITY_NAME_LEN];
+} alpha_waypoint_t;
+
 typedef struct alpha_centauri_game_state {
   bool active;
   unsigned stage;
@@ -254,6 +263,10 @@ typedef struct alpha_centauri_game_state {
   unsigned nav_required_ticks;
   unsigned gravity_source_count;
   alpha_gravity_source_t gravity_sources[ALPHA_MAX_GRAVITY_SOURCES];
+  unsigned waypoint_count;
+  unsigned waypoint_index;
+  alpha_waypoint_t waypoints[ALPHA_MAX_WAYPOINTS];
+  alpha_waypoint_t final_waypoint;
 } alpha_centauri_game_state_t;
 
 typedef struct session_game_state {
