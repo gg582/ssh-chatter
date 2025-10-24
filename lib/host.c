@@ -8168,6 +8168,15 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
   snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s",
            snapshot.input_translation_language);
   }
+  ctx->output_translation_enabled = snapshot.output_translation_enabled;
+  snprintf(ctx->output_translation_language, sizeof(ctx->output_translation_language), "%s",
+           snapshot.output_translation_language);
+  ctx->input_translation_enabled = snapshot.input_translation_enabled;
+  snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s",
+           snapshot.input_translation_language);
+  }
+
+  (void)session_user_data_load(ctx);
 
   (void)session_user_data_load(ctx);
 
