@@ -341,6 +341,7 @@ typedef struct session_ctx {
   bool input_escape_active;
   char input_escape_buffer[8];
   size_t input_escape_length;
+  bool bracket_paste_active;
   char client_ip[SSH_CHATTER_IP_LEN];
   const char *user_color_code;
   const char *user_highlight_code;
