@@ -146,6 +146,14 @@ static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
 #define ALPHA_STAR_MU 360.0
 #define ALPHA_PLANET_MU 65.0
 #define ALPHA_DEBRIS_MU 12.0
+#define ALPHA_MIN_WAYPOINTS 3U
+
+static const char *const kAlphaWaystationNames[] = {
+    "Relay Lyra",
+    "Depot Carina",
+    "Refuel Vesper",
+    "Outpost Helion",
+};
 
 #define TELNET_IAC 255
 #define TELNET_CMD_SE 240
@@ -1579,6 +1587,19 @@ static bool session_game_alpha_position_occupied(const alpha_centauri_game_state
       return true;
     }
   }
+  if (state->stage == 4U) {
+    if (!state->eva_ready) {
+      for (unsigned idx = 0U; idx < state->waypoint_count; ++idx) {
+        const alpha_waypoint_t *waypoint = &state->waypoints[idx];
+        if (waypoint->x == x && waypoint->y == y) {
+          return true;
+        }
+      }
+    }
+    if (state->final_waypoint.symbol != '\0' && state->final_waypoint.x == x && state->final_waypoint.y == y) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -1654,6 +1675,9 @@ static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line)
 static void session_game_alpha_log_completion(session_ctx_t *ctx);
 static void session_game_alpha_render_navigation(session_ctx_t *ctx);
 static void session_game_alpha_refresh_navigation(session_ctx_t *ctx);
+static void session_game_alpha_plan_waypoints(session_ctx_t *ctx);
+static void session_game_alpha_present_waypoints(session_ctx_t *ctx);
+static void session_game_alpha_complete_waypoint(session_ctx_t *ctx);
 static bool session_game_alpha_handle_arrow(session_ctx_t *ctx, int dx, int dy);
 static void session_game_alpha_execute_ignite(session_ctx_t *ctx);
 static void session_game_alpha_execute_trim(session_ctx_t *ctx);
@@ -18369,6 +18393,18 @@ static void session_game_alpha_configure_gravity(session_ctx_t *ctx) {
 
   double stage_multiplier = 1.0 + (double)state->stage * 0.25;
   const char *hole_name = state->stage >= 3 ? "Proxima Abyss" : "Core Singularity";
+  unsigned special_sources = 0U;
+  if (state->stage == 4U) {
+    if (!state->eva_ready || state->final_waypoint.symbol == '\0') {
+      session_game_alpha_plan_waypoints(ctx);
+    }
+    if (!state->eva_ready) {
+      special_sources += state->waypoint_count;
+    }
+    if (state->final_waypoint.symbol != '\0') {
+      ++special_sources;
+    }
+  }
   double hole_mu = ALPHA_BLACK_HOLE_MU * session_game_alpha_random_double(ctx, stage_multiplier,
                                                                           stage_multiplier + 0.75);
   session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN, hole_mu, ALPHA_NAV_MARGIN * 3, 'B', hole_name);
@@ -18381,7 +18417,11 @@ static void session_game_alpha_configure_gravity(session_ctx_t *ctx) {
     debris_count += 2;
   }
 
-  int available_slots = (int)ALPHA_MAX_GRAVITY_SOURCES - 1;
+  if (state->stage >= 4) {
+    planet_count = 0;
+  }
+
+  int available_slots = (int)ALPHA_MAX_GRAVITY_SOURCES - 1 - (int)special_sources;
   if (available_slots < 0) {
     available_slots = 0;
   }
@@ -18419,6 +18459,20 @@ static void session_game_alpha_configure_gravity(session_ctx_t *ctx) {
     const char *name = kAlphaDebrisCatalog[session_game_random_range(ctx, (int)ALPHA_DEBRIS_CATALOG_COUNT)];
     double mu = ALPHA_DEBRIS_MU * session_game_alpha_random_double(ctx, 0.5, 1.8) * stage_multiplier;
     session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN / 3, mu, ALPHA_NAV_MARGIN, 'D', name);
+  }
+
+  if (state->stage == 4U) {
+    if (!state->eva_ready) {
+      for (unsigned idx = 0U; idx < state->waypoint_count; ++idx) {
+        const alpha_waypoint_t *waypoint = &state->waypoints[idx];
+        session_game_alpha_add_gravity_source(state, waypoint->x, waypoint->y, ALPHA_PLANET_MU,
+                                              ALPHA_NAV_MARGIN * 2, waypoint->symbol, waypoint->name);
+      }
+    }
+    if (state->final_waypoint.symbol != '\0') {
+      session_game_alpha_add_gravity_source(state, state->final_waypoint.x, state->final_waypoint.y, ALPHA_PLANET_MU,
+                                            ALPHA_NAV_MARGIN * 2, state->final_waypoint.symbol, state->final_waypoint.name);
+    }
   }
 }
 
@@ -18570,16 +18624,29 @@ static void session_game_alpha_prepare_navigation(session_ctx_t *ctx) {
       break;
     case 4:
       if (!state->eva_ready) {
+        session_game_alpha_plan_waypoints(ctx);
+        if (state->waypoint_count == 0U) {
+          state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
+          state->nav_target_y = session_game_random_range(ctx, safe_margin + 5);
+        } else {
+          if (state->waypoint_index >= state->waypoint_count) {
+            state->waypoint_index = state->waypoint_count - 1U;
+          }
+          const alpha_waypoint_t *waypoint = &state->waypoints[state->waypoint_index];
+          state->nav_target_x = waypoint->x;
+          state->nav_target_y = waypoint->y;
+        }
         state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
         state->nav_y = session_game_random_range(ctx, safe_margin + 5);
-        state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
-        state->nav_target_y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, safe_margin + 5);
         state->nav_required_ticks = 4U;
       } else if (state->awaiting_flag) {
+        if (state->final_waypoint.symbol == '\0') {
+          session_game_alpha_plan_waypoints(ctx);
+        }
         state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
         state->nav_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
-        state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
-        state->nav_target_y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, safe_margin + 3);
+        state->nav_target_x = state->final_waypoint.x;
+        state->nav_target_y = state->final_waypoint.y;
         state->nav_required_ticks = 3U;
       } else {
         state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
@@ -18620,8 +18687,15 @@ static void session_game_alpha_prepare_navigation(session_ctx_t *ctx) {
   }
 
   if (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y) {
-    state->nav_target_x = (state->nav_target_x + (ALPHA_NAV_WIDTH / 2)) % ALPHA_NAV_WIDTH;
-    state->nav_target_y = (state->nav_target_y + (ALPHA_NAV_HEIGHT / 2)) % ALPHA_NAV_HEIGHT;
+    if (state->stage == 4U) {
+      state->nav_x = (state->nav_target_x + ALPHA_NAV_MARGIN) % ALPHA_NAV_WIDTH;
+      state->nav_y = (state->nav_target_y + ALPHA_NAV_MARGIN) % ALPHA_NAV_HEIGHT;
+      state->nav_fx = (double)state->nav_x;
+      state->nav_fy = (double)state->nav_y;
+    } else {
+      state->nav_target_x = (state->nav_target_x + (ALPHA_NAV_WIDTH / 2)) % ALPHA_NAV_WIDTH;
+      state->nav_target_y = (state->nav_target_y + (ALPHA_NAV_HEIGHT / 2)) % ALPHA_NAV_HEIGHT;
+    }
   }
 
   state->nav_fx = (double)state->nav_x;
@@ -18887,6 +18961,182 @@ static void session_game_alpha_refresh_navigation(session_ctx_t *ctx) {
   ctx->translation_suppress_output = previous_translation;
 }
 
+static void session_game_alpha_plan_waypoints(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA) {
+    return;
+  }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  if (state->stage != 4U) {
+    state->waypoint_count = 0U;
+    state->waypoint_index = 0U;
+    state->final_waypoint = (alpha_waypoint_t){0};
+    return;
+  }
+
+  size_t name_count = sizeof(kAlphaWaystationNames) / sizeof(kAlphaWaystationNames[0]);
+
+  if (!state->eva_ready && state->waypoint_count == 0U) {
+    unsigned desired = ALPHA_MIN_WAYPOINTS;
+    if (desired > ALPHA_MAX_WAYPOINTS) {
+      desired = ALPHA_MAX_WAYPOINTS;
+    }
+    state->waypoint_count = desired;
+    state->waypoint_index = 0U;
+
+    for (unsigned idx = 0U; idx < state->waypoint_count; ++idx) {
+      int x = 0;
+      int y = 0;
+      bool placed = false;
+      for (unsigned attempt = 0U; attempt < 96U && !placed; ++attempt) {
+        x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, ALPHA_NAV_MARGIN);
+        y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, ALPHA_NAV_MARGIN);
+        bool conflict = false;
+        for (unsigned prior = 0U; prior < idx; ++prior) {
+          const alpha_waypoint_t *existing = &state->waypoints[prior];
+          if (existing->x == x && existing->y == y) {
+            conflict = true;
+            break;
+          }
+        }
+        if (!conflict) {
+          placed = true;
+        }
+      }
+      if (!placed) {
+        x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, ALPHA_NAV_MARGIN);
+        y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, ALPHA_NAV_MARGIN);
+      }
+
+      alpha_waypoint_t *waypoint = &state->waypoints[idx];
+      waypoint->x = x;
+      waypoint->y = y;
+      waypoint->symbol = (char)('1' + (idx % 9));
+      waypoint->visited = false;
+      const char *name = name_count > 0 ? kAlphaWaystationNames[idx % name_count] : "Waystation";
+      snprintf(waypoint->name, sizeof(waypoint->name), "%s", name);
+    }
+  } else if (!state->eva_ready) {
+    for (unsigned idx = 0U; idx < state->waypoint_count; ++idx) {
+      alpha_waypoint_t *waypoint = &state->waypoints[idx];
+      if (waypoint->symbol == '\0') {
+        waypoint->symbol = (char)('1' + (idx % 9));
+      }
+    }
+  }
+
+  if (state->final_waypoint.symbol == '\0') {
+    int x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, ALPHA_NAV_MARGIN);
+    int y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, ALPHA_NAV_MARGIN + 4);
+    for (unsigned attempt = 0U; attempt < 96U; ++attempt) {
+      bool conflict = false;
+      for (unsigned idx = 0U; idx < state->waypoint_count; ++idx) {
+        const alpha_waypoint_t *waypoint = &state->waypoints[idx];
+        if (waypoint->x == x && waypoint->y == y) {
+          conflict = true;
+          break;
+        }
+      }
+      if (!conflict) {
+        break;
+      }
+      x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, ALPHA_NAV_MARGIN);
+      y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, ALPHA_NAV_MARGIN + 4);
+    }
+
+    state->final_waypoint.x = x;
+    state->final_waypoint.y = y;
+    state->final_waypoint.symbol = 'P';
+    state->final_waypoint.visited = false;
+    snprintf(state->final_waypoint.name, sizeof(state->final_waypoint.name), "%s", "Proxima Landing");
+  }
+}
+
+static void session_game_alpha_present_waypoints(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA) {
+    return;
+  }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  if (state->stage != 4U) {
+    return;
+  }
+
+  if (!state->eva_ready) {
+    if (state->waypoint_count == 0U) {
+      session_send_system_line(ctx, "Waystation manifest pending — reroll if the corridor looks blocked.");
+      return;
+    }
+
+    session_send_system_line(ctx, "Waystation manifest:");
+    for (unsigned idx = 0U; idx < state->waypoint_count; ++idx) {
+      const alpha_waypoint_t *waypoint = &state->waypoints[idx];
+      char line[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(line, sizeof(line), "  [%c] %c — %s%s", waypoint->visited ? 'x' : ' ', waypoint->symbol, waypoint->name,
+               idx == state->waypoint_index ? " ← current objective" : "");
+      session_send_system_line(ctx, line);
+    }
+
+    char landing[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(landing, sizeof(landing),
+             "Final descent: P — %s unlocks after the last waystation. Hold the landing for 3 nav ticks to finish.",
+             state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing");
+    session_send_system_line(ctx, landing);
+    return;
+  }
+
+  if (state->awaiting_flag) {
+    char landing[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(landing, sizeof(landing), "Final target: P — %s. Hold for %u nav ticks to plant the flag.",
+             state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing",
+             state->nav_required_ticks);
+    session_send_system_line(ctx, landing);
+  }
+}
+
+static void session_game_alpha_complete_waypoint(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA) {
+    return;
+  }
+
+  alpha_centauri_game_state_t *state = &ctx->game.alpha;
+  if (state->stage != 4U || state->eva_ready) {
+    return;
+  }
+
+  if (state->waypoint_index >= state->waypoint_count) {
+    session_game_alpha_execute_eva(ctx);
+    return;
+  }
+
+  alpha_waypoint_t *current = &state->waypoints[state->waypoint_index];
+  current->visited = true;
+  ++state->waypoint_index;
+  state->nav_stable_ticks = 0U;
+
+  if (state->waypoint_index >= state->waypoint_count) {
+    session_send_system_line(ctx, "Waystations secured. Setting the descent beacon...");
+    state->waypoint_index = state->waypoint_count;
+    session_game_alpha_execute_eva(ctx);
+    return;
+  }
+
+  const alpha_waypoint_t *next = &state->waypoints[state->waypoint_index];
+  state->nav_target_x = next->x;
+  state->nav_target_y = next->y;
+  state->nav_required_ticks = 4U;
+  state->nav_fx = (double)state->nav_x;
+  state->nav_fy = (double)state->nav_y;
+  state->nav_vx = 0.0;
+  state->nav_vy = 0.0;
+
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(message, sizeof(message), "Next stop %u/%u — marker %c (%s).", state->waypoint_index + 1U,
+           state->waypoint_count, next->symbol, next->name);
+  session_send_system_line(ctx, message);
+  session_game_alpha_refresh_navigation(ctx);
+}
+
 static void session_game_alpha_present_stage(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
     return;
@@ -18898,51 +19148,80 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
 
   session_render_separator(ctx, "Alpha Centauri Expedition");
 
+  char stage_line[SSH_CHATTER_MESSAGE_LIMIT];
   switch (state->stage) {
     case 0:
-      session_send_system_line(ctx,
-                               "Stage 0 — Launch stack ready. Use arrow keys to ride the ascent beacon and hold until the"
-                               " antimatter booster lights.");
+      snprintf(stage_line, sizeof(stage_line),
+               "Stage 0 — Launch stack ready. Ride the ascent beacon and hold steady for %u nav ticks to ignite the"
+               " antimatter booster.",
+               state->nav_required_ticks);
+      session_send_system_line(ctx, stage_line);
       break;
     case 1:
-      session_send_system_line(ctx,
-                               "Stage 1 — Mid-course trim. Glide onto the barycenter beacon with arrow keys and hold until"
-                               " guidance reports a lock.");
+      snprintf(stage_line, sizeof(stage_line),
+               "Stage 1 — Mid-course trim. Hold the barycenter beacon for %u nav ticks to bank the correction burn.",
+               state->nav_required_ticks);
+      session_send_system_line(ctx, stage_line);
       break;
     case 2:
-      session_send_system_line(ctx,
-                               "Stage 2 — Turnover. Line up with the retrograde marker using arrow keys and hold to flip"
-                               " the ship for braking.");
+      snprintf(stage_line, sizeof(stage_line),
+               "Stage 2 — Turnover. Keep the retrograde marker centered for %u nav ticks to flip into braking attitude.",
+               state->nav_required_ticks);
+      session_send_system_line(ctx, stage_line);
       break;
     case 3:
-      session_send_system_line(ctx,
-                               "Stage 3 — Braking burn. Drop onto the braking beacon with arrow keys and hold while the"
-                               " ship bleeds velocity.");
+      snprintf(stage_line, sizeof(stage_line),
+               "Stage 3 — Braking burn. Bleed velocity by holding the braking beacon for %u nav ticks.",
+               state->nav_required_ticks);
+      session_send_system_line(ctx, stage_line);
       break;
     case 4:
       if (!state->eva_ready) {
-        session_send_system_line(ctx,
-                                 "Stage 4 — High orbit over Proxima b. Thread the deorbit corridor with arrow keys and hold"
-                                 " to initiate the EVA.");
+        unsigned remaining = 0U;
+        if (state->waypoint_count > state->waypoint_index) {
+          remaining = state->waypoint_count - state->waypoint_index;
+        }
+        snprintf(stage_line, sizeof(stage_line),
+                 "Stage 4 — High orbit over Proxima b. Visit the numbered waystations, holding each for %u nav ticks."
+                 " %u stop(s) remain before descent.",
+                 state->nav_required_ticks, remaining);
+        session_send_system_line(ctx, stage_line);
       } else if (state->awaiting_flag) {
-        session_send_system_line(ctx,
-                                 "Stage 4 — Surface EVA. Guide the suit to the landing beacon with arrow keys and hold to"
-                                 " plant \"Immigrants' Flag\".");
+        snprintf(stage_line, sizeof(stage_line),
+                 "Stage 4 — Surface EVA. Settle on marker %c (%s) for %u nav ticks to plant \"Immigrants' Flag\".",
+                 state->final_waypoint.symbol != '\0' ? state->final_waypoint.symbol : 'P',
+                 state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing",
+                 state->nav_required_ticks);
+        session_send_system_line(ctx, stage_line);
       } else {
         session_send_system_line(ctx,
                                  "Stage 4 — Mission reset. Realign with the beacons for another run or exit with /suspend!.");
       }
+      session_game_alpha_present_waypoints(ctx);
       break;
     default:
       session_send_system_line(ctx, "Awaiting next burn sequence.");
       break;
   }
 
-  session_send_system_line(ctx,
-                           "Gravitational pulls: B=black hole, S=star, P=planet, D=debris — each mass tugs with its own μ.");
+  if (state->stage == 4U) {
+    session_send_system_line(ctx,
+                             "Route markers: 1–9 mark required waystations; P marks the Proxima landing zone.");
+    session_send_system_line(ctx,
+                             "Gravitational pulls: B=black hole, S=star, D=debris — each mass tugs with its own μ.");
+  } else {
+    session_send_system_line(ctx,
+                             "Gravitational pulls: B=black hole, S=star, P=planet, D=debris — each mass tugs with its own μ.");
+  }
   session_game_alpha_render_navigation(ctx);
-  session_send_system_line(ctx,
-                           "Legend: @ craft, + beacon, * locked alignment, B black hole, S star, P planet, D debris.");
+  if (state->stage == 4U) {
+    session_send_system_line(ctx,
+                             "Legend: @ craft, + beacon, * locked alignment, digits=waystations, P final landing, B black"
+                             " hole, S star, D debris.");
+  } else {
+    session_send_system_line(ctx,
+                             "Legend: @ craft, + beacon, * locked alignment, B black hole, S star, P planet, D debris.");
+  }
   session_send_system_line(ctx, "Navigation grid spans 80×80 sectors; each maneuver reshuffles the gravity field.");
   session_send_system_line(ctx, "Use arrow keys (↑ ↓ ← →) to nudge the craft and keep it steady over the beacon.");
   session_send_system_line(ctx, "Stuck? Type 'reset' to reroll the field with a fresh gravimetric solution.");
@@ -19097,6 +19376,10 @@ static void session_game_alpha_execute_retro(session_ctx_t *ctx) {
   state->radiation_msv += 12.0;
   state->eva_ready = false;
   state->awaiting_flag = false;
+  state->waypoint_index = 0U;
+  state->waypoint_count = 0U;
+  state->final_waypoint = (alpha_waypoint_t){0};
+  session_game_alpha_plan_waypoints(ctx);
   session_game_alpha_prepare_navigation(ctx);
   session_game_alpha_sync_to_save(ctx);
   session_game_alpha_present_stage(ctx);
@@ -19111,6 +19394,7 @@ static void session_game_alpha_execute_eva(session_ctx_t *ctx) {
   alpha_centauri_game_state_t *state = &ctx->game.alpha;
   state->eva_ready = true;
   state->awaiting_flag = true;
+  state->waypoint_index = state->waypoint_count;
   if (state->oxygen_days > 30.0) {
     state->oxygen_days -= 30.0;
   } else {
@@ -19198,10 +19482,11 @@ static bool session_game_alpha_handle_arrow(session_ctx_t *ctx, int dx, int dy) 
     completed = true;
   } else if (state->stage == 4U) {
     if (!state->eva_ready && state->nav_stable_ticks >= state->nav_required_ticks) {
-      session_game_alpha_execute_eva(ctx);
+      session_game_alpha_complete_waypoint(ctx);
       completed = true;
     } else if (state->eva_ready && state->awaiting_flag &&
                state->nav_stable_ticks >= state->nav_required_ticks) {
+      state->final_waypoint.visited = true;
       session_game_alpha_log_completion(ctx);
       completed = true;
     }
@@ -19281,10 +19566,18 @@ static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line)
 
   if (state->stage == 4U) {
     if (!state->eva_ready) {
-      if (strcasecmp(command, "eva") == 0 || strcasecmp(command, "descend") == 0) {
-        session_game_alpha_execute_eva(ctx);
+      if (state->waypoint_index < state->waypoint_count) {
+        const alpha_waypoint_t *target = &state->waypoints[state->waypoint_index];
+        char message[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(message, sizeof(message),
+                 "Route checkpoint %u/%u — hold marker %c (%s) for %u nav ticks to proceed.",
+                 state->waypoint_index + 1U, state->waypoint_count, target->symbol, target->name,
+                 state->nav_required_ticks);
+        session_send_system_line(ctx, message);
+        session_game_alpha_refresh_navigation(ctx);
       } else {
-        session_send_system_line(ctx, "Follow the descent beacon with arrow keys or type 'eva'.");
+        session_send_system_line(ctx,
+                                 "Waystations cleared. Hold position on the descent beacon to trigger EVA.");
         session_game_alpha_refresh_navigation(ctx);
       }
     } else if (state->awaiting_flag) {
@@ -19292,7 +19585,13 @@ static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line)
           strcasecmp(command, "flag") == 0) {
         session_game_alpha_log_completion(ctx);
       } else {
-        session_send_system_line(ctx, "Guide the suit with arrow keys or type 'plant flag' to finish.");
+        char message[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(message, sizeof(message),
+                 "Hold marker %c (%s) for %u nav ticks or type 'plant flag' to finish.",
+                 state->final_waypoint.symbol != '\0' ? state->final_waypoint.symbol : 'P',
+                 state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing",
+                 state->nav_required_ticks);
+        session_send_system_line(ctx, message);
         session_game_alpha_refresh_navigation(ctx);
       }
     } else {
