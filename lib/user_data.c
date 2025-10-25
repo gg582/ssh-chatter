@@ -601,12 +601,16 @@ bool user_data_save(const char *root, const user_data_record_t *record) {
     return false;
   }
 
-  user_data_record_t copy = *record;
-  user_data_normalize_record(&copy, record->username);
-  copy.magic = USER_DATA_MAGIC;
-  copy.version = USER_DATA_VERSION;
+  user_data_record_t normalized = *record;
+  user_data_normalize_record(&normalized, record->username);
+  normalized.magic = USER_DATA_MAGIC;
+  normalized.version = USER_DATA_VERSION;
 
-  bool success = fwrite(&copy, sizeof(copy), 1U, fp) == 1U;
+  user_data_record_t disk_record = normalized;
+  /* Profile pictures are persisted in dedicated per-user .dat files. */
+  memset(disk_record.profile_picture, 0, sizeof(disk_record.profile_picture));
+
+  bool success = fwrite(&disk_record, sizeof(disk_record), 1U, fp) == 1U;
   int error = success ? 0 : errno;
   if (success && fflush(fp) != 0) {
     success = false;
@@ -641,7 +645,7 @@ bool user_data_save(const char *root, const user_data_record_t *record) {
     return false;
   }
 
-  if (!user_data_profile_picture_store(root, &copy)) {
+  if (!user_data_profile_picture_store(root, &normalized)) {
     return false;
   }
 
