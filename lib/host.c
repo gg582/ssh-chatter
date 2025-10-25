@@ -18710,7 +18710,13 @@ static void session_game_alpha_configure_gravity(session_ctx_t *ctx) {
   }
   state->gravity_source_count = 0U;
 
-  double stage_multiplier = 1.0 + (double)state->stage * 0.25;
+  double stage_multiplier = 1.0 + (double)state->stage * 0.45;
+  if (state->stage >= 4U) {
+    stage_multiplier += (double)state->waypoint_index * 0.35;
+    if (state->awaiting_flag) {
+      stage_multiplier += 0.75;
+    }
+  }
   const char *hole_name = state->stage >= 3 ? "Proxima Abyss" : "Core Singularity";
   unsigned special_sources = 0U;
   if (state->stage == 4U) {
@@ -18725,19 +18731,24 @@ static void session_game_alpha_configure_gravity(session_ctx_t *ctx) {
     }
   }
   double hole_mu = ALPHA_BLACK_HOLE_MU * session_game_alpha_random_double(ctx, stage_multiplier,
-                                                                          stage_multiplier + 0.75);
+                                                                          stage_multiplier + 1.0);
   session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN, hole_mu, ALPHA_NAV_MARGIN * 3, 'B', hole_name);
 
   int star_count = 2 + (int)state->stage;
-  int planet_count = 2 + (int)(state->stage / 2);
-  int debris_count = 1 + (int)state->stage;
-  if (state->stage >= 4 && state->awaiting_flag) {
-    planet_count += 1;
-    debris_count += 2;
+  if (state->stage >= 2U) {
+    star_count += 1;
   }
-
-  if (state->stage >= 4) {
+  int planet_count = 1 + (int)((state->stage + 1U) / 2U);
+  int debris_count = 1 + (int)state->stage * 2;
+  if (state->stage >= 3U) {
+    debris_count += 1;
+  }
+  if (state->stage >= 4U) {
     planet_count = 0;
+    debris_count += (int)state->waypoint_index;
+    if (state->awaiting_flag) {
+      debris_count += 2;
+    }
   }
 
   int available_slots = (int)ALPHA_MAX_GRAVITY_SOURCES - 1 - (int)special_sources;
@@ -18764,19 +18775,19 @@ static void session_game_alpha_configure_gravity(session_ctx_t *ctx) {
 
   for (int idx = 0; idx < star_count; ++idx) {
     const char *name = kAlphaStarCatalog[session_game_random_range(ctx, (int)ALPHA_STAR_CATALOG_COUNT)];
-    double mu = ALPHA_STAR_MU * session_game_alpha_random_double(ctx, stage_multiplier * 0.7, stage_multiplier * 1.3);
+    double mu = ALPHA_STAR_MU * session_game_alpha_random_double(ctx, stage_multiplier * 0.7, stage_multiplier * 1.4);
     session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN / 2, mu, ALPHA_NAV_MARGIN * 2, 'S', name);
   }
 
   for (int idx = 0; idx < planet_count; ++idx) {
     const char *name = kAlphaPlanetCatalog[session_game_random_range(ctx, (int)ALPHA_PLANET_CATALOG_COUNT)];
-    double mu = ALPHA_PLANET_MU * session_game_alpha_random_double(ctx, stage_multiplier * 0.6, stage_multiplier * 1.4);
+    double mu = ALPHA_PLANET_MU * session_game_alpha_random_double(ctx, stage_multiplier * 0.8, stage_multiplier * 1.6);
     session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN / 2, mu, ALPHA_NAV_MARGIN * 2, 'P', name);
   }
 
   for (int idx = 0; idx < debris_count; ++idx) {
     const char *name = kAlphaDebrisCatalog[session_game_random_range(ctx, (int)ALPHA_DEBRIS_CATALOG_COUNT)];
-    double mu = ALPHA_DEBRIS_MU * session_game_alpha_random_double(ctx, 0.5, 1.8) * stage_multiplier;
+    double mu = ALPHA_DEBRIS_MU * session_game_alpha_random_double(ctx, 0.7, 2.1) * stage_multiplier;
     session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN / 3, mu, ALPHA_NAV_MARGIN, 'D', name);
   }
 
@@ -18901,8 +18912,29 @@ static void session_game_alpha_prepare_navigation(session_ctx_t *ctx) {
   alpha_centauri_game_state_t *state = &ctx->game.alpha;
   int safe_margin = ALPHA_NAV_MARGIN;
 
+  unsigned stage_level = state->stage;
+  if (stage_level > 0U) {
+    int shrink = (int)stage_level;
+    if (stage_level >= 2U) {
+      shrink += 1;
+    }
+    if (stage_level >= 3U) {
+      shrink += 1;
+    }
+    if (stage_level >= 4U) {
+      shrink += (int)state->waypoint_index;
+      if (state->awaiting_flag) {
+        shrink += 2;
+      }
+    }
+    safe_margin -= shrink;
+    if (safe_margin < 2) {
+      safe_margin = 2;
+    }
+  }
+
   state->nav_stable_ticks = 0U;
-  state->nav_required_ticks = 3U;
+  state->nav_required_ticks = 1U;
   state->nav_vx = 0.0;
   state->nav_vy = 0.0;
 
@@ -18915,7 +18947,7 @@ static void session_game_alpha_prepare_navigation(session_ctx_t *ctx) {
       }
       state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
       state->nav_target_y = session_game_random_range(ctx, safe_margin + 4);
-      state->nav_required_ticks = 3U;
+      state->nav_required_ticks = 1U;
       break;
     case 1:
       state->nav_x = session_game_random_range(ctx, (ALPHA_NAV_WIDTH / 2)) + safe_margin;
@@ -18925,21 +18957,21 @@ static void session_game_alpha_prepare_navigation(session_ctx_t *ctx) {
       state->nav_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
       state->nav_target_x = ALPHA_NAV_WIDTH - 1 - session_game_random_range(ctx, safe_margin + 5);
       state->nav_target_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
-      state->nav_required_ticks = 4U;
+      state->nav_required_ticks = 1U;
       break;
     case 2:
       state->nav_x = ALPHA_NAV_WIDTH - 1 - session_game_random_range(ctx, safe_margin + 5);
       state->nav_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
       state->nav_target_x = session_game_random_range(ctx, safe_margin + 5);
       state->nav_target_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
-      state->nav_required_ticks = 4U;
+      state->nav_required_ticks = 1U;
       break;
     case 3:
       state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
       state->nav_y = session_game_random_range(ctx, safe_margin + 5);
       state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
       state->nav_target_y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, safe_margin + 5);
-      state->nav_required_ticks = 5U;
+      state->nav_required_ticks = 1U;
       break;
     case 4:
       if (!state->eva_ready) {
@@ -18957,7 +18989,7 @@ static void session_game_alpha_prepare_navigation(session_ctx_t *ctx) {
         }
         state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
         state->nav_y = session_game_random_range(ctx, safe_margin + 5);
-        state->nav_required_ticks = 4U;
+        state->nav_required_ticks = 1U;
       } else if (state->awaiting_flag) {
         if (state->final_waypoint.symbol == '\0') {
           session_game_alpha_plan_waypoints(ctx);
@@ -18966,13 +18998,13 @@ static void session_game_alpha_prepare_navigation(session_ctx_t *ctx) {
         state->nav_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
         state->nav_target_x = state->final_waypoint.x;
         state->nav_target_y = state->final_waypoint.y;
-        state->nav_required_ticks = 3U;
+        state->nav_required_ticks = 1U;
       } else {
         state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
         state->nav_y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, safe_margin + 3);
         state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
         state->nav_target_y = session_game_random_range(ctx, safe_margin + 3);
-        state->nav_required_ticks = 3U;
+        state->nav_required_ticks = 1U;
       }
       break;
     default:
@@ -19181,8 +19213,9 @@ static void session_game_alpha_render_navigation(session_ctx_t *ctx) {
   const char *phase_label = session_game_alpha_phase_label(state);
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(header, sizeof(header), "Guidance: %s (stability %u/%u — Alt+L to lock)", phase_label,
-           state->nav_stable_ticks, state->nav_required_ticks);
+  bool contact = (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y);
+  const char *status = contact ? "beacon contact achieved" : "tracking beacon";
+  snprintf(header, sizeof(header), "Guidance: %s (%s — reach '+' to advance automatically)", phase_label, status);
   session_send_system_line(ctx, header);
 
   char border[ALPHA_NAV_WIDTH + 3];
@@ -19398,8 +19431,8 @@ static void session_game_alpha_present_waypoints(session_ctx_t *ctx) {
 
     char landing[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(landing, sizeof(landing),
-             "Final descent: P — %s unlocks after the last waystation. Hold the landing for 3 nav ticks, then press"
-             " Alt+L to finish.",
+             "Final descent: P — %s unlocks after the last waystation. Touch down to finish or press Alt+L if you"
+             " prefer a manual confirmation.",
              state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing");
     session_send_system_line(ctx, landing);
     return;
@@ -19407,10 +19440,9 @@ static void session_game_alpha_present_waypoints(session_ctx_t *ctx) {
 
   if (state->awaiting_flag) {
     char landing[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(landing, sizeof(landing), "Final target: P — %s. Hold for %u nav ticks, then press Alt+L or type 'plant"
-                                        " flag' to finish.",
-             state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing",
-             state->nav_required_ticks);
+    snprintf(landing, sizeof(landing),
+             "Final target: P — %s. Touch down to plant automatically, or press Alt+L/type 'plant flag' to finish.",
+             state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing");
     session_send_system_line(ctx, landing);
   }
 }
@@ -19445,11 +19477,13 @@ static void session_game_alpha_complete_waypoint(session_ctx_t *ctx) {
   const alpha_waypoint_t *next = &state->waypoints[state->waypoint_index];
   state->nav_target_x = next->x;
   state->nav_target_y = next->y;
-  state->nav_required_ticks = 4U;
+  state->nav_required_ticks = 1U;
   state->nav_fx = (double)state->nav_x;
   state->nav_fy = (double)state->nav_y;
   state->nav_vx = 0.0;
   state->nav_vy = 0.0;
+
+  session_game_alpha_configure_gravity(ctx);
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(message, sizeof(message), "Next stop %u/%u — marker %c (%s).", state->waypoint_index + 1U,
@@ -19473,30 +19507,22 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
   switch (state->stage) {
     case 0:
       snprintf(stage_line, sizeof(stage_line),
-               "Stage 0 — Launch stack ready. Ride the ascent beacon, hold steady for %u nav ticks, then press Alt+L"
-               " to ignite the antimatter booster.",
-               state->nav_required_ticks);
+               "Stage 0 — Launch stack ready. Ride the ascent beacon; contact ignites the antimatter booster automatically.");
       session_send_system_line(ctx, stage_line);
       break;
     case 1:
       snprintf(stage_line, sizeof(stage_line),
-               "Stage 1 — Mid-course trim. Hold the barycenter beacon for %u nav ticks, then press Alt+L to bank the"
-               " correction burn.",
-               state->nav_required_ticks);
+               "Stage 1 — Mid-course trim. Touch the barycenter beacon to bank the correction burn; manual lock is optional.");
       session_send_system_line(ctx, stage_line);
       break;
     case 2:
       snprintf(stage_line, sizeof(stage_line),
-               "Stage 2 — Turnover. Keep the retrograde marker centered for %u nav ticks, then press Alt+L to flip"
-               " into braking attitude.",
-               state->nav_required_ticks);
+               "Stage 2 — Turnover. Settle on the retrograde marker to flip into braking attitude automatically.");
       session_send_system_line(ctx, stage_line);
       break;
     case 3:
       snprintf(stage_line, sizeof(stage_line),
-               "Stage 3 — Braking burn. Bleed velocity by holding the braking beacon for %u nav ticks, then press"
-               " Alt+L to lock the burn.",
-               state->nav_required_ticks);
+               "Stage 3 — Braking burn. Drop onto the braking beacon and the burn locks the moment you make contact.");
       session_send_system_line(ctx, stage_line);
       break;
     case 4:
@@ -19506,17 +19532,16 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
           remaining = state->waypoint_count - state->waypoint_index;
         }
         snprintf(stage_line, sizeof(stage_line),
-                 "Stage 4 — High orbit over Proxima b. Visit the numbered waystations, hold each for %u nav ticks,"
-                 " then press Alt+L. %u stop(s) remain before descent.",
-                 state->nav_required_ticks, remaining);
+                 "Stage 4 — High orbit over Proxima b. Visit the numbered waystations; each beacon contact auto-logs"
+                 " the stop. %u stop(s) remain before descent.",
+                 remaining);
         session_send_system_line(ctx, stage_line);
       } else if (state->awaiting_flag) {
         snprintf(stage_line, sizeof(stage_line),
-                 "Stage 4 — Surface EVA. Settle on marker %c (%s) for %u nav ticks, then press Alt+L or type 'plant"
-                 " flag' to plant \"Immigrants' Flag\".",
+                 "Stage 4 — Surface EVA. Touch marker %c (%s) to plant \"Immigrants' Flag\" automatically, or press"
+                 " Alt+L/type 'plant flag' for manual confirmation.",
                  state->final_waypoint.symbol != '\0' ? state->final_waypoint.symbol : 'P',
-                 state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing",
-                 state->nav_required_ticks);
+                 state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing");
         session_send_system_line(ctx, stage_line);
       } else {
         session_send_system_line(ctx,
@@ -19541,16 +19566,17 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
   session_game_alpha_render_navigation(ctx);
   if (state->stage == 4U) {
     session_send_system_line(ctx,
-                             "Legend: @ craft, + beacon, * locked alignment, digits=waystations, P final landing, B black"
+                             "Legend: @ craft, + beacon, * beacon contact, digits=waystations, P final landing, B black"
                              " hole, S star, D debris.");
   } else {
     session_send_system_line(ctx,
-                             "Legend: @ craft, + beacon, * locked alignment, B black hole, S star, P planet, D debris.");
+                             "Legend: @ craft, + beacon, * beacon contact, B black hole, S star, P planet, D debris.");
   }
   session_send_system_line(ctx, "Navigation grid spans 60×60 sectors; each maneuver reshuffles the gravity field.");
-  session_send_system_line(ctx, "Use arrow keys to nudge the craft and keep it steady over the beacon.");
+  session_send_system_line(ctx, "Use arrow keys to nudge the craft; touching the beacon advances immediately.");
   session_send_system_line(ctx,
-                           "Press Alt+L once aligned to lock the maneuver; press Ctrl+S anytime to save the mission log.");
+                           "Alt+L records a manual confirmation; press Ctrl+S anytime to save the mission log.");
+  session_send_system_line(ctx, "Each stage intensifies the gravity field, so later maneuvers demand tighter control.");
   session_send_system_line(ctx, "Stuck? Type 'reset' to reroll the field with a fresh gravimetric solution.");
   session_game_alpha_report_state(ctx, "Current status:");
   ctx->translation_suppress_output = previous_translation;
@@ -19740,11 +19766,7 @@ static bool session_game_alpha_attempt_completion(session_ctx_t *ctx) {
   }
 
   alpha_centauri_game_state_t *state = &ctx->game.alpha;
-  if (state->nav_required_ticks == 0U) {
-    state->nav_required_ticks = 1U;
-  }
-
-  if (state->nav_stable_ticks < state->nav_required_ticks) {
+  if (state->nav_x != state->nav_target_x || state->nav_y != state->nav_target_y) {
     return false;
   }
 
@@ -19791,22 +19813,8 @@ static void session_game_alpha_manual_lock(session_ctx_t *ctx) {
     return;
   }
 
-  if (state->nav_required_ticks == 0U) {
-    state->nav_required_ticks = 1U;
-  }
-
-  if (state->nav_stable_ticks < state->nav_required_ticks) {
-    unsigned remaining = state->nav_required_ticks - state->nav_stable_ticks;
-    char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "Hold steady for %u more nav tick%s before locking.", remaining,
-             (remaining == 1U) ? "" : "s");
-    session_send_system_line(ctx, message);
-    session_game_alpha_refresh_navigation(ctx);
-    return;
-  }
-
   if (!session_game_alpha_attempt_completion(ctx)) {
-    session_send_system_line(ctx, "Alignment steady; mission control awaiting confirmation.");
+    session_send_system_line(ctx, "Beacon contact logged; mission control is standing by.");
     session_game_alpha_refresh_navigation(ctx);
   }
 }
@@ -19817,7 +19825,7 @@ static void session_game_alpha_manual_save(session_ctx_t *ctx) {
   }
 
   session_game_alpha_sync_to_save(ctx);
-  session_send_system_line(ctx, "Mission log saved. Press Alt+L once stable to lock the maneuver.");
+  session_send_system_line(ctx, "Mission log saved. Touch the beacon to advance or press Alt+L to confirm manually.");
 }
 
 static bool session_game_alpha_handle_arrow(session_ctx_t *ctx, int dx, int dy) {
@@ -19869,9 +19877,7 @@ static bool session_game_alpha_handle_arrow(session_ctx_t *ctx, int dx, int dy) 
   session_game_alpha_apply_gravity(state);
 
   if (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y) {
-    if (state->nav_stable_ticks < state->nav_required_ticks) {
-      ++state->nav_stable_ticks;
-    }
+    state->nav_stable_ticks = 1U;
   } else {
     state->nav_stable_ticks = 0U;
   }
@@ -19933,7 +19939,7 @@ static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line)
     if (strcasecmp(command, "trim") == 0 || strcasecmp(command, "align") == 0) {
       session_game_alpha_execute_trim(ctx);
     } else {
-      session_send_system_line(ctx, "Hold the barycenter beacon with arrow keys or type 'trim'.");
+      session_send_system_line(ctx, "Touch the barycenter beacon with arrow keys or type 'trim'.");
       session_game_alpha_refresh_navigation(ctx);
     }
     return;
@@ -19943,7 +19949,7 @@ static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line)
     if (strcasecmp(command, "flip") == 0 || strcasecmp(command, "turnover") == 0) {
       session_game_alpha_execute_flip(ctx);
     } else {
-      session_send_system_line(ctx, "Rotate into retrograde by holding the marker with arrow keys or type 'flip'.");
+      session_send_system_line(ctx, "Rotate into retrograde by touching the marker with arrow keys or type 'flip'.");
       session_game_alpha_refresh_navigation(ctx);
     }
     return;
@@ -19965,14 +19971,14 @@ static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line)
         const alpha_waypoint_t *target = &state->waypoints[state->waypoint_index];
         char message[SSH_CHATTER_MESSAGE_LIMIT];
         snprintf(message, sizeof(message),
-                 "Route checkpoint %u/%u — hold marker %c (%s) for %u nav ticks, then press Alt+L to proceed.",
-                 state->waypoint_index + 1U, state->waypoint_count, target->symbol, target->name,
-                 state->nav_required_ticks);
+                 "Route checkpoint %u/%u — touch marker %c (%s) to proceed automatically. Alt+L remains available for"
+                 " manual control.",
+                 state->waypoint_index + 1U, state->waypoint_count, target->symbol, target->name);
         session_send_system_line(ctx, message);
         session_game_alpha_refresh_navigation(ctx);
       } else {
         session_send_system_line(ctx,
-                                 "Waystations cleared. Hold position on the descent beacon and press Alt+L to trigger EVA.");
+                                 "Waystations cleared. Touch the descent beacon or press Alt+L to trigger EVA.");
         session_game_alpha_refresh_navigation(ctx);
       }
     } else if (state->awaiting_flag) {
@@ -19982,10 +19988,9 @@ static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line)
       } else {
         char message[SSH_CHATTER_MESSAGE_LIMIT];
         snprintf(message, sizeof(message),
-                 "Hold marker %c (%s) for %u nav ticks, then press Alt+L or type 'plant flag' to finish.",
+                 "Touch marker %c (%s) to finish automatically, or press Alt+L/type 'plant flag' to plant manually.",
                  state->final_waypoint.symbol != '\0' ? state->final_waypoint.symbol : 'P',
-                 state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing",
-                 state->nav_required_ticks);
+                 state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing");
         session_send_system_line(ctx, message);
         session_game_alpha_refresh_navigation(ctx);
       }
