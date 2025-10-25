@@ -17,12 +17,23 @@
 #include <unistd.h>
 
 #define USER_DATA_MAGIC 0x4D424F58U /* 'MBOX' */
-#define USER_DATA_VERSION 3U
+#define USER_DATA_VERSION 4U
+#define USER_DATA_VERSION_V3 3U
 #define USER_DATA_VERSION_V2 2U
 #define USER_DATA_VERSION_LEGACY 1U
 
 #define USER_DATA_PROFILE_PICTURE_V1_LEN 512U
 #define USER_DATA_PROFILE_PICTURE_V2_LEN 4096U
+#define USER_DATA_PROFILE_PICTURE_V3_LEN 10240U
+
+#define USER_DATA_PROFILE_DIRECTORY "profiles"
+
+static bool user_data_profile_directory_path(const char *root, char *path, size_t length);
+static bool user_data_profile_picture_path(const char *root, const char *username, char *path, size_t length);
+static void user_data_profile_picture_overlay(const char *root, const char *username, user_data_record_t *record);
+static bool user_data_profile_picture_store(const char *root, const user_data_record_t *record);
+
+static size_t user_data_column_reset_sequence_length(const char *text);
 
 typedef struct user_data_record_v1 {
   uint32_t magic;
@@ -53,6 +64,57 @@ typedef struct user_data_record_v2 {
   uint64_t last_updated;
   uint8_t reserved[64];
 } user_data_record_v2_t;
+
+typedef struct user_data_record_v3 {
+  uint32_t magic;
+  uint32_t version;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  uint32_t mailbox_count;
+  user_data_mail_entry_t mailbox[USER_DATA_MAILBOX_LIMIT];
+  char profile_picture[USER_DATA_PROFILE_PICTURE_V3_LEN];
+  alpha_centauri_save_t alpha;
+  uint32_t flag_count;
+  uint32_t flag_history_count;
+  uint64_t flag_history[USER_DATA_FLAG_HISTORY_LIMIT];
+  uint64_t last_updated;
+  uint8_t reserved[64];
+} user_data_record_v3_t;
+
+static size_t user_data_column_reset_sequence_length(const char *text) {
+  if (text == NULL) {
+    return 0U;
+  }
+
+  if (text[0] == '\033' && text[1] == '[' && text[2] == '1' && text[3] == 'G') {
+    return 4U;
+  }
+
+  if (text[0] == '[' && text[1] == '1' && text[2] == 'G') {
+    return 3U;
+  }
+
+  return 0U;
+}
+
+static void user_data_strip_column_reset(char *text) {
+  if (text == NULL || text[0] == '\0') {
+    return;
+  }
+
+  char *dst = text;
+  const char *src = text;
+  while (*src != '\0') {
+    size_t skip = user_data_column_reset_sequence_length(src);
+    if (skip > 0U) {
+      src += skip;
+      continue;
+    }
+
+    *dst++ = *src++;
+  }
+
+  *dst = '\0';
+}
 
 static bool user_data_is_directory(const char *path) {
   if (path == NULL || path[0] == '\0') {
@@ -107,7 +169,16 @@ bool user_data_ensure_root(const char *root) {
     return false;
   }
 
-  return user_data_create_directory(root);
+  if (!user_data_create_directory(root)) {
+    return false;
+  }
+
+  char profile_root[PATH_MAX];
+  if (!user_data_profile_directory_path(root, profile_root, sizeof(profile_root))) {
+    return false;
+  }
+
+  return user_data_create_directory(profile_root);
 }
 
 bool user_data_sanitize_username(const char *username, char *sanitized, size_t length) {
@@ -167,6 +238,166 @@ bool user_data_path_for(const char *root, const char *username, char *path, size
   return true;
 }
 
+static bool user_data_profile_directory_path(const char *root, char *path, size_t length) {
+  if (path == NULL || length == 0U || root == NULL || root[0] == '\0') {
+    return false;
+  }
+
+  int written = snprintf(path, length, "%s/%s", root, USER_DATA_PROFILE_DIRECTORY);
+  if (written < 0 || (size_t)written >= length) {
+    return false;
+  }
+
+  return true;
+}
+
+static bool user_data_profile_picture_path(const char *root, const char *username, char *path, size_t length) {
+  if (path == NULL || length == 0U || root == NULL || root[0] == '\0' || username == NULL || username[0] == '\0') {
+    return false;
+  }
+
+  char sanitized[SSH_CHATTER_USERNAME_LEN * 2U];
+  if (!user_data_sanitize_username(username, sanitized, sizeof(sanitized))) {
+    return false;
+  }
+
+  if (sanitized[0] == '\0') {
+    return false;
+  }
+
+  char directory[PATH_MAX];
+  if (!user_data_profile_directory_path(root, directory, sizeof(directory))) {
+    return false;
+  }
+
+  int written = snprintf(path, length, "%s/%s.dat", directory, sanitized);
+  if (written < 0 || (size_t)written >= length) {
+    return false;
+  }
+
+  return true;
+}
+
+static void user_data_profile_picture_overlay(const char *root, const char *username, user_data_record_t *record) {
+  if (record == NULL || root == NULL || root[0] == '\0' || username == NULL || username[0] == '\0') {
+    return;
+  }
+
+  char path[PATH_MAX];
+  if (!user_data_profile_picture_path(root, username, path, sizeof(path))) {
+    return;
+  }
+
+  FILE *fp = fopen(path, "rb");
+  if (fp == NULL) {
+    return;
+  }
+
+  char buffer[USER_DATA_PROFILE_PICTURE_LEN];
+  size_t read = fread(buffer, 1U, sizeof(buffer) - 1U, fp);
+  if (ferror(fp) != 0) {
+    fclose(fp);
+    return;
+  }
+
+  fclose(fp);
+
+  buffer[read] = '\0';
+  user_data_strip_column_reset(buffer);
+  buffer[USER_DATA_PROFILE_PICTURE_LEN - 1U] = '\0';
+  snprintf(record->profile_picture, sizeof(record->profile_picture), "%s", buffer);
+}
+
+static bool user_data_profile_picture_store(const char *root, const user_data_record_t *record) {
+  if (root == NULL || root[0] == '\0' || record == NULL || record->username[0] == '\0') {
+    return false;
+  }
+
+  char path[PATH_MAX];
+  if (!user_data_profile_picture_path(root, record->username, path, sizeof(path))) {
+    return false;
+  }
+
+  if (record->profile_picture[0] == '\0') {
+    if (unlink(path) == 0) {
+      return true;
+    }
+    if (errno == ENOENT) {
+      return true;
+    }
+    return false;
+  }
+
+  char directory[PATH_MAX];
+  if (!user_data_profile_directory_path(root, directory, sizeof(directory))) {
+    return false;
+  }
+
+  if (!user_data_create_directory(directory)) {
+    return false;
+  }
+
+  char temp_path[PATH_MAX];
+  int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+  if (written < 0 || (size_t)written >= sizeof(temp_path)) {
+    return false;
+  }
+
+  FILE *fp = fopen(temp_path, "wb");
+  if (fp == NULL) {
+    return false;
+  }
+
+  const char *picture = record->profile_picture;
+  size_t remaining = strlen(picture);
+  bool success = true;
+  while (remaining > 0U) {
+    size_t chunk = fwrite(picture, 1U, remaining, fp);
+    if (chunk == 0U) {
+      success = false;
+      break;
+    }
+    picture += chunk;
+    remaining -= chunk;
+  }
+
+  int error = success ? 0 : errno;
+  if (success && fflush(fp) != 0) {
+    success = false;
+    error = errno;
+  }
+
+  if (success) {
+    int fd = fileno(fp);
+    if (fd >= 0 && fsync(fd) != 0) {
+      success = false;
+      error = errno;
+    }
+  }
+
+  if (fclose(fp) != 0) {
+    if (success) {
+      error = errno;
+    }
+    success = false;
+  }
+
+  if (!success) {
+    unlink(temp_path);
+    errno = error != 0 ? error : EIO;
+    return false;
+  }
+
+  if (rename(temp_path, path) != 0) {
+    int rename_error = errno;
+    unlink(temp_path);
+    errno = rename_error;
+    return false;
+  }
+
+  return true;
+}
+
 static void user_data_normalize_record(user_data_record_t *record, const char *username) {
   if (record == NULL) {
     return;
@@ -179,6 +410,7 @@ static void user_data_normalize_record(user_data_record_t *record, const char *u
     record->flag_history_count = USER_DATA_FLAG_HISTORY_LIMIT;
   }
   record->profile_picture[USER_DATA_PROFILE_PICTURE_LEN - 1U] = '\0';
+  user_data_strip_column_reset(record->profile_picture);
   if (username != NULL && username[0] != '\0') {
     snprintf(record->username, sizeof(record->username), "%s", username);
   }
@@ -247,6 +479,7 @@ bool user_data_load(const char *root, const char *username, user_data_record_t *
 
   const size_t file_size = (size_t)st.st_size;
   const size_t expected_size = sizeof(user_data_record_t);
+  const size_t v3_size = sizeof(user_data_record_v3_t);
   const size_t v2_size = sizeof(user_data_record_v2_t);
   const size_t legacy_size = sizeof(user_data_record_v1_t);
 
@@ -257,6 +490,27 @@ bool user_data_load(const char *root, const char *username, user_data_record_t *
   if (file_size == expected_size) {
     size_t read = fread(&temp, sizeof(temp), 1U, fp);
     if (read == 1U && temp.magic == USER_DATA_MAGIC && temp.version == USER_DATA_VERSION) {
+      loaded = true;
+    }
+  } else if (file_size == v3_size) {
+    user_data_record_v3_t legacy_record;
+    size_t read = fread(&legacy_record, sizeof(legacy_record), 1U, fp);
+    if (read == 1U && legacy_record.magic == USER_DATA_MAGIC &&
+        legacy_record.version == USER_DATA_VERSION_V3) {
+      memset(&temp, 0, sizeof(temp));
+      temp.magic = USER_DATA_MAGIC;
+      temp.version = USER_DATA_VERSION;
+      snprintf(temp.username, sizeof(temp.username), "%s", legacy_record.username);
+      temp.mailbox_count = legacy_record.mailbox_count;
+      memcpy(temp.mailbox, legacy_record.mailbox, sizeof(temp.mailbox));
+      memcpy(temp.profile_picture, legacy_record.profile_picture, sizeof(legacy_record.profile_picture));
+      temp.alpha = legacy_record.alpha;
+      temp.flag_count = legacy_record.flag_count;
+      temp.flag_history_count = legacy_record.flag_history_count;
+      memcpy(temp.flag_history, legacy_record.flag_history, sizeof(temp.flag_history));
+      temp.last_updated = legacy_record.last_updated;
+      memset(temp.reserved, 0, sizeof(temp.reserved));
+      needs_upgrade = true;
       loaded = true;
     }
   } else if (file_size == v2_size) {
@@ -310,6 +564,7 @@ bool user_data_load(const char *root, const char *username, user_data_record_t *
   }
 
   user_data_normalize_record(&temp, username);
+  user_data_profile_picture_overlay(root, username, &temp);
   if (needs_upgrade) {
     temp.version = USER_DATA_VERSION;
   }
@@ -383,6 +638,10 @@ bool user_data_save(const char *root, const user_data_record_t *record) {
     int rename_error = errno;
     unlink(temp_path);
     errno = rename_error;
+    return false;
+  }
+
+  if (!user_data_profile_picture_store(root, &copy)) {
     return false;
   }
 
