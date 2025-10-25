@@ -2199,9 +2199,9 @@ typedef struct reaction_descriptor {
 } reaction_descriptor_t;
 
 static const reaction_descriptor_t REACTION_DEFINITIONS[SSH_CHATTER_REACTION_KIND_COUNT] = {
-    {"good", "good", "👍"},   {"sad", "sad", "😢"},   {"cool", "cool", "😎"},
-    {"angry", "angry", "😠"}, {"checked", "checked", "✅"},
-    {"love", "love", "❤️"},   {"wtf", "wtf", "🖕"},
+    {"good", "good", "b"},   {"sad", "sad", ":("},   {"cool", "cool", "(ツ)!"},
+    {"angry", "angry", ":/"}, {"checked", "checked", "[v]"},
+    {"love", "love", "<3"},   {"wtf", "wtf", "凸_(ツ)"},
 };
 
 typedef struct os_descriptor {
