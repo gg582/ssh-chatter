@@ -1463,6 +1463,10 @@ static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
 static void session_bbs_queue_translation(session_ctx_t *ctx, const bbs_post_t *post);
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, const char *notice,
                                     bool reset_scroll, bool scroll_to_bottom);
+static bool host_user_data_load_existing(host_t *host, const char *username, user_data_record_t *record,
+                                        bool create_if_missing);
+static void host_user_data_build_match_key(const char *username, char *key, size_t length);
+static bool host_user_data_find_profile_picture(host_t *host, const char *alias, user_data_record_t *record);
 static bool session_bbs_scroll(session_ctx_t *ctx, int direction, size_t step);
 static bool session_bbs_refresh_view(session_ctx_t *ctx);
 static void session_handle_rss(session_ctx_t *ctx, const char *arguments);
@@ -15966,6 +15970,36 @@ static size_t session_bbs_render_post_iterate(session_ctx_t *ctx, const bbs_post
     session_bbs_emit_line_if_visible(ctx, "Tags  : (none)", false, offset, window, emit, &line_index);
   }
 
+  if (ctx != NULL && ctx->owner != NULL) {
+    user_data_record_t author_record;
+    if (host_user_data_find_profile_picture(ctx->owner, post->author, &author_record)) {
+      session_format_separator_line(ctx, "Profile Picture", separator_line, sizeof(separator_line));
+      session_bbs_emit_line_if_visible(ctx, separator_line, false, offset, window, emit, &line_index);
+
+      const char *picture_cursor = author_record.profile_picture;
+      while (picture_cursor != NULL && *picture_cursor != '\0') {
+        const char *newline = strchr(picture_cursor, '\n');
+        if (newline == NULL) {
+          session_bbs_emit_line_if_visible(ctx, picture_cursor, true, offset, window, emit, &line_index);
+          break;
+        }
+
+        size_t len = (size_t)(newline - picture_cursor);
+        if (len >= SSH_CHATTER_MESSAGE_LIMIT) {
+          len = SSH_CHATTER_MESSAGE_LIMIT - 1U;
+        }
+
+        char line[SSH_CHATTER_MESSAGE_LIMIT];
+        memcpy(line, picture_cursor, len);
+        line[len] = '\0';
+        session_bbs_emit_line_if_visible(ctx, line, true, offset, window, emit, &line_index);
+        picture_cursor = newline + 1;
+      }
+
+      session_bbs_emit_line_if_visible(ctx, "", false, offset, window, emit, &line_index);
+    }
+  }
+
   session_format_separator_line(ctx, "Body", separator_line, sizeof(separator_line));
   session_bbs_emit_line_if_visible(ctx, separator_line, false, offset, window, emit, &line_index);
 
@@ -22531,6 +22565,120 @@ static void session_user_data_touch(session_ctx_t *ctx) {
     now = 0;
   }
   ctx->user_data.last_updated = (uint64_t)now;
+}
+
+static void host_user_data_build_match_key(const char *username, char *key, size_t length) {
+  if (key == NULL || length == 0U) {
+    return;
+  }
+
+  key[0] = '\0';
+  if (username == NULL || username[0] == '\0') {
+    return;
+  }
+
+  char sanitized[SSH_CHATTER_USERNAME_LEN * 2U];
+  const bool sanitized_ok = user_data_sanitize_username(username, sanitized, sizeof(sanitized));
+  const char *source = sanitized_ok ? sanitized : username;
+
+  size_t out_idx = 0U;
+  for (size_t idx = 0U; source[idx] != '\0'; ++idx) {
+    unsigned char ch = (unsigned char)source[idx];
+    if (isalnum(ch)) {
+      if (out_idx + 1U < length) {
+        key[out_idx++] = (char)tolower(ch);
+      }
+    }
+  }
+
+  key[out_idx] = '\0';
+}
+
+static bool host_user_data_find_profile_picture(host_t *host, const char *alias, user_data_record_t *record) {
+  if (host == NULL || alias == NULL || alias[0] == '\0' || record == NULL) {
+    return false;
+  }
+
+  user_data_record_t direct_record;
+  const bool direct_loaded = host_user_data_load_existing(host, alias, &direct_record, false);
+  if (direct_loaded && direct_record.profile_picture[0] != '\0') {
+    *record = direct_record;
+    return true;
+  }
+
+  char alias_key[SSH_CHATTER_USERNAME_LEN * 2U];
+  host_user_data_build_match_key(alias, alias_key, sizeof(alias_key));
+  if (alias_key[0] == '\0') {
+    return false;
+  }
+
+  char alias_path_key[SSH_CHATTER_USERNAME_LEN * 2U];
+  alias_path_key[0] = '\0';
+  if (!user_data_sanitize_username(alias, alias_path_key, sizeof(alias_path_key))) {
+    alias_path_key[0] = '\0';
+  }
+
+  if (host->user_data_root[0] == '\0') {
+    return false;
+  }
+
+  DIR *dir = opendir(host->user_data_root);
+  if (dir == NULL) {
+    return false;
+  }
+
+  bool matched = false;
+  struct dirent *entry = NULL;
+  while (!matched && (entry = readdir(dir)) != NULL) {
+    const char *name = entry->d_name;
+    if (name == NULL || name[0] == '\0') {
+      continue;
+    }
+
+    if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) {
+      continue;
+    }
+
+    size_t name_len = strlen(name);
+    if (name_len <= 4U || strcmp(name + name_len - 4U, ".dat") != 0) {
+      continue;
+    }
+
+    size_t base_len = name_len - 4U;
+    char candidate_name[SSH_CHATTER_USERNAME_LEN * 2U];
+    if (base_len >= sizeof(candidate_name)) {
+      continue;
+    }
+    memcpy(candidate_name, name, base_len);
+    candidate_name[base_len] = '\0';
+
+    if (alias_path_key[0] != '\0' && strcmp(candidate_name, alias_path_key) == 0) {
+      continue;
+    }
+
+    user_data_record_t candidate_record;
+    if (!host_user_data_load_existing(host, candidate_name, &candidate_record, false)) {
+      continue;
+    }
+
+    if (candidate_record.profile_picture[0] == '\0') {
+      continue;
+    }
+
+    char candidate_key[SSH_CHATTER_USERNAME_LEN * 2U];
+    host_user_data_build_match_key(candidate_record.username, candidate_key, sizeof(candidate_key));
+    if (candidate_key[0] == '\0') {
+      continue;
+    }
+
+    if (strcmp(candidate_key, alias_key) == 0) {
+      *record = candidate_record;
+      matched = true;
+    }
+  }
+
+  closedir(dir);
+  return matched;
 }
 
 static bool host_user_data_load_existing(host_t *host, const char *username, user_data_record_t *record,
