@@ -55,7 +55,6 @@
 
 #define ANSI_CLEAR_LINE "\033[2K"
 #define ANSI_INSERT_LINE "\033[1L"
-#define ANSI_CURSOR_COLUMN_RESET "\033[1G"
 
 #define SSH_CHATTER_MESSAGE_BOX_MAX_LINES 32U
 #define SSH_CHATTER_MESSAGE_BOX_PADDING 2U
@@ -129,6 +128,8 @@ static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
 #define SSH_CHATTER_ELIZA_PROMPT_BUFFER ((SSH_CHATTER_ELIZA_CONTEXT_BUFFER * 2U) + (SSH_CHATTER_MESSAGE_LIMIT * 3U))
 #define SSH_CHATTER_ELIZA_TOKEN_LIMIT 16U
 
+static size_t host_column_reset_sequence_length(const char *text);
+static bool host_contains_column_reset(const char *text);
 static void host_strip_column_reset(char *text);
 
 #define ALPHA_TOTAL_DISTANCE_LY 4.24
@@ -1184,7 +1185,6 @@ static void session_render_caption_with_offset(session_ctx_t *ctx, const char *m
 static void session_send_line(session_ctx_t *ctx, const char *message);
 static void session_send_plain_line(session_ctx_t *ctx, const char *message);
 static void session_send_system_line(session_ctx_t *ctx, const char *message);
-static void session_send_system_line_with_column_reset(session_ctx_t *ctx, const char *message);
 static void session_send_raw_text(session_ctx_t *ctx, const char *text);
 static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text);
 static void session_send_system_lines_bulk(session_ctx_t *ctx, const char *const *lines, size_t line_count);
@@ -7811,21 +7811,48 @@ static void host_bbs_resolve_path(host_t *host) {
   }
 }
 
-static void host_strip_column_reset(char *text) {
-  if (text == NULL || text[0] == '\0') {
-    return;
+static size_t host_column_reset_sequence_length(const char *text) {
+  if (text == NULL) {
+    return 0U;
   }
 
-  const size_t prefix_len = sizeof(ANSI_CURSOR_COLUMN_RESET) - 1U;
-  if (prefix_len == 0U) {
+  if (text[0] == '\033' && text[1] == '[' && text[2] == '1' && text[3] == 'G') {
+    return 4U;
+  }
+
+  if (text[0] == '[' && text[1] == '1' && text[2] == 'G') {
+    return 3U;
+  }
+
+  return 0U;
+}
+
+static bool host_contains_column_reset(const char *text) {
+  if (text == NULL) {
+    return false;
+  }
+
+  while (*text != '\0') {
+    if (host_column_reset_sequence_length(text) > 0U) {
+      return true;
+    }
+    ++text;
+  }
+
+  return false;
+}
+
+static void host_strip_column_reset(char *text) {
+  if (text == NULL || text[0] == '\0') {
     return;
   }
 
   char *dst = text;
   const char *src = text;
   while (*src != '\0') {
-    if (strncmp(src, ANSI_CURSOR_COLUMN_RESET, prefix_len) == 0) {
-      src += prefix_len;
+    size_t skip = host_column_reset_sequence_length(src);
+    if (skip > 0U) {
+      src += skip;
       continue;
     }
 
@@ -8862,8 +8889,9 @@ static bool host_motd_contains_translation_notice(const char *motd_text) {
   const size_t notice_length = strlen(kTranslationQuotaNotice);
   const char *cursor = motd_text;
   while (*cursor != '\0') {
-    if (strncmp(cursor, "\033[1G", 4) == 0) {
-      cursor += 4;
+    size_t skip = host_column_reset_sequence_length(cursor);
+    if (skip > 0U) {
+      cursor += skip;
       continue;
     }
     if (*cursor == '\r' || *cursor == '\n') {
@@ -8888,9 +8916,9 @@ static void host_prepend_translation_notice_in_memory(host_t *host, const char *
 
   char updated[sizeof(host->motd)];
   if (existing_motd != NULL && existing_motd[0] != '\0') {
-    snprintf(updated, sizeof(updated), "\033[1G%s\n\033[1G\n%s", kTranslationQuotaNotice, existing_motd);
+    snprintf(updated, sizeof(updated), "%s\n\n%s", kTranslationQuotaNotice, existing_motd);
   } else {
-    snprintf(updated, sizeof(updated), "\033[1G%s\n", kTranslationQuotaNotice);
+    snprintf(updated, sizeof(updated), "%s\n", kTranslationQuotaNotice);
   }
 
   pthread_mutex_lock(&host->lock);
@@ -10842,28 +10870,6 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
   }
 
   ctx->translation_suppress_output = previous_suppress;
-}
-
-static void session_send_system_line_with_column_reset(session_ctx_t *ctx, const char *message) {
-  if (ctx == NULL || message == NULL) {
-    session_send_system_line(ctx, message);
-    return;
-  }
-
-  static const size_t kPrefixLength = sizeof(ANSI_CURSOR_COLUMN_RESET) - 1U;
-  if (strncmp(message, ANSI_CURSOR_COLUMN_RESET, kPrefixLength) == 0) {
-    session_send_system_line(ctx, message);
-    return;
-  }
-
-  char prefixed[SSH_CHATTER_MESSAGE_LIMIT + sizeof(ANSI_CURSOR_COLUMN_RESET)];
-  int written = snprintf(prefixed, sizeof(prefixed), "%s%s", ANSI_CURSOR_COLUMN_RESET, message);
-  if (written < 0 || (size_t)written >= sizeof(prefixed)) {
-    session_send_system_line(ctx, message);
-    return;
-  }
-
-  session_send_system_line(ctx, prefixed);
 }
 
 static void session_send_raw_text(session_ctx_t *ctx, const char *text) {
@@ -14441,11 +14447,11 @@ static void session_profile_picture_normalize(const char *input, char *output, s
   }
 
   size_t out_idx = 0U;
-  const size_t prefix_len = sizeof(ANSI_CURSOR_COLUMN_RESET) - 1U;
   size_t idx = 0U;
   while (input[idx] != '\0') {
-    if (prefix_len > 0U && strncmp(&input[idx], ANSI_CURSOR_COLUMN_RESET, prefix_len) == 0) {
-      idx += prefix_len;
+    size_t skip = host_column_reset_sequence_length(&input[idx]);
+    if (skip > 0U) {
+      idx += skip;
       continue;
     }
 
@@ -15988,7 +15994,7 @@ static void session_bbs_emit_line_if_visible(session_ctx_t *ctx, const char *lin
   size_t start = offset;
   size_t end = (window == 0U || offset > SIZE_MAX - window) ? SIZE_MAX : offset + window;
   if (*line_index >= start && *line_index < end) {
-    if (strstr(text, ANSI_CURSOR_COLUMN_RESET) != NULL) {
+    if (host_contains_column_reset(text)) {
       char sanitized[SSH_CHATTER_MESSAGE_LIMIT];
       sanitized[0] = '\0';
       snprintf(sanitized, sizeof(sanitized), "%s", text);
@@ -16991,7 +16997,7 @@ static void session_rss_show_current(session_ctx_t *ctx) {
       rss_trim_whitespace(fragment);
       if (fragment[0] != '\0') {
         snprintf(line, sizeof(line), "  %s", fragment);
-        session_send_system_line_with_column_reset(ctx, line);
+        session_send_system_line(ctx, line);
       }
       fragment = strtok_r(NULL, "\r\n", &saveptr);
     }
@@ -24318,16 +24324,16 @@ void host_init(host_t *host, auth_profile_t *auth) {
   snprintf(host->version, sizeof(host->version), "ssh-chatter (C, rolling release)");
   snprintf(host->motd_base, sizeof(host->motd_base),
            "Welcome to ssh-chat!\n"
-           "\033[1G- Be polite to each other\n"
-           "\033[1G- fun fact: this server is written in pure c.\n"
-           "\033[1G============================================\n"
-           "\033[1G _      ____  ____  _____ ____  _        ____  _ \n"
-           "\033[1G/ \\__/|/  _ \\/  _ \\/  __//  __\\/ \\  /|  /   _\\/ \\\n"
-           "\033[1G| |\\/||| / \\|| | \\||  \\  |  \\/|| |\\ ||  |  /  | |\n"
-           "\033[1G| |  ||| \\_/|| |_/||  /_ |    /| | \\||  |  \\__\\_/\n"
-           "\033[1G\\_/  \\|\\____/\\____/\\____\\\\_/\\_\\\\_/  \\|  \\____/(_)\n"
-           "\033[1G                                                 \n"
-           "\033[1G============================================\n");
+           "- Be polite to each other\n"
+           "- fun fact: this server is written in pure c.\n"
+           "============================================\n"
+           " _      ____  ____  _____ ____  _        ____  _ \n"
+           "/ \\__/|/  _ \\/  _ \\/  __//  __\\/ \\  /|  /   _\\/ \\\n"
+           "| |\\/||| / \\|| | \\||  \\  |  \\/|| |\\ ||  |  /  | |\n"
+           "| |  ||| \\_/|| |_/||  /_ |    /| | \\||  |  \\__\\_/\n"
+           "\\_/  \\|\\____/\\____/\\____\\\\_/\\_\\\\_/  \\|  \\____/(_)\n"
+           "                                                 \n"
+           "============================================\n");
   snprintf(host->motd, sizeof(host->motd), "%s", host->motd_base);
   host->motd_path[0] = '\0';
   host->motd_has_file = false;
@@ -24579,7 +24585,7 @@ static void host_build_birthday_notice_locked(host_t *host, char *line, size_t l
     return;
   }
 
-  snprintf(line, length, "%sHappy birthday to %s!\n", ANSI_CURSOR_COLUMN_RESET, names);
+  snprintf(line, length, "Happy birthday to %s!\n", names);
 }
 
 static void host_refresh_motd_locked(host_t *host) {
@@ -24678,7 +24684,7 @@ static bool host_try_load_motd_from_path(host_t *host, const char *path) {
   char *motd_line = strtok_r(motd_buffer, "\n", &next_line);
   while (motd_line != NULL && offset < sizeof(motd_clean)) {
     const int written =
-        snprintf(motd_clean + offset, sizeof(motd_clean) - offset, "\033[1G%s\n", motd_line);
+        snprintf(motd_clean + offset, sizeof(motd_clean) - offset, "%s\n", motd_line);
     if (written < 0 || (size_t)written >= sizeof(motd_clean) - offset) {
       offset = sizeof(motd_clean) - 1U;
       break;

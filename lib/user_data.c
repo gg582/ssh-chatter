@@ -26,7 +26,7 @@
 #define USER_DATA_PROFILE_PICTURE_V2_LEN 4096U
 #define USER_DATA_PROFILE_PICTURE_V3_LEN 10240U
 
-#define USER_DATA_CURSOR_COLUMN_RESET "\033[1G"
+static size_t user_data_column_reset_sequence_length(const char *text);
 
 typedef struct user_data_record_v1 {
   uint32_t magic;
@@ -73,21 +73,33 @@ typedef struct user_data_record_v3 {
   uint8_t reserved[64];
 } user_data_record_v3_t;
 
-static void user_data_strip_column_reset(char *text) {
-  if (text == NULL || text[0] == '\0') {
-    return;
+static size_t user_data_column_reset_sequence_length(const char *text) {
+  if (text == NULL) {
+    return 0U;
   }
 
-  const size_t prefix_len = sizeof(USER_DATA_CURSOR_COLUMN_RESET) - 1U;
-  if (prefix_len == 0U) {
+  if (text[0] == '\033' && text[1] == '[' && text[2] == '1' && text[3] == 'G') {
+    return 4U;
+  }
+
+  if (text[0] == '[' && text[1] == '1' && text[2] == 'G') {
+    return 3U;
+  }
+
+  return 0U;
+}
+
+static void user_data_strip_column_reset(char *text) {
+  if (text == NULL || text[0] == '\0') {
     return;
   }
 
   char *dst = text;
   const char *src = text;
   while (*src != '\0') {
-    if (strncmp(src, USER_DATA_CURSOR_COLUMN_RESET, prefix_len) == 0) {
-      src += prefix_len;
+    size_t skip = user_data_column_reset_sequence_length(src);
+    if (skip > 0U) {
+      src += skip;
       continue;
     }
 
