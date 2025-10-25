@@ -2069,7 +2069,10 @@ typedef struct host_state_grant_entry {
 } host_state_grant_entry_t;
 
 static const uint32_t BBS_STATE_MAGIC = 0x42425331U; /* 'BBS1' */
-static const uint32_t BBS_STATE_VERSION = 1U;
+static const uint32_t BBS_STATE_VERSION = 2U;
+
+#define SSH_CHATTER_BBS_TITLE_LEN_V1 96U
+#define SSH_CHATTER_BBS_BODY_LEN_V1 2048U
 
 typedef struct bbs_state_header {
   uint32_t magic;
@@ -2097,6 +2100,19 @@ typedef struct bbs_state_post_entry {
   char tags[SSH_CHATTER_BBS_MAX_TAGS][SSH_CHATTER_BBS_TAG_LEN];
   bbs_state_comment_entry_t comments[SSH_CHATTER_BBS_MAX_COMMENTS];
 } bbs_state_post_entry_t;
+
+typedef struct bbs_state_post_entry_v1 {
+  uint64_t id;
+  int64_t created_at;
+  int64_t bumped_at;
+  uint32_t tag_count;
+  uint32_t comment_count;
+  char author[SSH_CHATTER_USERNAME_LEN];
+  char title[SSH_CHATTER_BBS_TITLE_LEN_V1];
+  char body[SSH_CHATTER_BBS_BODY_LEN_V1];
+  char tags[SSH_CHATTER_BBS_MAX_TAGS][SSH_CHATTER_BBS_TAG_LEN];
+  bbs_state_comment_entry_t comments[SSH_CHATTER_BBS_MAX_COMMENTS];
+} bbs_state_post_entry_v1_t;
 
 static const uint32_t RSS_STATE_MAGIC = 0x52535331U; /* 'RSS1' */
 static const uint32_t RSS_STATE_VERSION = 1U;
@@ -7960,9 +7976,36 @@ static void host_bbs_state_load(host_t *host) {
 
   for (uint32_t idx = 0U; idx < header.post_count; ++idx) {
     bbs_state_post_entry_t serialized = {0};
-    if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
-      success = false;
-      break;
+    if (header.version == 1U) {
+      bbs_state_post_entry_v1_t legacy = {0};
+      if (fread(&legacy, sizeof(legacy), 1U, fp) != 1U) {
+        success = false;
+        break;
+      }
+
+      serialized.id = legacy.id;
+      serialized.created_at = legacy.created_at;
+      serialized.bumped_at = legacy.bumped_at;
+      serialized.tag_count = legacy.tag_count;
+      serialized.comment_count = legacy.comment_count;
+      snprintf(serialized.author, sizeof(serialized.author), "%s", legacy.author);
+      snprintf(serialized.title, sizeof(serialized.title), "%s", legacy.title);
+      snprintf(serialized.body, sizeof(serialized.body), "%s", legacy.body);
+      for (size_t tag = 0U; tag < SSH_CHATTER_BBS_MAX_TAGS; ++tag) {
+        snprintf(serialized.tags[tag], sizeof(serialized.tags[tag]), "%s", legacy.tags[tag]);
+      }
+      for (size_t comment = 0U; comment < SSH_CHATTER_BBS_MAX_COMMENTS; ++comment) {
+        snprintf(serialized.comments[comment].author, sizeof(serialized.comments[comment].author), "%s",
+                 legacy.comments[comment].author);
+        snprintf(serialized.comments[comment].text, sizeof(serialized.comments[comment].text), "%s",
+                 legacy.comments[comment].text);
+        serialized.comments[comment].created_at = legacy.comments[comment].created_at;
+      }
+    } else {
+      if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+        success = false;
+        break;
+      }
     }
 
     if (serialized.id > max_id) {
@@ -17267,13 +17310,21 @@ static void session_asciiart_begin(session_ctx_t *ctx, session_asciiart_target_t
   ctx->asciiart_pending = true;
   ctx->asciiart_target = target;
 
+  char header[SSH_CHATTER_MESSAGE_LIMIT];
+  size_t ascii_bytes = (size_t)SSH_CHATTER_ASCIIART_BUFFER_LEN;
   if (target == SESSION_ASCIIART_TARGET_CHAT) {
-    session_send_system_line(ctx, "ASCII art composer ready (max 128 lines, 10-minute cooldown per IP).");
+    snprintf(header, sizeof(header),
+             "ASCII art composer ready (max %u lines, up to %zu bytes, 10-minute cooldown per IP).",
+             SSH_CHATTER_ASCIIART_MAX_LINES, ascii_bytes);
+    session_send_system_line(ctx, header);
     session_send_system_line(ctx,
                              "Type " SSH_CHATTER_ASCIIART_TERMINATOR " on a line by itself or press Ctrl+S to finish.");
     session_send_system_line(ctx, "Press Ctrl+A to cancel the draft.");
   } else {
-    session_send_system_line(ctx, "Profile picture composer ready (max 128 lines, up to 4096 bytes, stored privately).");
+    snprintf(header, sizeof(header),
+             "Profile picture composer ready (max %u lines, up to %zu bytes, stored privately).",
+             SSH_CHATTER_ASCIIART_MAX_LINES, ascii_bytes);
+    session_send_system_line(ctx, header);
     session_send_system_line(ctx,
                              "Type " SSH_CHATTER_ASCIIART_TERMINATOR " on a line by itself or press Ctrl+S to save.");
     session_send_system_line(ctx, "Press Ctrl+A to cancel the draft.");

@@ -17,10 +17,12 @@
 #include <unistd.h>
 
 #define USER_DATA_MAGIC 0x4D424F58U /* 'MBOX' */
-#define USER_DATA_VERSION 2U
+#define USER_DATA_VERSION 3U
+#define USER_DATA_VERSION_V2 2U
 #define USER_DATA_VERSION_LEGACY 1U
 
 #define USER_DATA_PROFILE_PICTURE_V1_LEN 512U
+#define USER_DATA_PROFILE_PICTURE_V2_LEN 4096U
 
 typedef struct user_data_record_v1 {
   uint32_t magic;
@@ -36,6 +38,21 @@ typedef struct user_data_record_v1 {
   uint64_t last_updated;
   uint8_t reserved[64];
 } user_data_record_v1_t;
+
+typedef struct user_data_record_v2 {
+  uint32_t magic;
+  uint32_t version;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  uint32_t mailbox_count;
+  user_data_mail_entry_t mailbox[USER_DATA_MAILBOX_LIMIT];
+  char profile_picture[USER_DATA_PROFILE_PICTURE_V2_LEN];
+  alpha_centauri_save_t alpha;
+  uint32_t flag_count;
+  uint32_t flag_history_count;
+  uint64_t flag_history[USER_DATA_FLAG_HISTORY_LIMIT];
+  uint64_t last_updated;
+  uint8_t reserved[64];
+} user_data_record_v2_t;
 
 static bool user_data_is_directory(const char *path) {
   if (path == NULL || path[0] == '\0') {
@@ -230,15 +247,37 @@ bool user_data_load(const char *root, const char *username, user_data_record_t *
 
   const size_t file_size = (size_t)st.st_size;
   const size_t expected_size = sizeof(user_data_record_t);
+  const size_t v2_size = sizeof(user_data_record_v2_t);
   const size_t legacy_size = sizeof(user_data_record_v1_t);
 
   user_data_record_t temp;
-  bool legacy = false;
+  bool needs_upgrade = false;
   bool loaded = false;
 
   if (file_size == expected_size) {
     size_t read = fread(&temp, sizeof(temp), 1U, fp);
     if (read == 1U && temp.magic == USER_DATA_MAGIC && temp.version == USER_DATA_VERSION) {
+      loaded = true;
+    }
+  } else if (file_size == v2_size) {
+    user_data_record_v2_t legacy_record;
+    size_t read = fread(&legacy_record, sizeof(legacy_record), 1U, fp);
+    if (read == 1U && legacy_record.magic == USER_DATA_MAGIC &&
+        legacy_record.version == USER_DATA_VERSION_V2) {
+      memset(&temp, 0, sizeof(temp));
+      temp.magic = USER_DATA_MAGIC;
+      temp.version = USER_DATA_VERSION;
+      snprintf(temp.username, sizeof(temp.username), "%s", legacy_record.username);
+      temp.mailbox_count = legacy_record.mailbox_count;
+      memcpy(temp.mailbox, legacy_record.mailbox, sizeof(temp.mailbox));
+      memcpy(temp.profile_picture, legacy_record.profile_picture, sizeof(legacy_record.profile_picture));
+      temp.alpha = legacy_record.alpha;
+      temp.flag_count = legacy_record.flag_count;
+      temp.flag_history_count = legacy_record.flag_history_count;
+      memcpy(temp.flag_history, legacy_record.flag_history, sizeof(temp.flag_history));
+      temp.last_updated = legacy_record.last_updated;
+      memset(temp.reserved, 0, sizeof(temp.reserved));
+      needs_upgrade = true;
       loaded = true;
     }
   } else if (file_size == legacy_size) {
@@ -259,7 +298,7 @@ bool user_data_load(const char *root, const char *username, user_data_record_t *
       memcpy(temp.flag_history, legacy_record.flag_history, sizeof(temp.flag_history));
       temp.last_updated = legacy_record.last_updated;
       memset(temp.reserved, 0, sizeof(temp.reserved));
-      legacy = true;
+      needs_upgrade = true;
       loaded = true;
     }
   }
@@ -271,7 +310,7 @@ bool user_data_load(const char *root, const char *username, user_data_record_t *
   }
 
   user_data_normalize_record(&temp, username);
-  if (legacy) {
+  if (needs_upgrade) {
     temp.version = USER_DATA_VERSION;
   }
   *record = temp;
