@@ -17,12 +17,16 @@
 #include <unistd.h>
 
 #define USER_DATA_MAGIC 0x4D424F58U /* 'MBOX' */
-#define USER_DATA_VERSION 3U
+#define USER_DATA_VERSION 4U
+#define USER_DATA_VERSION_V3 3U
 #define USER_DATA_VERSION_V2 2U
 #define USER_DATA_VERSION_LEGACY 1U
 
 #define USER_DATA_PROFILE_PICTURE_V1_LEN 512U
 #define USER_DATA_PROFILE_PICTURE_V2_LEN 4096U
+#define USER_DATA_PROFILE_PICTURE_V3_LEN 10240U
+
+static size_t user_data_column_reset_sequence_length(const char *text);
 
 typedef struct user_data_record_v1 {
   uint32_t magic;
@@ -53,6 +57,57 @@ typedef struct user_data_record_v2 {
   uint64_t last_updated;
   uint8_t reserved[64];
 } user_data_record_v2_t;
+
+typedef struct user_data_record_v3 {
+  uint32_t magic;
+  uint32_t version;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  uint32_t mailbox_count;
+  user_data_mail_entry_t mailbox[USER_DATA_MAILBOX_LIMIT];
+  char profile_picture[USER_DATA_PROFILE_PICTURE_V3_LEN];
+  alpha_centauri_save_t alpha;
+  uint32_t flag_count;
+  uint32_t flag_history_count;
+  uint64_t flag_history[USER_DATA_FLAG_HISTORY_LIMIT];
+  uint64_t last_updated;
+  uint8_t reserved[64];
+} user_data_record_v3_t;
+
+static size_t user_data_column_reset_sequence_length(const char *text) {
+  if (text == NULL) {
+    return 0U;
+  }
+
+  if (text[0] == '\033' && text[1] == '[' && text[2] == '1' && text[3] == 'G') {
+    return 4U;
+  }
+
+  if (text[0] == '[' && text[1] == '1' && text[2] == 'G') {
+    return 3U;
+  }
+
+  return 0U;
+}
+
+static void user_data_strip_column_reset(char *text) {
+  if (text == NULL || text[0] == '\0') {
+    return;
+  }
+
+  char *dst = text;
+  const char *src = text;
+  while (*src != '\0') {
+    size_t skip = user_data_column_reset_sequence_length(src);
+    if (skip > 0U) {
+      src += skip;
+      continue;
+    }
+
+    *dst++ = *src++;
+  }
+
+  *dst = '\0';
+}
 
 static bool user_data_is_directory(const char *path) {
   if (path == NULL || path[0] == '\0') {
@@ -179,6 +234,7 @@ static void user_data_normalize_record(user_data_record_t *record, const char *u
     record->flag_history_count = USER_DATA_FLAG_HISTORY_LIMIT;
   }
   record->profile_picture[USER_DATA_PROFILE_PICTURE_LEN - 1U] = '\0';
+  user_data_strip_column_reset(record->profile_picture);
   if (username != NULL && username[0] != '\0') {
     snprintf(record->username, sizeof(record->username), "%s", username);
   }
@@ -247,6 +303,7 @@ bool user_data_load(const char *root, const char *username, user_data_record_t *
 
   const size_t file_size = (size_t)st.st_size;
   const size_t expected_size = sizeof(user_data_record_t);
+  const size_t v3_size = sizeof(user_data_record_v3_t);
   const size_t v2_size = sizeof(user_data_record_v2_t);
   const size_t legacy_size = sizeof(user_data_record_v1_t);
 
@@ -257,6 +314,27 @@ bool user_data_load(const char *root, const char *username, user_data_record_t *
   if (file_size == expected_size) {
     size_t read = fread(&temp, sizeof(temp), 1U, fp);
     if (read == 1U && temp.magic == USER_DATA_MAGIC && temp.version == USER_DATA_VERSION) {
+      loaded = true;
+    }
+  } else if (file_size == v3_size) {
+    user_data_record_v3_t legacy_record;
+    size_t read = fread(&legacy_record, sizeof(legacy_record), 1U, fp);
+    if (read == 1U && legacy_record.magic == USER_DATA_MAGIC &&
+        legacy_record.version == USER_DATA_VERSION_V3) {
+      memset(&temp, 0, sizeof(temp));
+      temp.magic = USER_DATA_MAGIC;
+      temp.version = USER_DATA_VERSION;
+      snprintf(temp.username, sizeof(temp.username), "%s", legacy_record.username);
+      temp.mailbox_count = legacy_record.mailbox_count;
+      memcpy(temp.mailbox, legacy_record.mailbox, sizeof(temp.mailbox));
+      memcpy(temp.profile_picture, legacy_record.profile_picture, sizeof(legacy_record.profile_picture));
+      temp.alpha = legacy_record.alpha;
+      temp.flag_count = legacy_record.flag_count;
+      temp.flag_history_count = legacy_record.flag_history_count;
+      memcpy(temp.flag_history, legacy_record.flag_history, sizeof(temp.flag_history));
+      temp.last_updated = legacy_record.last_updated;
+      memset(temp.reserved, 0, sizeof(temp.reserved));
+      needs_upgrade = true;
       loaded = true;
     }
   } else if (file_size == v2_size) {
