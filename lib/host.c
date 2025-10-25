@@ -12846,6 +12846,8 @@ static bool session_run_captcha(session_ctx_t *ctx) {
   captcha_prompt_t prompt;
   session_build_captcha_prompt(ctx, &prompt);
   host_update_last_captcha_prompt(ctx->owner, &prompt);
+  session_send_system_line(ctx, "For Windows users: CHANGE TERMINAL ENCODING TO UTF-8");
+  session_send_system_line(ctx, "INFO: Chinese question is in Traditional one to cover regions those are NOT Mainland China.");
   session_send_system_line(ctx, "Before entering the room, solve this small puzzle.");
   char korean_prompt_line[sizeof(prompt.question_ko) + 16];
   snprintf(korean_prompt_line, sizeof(korean_prompt_line), "캡챠: %s", prompt.question_ko);
