@@ -1452,6 +1452,7 @@ static void session_bbs_read(session_ctx_t *ctx, uint64_t id);
 static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments);
 static void session_bbs_capture_body_text(session_ctx_t *ctx, const char *text);
 static void session_bbs_capture_body_line(session_ctx_t *ctx, const char *line);
+static bool session_bbs_capture_continue(const session_ctx_t *ctx);
 static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments);
 static void session_bbs_regen_post(session_ctx_t *ctx, uint64_t id);
 static void session_bbs_delete(session_ctx_t *ctx, uint64_t id);
@@ -1504,6 +1505,11 @@ static void session_asciiart_capture_text(session_ctx_t *ctx, const char *text);
 static void session_asciiart_capture_line(session_ctx_t *ctx, const char *line);
 static void session_asciiart_commit(session_ctx_t *ctx);
 static void session_asciiart_cancel(session_ctx_t *ctx, const char *reason);
+typedef void (*session_text_line_consumer_t)(session_ctx_t *, const char *);
+typedef bool (*session_text_continue_predicate_t)(const session_ctx_t *);
+static void session_capture_multiline_text(session_ctx_t *ctx, const char *text, session_text_line_consumer_t consumer,
+                                           session_text_continue_predicate_t should_continue);
+static bool session_asciiart_capture_continue(const session_ctx_t *ctx);
 static void session_handle_game(session_ctx_t *ctx, const char *arguments);
 static void session_game_suspend(session_ctx_t *ctx, const char *reason);
 static int session_channel_read_poll(session_ctx_t *ctx, char *buffer, size_t length, int timeout_ms);
@@ -12950,10 +12956,6 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  if (normalized[0] == '\0') {
-    return;
-  }
-
   if (ctx->game.active) {
     if (strcmp(normalized, "/suspend!") == 0) {
       session_game_suspend(ctx, "Game suspended.");
@@ -16586,28 +16588,7 @@ static void session_bbs_capture_body_text(session_ctx_t *ctx, const char *text) 
     return;
   }
 
-  const char *segment = text;
-  for (const char *cursor = text;; ++cursor) {
-    char ch = *cursor;
-    if (ch != '\n' && ch != '\0') {
-      continue;
-    }
-
-    size_t length = (size_t)(cursor - segment);
-    char line[SSH_CHATTER_MAX_INPUT_LEN];
-    if (length >= sizeof(line)) {
-      length = sizeof(line) - 1U;
-    }
-    if (length > 0U) {
-      memcpy(line, segment, length);
-    }
-    line[length] = '\0';
-    session_bbs_capture_body_line(ctx, line);
-    if (!ctx->bbs_post_pending || ch == '\0') {
-      break;
-    }
-    segment = cursor + 1;
-  }
+  session_capture_multiline_text(ctx, text, session_bbs_capture_body_line, session_bbs_capture_continue);
 }
 
 static void session_bbs_capture_body_line(session_ctx_t *ctx, const char *line) {
@@ -17395,33 +17376,102 @@ static void session_asciiart_cancel(session_ctx_t *ctx, const char *reason) {
   }
 }
 
+static bool session_asciiart_capture_continue(const session_ctx_t *ctx) {
+  return ctx != NULL && ctx->asciiart_pending;
+}
+
+static bool session_bbs_capture_continue(const session_ctx_t *ctx) {
+  return ctx != NULL && ctx->bbs_post_pending;
+}
+
+static void session_capture_multiline_text(session_ctx_t *ctx, const char *text, session_text_line_consumer_t consumer,
+                                           session_text_continue_predicate_t should_continue) {
+  if (ctx == NULL || text == NULL || consumer == NULL || should_continue == NULL) {
+    return;
+  }
+
+  char line[SSH_CHATTER_MAX_INPUT_LEN];
+  size_t line_length = 0U;
+  bool emitted = false;
+
+  const char *cursor = text;
+  while (*cursor != '\0') {
+    char ch = *cursor++;
+    if (ch == '\\') {
+      char next = *cursor;
+      if (next == 'r') {
+        ++cursor;
+        if (*cursor == '\\' && cursor[1] == 'n') {
+          cursor += 2;
+        }
+        line[line_length] = '\0';
+        consumer(ctx, line);
+        emitted = true;
+        line_length = 0U;
+        if (!should_continue(ctx)) {
+          return;
+        }
+        continue;
+      }
+      if (next == 'n') {
+        ++cursor;
+        line[line_length] = '\0';
+        consumer(ctx, line);
+        emitted = true;
+        line_length = 0U;
+        if (!should_continue(ctx)) {
+          return;
+        }
+        continue;
+      }
+      if (next == '\\') {
+        ++cursor;
+        ch = '\\';
+      }
+    }
+
+    if (ch == '\r') {
+      if (*cursor == '\n') {
+        ++cursor;
+      }
+      line[line_length] = '\0';
+      consumer(ctx, line);
+      emitted = true;
+      line_length = 0U;
+      if (!should_continue(ctx)) {
+        return;
+      }
+      continue;
+    }
+
+    if (ch == '\n') {
+      line[line_length] = '\0';
+      consumer(ctx, line);
+      emitted = true;
+      line_length = 0U;
+      if (!should_continue(ctx)) {
+        return;
+      }
+      continue;
+    }
+
+    if (line_length + 1U < sizeof(line)) {
+      line[line_length++] = ch;
+    }
+  }
+
+  if (line_length > 0U || !emitted) {
+    line[line_length] = '\0';
+    consumer(ctx, line);
+  }
+}
+
 static void session_asciiart_capture_text(session_ctx_t *ctx, const char *text) {
   if (ctx == NULL || !ctx->asciiart_pending || text == NULL) {
     return;
   }
 
-  const char *segment = text;
-  for (const char *cursor = text;; ++cursor) {
-    char ch = *cursor;
-    if (ch != '\n' && ch != '\0') {
-      continue;
-    }
-
-    size_t length = (size_t)(cursor - segment);
-    char line[SSH_CHATTER_MAX_INPUT_LEN];
-    if (length >= sizeof(line)) {
-      length = sizeof(line) - 1U;
-    }
-    if (length > 0U) {
-      memcpy(line, segment, length);
-    }
-    line[length] = '\0';
-    session_asciiart_capture_line(ctx, line);
-    if (!ctx->asciiart_pending || ch == '\0') {
-      break;
-    }
-    segment = cursor + 1;
-  }
+  session_capture_multiline_text(ctx, text, session_asciiart_capture_line, session_asciiart_capture_continue);
 }
 
 static void session_asciiart_capture_line(session_ctx_t *ctx, const char *line) {
