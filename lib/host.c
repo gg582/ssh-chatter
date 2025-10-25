@@ -12926,7 +12926,7 @@ static void session_handle_username_conflict_input(session_ctx_t *ctx, const cha
 }
 
 static void session_process_line(session_ctx_t *ctx, const char *line) {
-  if (ctx == NULL || line == NULL || line[0] == '\0') {
+  if (ctx == NULL || line == NULL) {
     return;
   }
 
@@ -12941,6 +12941,10 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
 
   if (ctx->bbs_post_pending) {
     session_bbs_capture_body_line(ctx, normalized);
+    return;
+  }
+
+  if (normalized[0] == '\0') {
     return;
   }
 
@@ -23774,10 +23778,13 @@ static void *session_thread(void *arg) {
 
       if (ch == '\r' || ch == '\n') {
         session_apply_background_fill(ctx);
+        const bool composing_draft = ctx->bbs_post_pending || ctx->asciiart_pending;
         if (ctx->input_length > 0U) {
           ctx->input_buffer[ctx->input_length] = '\0';
           session_history_record(ctx, ctx->input_buffer);
           session_process_line(ctx, ctx->input_buffer);
+        } else if (composing_draft) {
+          session_process_line(ctx, "");
         }
         session_clear_input(ctx);
         if (ctx->should_exit) {
