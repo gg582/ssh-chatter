@@ -1463,6 +1463,8 @@ static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
 static void session_bbs_queue_translation(session_ctx_t *ctx, const bbs_post_t *post);
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, const char *notice,
                                     bool reset_scroll, bool scroll_to_bottom);
+static bool host_user_data_load_existing(host_t *host, const char *username, user_data_record_t *record,
+                                        bool create_if_missing);
 static bool session_bbs_scroll(session_ctx_t *ctx, int direction, size_t step);
 static bool session_bbs_refresh_view(session_ctx_t *ctx);
 static void session_handle_rss(session_ctx_t *ctx, const char *arguments);
@@ -15964,6 +15966,37 @@ static size_t session_bbs_render_post_iterate(session_ctx_t *ctx, const bbs_post
     session_bbs_emit_line_if_visible(ctx, tag_line, false, offset, window, emit, &line_index);
   } else {
     session_bbs_emit_line_if_visible(ctx, "Tags  : (none)", false, offset, window, emit, &line_index);
+  }
+
+  if (ctx != NULL && ctx->owner != NULL) {
+    user_data_record_t author_record;
+    if (host_user_data_load_existing(ctx->owner, post->author, &author_record, false) &&
+        author_record.profile_picture[0] != '\0') {
+      session_format_separator_line(ctx, "Profile Picture", separator_line, sizeof(separator_line));
+      session_bbs_emit_line_if_visible(ctx, separator_line, false, offset, window, emit, &line_index);
+
+      const char *picture_cursor = author_record.profile_picture;
+      while (picture_cursor != NULL && *picture_cursor != '\0') {
+        const char *newline = strchr(picture_cursor, '\n');
+        if (newline == NULL) {
+          session_bbs_emit_line_if_visible(ctx, picture_cursor, true, offset, window, emit, &line_index);
+          break;
+        }
+
+        size_t len = (size_t)(newline - picture_cursor);
+        if (len >= SSH_CHATTER_MESSAGE_LIMIT) {
+          len = SSH_CHATTER_MESSAGE_LIMIT - 1U;
+        }
+
+        char line[SSH_CHATTER_MESSAGE_LIMIT];
+        memcpy(line, picture_cursor, len);
+        line[len] = '\0';
+        session_bbs_emit_line_if_visible(ctx, line, true, offset, window, emit, &line_index);
+        picture_cursor = newline + 1;
+      }
+
+      session_bbs_emit_line_if_visible(ctx, "", false, offset, window, emit, &line_index);
+    }
   }
 
   session_format_separator_line(ctx, "Body", separator_line, sizeof(separator_line));
