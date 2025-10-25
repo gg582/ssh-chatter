@@ -2075,11 +2075,12 @@ typedef struct host_state_grant_entry {
 } host_state_grant_entry_t;
 
 static const uint32_t BBS_STATE_MAGIC = 0x42425331U; /* 'BBS1' */
-static const uint32_t BBS_STATE_VERSION = 3U;
+static const uint32_t BBS_STATE_VERSION = 4U;
 
 #define SSH_CHATTER_BBS_TITLE_LEN_V1 96U
 #define SSH_CHATTER_BBS_BODY_LEN_V1 2048U
 #define SSH_CHATTER_BBS_BODY_LEN_V2 10240U
+#define SSH_CHATTER_BBS_BODY_LEN_V3 20480U
 
 typedef struct bbs_state_header {
   uint32_t magic;
@@ -2133,6 +2134,19 @@ typedef struct bbs_state_post_entry_v2 {
   char tags[SSH_CHATTER_BBS_MAX_TAGS][SSH_CHATTER_BBS_TAG_LEN];
   bbs_state_comment_entry_t comments[SSH_CHATTER_BBS_MAX_COMMENTS];
 } bbs_state_post_entry_v2_t;
+
+typedef struct bbs_state_post_entry_v3 {
+  uint64_t id;
+  int64_t created_at;
+  int64_t bumped_at;
+  uint32_t tag_count;
+  uint32_t comment_count;
+  char author[SSH_CHATTER_USERNAME_LEN];
+  char title[SSH_CHATTER_BBS_TITLE_LEN];
+  char body[SSH_CHATTER_BBS_BODY_LEN_V3];
+  char tags[SSH_CHATTER_BBS_MAX_TAGS][SSH_CHATTER_BBS_TAG_LEN];
+  bbs_state_comment_entry_t comments[SSH_CHATTER_BBS_MAX_COMMENTS];
+} bbs_state_post_entry_v3_t;
 
 static const uint32_t RSS_STATE_MAGIC = 0x52535331U; /* 'RSS1' */
 static const uint32_t RSS_STATE_VERSION = 1U;
@@ -8074,6 +8088,31 @@ static void host_bbs_state_load(host_t *host) {
       }
     } else if (header.version == 2U) {
       bbs_state_post_entry_v2_t legacy = {0};
+      if (fread(&legacy, sizeof(legacy), 1U, fp) != 1U) {
+        success = false;
+        break;
+      }
+
+      serialized.id = legacy.id;
+      serialized.created_at = legacy.created_at;
+      serialized.bumped_at = legacy.bumped_at;
+      serialized.tag_count = legacy.tag_count;
+      serialized.comment_count = legacy.comment_count;
+      snprintf(serialized.author, sizeof(serialized.author), "%s", legacy.author);
+      snprintf(serialized.title, sizeof(serialized.title), "%s", legacy.title);
+      snprintf(serialized.body, sizeof(serialized.body), "%s", legacy.body);
+      for (size_t tag = 0U; tag < SSH_CHATTER_BBS_MAX_TAGS; ++tag) {
+        snprintf(serialized.tags[tag], sizeof(serialized.tags[tag]), "%s", legacy.tags[tag]);
+      }
+      for (size_t comment = 0U; comment < SSH_CHATTER_BBS_MAX_COMMENTS; ++comment) {
+        snprintf(serialized.comments[comment].author, sizeof(serialized.comments[comment].author), "%s",
+                 legacy.comments[comment].author);
+        snprintf(serialized.comments[comment].text, sizeof(serialized.comments[comment].text), "%s",
+                 legacy.comments[comment].text);
+        serialized.comments[comment].created_at = legacy.comments[comment].created_at;
+      }
+    } else if (header.version == 3U) {
+      bbs_state_post_entry_v3_t legacy = {0};
       if (fread(&legacy, sizeof(legacy), 1U, fp) != 1U) {
         success = false;
         break;
