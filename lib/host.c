@@ -25448,6 +25448,9 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
           case ETIMEDOUT:
           case ENOTCONN:
           case EPIPE:
+#ifdef EPROTO
+          case EPROTO:
+#endif
             fatal_socket_error = false;
             break;
           case EBADF:
