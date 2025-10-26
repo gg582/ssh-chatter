@@ -104,6 +104,7 @@ static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
 typedef enum host_join_attempt_result {
   HOST_JOIN_ATTEMPT_OK = 0,
   HOST_JOIN_ATTEMPT_KICK,
+  HOST_JOIN_ATTEMPT_BAN,
 } host_join_attempt_result_t;
 #define SSH_CHATTER_CHANNEL_RECOVERY_LIMIT ((unsigned int)INT_MAX)
 #define SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS 200000000L
@@ -22254,12 +22255,24 @@ static host_join_attempt_result_t host_register_join_attempt(host_t *host, const
   }
   pthread_mutex_unlock(&host->lock);
 
-  if ((ban_ip || ban_same_name || kick_ip) && !exempt_ip) {
-    if (ban_ip || ban_same_name) {
-      printf("[auto-kick] %s flagged for rapid reconnects\n", ip);
+  if (!exempt_ip && (ban_ip || ban_same_name)) {
+    const char *ban_user = (ban_same_name && username != NULL && username[0] != '\0') ? username : "";
+    (void)host_add_ban_entry(host, ban_user, ip);
+
+    if (ban_ip && ban_same_name) {
+      printf("[auto-ban] %s (%s) banned for rapid reconnects and repeated username attempts\n", ip,
+             ban_user[0] != '\0' ? ban_user : "unknown");
+    } else if (ban_ip) {
+      printf("[auto-ban] %s banned for rapid reconnects\n", ip);
     } else {
-      printf("[auto-kick] %s exceeded join limit\n", ip);
+      printf("[auto-ban] %s (%s) banned for repeated username attempts\n", ip,
+             ban_user[0] != '\0' ? ban_user : "unknown");
     }
+    return HOST_JOIN_ATTEMPT_BAN;
+  }
+
+  if (!exempt_ip && kick_ip) {
+    printf("[auto-kick] %s exceeded join limit\n", ip);
     return HOST_JOIN_ATTEMPT_KICK;
   }
 
@@ -24228,6 +24241,11 @@ static void *session_thread(void *arg) {
 
   host_join_attempt_result_t join_result =
       host_register_join_attempt(ctx->owner, ctx->user.name, ctx->client_ip);
+  if (join_result == HOST_JOIN_ATTEMPT_BAN) {
+    session_send_system_line(ctx, "Rapid reconnect detected. You have been banned.");
+    session_cleanup(ctx);
+    return NULL;
+  }
   if (join_result == HOST_JOIN_ATTEMPT_KICK) {
     session_send_system_line(ctx, "Rapid reconnect detected. You have been kicked.");
     session_cleanup(ctx);
