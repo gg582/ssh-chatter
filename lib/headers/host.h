@@ -92,6 +92,8 @@ typedef struct join_activity_entry {
   struct timespec last_attempt;
   size_t rapid_attempts;
   size_t same_name_attempts;
+  struct timespec join_window_start;
+  size_t join_window_attempts;
   struct timespec last_suspicious;
   size_t suspicious_events;
   bool asciiart_has_cooldown;
@@ -609,6 +611,7 @@ typedef struct host {
   join_activity_entry_t *join_activity;
   size_t join_activity_count;
   size_t join_activity_capacity;
+  _Atomic bool captcha_enabled;
   uint64_t captcha_nonce;
   bool has_last_captcha;
   char last_captcha_question[1024];

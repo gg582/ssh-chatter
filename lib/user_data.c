@@ -17,7 +17,8 @@
 #include <unistd.h>
 
 #define USER_DATA_MAGIC 0x4D424F58U /* 'MBOX' */
-#define USER_DATA_VERSION 4U
+#define USER_DATA_VERSION 5U
+#define USER_DATA_VERSION_V4 4U
 #define USER_DATA_VERSION_V3 3U
 #define USER_DATA_VERSION_V2 2U
 #define USER_DATA_VERSION_LEGACY 1U
@@ -27,6 +28,7 @@
 #define USER_DATA_PROFILE_PICTURE_V3_LEN 10240U
 
 #define USER_DATA_PROFILE_DIRECTORY "profiles"
+#define USER_DATA_VARIANT_LIMIT 32U
 
 static bool user_data_profile_directory_path(const char *root, char *path, size_t length);
 static bool user_data_profile_picture_path(const char *root, const char *username, char *path, size_t length);
@@ -79,6 +81,21 @@ typedef struct user_data_record_v3 {
   uint64_t last_updated;
   uint8_t reserved[64];
 } user_data_record_v3_t;
+
+typedef struct user_data_record_v4 {
+  uint32_t magic;
+  uint32_t version;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  uint32_t mailbox_count;
+  user_data_mail_entry_t mailbox[USER_DATA_MAILBOX_LIMIT];
+  char profile_picture[USER_DATA_PROFILE_PICTURE_LEN];
+  alpha_centauri_save_t alpha;
+  uint32_t flag_count;
+  uint32_t flag_history_count;
+  uint64_t flag_history[USER_DATA_FLAG_HISTORY_LIMIT];
+  uint64_t last_updated;
+  uint8_t reserved[64];
+} user_data_record_v4_t;
 
 static size_t user_data_column_reset_sequence_length(const char *text) {
   if (text == NULL) {
@@ -164,6 +181,171 @@ static bool user_data_ensure_parent(const char *path) {
   return user_data_create_directory(parent);
 }
 
+static bool user_data_file_exists(const char *path) {
+  if (path == NULL || path[0] == '\0') {
+    return false;
+  }
+
+  return access(path, F_OK) == 0;
+}
+
+static bool user_data_build_variant_name(const char *base, size_t index, char *buffer, size_t length) {
+  if (buffer == NULL || length == 0U || base == NULL || base[0] == '\0') {
+    return false;
+  }
+
+  int written;
+  if (index == 0U) {
+    written = snprintf(buffer, length, "%s", base);
+  } else {
+    written = snprintf(buffer, length, "%s-%zu", base, index);
+  }
+
+  return written >= 0 && (size_t)written < length;
+}
+
+static bool user_data_load_raw(const char *path, user_data_record_t *record, bool *needs_upgrade) {
+  if (record == NULL || path == NULL || path[0] == '\0') {
+    return false;
+  }
+
+  FILE *fp = fopen(path, "rb");
+  if (fp == NULL) {
+    return false;
+  }
+
+  struct stat st;
+  if (fstat(fileno(fp), &st) != 0) {
+    fclose(fp);
+    return false;
+  }
+
+  if (fseek(fp, 0L, SEEK_SET) != 0) {
+    fclose(fp);
+    return false;
+  }
+
+  if (st.st_size < 0) {
+    fclose(fp);
+    return false;
+  }
+
+  const size_t file_size = (size_t)st.st_size;
+  const size_t expected_size = sizeof(user_data_record_t);
+  const size_t v4_size = sizeof(user_data_record_v4_t);
+  const size_t v3_size = sizeof(user_data_record_v3_t);
+  const size_t v2_size = sizeof(user_data_record_v2_t);
+  const size_t legacy_size = sizeof(user_data_record_v1_t);
+
+  user_data_record_t temp;
+  bool upgrade = false;
+  bool loaded = false;
+
+  if (file_size == expected_size) {
+    size_t read = fread(&temp, sizeof(temp), 1U, fp);
+    if (read == 1U && temp.magic == USER_DATA_MAGIC && temp.version == USER_DATA_VERSION) {
+      loaded = true;
+    }
+  } else if (file_size == v4_size) {
+    user_data_record_v4_t legacy4;
+    size_t read = fread(&legacy4, sizeof(legacy4), 1U, fp);
+    if (read == 1U && legacy4.magic == USER_DATA_MAGIC && legacy4.version == USER_DATA_VERSION_V4) {
+      memset(&temp, 0, sizeof(temp));
+      temp.magic = USER_DATA_MAGIC;
+      temp.version = USER_DATA_VERSION;
+      snprintf(temp.username, sizeof(temp.username), "%s", legacy4.username);
+      temp.last_ip[0] = '\0';
+      temp.mailbox_count = legacy4.mailbox_count;
+      memcpy(temp.mailbox, legacy4.mailbox, sizeof(temp.mailbox));
+      memcpy(temp.profile_picture, legacy4.profile_picture, sizeof(legacy4.profile_picture));
+      temp.alpha = legacy4.alpha;
+      temp.flag_count = legacy4.flag_count;
+      temp.flag_history_count = legacy4.flag_history_count;
+      memcpy(temp.flag_history, legacy4.flag_history, sizeof(temp.flag_history));
+      temp.last_updated = legacy4.last_updated;
+      memset(temp.reserved, 0, sizeof(temp.reserved));
+      upgrade = true;
+      loaded = true;
+    }
+  } else if (file_size == v3_size) {
+    user_data_record_v3_t legacy3;
+    size_t read = fread(&legacy3, sizeof(legacy3), 1U, fp);
+    if (read == 1U && legacy3.magic == USER_DATA_MAGIC && legacy3.version == USER_DATA_VERSION_V3) {
+      memset(&temp, 0, sizeof(temp));
+      temp.magic = USER_DATA_MAGIC;
+      temp.version = USER_DATA_VERSION;
+      snprintf(temp.username, sizeof(temp.username), "%s", legacy3.username);
+      temp.last_ip[0] = '\0';
+      temp.mailbox_count = legacy3.mailbox_count;
+      memcpy(temp.mailbox, legacy3.mailbox, sizeof(temp.mailbox));
+      memcpy(temp.profile_picture, legacy3.profile_picture, sizeof(legacy3.profile_picture));
+      temp.alpha = legacy3.alpha;
+      temp.flag_count = legacy3.flag_count;
+      temp.flag_history_count = legacy3.flag_history_count;
+      memcpy(temp.flag_history, legacy3.flag_history, sizeof(temp.flag_history));
+      temp.last_updated = legacy3.last_updated;
+      memset(temp.reserved, 0, sizeof(temp.reserved));
+      upgrade = true;
+      loaded = true;
+    }
+  } else if (file_size == v2_size) {
+    user_data_record_v2_t legacy2;
+    size_t read = fread(&legacy2, sizeof(legacy2), 1U, fp);
+    if (read == 1U && legacy2.magic == USER_DATA_MAGIC && legacy2.version == USER_DATA_VERSION_V2) {
+      memset(&temp, 0, sizeof(temp));
+      temp.magic = USER_DATA_MAGIC;
+      temp.version = USER_DATA_VERSION;
+      snprintf(temp.username, sizeof(temp.username), "%s", legacy2.username);
+      temp.last_ip[0] = '\0';
+      temp.mailbox_count = legacy2.mailbox_count;
+      memcpy(temp.mailbox, legacy2.mailbox, sizeof(temp.mailbox));
+      memcpy(temp.profile_picture, legacy2.profile_picture, sizeof(legacy2.profile_picture));
+      temp.alpha = legacy2.alpha;
+      temp.flag_count = legacy2.flag_count;
+      temp.flag_history_count = legacy2.flag_history_count;
+      memcpy(temp.flag_history, legacy2.flag_history, sizeof(temp.flag_history));
+      temp.last_updated = legacy2.last_updated;
+      memset(temp.reserved, 0, sizeof(temp.reserved));
+      upgrade = true;
+      loaded = true;
+    }
+  } else if (file_size == legacy_size) {
+    user_data_record_v1_t legacy1;
+    size_t read = fread(&legacy1, sizeof(legacy1), 1U, fp);
+    if (read == 1U && legacy1.magic == USER_DATA_MAGIC && legacy1.version == USER_DATA_VERSION_LEGACY) {
+      memset(&temp, 0, sizeof(temp));
+      temp.magic = USER_DATA_MAGIC;
+      temp.version = USER_DATA_VERSION;
+      snprintf(temp.username, sizeof(temp.username), "%s", legacy1.username);
+      temp.last_ip[0] = '\0';
+      temp.mailbox_count = legacy1.mailbox_count;
+      memcpy(temp.mailbox, legacy1.mailbox, sizeof(temp.mailbox));
+      memcpy(temp.profile_picture, legacy1.profile_picture, sizeof(legacy1.profile_picture));
+      temp.alpha = legacy1.alpha;
+      temp.flag_count = legacy1.flag_count;
+      temp.flag_history_count = legacy1.flag_history_count;
+      memcpy(temp.flag_history, legacy1.flag_history, sizeof(temp.flag_history));
+      temp.last_updated = legacy1.last_updated;
+      memset(temp.reserved, 0, sizeof(temp.reserved));
+      upgrade = true;
+      loaded = true;
+    }
+  }
+
+  fclose(fp);
+
+  if (!loaded) {
+    return false;
+  }
+
+  if (needs_upgrade != NULL) {
+    *needs_upgrade = upgrade;
+  }
+
+  *record = temp;
+  return true;
+}
+
 bool user_data_ensure_root(const char *root) {
   if (root == NULL || root[0] == '\0') {
     return false;
@@ -221,7 +403,8 @@ bool user_data_sanitize_username(const char *username, char *sanitized, size_t l
   return true;
 }
 
-bool user_data_path_for(const char *root, const char *username, char *path, size_t length) {
+bool user_data_path_for(const char *root, const char *username, const char *ip, bool create_if_missing,
+                        char *path, size_t length) {
   if (path == NULL || length == 0U || root == NULL || root[0] == '\0') {
     return false;
   }
@@ -231,11 +414,56 @@ bool user_data_path_for(const char *root, const char *username, char *path, size
     return false;
   }
 
-  int written = snprintf(path, length, "%s/%s.dat", root, sanitized);
-  if (written < 0 || (size_t)written >= length) {
+  if (ip == NULL || ip[0] == '\0') {
+    int written = snprintf(path, length, "%s/%s.dat", root, sanitized);
+    return written >= 0 && (size_t)written < length;
+  }
+
+  size_t available_index = USER_DATA_VARIANT_LIMIT;
+  char candidate_name[SSH_CHATTER_USERNAME_LEN * 2U];
+  char candidate_path[PATH_MAX];
+  for (size_t idx = 0U; idx < USER_DATA_VARIANT_LIMIT; ++idx) {
+    if (!user_data_build_variant_name(sanitized, idx, candidate_name, sizeof(candidate_name))) {
+      continue;
+    }
+
+    int written = snprintf(candidate_path, sizeof(candidate_path), "%s/%s.dat", root, candidate_name);
+    if (written < 0 || (size_t)written >= sizeof(candidate_path)) {
+      continue;
+    }
+
+    if (user_data_file_exists(candidate_path)) {
+      user_data_record_t existing;
+      if (user_data_load_raw(candidate_path, &existing, NULL)) {
+        bool username_match = strncmp(existing.username, username, sizeof(existing.username)) == 0;
+        bool ip_match = strncmp(existing.last_ip, ip, SSH_CHATTER_IP_LEN) == 0;
+        bool legacy_match = existing.last_ip[0] == '\0';
+        if (username_match && (ip_match || legacy_match)) {
+          if ((size_t)written < length) {
+            memcpy(path, candidate_path, (size_t)written + 1U);
+            return true;
+          }
+          return false;
+        }
+      }
+      continue;
+    }
+
+    if (available_index == USER_DATA_VARIANT_LIMIT) {
+      available_index = idx;
+    }
+  }
+
+  if (!create_if_missing || available_index == USER_DATA_VARIANT_LIMIT) {
     return false;
   }
-  return true;
+
+  if (!user_data_build_variant_name(sanitized, available_index, candidate_name, sizeof(candidate_name))) {
+    return false;
+  }
+
+  int written = snprintf(path, length, "%s/%s.dat", root, candidate_name);
+  return written >= 0 && (size_t)written < length;
 }
 
 static bool user_data_profile_directory_path(const char *root, char *path, size_t length) {
@@ -410,13 +638,14 @@ static void user_data_normalize_record(user_data_record_t *record, const char *u
     record->flag_history_count = USER_DATA_FLAG_HISTORY_LIMIT;
   }
   record->profile_picture[USER_DATA_PROFILE_PICTURE_LEN - 1U] = '\0';
+  record->last_ip[SSH_CHATTER_IP_LEN - 1U] = '\0';
   user_data_strip_column_reset(record->profile_picture);
   if (username != NULL && username[0] != '\0') {
     snprintf(record->username, sizeof(record->username), "%s", username);
   }
 }
 
-bool user_data_init(user_data_record_t *record, const char *username) {
+bool user_data_init(user_data_record_t *record, const char *username, const char *ip) {
   if (record == NULL) {
     return false;
   }
@@ -426,6 +655,9 @@ bool user_data_init(user_data_record_t *record, const char *username) {
   record->version = USER_DATA_VERSION;
   if (username != NULL) {
     snprintf(record->username, sizeof(record->username), "%s", username);
+  }
+  if (ip != NULL) {
+    snprintf(record->last_ip, sizeof(record->last_ip), "%s", ip);
   }
   record->alpha.active = 0U;
   record->alpha.stage = 0U;
@@ -446,120 +678,19 @@ bool user_data_init(user_data_record_t *record, const char *username) {
   return true;
 }
 
-bool user_data_load(const char *root, const char *username, user_data_record_t *record) {
+bool user_data_load(const char *root, const char *username, const char *ip, user_data_record_t *record) {
   if (record == NULL) {
     return false;
   }
 
   char path[PATH_MAX];
-  if (!user_data_path_for(root, username, path, sizeof(path))) {
+  if (!user_data_path_for(root, username, ip, false, path, sizeof(path))) {
     return false;
   }
-
-  FILE *fp = fopen(path, "rb");
-  if (fp == NULL) {
-    return false;
-  }
-
-  struct stat st;
-  if (fstat(fileno(fp), &st) != 0) {
-    fclose(fp);
-    return false;
-  }
-
-  if (fseek(fp, 0L, SEEK_SET) != 0) {
-    fclose(fp);
-    return false;
-  }
-
-  if (st.st_size < 0) {
-    fclose(fp);
-    return false;
-  }
-
-  const size_t file_size = (size_t)st.st_size;
-  const size_t expected_size = sizeof(user_data_record_t);
-  const size_t v3_size = sizeof(user_data_record_v3_t);
-  const size_t v2_size = sizeof(user_data_record_v2_t);
-  const size_t legacy_size = sizeof(user_data_record_v1_t);
 
   user_data_record_t temp;
   bool needs_upgrade = false;
-  bool loaded = false;
-
-  if (file_size == expected_size) {
-    size_t read = fread(&temp, sizeof(temp), 1U, fp);
-    if (read == 1U && temp.magic == USER_DATA_MAGIC && temp.version == USER_DATA_VERSION) {
-      loaded = true;
-    }
-  } else if (file_size == v3_size) {
-    user_data_record_v3_t legacy_record;
-    size_t read = fread(&legacy_record, sizeof(legacy_record), 1U, fp);
-    if (read == 1U && legacy_record.magic == USER_DATA_MAGIC &&
-        legacy_record.version == USER_DATA_VERSION_V3) {
-      memset(&temp, 0, sizeof(temp));
-      temp.magic = USER_DATA_MAGIC;
-      temp.version = USER_DATA_VERSION;
-      snprintf(temp.username, sizeof(temp.username), "%s", legacy_record.username);
-      temp.mailbox_count = legacy_record.mailbox_count;
-      memcpy(temp.mailbox, legacy_record.mailbox, sizeof(temp.mailbox));
-      memcpy(temp.profile_picture, legacy_record.profile_picture, sizeof(legacy_record.profile_picture));
-      temp.alpha = legacy_record.alpha;
-      temp.flag_count = legacy_record.flag_count;
-      temp.flag_history_count = legacy_record.flag_history_count;
-      memcpy(temp.flag_history, legacy_record.flag_history, sizeof(temp.flag_history));
-      temp.last_updated = legacy_record.last_updated;
-      memset(temp.reserved, 0, sizeof(temp.reserved));
-      needs_upgrade = true;
-      loaded = true;
-    }
-  } else if (file_size == v2_size) {
-    user_data_record_v2_t legacy_record;
-    size_t read = fread(&legacy_record, sizeof(legacy_record), 1U, fp);
-    if (read == 1U && legacy_record.magic == USER_DATA_MAGIC &&
-        legacy_record.version == USER_DATA_VERSION_V2) {
-      memset(&temp, 0, sizeof(temp));
-      temp.magic = USER_DATA_MAGIC;
-      temp.version = USER_DATA_VERSION;
-      snprintf(temp.username, sizeof(temp.username), "%s", legacy_record.username);
-      temp.mailbox_count = legacy_record.mailbox_count;
-      memcpy(temp.mailbox, legacy_record.mailbox, sizeof(temp.mailbox));
-      memcpy(temp.profile_picture, legacy_record.profile_picture, sizeof(legacy_record.profile_picture));
-      temp.alpha = legacy_record.alpha;
-      temp.flag_count = legacy_record.flag_count;
-      temp.flag_history_count = legacy_record.flag_history_count;
-      memcpy(temp.flag_history, legacy_record.flag_history, sizeof(temp.flag_history));
-      temp.last_updated = legacy_record.last_updated;
-      memset(temp.reserved, 0, sizeof(temp.reserved));
-      needs_upgrade = true;
-      loaded = true;
-    }
-  } else if (file_size == legacy_size) {
-    user_data_record_v1_t legacy_record;
-    size_t read = fread(&legacy_record, sizeof(legacy_record), 1U, fp);
-    if (read == 1U && legacy_record.magic == USER_DATA_MAGIC &&
-        legacy_record.version == USER_DATA_VERSION_LEGACY) {
-      memset(&temp, 0, sizeof(temp));
-      temp.magic = USER_DATA_MAGIC;
-      temp.version = USER_DATA_VERSION;
-      snprintf(temp.username, sizeof(temp.username), "%s", legacy_record.username);
-      temp.mailbox_count = legacy_record.mailbox_count;
-      memcpy(temp.mailbox, legacy_record.mailbox, sizeof(temp.mailbox));
-      memcpy(temp.profile_picture, legacy_record.profile_picture, sizeof(legacy_record.profile_picture));
-      temp.alpha = legacy_record.alpha;
-      temp.flag_count = legacy_record.flag_count;
-      temp.flag_history_count = legacy_record.flag_history_count;
-      memcpy(temp.flag_history, legacy_record.flag_history, sizeof(temp.flag_history));
-      temp.last_updated = legacy_record.last_updated;
-      memset(temp.reserved, 0, sizeof(temp.reserved));
-      needs_upgrade = true;
-      loaded = true;
-    }
-  }
-
-  fclose(fp);
-
-  if (!loaded) {
+  if (!user_data_load_raw(path, &temp, &needs_upgrade)) {
     return false;
   }
 
@@ -568,17 +699,21 @@ bool user_data_load(const char *root, const char *username, user_data_record_t *
   if (needs_upgrade) {
     temp.version = USER_DATA_VERSION;
   }
+  if (ip != NULL && ip[0] != '\0') {
+    snprintf(temp.last_ip, sizeof(temp.last_ip), "%s", ip);
+  }
   *record = temp;
   return true;
 }
 
-bool user_data_save(const char *root, const user_data_record_t *record) {
+bool user_data_save(const char *root, const user_data_record_t *record, const char *ip) {
   if (record == NULL) {
     return false;
   }
 
   char path[PATH_MAX];
-  if (!user_data_path_for(root, record->username, path, sizeof(path))) {
+  const char *effective_ip = (ip != NULL && ip[0] != '\0') ? ip : record->last_ip;
+  if (!user_data_path_for(root, record->username, effective_ip, true, path, sizeof(path))) {
     return false;
   }
 
@@ -605,6 +740,9 @@ bool user_data_save(const char *root, const user_data_record_t *record) {
   user_data_normalize_record(&normalized, record->username);
   normalized.magic = USER_DATA_MAGIC;
   normalized.version = USER_DATA_VERSION;
+  if (effective_ip != NULL && effective_ip[0] != '\0') {
+    snprintf(normalized.last_ip, sizeof(normalized.last_ip), "%s", effective_ip);
+  }
 
   user_data_record_t disk_record = normalized;
   /* Profile pictures are persisted in dedicated per-user .dat files. */
@@ -652,17 +790,17 @@ bool user_data_save(const char *root, const user_data_record_t *record) {
   return true;
 }
 
-bool user_data_ensure_exists(const char *root, const char *username, user_data_record_t *record) {
-  if (record != NULL && user_data_load(root, username, record)) {
+bool user_data_ensure_exists(const char *root, const char *username, const char *ip, user_data_record_t *record) {
+  if (record != NULL && user_data_load(root, username, ip, record)) {
     return true;
   }
 
   user_data_record_t temp;
-  if (!user_data_init(&temp, username)) {
+  if (!user_data_init(&temp, username, ip)) {
     return false;
   }
 
-  if (!user_data_save(root, &temp)) {
+  if (!user_data_save(root, &temp, ip)) {
     return false;
   }
 
