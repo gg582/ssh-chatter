@@ -2661,7 +2661,9 @@ static void session_assign_lan_privileges(session_ctx_t *ctx) {
     ctx->user.is_operator = true;
     ctx->auth.is_operator = true;
     ctx->user.is_lan_operator = true;
-    snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", LAN_OPS_NICKNAME);
+    if (ctx->user.name[0] == '\0') {
+      snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", LAN_OPS_NICKNAME);
+    }
   }
 }
 
