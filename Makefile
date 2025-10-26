@@ -2,8 +2,6 @@ CC := cc
 CFLAGS = -std=c2x -Ofast \
         -Ilib/headers \
         -Wall -Wextra -Werror -Wshadow -Wformat=2 -Wundef -Wconversion -Wdouble-promotion \
-        -fsanitize=address,leak,undefined,shift,bounds,float-divide-by-zero,vptr \
-        -fsanitize-address-use-after-scope \
         -fno-omit-frame-pointer -fstack-protector-strong -fno-common \
         -fPIC \
         -g \
@@ -28,9 +26,41 @@ CFLAGS = -std=c2x -Ofast \
 	-fno-asynchronous-unwind-tables \
 	-fstrict-aliasing \
 	-fstrict-overflow \
-	-fno-trapping-math
-COMMON_LDFLAGS = -fsanitize=address,leak,undefined,shift,bounds,float-divide-by-zero,vptr \
-        -lpthread -ldl -lcurl -lm -lgc
+	-fno-trapping-math \
+        -DGC_THREADS \
+        -DPARALLEL_MARK \
+        -DNO_DEBUGGING \
+        -DUSE_MMAP \
+        -DUSE_MUNMAP \
+        -DGC_LARGE_ALLOC \
+        -DGC_ATOMIC_UNCOLLECTABLE \
+        -DGC_ENABLE_INCREMENTAL \
+        -DGC_TIME_LIMIT=50 \
+        -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free \
+        -fmerge-all-constants \
+        -fipa-pure-const \
+        -fipa-cp-clone \
+        -floop-nest-optimize \
+        -fgraphite-identity -floop-interchange -floop-strip-mine -floop-block \
+        -fno-semantic-interposition \
+
+    COMMON_LDFLAGS = \
+        -lpthread -ldl -lcurl -lm -lgc \
+        -flto=$(shell nproc) -fuse-linker-plugin \
+        -Wl,-Ofast \
+        -Wl,--sort-common \
+        -Wl,-z,relro \
+        -Wl,-z,now \
+        -Wl,-Bsymbolic \
+        -Wl,--gc-sections \
+        -Wl,--as-needed \
+        -Wl,--strip-all \
+        -Wl,--relax \
+        -Wl,--no-undefined \
+        -Wl,--warn-execstack \
+        -Wl,-z,noexecstack \
+        -Wl,-z,separate-code
+	
 LDFLAGS = $(COMMON_LDFLAGS) -lssh
 
 TARGET := ssh-chatter

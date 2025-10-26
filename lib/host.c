@@ -3951,17 +3951,57 @@ static bool host_security_execute_clamav_backend(host_t *host, char *notice, siz
   struct timespec start = {0, 0};
   clock_gettime(CLOCK_MONOTONIC, &start);
 
-  FILE *pipe = popen(host->security_clamav_command, "r");
-  if (pipe == NULL) {
+  int pipefd[2];
+  if (pipe(pipefd) == -1) {
     int error_code = errno;
     char reason[128];
-    if (error_code != 0) {
-      snprintf(reason, sizeof(reason), "%s", strerror(error_code));
-    } else {
-      snprintf(reason, sizeof(reason), "%s", "unable to launch command");
-    }
-    snprintf(notice, notice_length, "* [security] Scheduled ClamAV scan failed to start (%s).", reason);
+    snprintf(reason, sizeof(reason), "%s", strerror(error_code));
+    snprintf(notice, notice_length,
+             "* [security] Scheduled ClamAV scan failed to create pipe (%s).", reason);
     host_security_disable_clamav(host, reason);
+    return true;
+  }
+
+  pid_t pid = fork();
+  if (pid == -1) {
+    int error_code = errno;
+    char reason[128];
+    snprintf(reason, sizeof(reason), "%s", strerror(error_code));
+    snprintf(notice, notice_length,
+             "* [security] Scheduled ClamAV scan fork() failed (%s).", reason);
+    host_security_disable_clamav(host, reason);
+    close(pipefd[0]);
+    close(pipefd[1]);
+    return true;
+  }
+
+  if (pid == 0) {
+    // child process: redirect stdout/stderr to pipe
+    close(pipefd[0]);
+    dup2(pipefd[1], STDOUT_FILENO);
+    dup2(pipefd[1], STDERR_FILENO);
+    close(pipefd[1]);
+
+    // execute clamscan without shell parsing issues
+    const char *argv[] = {"sh", "-c", host->security_clamav_command, NULL};
+    execvp(argv[0], (char *const *)argv);
+
+    // only runs if exec failed
+    fprintf(stderr, "[security] execvp() failed: %s\n", strerror(errno));
+    _exit(127);
+  }
+
+  // parent process: turn pipefd[0] into a FILE* for compatibility
+  close(pipefd[1]);
+  FILE *pipe = fdopen(pipefd[0], "r");
+  if (!pipe) {
+    int error_code = errno;
+    char reason[128];
+    snprintf(reason, sizeof(reason), "%s", strerror(error_code));
+    snprintf(notice, notice_length,
+             "* [security] Scheduled ClamAV scan fdopen() failed (%s).", reason);
+    host_security_disable_clamav(host, reason);
+    close(pipefd[0]);
     return true;
   }
 
