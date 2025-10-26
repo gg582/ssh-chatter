@@ -21582,6 +21582,9 @@ static void session_handle_captcha(session_ctx_t *ctx, const char *arguments) {
       snprintf(notice, sizeof(notice), "* [%s] enabled captcha for new connections.", ctx->user.name);
       host_history_record_system(host, notice);
       chat_room_broadcast(&host->room, notice, NULL);
+      pthread_mutex_lock(&host->lock);
+      host_state_save_locked(host);
+      pthread_mutex_unlock(&host->lock);
     }
     return;
   }
@@ -21596,6 +21599,9 @@ static void session_handle_captcha(session_ctx_t *ctx, const char *arguments) {
       snprintf(notice, sizeof(notice), "* [%s] disabled captcha for new connections.", ctx->user.name);
       host_history_record_system(host, notice);
       chat_room_broadcast(&host->room, notice, NULL);
+      pthread_mutex_lock(&host->lock);
+      host_state_save_locked(host);
+      pthread_mutex_unlock(&host->lock);
     }
     return;
   }
