@@ -11,7 +11,6 @@ CHATTER_BBS_HOST=chat.korokorok.com
 CHATTER_BBS_HOST_DEFAULT=chat.korokorok.com
 Don't add # when /bbs read. /bbs read 66 is correct. BBS리딩할때 /bbs read #66처럼 쓰면 안되고 샵 떼세요.
 제발 BBS에 글써주세요..싹싹 빌겠습니다..(/ ^ \)_/
-야한 대화도 환영입니다.
 모든 주제 허용|NO TOPIC RESTRICTION
 TELNET: THINGS YOU SHOULD DO | 텔넷에서 하셔야 할 일
   Telnet: Ctrl+]. Write set escape without return, press space bar, press Ctrl+V, type ^@ and press return key
