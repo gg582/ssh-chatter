@@ -4,7 +4,7 @@ CFLAGS = -std=c2x -Ofast \
         -Wall -Wextra -Werror -Wshadow -Wformat=2 -Wundef -Wconversion -Wdouble-promotion \
         -fno-omit-frame-pointer -fstack-protector-strong -fno-common \
         -fPIC \
-        -g \
+        -g -lgc \
 	-D_FORTIFY_SOURCE=2 \
 	-march=native \
 	-flto=$(shell nproc) \
