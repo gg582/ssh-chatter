@@ -2661,7 +2661,9 @@ static void session_assign_lan_privileges(session_ctx_t *ctx) {
     ctx->user.is_operator = true;
     ctx->auth.is_operator = true;
     ctx->user.is_lan_operator = true;
-    snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", LAN_OPS_NICKNAME);
+    if (ctx->user.name[0] == '\0') {
+      snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", LAN_OPS_NICKNAME);
+    }
   }
 }
 
@@ -8305,7 +8307,12 @@ static void host_bbs_watchdog_scan(host_t *host) {
     return;
   }
 
-  bbs_post_t snapshot[SSH_CHATTER_BBS_MAX_POSTS];
+  bbs_post_t *snapshot = calloc(SSH_CHATTER_BBS_MAX_POSTS, sizeof(*snapshot));
+  if (snapshot == NULL) {
+    humanized_log_error("bbs", "failed to allocate watchdog snapshot", ENOMEM);
+    return;
+  }
+
   size_t snapshot_count = 0U;
 
   pthread_mutex_lock(&host->lock);
@@ -8321,15 +8328,23 @@ static void host_bbs_watchdog_scan(host_t *host) {
   pthread_mutex_unlock(&host->lock);
 
   if (snapshot_count == 0U) {
+    free(snapshot);
+    return;
+  }
+
+  const size_t content_capacity =
+      SSH_CHATTER_BBS_BODY_LEN + (SSH_CHATTER_BBS_COMMENT_LEN * SSH_CHATTER_BBS_MAX_COMMENTS) + 1024U;
+  char *content = malloc(content_capacity);
+  if (content == NULL) {
+    humanized_log_error("bbs", "failed to allocate watchdog buffer", ENOMEM);
+    free(snapshot);
     return;
   }
 
   for (size_t idx = 0U; idx < snapshot_count; ++idx) {
     const bbs_post_t *post = &snapshot[idx];
 
-    char content[SSH_CHATTER_BBS_BODY_LEN +
-                 (SSH_CHATTER_BBS_COMMENT_LEN * SSH_CHATTER_BBS_MAX_COMMENTS) + 1024U];
-    int written = snprintf(content, sizeof(content),
+    int written = snprintf(content, content_capacity,
                           "Title: %s\nTags: ",
                           post->title[0] != '\0' ? post->title : "(untitled)");
     if (written < 0) {
@@ -8337,46 +8352,46 @@ static void host_bbs_watchdog_scan(host_t *host) {
     }
 
     size_t offset = (size_t)written;
-    if (offset >= sizeof(content)) {
-      offset = sizeof(content) - 1U;
+    if (offset >= content_capacity) {
+      offset = content_capacity - 1U;
     }
 
     for (size_t tag = 0U; tag < post->tag_count; ++tag) {
       const char *prefix = (tag == 0U) ? "" : ",";
-      int tag_written = snprintf(content + offset, sizeof(content) - offset, "%s%s", prefix,
+      int tag_written = snprintf(content + offset, content_capacity - offset, "%s%s", prefix,
                                  post->tags[tag]);
       if (tag_written < 0) {
         break;
       }
       offset += (size_t)tag_written;
-      if (offset >= sizeof(content)) {
-        offset = sizeof(content) - 1U;
+      if (offset >= content_capacity) {
+        offset = content_capacity - 1U;
         break;
       }
     }
 
-    if (offset + 2U < sizeof(content)) {
+    if (offset + 2U < content_capacity) {
       content[offset++] = '\n';
       content[offset++] = '\n';
       content[offset] = '\0';
     } else {
-      content[sizeof(content) - 1U] = '\0';
-      offset = sizeof(content) - 1U;
+      content[content_capacity - 1U] = '\0';
+      offset = content_capacity - 1U;
     }
 
-    int body_written = snprintf(content + offset, sizeof(content) - offset,
+    int body_written = snprintf(content + offset, content_capacity - offset,
                                 "Body:\n%s",
                                 post->body[0] != '\0' ? post->body : "(empty)");
     if (body_written < 0) {
       continue;
     }
     offset += (size_t)body_written;
-    if (offset >= sizeof(content)) {
-      offset = sizeof(content) - 1U;
+    if (offset >= content_capacity) {
+      offset = content_capacity - 1U;
     }
 
     for (size_t comment = 0U; comment < post->comment_count; ++comment) {
-      if (offset + 2U >= sizeof(content)) {
+      if (offset + 2U >= content_capacity) {
         break;
       }
       content[offset++] = '\n';
@@ -8384,7 +8399,7 @@ static void host_bbs_watchdog_scan(host_t *host) {
       content[offset] = '\0';
 
       const bbs_comment_t *entry = &post->comments[comment];
-      int comment_written = snprintf(content + offset, sizeof(content) - offset,
+      int comment_written = snprintf(content + offset, content_capacity - offset,
                                      "Comment by %s:\n%s",
                                      entry->author[0] != '\0' ? entry->author : "(anonymous)",
                                      entry->text[0] != '\0' ? entry->text : "(empty)");
@@ -8392,8 +8407,8 @@ static void host_bbs_watchdog_scan(host_t *host) {
         break;
       }
       offset += (size_t)comment_written;
-      if (offset >= sizeof(content)) {
-        offset = sizeof(content) - 1U;
+      if (offset >= content_capacity) {
+        offset = content_capacity - 1U;
         break;
       }
     }
@@ -8443,6 +8458,8 @@ static void host_bbs_watchdog_scan(host_t *host) {
     chat_room_broadcast(&host->room, notice, NULL);
   }
 
+  free(content);
+  free(snapshot);
 }
 
 static void *host_bbs_watchdog_thread(void *arg) {
