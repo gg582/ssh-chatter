@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "lib/headers/host.h"
+#include "lib/headers/humanized/humanized.h"
 
 #include <errno.h>
 #include <getopt.h>
@@ -18,6 +19,14 @@ static void print_usage(const char *prog_name) {
           "       %s [-h]\n"
           "       %s [-V]\n",
           prog_name, prog_name, prog_name);
+}
+
+static void sleep_before_restart(unsigned int attempts) {
+  struct timespec restart_delay = {
+      .tv_sec = attempts < 5U ? 1L : (attempts < 10U ? 5L : 30L),
+      .tv_nsec = 0L,
+  };
+  nanosleep(&restart_delay, NULL);
 }
 
 int main(int argc, char **argv) {
@@ -63,13 +72,17 @@ int main(int argc, char **argv) {
           if (colon != NULL) {
             size_t host_len = (size_t)(colon - value);
             if (host_len >= sizeof(telnet_bind_storage)) {
-              fprintf(stderr, "telnet bind address is too long\n");
-              return EXIT_FAILURE;
+              fprintf(stderr,
+                      "telnet bind address is too long; ignoring override and using default listener address\n");
+              telnet_bind_storage[0] = '\0';
+              telnet_bind_overridden = false;
+            } else if (host_len > 0U) {
+              memcpy(telnet_bind_storage, value, host_len);
+              telnet_bind_storage[host_len] = '\0';
+              telnet_bind_overridden = true;
+            } else {
+              telnet_bind_overridden = false;
             }
-
-            memcpy(telnet_bind_storage, value, host_len);
-            telnet_bind_storage[host_len] = '\0';
-            telnet_bind_overridden = true;
 
             const char *port_part = colon + 1;
             if (port_part[0] == '\0') {
@@ -77,11 +90,12 @@ int main(int argc, char **argv) {
             } else {
               size_t port_len = strlen(port_part);
               if (port_len >= sizeof(telnet_port_storage)) {
-                fprintf(stderr, "telnet port is too long\n");
-                return EXIT_FAILURE;
+                fprintf(stderr, "telnet port is too long; using default port 2323\n");
+                telnet_port = "2323";
+              } else {
+                memcpy(telnet_port_storage, port_part, port_len + 1);
+                telnet_port = telnet_port_storage;
               }
-              memcpy(telnet_port_storage, port_part, port_len + 1);
-              telnet_port = telnet_port_storage;
             }
           } else {
             telnet_bind_overridden = false;
@@ -90,11 +104,12 @@ int main(int argc, char **argv) {
             } else {
               size_t port_len = strlen(value);
               if (port_len >= sizeof(telnet_port_storage)) {
-                fprintf(stderr, "telnet port is too long\n");
-                return EXIT_FAILURE;
+                fprintf(stderr, "telnet port is too long; using default port 2323\n");
+                telnet_port = "2323";
+              } else {
+                memcpy(telnet_port_storage, value, port_len + 1);
+                telnet_port = telnet_port_storage;
               }
-              memcpy(telnet_port_storage, value, port_len + 1);
-              telnet_port = telnet_port_storage;
             }
           }
           telnet_enabled = true;
@@ -127,8 +142,11 @@ int main(int argc, char **argv) {
   while (true) {
     host_t *host = calloc(1, sizeof(*host));
     if (host == NULL) {
-      fprintf(stderr, "failed to allocate host state\n");
-      return EXIT_FAILURE;
+      ++restart_attempts;
+      humanized_log_error("daemon", "failed to allocate host state", errno != 0 ? errno : ENOMEM);
+      printf("[daemon] retrying host startup (attempt %u)\n", restart_attempts);
+      sleep_before_restart(restart_attempts);
+      continue;
     }
 
     host_init(host, &default_profile);
@@ -155,15 +173,15 @@ int main(int argc, char **argv) {
 
     ++restart_attempts;
 
-    const char *error_message = serve_errno != 0 ? strerror(serve_errno) : "unknown error";
-    fprintf(stderr, "ssh-chatter encountered an internal error (code %d): %s\n", serve_result,
-            error_message);
-    fprintf(stderr, "Restarting ssh-chatter (attempt %u)...\n", restart_attempts);
+    char detail[128];
+    if (serve_result != 0) {
+      snprintf(detail, sizeof(detail), "host_serve failed (code %d)", serve_result);
+    } else {
+      snprintf(detail, sizeof(detail), "host_serve returned unexpectedly");
+    }
+    humanized_log_error("daemon", detail, serve_errno != 0 ? serve_errno : EIO);
+    printf("[daemon] restarting ssh-chatter (attempt %u)\n", restart_attempts);
 
-    struct timespec restart_delay = {
-        .tv_sec = restart_attempts < 5U ? 1L : (restart_attempts < 10U ? 5L : 30L),
-        .tv_nsec = 0L,
-    };
-    nanosleep(&restart_delay, NULL);
+    sleep_before_restart(restart_attempts);
   }
 }
