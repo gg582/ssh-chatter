@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <getopt.h>
+#include <gc/gc.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +22,7 @@ static void print_usage(const char *prog_name) {
 
 int main(int argc, char **argv) {
   setlocale(LC_ALL, "");
+  GC_INIT();
 
   const char *bind_address = NULL;
   const char *bind_port = NULL;

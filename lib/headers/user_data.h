@@ -49,6 +49,7 @@ typedef struct user_data_record {
   uint32_t magic;
   uint32_t version;
   char username[SSH_CHATTER_USERNAME_LEN];
+  char last_ip[SSH_CHATTER_IP_LEN];
   uint32_t mailbox_count;
   user_data_mail_entry_t mailbox[USER_DATA_MAILBOX_LIMIT];
   char profile_picture[USER_DATA_PROFILE_PICTURE_LEN];
@@ -61,11 +62,12 @@ typedef struct user_data_record {
 } user_data_record_t;
 
 bool user_data_sanitize_username(const char *username, char *sanitized, size_t length);
-bool user_data_path_for(const char *root, const char *username, char *path, size_t length);
+bool user_data_path_for(const char *root, const char *username, const char *ip, bool create_if_missing,
+                        char *path, size_t length);
 bool user_data_ensure_root(const char *root);
-bool user_data_init(user_data_record_t *record, const char *username);
-bool user_data_load(const char *root, const char *username, user_data_record_t *record);
-bool user_data_save(const char *root, const user_data_record_t *record);
-bool user_data_ensure_exists(const char *root, const char *username, user_data_record_t *record);
+bool user_data_init(user_data_record_t *record, const char *username, const char *ip);
+bool user_data_load(const char *root, const char *username, const char *ip, user_data_record_t *record);
+bool user_data_save(const char *root, const user_data_record_t *record, const char *ip);
+bool user_data_ensure_exists(const char *root, const char *username, const char *ip, user_data_record_t *record);
 
 #endif /* SSH_CHATTER_USER_DATA_H */
