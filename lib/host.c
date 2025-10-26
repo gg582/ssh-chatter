@@ -24065,6 +24065,32 @@ static void *session_thread(void *arg) {
           break;
         }
 
+        bool remote_disconnect = !session_transport_is_open(ctx) || session_transport_is_eof(ctx);
+        if (!remote_disconnect && error_message != NULL && error_message[0] != '\0') {
+          static const char *const kNetworkDisconnectTokens[] = {
+              "ssh_msg_disconnect",
+              "disconnected by",
+              "connection reset",
+              "connection closed",
+              "broken pipe",
+              "socket error",
+          };
+          for (size_t token_idx = 0; token_idx < (sizeof(kNetworkDisconnectTokens) / sizeof(kNetworkDisconnectTokens[0]));
+               ++token_idx) {
+            if (string_contains_case_insensitive(error_message, kNetworkDisconnectTokens[token_idx])) {
+              remote_disconnect = true;
+              break;
+            }
+          }
+        }
+
+        if (remote_disconnect) {
+          const char *username = ctx->user.name[0] != '\0' ? ctx->user.name : "unknown";
+          const char *message = (error_message != NULL && error_message[0] != '\0') ? error_message : "connection closed";
+          printf("[session] channel closed for %s: %s\n", username, message);
+          break;
+        }
+
         if (ctx->has_joined_room && ctx->channel_error_retries < SSH_CHATTER_CHANNEL_RECOVERY_LIMIT) {
           ctx->channel_error_retries += 1U;
           if (error_message == NULL || error_message[0] == '\0') {
