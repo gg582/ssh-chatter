@@ -14,6 +14,7 @@
 #include "translation_helpers.h"
 
 #include <curl/curl.h>
+#include <gc/gc.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <dlfcn.h>
@@ -99,6 +100,11 @@ static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
     sizeof(SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS) /
     sizeof(SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS[0]);
 #define SESSION_CHANNEL_TIMEOUT (-2)
+
+typedef enum host_join_attempt_result {
+  HOST_JOIN_ATTEMPT_OK = 0,
+  HOST_JOIN_ATTEMPT_KICK,
+} host_join_attempt_result_t;
 #define SSH_CHATTER_CHANNEL_RECOVERY_LIMIT ((unsigned int)INT_MAX)
 #define SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS 200000000L
 #define SSH_CHATTER_CHANNEL_WRITE_TIMEOUT_MS 200
@@ -110,6 +116,9 @@ static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
 #define SSH_CHATTER_JOIN_RAPID_WINDOW_NS 60000000000LL
 #define SSH_CHATTER_JOIN_IP_THRESHOLD 6U
 #define SSH_CHATTER_JOIN_NAME_THRESHOLD 6U
+#define SSH_CHATTER_JOIN_KICK_WINDOW_NS 60000000000LL
+#define SSH_CHATTER_JOIN_KICK_THRESHOLD 20U
+#define LAN_OPS_NICKNAME "lan-ops"
 #define SSH_CHATTER_SUSPICIOUS_EVENT_WINDOW_NS 300000000000LL
 #define SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD 2U
 #define SSH_CHATTER_CLAMAV_SCAN_INTERVAL_SECONDS (5 * 60 * 60)
@@ -1283,6 +1292,7 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments);
 static void session_handle_translate(session_ctx_t *ctx, const char *arguments);
 static void session_handle_translate_scope(session_ctx_t *ctx, const char *arguments);
 static void session_handle_gemini(session_ctx_t *ctx, const char *arguments);
+static void session_handle_captcha(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *arguments);
 static void session_handle_set_target_lang(session_ctx_t *ctx, const char *arguments);
 static void session_handle_chat_spacing(session_ctx_t *ctx, const char *arguments);
@@ -1351,10 +1361,10 @@ static bool session_user_data_available(session_ctx_t *ctx);
 static bool session_user_data_load(session_ctx_t *ctx);
 static bool session_user_data_commit(session_ctx_t *ctx);
 static void session_user_data_touch(session_ctx_t *ctx);
-static bool host_user_data_send_mail(host_t *host, const char *recipient, const char *sender, const char *message,
-                                    char *error, size_t error_length);
-static bool host_user_data_load_existing(host_t *host, const char *username, user_data_record_t *record,
-                                        bool create_if_missing);
+static bool host_user_data_send_mail(host_t *host, const char *recipient, const char *recipient_ip,
+                                    const char *sender, const char *message, char *error, size_t error_length);
+static bool host_user_data_load_existing(host_t *host, const char *username, const char *ip,
+                                        user_data_record_t *record, bool create_if_missing);
 static void host_user_data_bootstrap(host_t *host);
 static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count);
 static size_t session_utf8_prev_char_len(const char *buffer, size_t length);
@@ -1368,7 +1378,7 @@ static user_preference_t *host_find_preference_locked(host_t *host, const char *
 static user_preference_t *host_ensure_preference_locked(host_t *host, const char *username);
 static void host_store_user_theme(host_t *host, const session_ctx_t *ctx);
 static size_t host_prepare_join_delay(host_t *host, struct timespec *wait_duration);
-static bool host_register_join_attempt(host_t *host, const char *username, const char *ip);
+static host_join_attempt_result_t host_register_join_attempt(host_t *host, const char *username, const char *ip);
 static bool session_run_captcha(session_ctx_t *ctx);
 static bool session_is_captcha_exempt(const session_ctx_t *ctx);
 static void host_store_system_theme(host_t *host, const session_ctx_t *ctx);
@@ -1465,8 +1475,8 @@ static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
 static void session_bbs_queue_translation(session_ctx_t *ctx, const bbs_post_t *post);
 static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, const char *notice,
                                     bool reset_scroll, bool scroll_to_bottom);
-static bool host_user_data_load_existing(host_t *host, const char *username, user_data_record_t *record,
-                                        bool create_if_missing);
+static bool host_user_data_load_existing(host_t *host, const char *username, const char *ip,
+                                        user_data_record_t *record, bool create_if_missing);
 static void host_user_data_build_match_key(const char *username, char *key, size_t length);
 static bool host_user_data_find_profile_picture(host_t *host, const char *alias, user_data_record_t *record);
 static bool session_bbs_scroll(session_ctx_t *ctx, int direction, size_t step);
@@ -1855,7 +1865,7 @@ static const char *const TETROMINO_SHAPES[7][4] = {
 static const char TETROMINO_DISPLAY_CHARS[7] = {'I', 'J', 'L', 'O', 'S', 'T', 'Z'};
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
-static const uint32_t HOST_STATE_VERSION = 7U;
+static const uint32_t HOST_STATE_VERSION = 8U;
 static const uint32_t ELIZA_STATE_MAGIC = 0x454c5354U; /* 'ELST' */
 static const uint32_t ELIZA_STATE_VERSION = 1U;
 
@@ -1895,6 +1905,8 @@ typedef struct host_state_header {
   uint32_t legacy_sound_count;
   uint32_t grant_count;
   uint64_t next_message_id;
+  uint8_t captcha_enabled;
+  uint8_t reserved[7];
 } host_state_header_t;
 
 typedef struct host_state_history_entry_v1 {
@@ -2648,6 +2660,8 @@ static void session_assign_lan_privileges(session_ctx_t *ctx) {
   if (session_is_lan_client(ctx->client_ip)) {
     ctx->user.is_operator = true;
     ctx->auth.is_operator = true;
+    ctx->user.is_lan_operator = true;
+    snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", LAN_OPS_NICKNAME);
   }
 }
 
@@ -4744,7 +4758,7 @@ static void host_user_data_bootstrap_visit(host_t *host, const char *username) {
     return;
   }
 
-  (void)host_user_data_load_existing(host, username, NULL, true);
+  (void)host_user_data_load_existing(host, username, NULL, NULL, true);
 }
 
 static void host_user_data_bootstrap(host_t *host) {
@@ -4903,6 +4917,8 @@ static void host_state_save_locked(host_t *host) {
   header.legacy_sound_count = 0U;
   header.grant_count = (uint32_t)host->operator_grant_count;
   header.next_message_id = host->next_message_id;
+  header.captcha_enabled = atomic_load(&host->captcha_enabled) ? 1U : 0U;
+  memset(header.reserved, 0, sizeof(header.reserved));
 
   bool success = fwrite(&header, sizeof(header), 1U, fp) == 1U;
 
@@ -5512,6 +5528,7 @@ static void host_state_load(host_t *host) {
   uint64_t next_message_id = 1U;
 
   uint32_t grant_count = 0U;
+  uint8_t captcha_enabled_raw = 0U;
   if (version >= 2U) {
     uint32_t sound_count_raw = 0U;
     uint32_t grant_count_raw = 0U;
@@ -5528,11 +5545,24 @@ static void host_state_load(host_t *host) {
     }
   }
 
+  if (version >= 8U) {
+    uint8_t reserved_bytes[7] = {0};
+    if (fread(&captcha_enabled_raw, sizeof(captcha_enabled_raw), 1U, fp) != 1U ||
+        fread(reserved_bytes, sizeof(reserved_bytes), 1U, fp) != 1U) {
+      fclose(fp);
+      return;
+    }
+  }
+
   if (preference_count > SSH_CHATTER_MAX_PREFERENCES) {
     preference_count = SSH_CHATTER_MAX_PREFERENCES;
   }
 
   pthread_mutex_lock(&host->lock);
+
+  if (version >= 8U) {
+    atomic_store(&host->captcha_enabled, captcha_enabled_raw != 0U);
+  }
 
   bool success = true;
 
@@ -8638,6 +8668,34 @@ typedef struct translation_result {
   struct translation_result *next;
 } translation_result_t;
 
+static translation_job_t *session_translation_job_alloc(void) {
+  translation_job_t *job = (translation_job_t *)GC_MALLOC(sizeof(*job));
+  if (job != NULL) {
+    memset(job, 0, sizeof(*job));
+  }
+  return job;
+}
+
+static void session_translation_job_free(translation_job_t *job) {
+  if (job != NULL) {
+    GC_FREE(job);
+  }
+}
+
+static translation_result_t *session_translation_result_alloc(void) {
+  translation_result_t *result = (translation_result_t *)GC_MALLOC(sizeof(*result));
+  if (result != NULL) {
+    memset(result, 0, sizeof(*result));
+  }
+  return result;
+}
+
+static void session_translation_result_free(translation_result_t *result) {
+  if (result != NULL) {
+    GC_FREE(result);
+  }
+}
+
 static bool session_translation_worker_ensure(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return false;
@@ -8693,13 +8751,13 @@ static void session_translation_clear_queue(session_ctx_t *ctx) {
 
   while (pending != NULL) {
     translation_job_t *next = pending->next;
-    free(pending);
+    session_translation_job_free(pending);
     pending = next;
   }
 
   while (ready != NULL) {
     translation_result_t *next = ready->next;
-    free(ready);
+    session_translation_result_free(ready);
     ready = next;
   }
 
@@ -8725,7 +8783,7 @@ static bool session_translation_queue_caption(session_ctx_t *ctx, const char *me
     return false;
   }
 
-  translation_job_t *job = calloc(1U, sizeof(*job));
+  translation_job_t *job = session_translation_job_alloc();
   if (job == NULL) {
     return false;
   }
@@ -8733,12 +8791,12 @@ static bool session_translation_queue_caption(session_ctx_t *ctx, const char *me
   size_t placeholder_count = 0U;
   if (!translation_prepare_text(message, job->data.caption.sanitized, sizeof(job->data.caption.sanitized),
                                 job->data.caption.placeholders, &placeholder_count)) {
-    free(job);
+    session_translation_job_free(job);
     return false;
   }
 
   if (job->data.caption.sanitized[0] == '\0') {
-    free(job);
+    session_translation_job_free(job);
     return false;
   }
 
@@ -8825,7 +8883,7 @@ static bool session_translation_queue_private_message(session_ctx_t *ctx, sessio
     return false;
   }
 
-  translation_job_t *job = calloc(1U, sizeof(*job));
+  translation_job_t *job = session_translation_job_alloc();
   if (job == NULL) {
     return false;
   }
@@ -8865,7 +8923,7 @@ static bool session_translation_queue_input(session_ctx_t *ctx, const char *text
     return false;
   }
 
-  translation_job_t *job = calloc(1U, sizeof(*job));
+  translation_job_t *job = session_translation_job_alloc();
   if (job == NULL) {
     return false;
   }
@@ -9124,7 +9182,7 @@ static void session_translation_flush_ready(session_ctx_t *ctx) {
         session_deliver_outgoing_message(ctx, ready->original);
       }
       refreshed = true;
-      free(ready);
+      session_translation_result_free(ready);
       ready = next;
       continue;
     }
@@ -9162,7 +9220,7 @@ static void session_translation_flush_ready(session_ctx_t *ctx) {
       }
 
       refreshed = true;
-      free(ready);
+      session_translation_result_free(ready);
       ready = next;
       continue;
     }
@@ -9215,7 +9273,7 @@ static void session_translation_flush_ready(session_ctx_t *ctx) {
       }
     }
 
-    free(ready);
+    session_translation_result_free(ready);
     ready = next;
   }
 
@@ -9263,7 +9321,7 @@ static void session_translation_publish_result(session_ctx_t *ctx, const transla
     return;
   }
 
-  translation_result_t *result = calloc(1U, sizeof(*result));
+  translation_result_t *result = session_translation_result_alloc();
   if (result == NULL) {
     return;
   }
@@ -9341,7 +9399,7 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
   }
 
   if (ctx->translation_thread_stop) {
-    free(job);
+    session_translation_job_free(job);
     return;
   }
 
@@ -9360,7 +9418,7 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
     if (translator_translate_with_cancel(source_text, job->target_language, translated_body, sizeof(translated_body),
                                          detected_target, detected_length, &ctx->translation_thread_stop)) {
       if (ctx->translation_thread_stop) {
-        free(job);
+        session_translation_job_free(job);
         return;
       }
       session_translation_publish_result(ctx, job, translated_body,
@@ -9370,7 +9428,7 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
       char message[128];
       const bool quota_failure = translator_last_error_was_quota();
       if (ctx->translation_thread_stop) {
-        free(job);
+        session_translation_job_free(job);
         return;
       }
       if (quota_failure) {
@@ -9388,12 +9446,12 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
         snprintf(message, sizeof(message), "Translation failed; sending your original message.");
       }
       if (ctx->translation_thread_stop) {
-        free(job);
+        session_translation_job_free(job);
         return;
       }
       session_translation_publish_result(ctx, job, NULL, NULL, message, false);
     }
-    free(job);
+    session_translation_job_free(job);
     return;
   }
 
@@ -9410,7 +9468,7 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
     translated_body[0] = '\0';
 
     if (ctx->translation_thread_stop) {
-      free(job);
+      session_translation_job_free(job);
       return;
     }
 
@@ -9419,7 +9477,7 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
       const char *error = translator_last_error();
       const bool quota_failure = translator_last_error_was_quota();
       if (ctx->translation_thread_stop) {
-        free(job);
+        session_translation_job_free(job);
         return;
       }
       if (quota_failure) {
@@ -9461,7 +9519,7 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
   }
 
   if (ctx->translation_thread_stop) {
-    free(job);
+    session_translation_job_free(job);
     return;
   }
 
@@ -9471,7 +9529,7 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
     session_translation_publish_result(ctx, job, failure_message, NULL, NULL, false);
   }
 
-  free(job);
+  session_translation_job_free(job);
 }
 
 static bool session_translation_process_batch(session_ctx_t *ctx, translation_job_t **jobs, size_t job_count) {
@@ -9486,7 +9544,7 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
   if (ctx->translation_thread_stop) {
     for (size_t idx = 0U; idx < job_count; ++idx) {
       if (jobs[idx] != NULL) {
-        free(jobs[idx]);
+        session_translation_job_free(jobs[idx]);
         jobs[idx] = NULL;
       }
     }
@@ -9506,7 +9564,7 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
     if (ctx->translation_thread_stop) {
       for (size_t release = idx; release < job_count; ++release) {
         if (jobs[release] != NULL) {
-          free(jobs[release]);
+          session_translation_job_free(jobs[release]);
           jobs[release] = NULL;
         }
       }
@@ -9550,7 +9608,7 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
     if (ctx->translation_thread_stop) {
       for (size_t idx = 0U; idx < job_count; ++idx) {
         if (jobs[idx] != NULL) {
-          free(jobs[idx]);
+          session_translation_job_free(jobs[idx]);
           jobs[idx] = NULL;
         }
       }
@@ -9566,7 +9624,7 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
   if (ctx->translation_thread_stop) {
     for (size_t idx = 0U; idx < job_count; ++idx) {
       if (jobs[idx] != NULL) {
-        free(jobs[idx]);
+        session_translation_job_free(jobs[idx]);
         jobs[idx] = NULL;
       }
     }
@@ -9663,7 +9721,7 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
   if (ctx->translation_thread_stop) {
     for (size_t idx = 0U; idx < job_count; ++idx) {
       if (jobs[idx] != NULL) {
-        free(jobs[idx]);
+        session_translation_job_free(jobs[idx]);
         jobs[idx] = NULL;
       }
     }
@@ -9674,7 +9732,7 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
 
   for (size_t idx = 0U; idx < job_count; ++idx) {
     session_translation_publish_result(ctx, jobs[idx], restored_segments[idx], NULL, NULL, true);
-    free(jobs[idx]);
+    session_translation_job_free(jobs[idx]);
   }
 
   free(combined);
@@ -13011,6 +13069,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/translate-scope <chat|chat-nohistory|all> - limit translation to chat/BBS, optionally skipping scrollback (operator only)",
       "/gemini <on|off>       - toggle Gemini provider (operator only)",
       "/gemini-unfreeze      - clear automatic Gemini cooldown (operator only)",
+      "/captcha <on|off>      - toggle captcha requirement (operator only)",
       "/eliza <on|off>        - toggle the eliza moderator persona (operator only)",
       "/eliza-chat <message>  - chat with eliza using shared memories",
       "/chat-spacing <0-5>    - reserve blank lines before translated captions in chat",
@@ -14423,10 +14482,39 @@ static void session_handle_mail(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (strcasecmp(command, "send") == 0) {
+    char target_token[SSH_CHATTER_USERNAME_LEN + SSH_CHATTER_IP_LEN];
+    cursor = session_consume_token(cursor, target_token, sizeof(target_token));
+    if (target_token[0] == '\0' || cursor == NULL || cursor[0] == '\0') {
+      session_send_system_line(ctx, "Usage: /mail send <user[@ip]> <message>");
+      return;
+    }
+
     char target[SSH_CHATTER_USERNAME_LEN];
-    cursor = session_consume_token(cursor, target, sizeof(target));
-    if (target[0] == '\0' || cursor == NULL || cursor[0] == '\0') {
-      session_send_system_line(ctx, "Usage: /mail send <user> <message>");
+    char target_ip[SSH_CHATTER_IP_LEN];
+    target_ip[0] = '\0';
+    const char *at = strchr(target_token, '@');
+    if (at != NULL) {
+      size_t name_len = (size_t)(at - target_token);
+      if (name_len == 0U || name_len >= sizeof(target)) {
+        session_send_system_line(ctx, "Invalid mailbox recipient.");
+        return;
+      }
+      memcpy(target, target_token, name_len);
+      target[name_len] = '\0';
+      const char *ip_part = at + 1;
+      if (ip_part[0] != '\0') {
+        if (strlen(ip_part) >= sizeof(target_ip)) {
+          session_send_system_line(ctx, "Recipient IP is too long.");
+          return;
+        }
+        snprintf(target_ip, sizeof(target_ip), "%s", ip_part);
+      }
+    } else {
+      snprintf(target, sizeof(target), "%s", target_token);
+    }
+
+    if (target[0] == '\0') {
+      session_send_system_line(ctx, "Invalid mailbox recipient.");
       return;
     }
 
@@ -14439,7 +14527,8 @@ static void session_handle_mail(session_ctx_t *ctx, const char *arguments) {
     }
 
     char error[128];
-    if (!host_user_data_send_mail(ctx->owner, target, ctx->user.name, message, error, sizeof(error))) {
+    if (!host_user_data_send_mail(ctx->owner, target, target_ip[0] != '\0' ? target_ip : NULL, ctx->user.name,
+                                  message, error, sizeof(error))) {
       if (error[0] != '\0') {
         session_send_system_line(ctx, error);
       } else {
@@ -21455,6 +21544,65 @@ static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
   session_send_system_line(ctx, "Usage: /gemini <on|off>");
 }
 
+static void session_handle_captcha(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
+    session_send_system_line(ctx, "Only operators may control captcha requirements.");
+    return;
+  }
+
+  char token[16];
+  if (arguments != NULL) {
+    snprintf(token, sizeof(token), "%s", arguments);
+    trim_whitespace_inplace(token);
+  } else {
+    token[0] = '\0';
+  }
+
+  host_t *host = ctx->owner;
+  if (token[0] == '\0') {
+    bool enabled = atomic_load(&host->captcha_enabled);
+    char status[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(status, sizeof(status), "Captcha is currently %s.", enabled ? "enabled" : "disabled");
+    session_send_system_line(ctx, status);
+    session_send_system_line(ctx, "Usage: /captcha <on|off>");
+    return;
+  }
+
+  if (strcasecmp(token, "on") == 0) {
+    bool was_enabled = atomic_exchange(&host->captcha_enabled, true);
+    if (was_enabled) {
+      session_send_system_line(ctx, "Captcha is already enabled.");
+    } else {
+      session_send_system_line(ctx, "Captcha enabled. New connections must solve the puzzle.");
+      char notice[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(notice, sizeof(notice), "* [%s] enabled captcha for new connections.", ctx->user.name);
+      host_history_record_system(host, notice);
+      chat_room_broadcast(&host->room, notice, NULL);
+    }
+    return;
+  }
+
+  if (strcasecmp(token, "off") == 0) {
+    bool was_enabled = atomic_exchange(&host->captcha_enabled, false);
+    if (!was_enabled) {
+      session_send_system_line(ctx, "Captcha is already disabled.");
+    } else {
+      session_send_system_line(ctx, "Captcha disabled. New connections will skip the puzzle.");
+      char notice[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(notice, sizeof(notice), "* [%s] disabled captcha for new connections.", ctx->user.name);
+      host_history_record_system(host, notice);
+      chat_room_broadcast(&host->room, notice, NULL);
+    }
+    return;
+  }
+
+  session_send_system_line(ctx, "Usage: /captcha <on|off>");
+}
+
 static void session_handle_eliza(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;
@@ -21771,8 +21919,8 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  if (host_username_reserved(ctx->owner, new_name)) {
-    session_send_system_line(ctx, "That name is reserved for the chat bot.");
+  if (host_username_reserved(ctx->owner, new_name) && !ctx->user.is_lan_operator) {
+    session_send_system_line(ctx, "That name is reserved for LAN operators.");
     return;
   }
 
@@ -21880,8 +22028,11 @@ static session_ctx_t *chat_room_find_user(chat_room_t *room, const char *usernam
 
 static bool host_username_reserved(host_t *host, const char *username) {
   (void)host;
-  (void)username;
-  return false;
+  if (username == NULL) {
+    return false;
+  }
+
+  return strcasecmp(username, LAN_OPS_NICKNAME) == 0;
 }
 
 static join_activity_entry_t *host_find_join_activity_locked(host_t *host, const char *ip) {
@@ -21964,9 +22115,9 @@ static size_t host_prepare_join_delay(host_t *host, struct timespec *wait_durati
   return progress;
 }
 
-static bool host_register_join_attempt(host_t *host, const char *username, const char *ip) {
+static host_join_attempt_result_t host_register_join_attempt(host_t *host, const char *username, const char *ip) {
   if (host == NULL || ip == NULL || ip[0] == '\0') {
-    return false;
+    return HOST_JOIN_ATTEMPT_OK;
   }
 
   struct timespec now = {0, 0};
@@ -21975,12 +22126,13 @@ static bool host_register_join_attempt(host_t *host, const char *username, const
   bool ban_ip = false;
   bool ban_same_name = false;
   bool exempt_ip = false;
+  bool kick_ip = false;
 
   pthread_mutex_lock(&host->lock);
   join_activity_entry_t *entry = host_ensure_join_activity_locked(host, ip);
   if (entry == NULL) {
     pthread_mutex_unlock(&host->lock);
-    return false;
+    return HOST_JOIN_ATTEMPT_OK;
   }
 
   struct timespec diff = timespec_diff(&now, &entry->last_attempt);
@@ -22005,6 +22157,23 @@ static bool host_register_join_attempt(host_t *host, const char *username, const
     entry->same_name_attempts = within_window ? entry->same_name_attempts + 1U : 1U;
   }
 
+  const bool has_join_window = entry->join_window_start.tv_sec != 0 || entry->join_window_start.tv_nsec != 0;
+  if (!has_join_window) {
+    entry->join_window_start = now;
+    entry->join_window_attempts = 1U;
+  } else {
+    struct timespec window_diff = timespec_diff(&now, &entry->join_window_start);
+    const long long window_ns = (long long)window_diff.tv_sec * 1000000000LL + (long long)window_diff.tv_nsec;
+    if (window_ns > SSH_CHATTER_JOIN_KICK_WINDOW_NS) {
+      entry->join_window_start = now;
+      entry->join_window_attempts = 1U;
+    } else {
+      if (entry->join_window_attempts < SIZE_MAX) {
+        entry->join_window_attempts += 1U;
+      }
+    }
+  }
+
   entry->last_attempt = now;
 
   if (host_ip_has_grant_locked(host, ip)) {
@@ -22017,17 +22186,21 @@ static bool host_register_join_attempt(host_t *host, const char *username, const
   if (within_window && entry->same_name_attempts >= SSH_CHATTER_JOIN_NAME_THRESHOLD) {
     ban_same_name = true;
   }
+  if (!exempt_ip && entry->join_window_attempts >= SSH_CHATTER_JOIN_KICK_THRESHOLD) {
+    kick_ip = true;
+  }
   pthread_mutex_unlock(&host->lock);
 
-  if ((ban_ip || ban_same_name) && !exempt_ip) {
-    const char *ban_user = (username != NULL && username[0] != '\0') ? username : "";
-    if (host_add_ban_entry(host, ban_user, ip)) {
-      printf("[auto-ban] %s flagged for rapid reconnects\n", ip);
+  if ((ban_ip || ban_same_name || kick_ip) && !exempt_ip) {
+    if (ban_ip || ban_same_name) {
+      printf("[auto-kick] %s flagged for rapid reconnects\n", ip);
+    } else {
+      printf("[auto-kick] %s exceeded join limit\n", ip);
     }
-    return true;
+    return HOST_JOIN_ATTEMPT_KICK;
   }
 
-  return false;
+  return HOST_JOIN_ATTEMPT_OK;
 }
 
 static bool host_register_suspicious_activity(host_t *host, const char *username, const char *ip,
@@ -22373,6 +22546,10 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   }
   else if (session_parse_command(line, "/gemini", &args)) {
     session_handle_gemini(ctx, args);
+    return;
+  }
+  else if (session_parse_command(line, "/captcha", &args)) {
+    session_handle_captcha(ctx, args);
     return;
   }
   else if (session_parse_command(line, "/eliza", &args)) {
@@ -22736,7 +22913,7 @@ static bool host_user_data_find_profile_picture(host_t *host, const char *alias,
   }
 
   user_data_record_t direct_record;
-  const bool direct_loaded = host_user_data_load_existing(host, alias, &direct_record, false);
+  const bool direct_loaded = host_user_data_load_existing(host, alias, NULL, &direct_record, false);
   if (direct_loaded && direct_record.profile_picture[0] != '\0') {
     *record = direct_record;
     return true;
@@ -22793,7 +22970,7 @@ static bool host_user_data_find_profile_picture(host_t *host, const char *alias,
     }
 
     user_data_record_t candidate_record;
-    if (!host_user_data_load_existing(host, candidate_name, &candidate_record, false)) {
+    if (!host_user_data_load_existing(host, candidate_name, NULL, &candidate_record, false)) {
       continue;
     }
 
@@ -22817,8 +22994,8 @@ static bool host_user_data_find_profile_picture(host_t *host, const char *alias,
   return matched;
 }
 
-static bool host_user_data_load_existing(host_t *host, const char *username, user_data_record_t *record,
-                                        bool create_if_missing) {
+static bool host_user_data_load_existing(host_t *host, const char *username, const char *ip,
+                                        user_data_record_t *record, bool create_if_missing) {
   if (host == NULL || username == NULL || username[0] == '\0') {
     return false;
   }
@@ -22833,9 +23010,9 @@ static bool host_user_data_load_existing(host_t *host, const char *username, use
   }
 
   if (create_if_missing) {
-    success = user_data_ensure_exists(host->user_data_root, username, record);
+    success = user_data_ensure_exists(host->user_data_root, username, ip, record);
   } else {
-    success = user_data_load(host->user_data_root, username, record);
+    success = user_data_load(host->user_data_root, username, ip, record);
   }
 
   if (host->user_data_lock_initialized) {
@@ -22855,7 +23032,7 @@ static bool session_user_data_load(session_ctx_t *ctx) {
   }
 
   user_data_record_t record;
-  if (!host_user_data_load_existing(ctx->owner, ctx->user.name, &record, true)) {
+  if (!host_user_data_load_existing(ctx->owner, ctx->user.name, ctx->client_ip, &record, true)) {
     return false;
   }
 
@@ -22876,7 +23053,8 @@ static bool session_user_data_commit(session_ctx_t *ctx) {
   if (host->user_data_lock_initialized) {
     pthread_mutex_lock(&host->user_data_lock);
   }
-  success = user_data_save(host->user_data_root, &ctx->user_data);
+  snprintf(ctx->user_data.last_ip, sizeof(ctx->user_data.last_ip), "%s", ctx->client_ip);
+  success = user_data_save(host->user_data_root, &ctx->user_data, ctx->client_ip);
   if (host->user_data_lock_initialized) {
     pthread_mutex_unlock(&host->user_data_lock);
   }
@@ -22888,8 +23066,8 @@ static bool session_user_data_commit(session_ctx_t *ctx) {
   return success;
 }
 
-static bool host_user_data_send_mail(host_t *host, const char *recipient, const char *sender, const char *message,
-                                    char *error, size_t error_length) {
+static bool host_user_data_send_mail(host_t *host, const char *recipient, const char *recipient_ip,
+                                    const char *sender, const char *message, char *error, size_t error_length) {
   if (error != NULL && error_length > 0U) {
     error[0] = '\0';
   }
@@ -22908,8 +23086,40 @@ static bool host_user_data_send_mail(host_t *host, const char *recipient, const 
     return false;
   }
 
+  char resolved_ip[SSH_CHATTER_IP_LEN];
+  resolved_ip[0] = '\0';
+  if (recipient_ip != NULL && recipient_ip[0] != '\0') {
+    snprintf(resolved_ip, sizeof(resolved_ip), "%s", recipient_ip);
+  }
+
+  const bool target_is_lan_ops = strcasecmp(recipient, LAN_OPS_NICKNAME) == 0;
+  if (target_is_lan_ops) {
+    session_ctx_t *target_session = chat_room_find_user(&host->room, recipient);
+    if (target_session == NULL || !target_session->user.is_lan_operator) {
+      if (error != NULL && error_length > 0U) {
+        snprintf(error, error_length, "%s", "LAN operator mailbox is unavailable.");
+      }
+      return false;
+    }
+    snprintf(resolved_ip, sizeof(resolved_ip), "%s", target_session->client_ip);
+  }
+
+  if (resolved_ip[0] == '\0') {
+    session_ctx_t *target_session = chat_room_find_user(&host->room, recipient);
+    if (target_session != NULL) {
+      snprintf(resolved_ip, sizeof(resolved_ip), "%s", target_session->client_ip);
+    }
+  }
+
+  if (resolved_ip[0] == '\0') {
+    if (error != NULL && error_length > 0U) {
+      snprintf(error, error_length, "%s", "Provide the recipient's IP (name@ip) when they are offline.");
+    }
+    return false;
+  }
+
   user_data_record_t record;
-  if (!host_user_data_load_existing(host, recipient, &record, true)) {
+  if (!host_user_data_load_existing(host, recipient, resolved_ip, &record, true)) {
     if (error != NULL && error_length > 0U) {
       snprintf(error, error_length, "Unable to open mailbox for %s.", recipient);
     }
@@ -22936,12 +23146,13 @@ static bool host_user_data_send_mail(host_t *host, const char *recipient, const 
   }
   snprintf(entry->message, sizeof(entry->message), "%s", message);
   record.last_updated = (uint64_t)now;
+  snprintf(record.last_ip, sizeof(record.last_ip), "%s", resolved_ip);
 
   bool success;
   if (host->user_data_lock_initialized) {
     pthread_mutex_lock(&host->user_data_lock);
   }
-  success = user_data_save(host->user_data_root, &record);
+  success = user_data_save(host->user_data_root, &record, resolved_ip);
   if (host->user_data_lock_initialized) {
     pthread_mutex_unlock(&host->user_data_lock);
   }
@@ -23942,14 +24153,20 @@ static void *session_thread(void *arg) {
   session_apply_granted_privileges(ctx);
   session_apply_saved_preferences(ctx);
 
+  bool captcha_enabled = false;
+  if (ctx->owner != NULL) {
+    captcha_enabled = atomic_load(&ctx->owner->captcha_enabled);
+  }
   const bool captcha_exempt = session_is_captcha_exempt(ctx);
-  if (!captcha_exempt && !session_run_captcha(ctx)) {
+  if (captcha_enabled && !captcha_exempt && !session_run_captcha(ctx)) {
     session_cleanup(ctx);
     return NULL;
   }
 
-  if (host_register_join_attempt(ctx->owner, ctx->user.name, ctx->client_ip)) {
-    session_send_system_line(ctx, "Rapid reconnect detected. You have been banned.");
+  host_join_attempt_result_t join_result =
+      host_register_join_attempt(ctx->owner, ctx->user.name, ctx->client_ip);
+  if (join_result == HOST_JOIN_ATTEMPT_KICK) {
+    session_send_system_line(ctx, "Rapid reconnect detected. You have been kicked.");
     session_cleanup(ctx);
     return NULL;
   }
@@ -23960,7 +24177,8 @@ static void *session_thread(void *arg) {
     return NULL;
   }
 
-  const bool reserved_username = host_username_reserved(ctx->owner, ctx->user.name);
+  const bool reserved_username =
+      host_username_reserved(ctx->owner, ctx->user.name) && !ctx->user.is_lan_operator;
   session_ctx_t *existing = chat_room_find_user(&ctx->owner->room, ctx->user.name);
   if (reserved_username || existing != NULL) {
     ctx->username_conflict = true;
@@ -24499,6 +24717,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->join_activity = NULL;
   host->join_activity_count = 0U;
   host->join_activity_capacity = 0U;
+  atomic_store(&host->captcha_enabled, false);
   host->captcha_nonce = 0U;
   host->has_last_captcha = false;
   host->last_captcha_question[0] = '\0';

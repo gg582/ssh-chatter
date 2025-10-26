@@ -30,7 +30,7 @@ CFLAGS = -std=c2x -Ofast \
 	-fstrict-overflow \
 	-fno-trapping-math
 COMMON_LDFLAGS = -fsanitize=address,leak,undefined,shift,bounds,float-divide-by-zero,vptr \
-        -lpthread -ldl -lcurl -lm
+        -lpthread -ldl -lcurl -lm -lgc
 LDFLAGS = $(COMMON_LDFLAGS) -lssh
 
 TARGET := ssh-chatter
