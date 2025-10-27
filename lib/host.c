@@ -10471,6 +10471,26 @@ static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer, size_t
   return !ctx->should_exit;
 }
 
+static bool session_telnet_can_use_reserved_name(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  if (ctx->user.is_lan_operator) {
+    return true;
+  }
+
+  if (session_is_lan_client(ctx->client_ip)) {
+    return true;
+  }
+
+  if (ctx->owner != NULL && host_ip_has_grant(ctx->owner, ctx->client_ip)) {
+    return true;
+  }
+
+  return false;
+}
+
 static bool session_telnet_prompt_initial_nickname(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->owner == NULL) {
     return false;
@@ -10515,7 +10535,8 @@ static bool session_telnet_prompt_initial_nickname(session_ctx_t *ctx) {
       continue;
     }
 
-    if (host_username_reserved(ctx->owner, nickname) && !ctx->user.is_lan_operator) {
+    if (ctx->owner != NULL && host_username_reserved(ctx->owner, nickname) &&
+        !session_telnet_can_use_reserved_name(ctx)) {
       session_send_system_line(ctx, "That name is reserved for LAN operators.");
       continue;
     }
