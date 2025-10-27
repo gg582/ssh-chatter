@@ -10401,6 +10401,159 @@ static int session_telnet_read_byte(session_ctx_t *ctx, unsigned char *out, int 
   }
 }
 
+static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer, size_t length) {
+  if (ctx == NULL || buffer == NULL || length == 0U) {
+    return false;
+  }
+
+  size_t written = 0U;
+  bool ignore_next_newline = false;
+
+  while (!ctx->should_exit) {
+    unsigned char byte = 0U;
+    int read_result = session_telnet_read_byte(ctx, &byte, -1);
+    if (read_result == SSH_AGAIN) {
+      continue;
+    }
+    if (read_result <= 0) {
+      ctx->should_exit = true;
+      return false;
+    }
+
+    if (ignore_next_newline) {
+      ignore_next_newline = false;
+      if (byte == '\n') {
+        continue;
+      }
+    }
+
+    if (byte == '\0') {
+      ctx->should_exit = true;
+      return false;
+    }
+
+    if (byte == '\r' || byte == '\n') {
+      session_channel_write(ctx, "\r\n", 2U);
+      if (byte == '\r') {
+        ignore_next_newline = true;
+      }
+      break;
+    }
+
+    if (byte == 0x7FU || byte == '\b') {
+      if (written > 0U) {
+        --written;
+        session_channel_write(ctx, "\b \b", 3U);
+      }
+      continue;
+    }
+
+    if (byte == 0x03U || byte == 0x04U) {
+      ctx->should_exit = true;
+      return false;
+    }
+
+    if (byte < 0x20U) {
+      continue;
+    }
+
+    if (written + 1U >= length) {
+      const char bell = '\a';
+      session_channel_write(ctx, &bell, 1U);
+      continue;
+    }
+
+    buffer[written++] = (char)byte;
+    session_channel_write(ctx, (const char *)&byte, 1U);
+  }
+
+  buffer[written] = '\0';
+  return !ctx->should_exit;
+}
+
+static bool session_telnet_can_use_reserved_name(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  if (ctx->user.is_lan_operator) {
+    return true;
+  }
+
+  if (session_is_lan_client(ctx->client_ip)) {
+    return true;
+  }
+
+  if (ctx->owner != NULL && host_ip_has_grant(ctx->owner, ctx->client_ip)) {
+    return true;
+  }
+
+  return false;
+}
+
+static bool session_telnet_prompt_initial_nickname(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return false;
+  }
+
+  char nickname[SSH_CHATTER_USERNAME_LEN];
+
+  session_send_system_line(
+      ctx,
+      "Telnet escape character defaults to Ctrl+@. Press Ctrl+@ if you need to exit this prompt.");
+
+  while (!ctx->should_exit) {
+    session_send_system_line(ctx, "Set your nickname:");
+    session_channel_write(ctx, "> ", 2U);
+
+    if (!session_telnet_collect_line(ctx, nickname, sizeof(nickname))) {
+      return false;
+    }
+
+    trim_whitespace_inplace(nickname);
+    if (nickname[0] == '\0') {
+      session_send_system_line(ctx, "Nickname cannot be empty.");
+      continue;
+    }
+
+    bool invalid_character = false;
+    for (size_t idx = 0U; nickname[idx] != '\0'; ++idx) {
+      const unsigned char ch = (unsigned char)nickname[idx];
+      if (ch <= 0x1FU || ch == 0x7FU || ch == ' ' || ch == '\t') {
+        invalid_character = true;
+        break;
+      }
+    }
+
+    if (invalid_character) {
+      session_send_system_line(ctx, "Names may not include control characters or whitespace.");
+      continue;
+    }
+
+    if (host_is_username_banned(ctx->owner, nickname)) {
+      session_send_system_line(ctx, "That name is banned.");
+      continue;
+    }
+
+    if (ctx->owner != NULL && host_username_reserved(ctx->owner, nickname) &&
+        !session_telnet_can_use_reserved_name(ctx)) {
+      session_send_system_line(ctx, "That name is reserved for LAN operators.");
+      continue;
+    }
+
+    session_ctx_t *existing = chat_room_find_user(&ctx->owner->room, nickname);
+    if (existing != NULL && existing != ctx) {
+      session_send_system_line(ctx, "That name is already taken.");
+      continue;
+    }
+
+    snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", nickname);
+    return true;
+  }
+
+  return false;
+}
+
 static int session_transport_read(session_ctx_t *ctx, void *buffer, size_t length, int timeout_ms) {
   if (ctx == NULL || buffer == NULL || length == 0U) {
     return SSH_ERROR;
@@ -24225,6 +24378,13 @@ static void *session_thread(void *arg) {
     break;
   }
 
+  if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+    if (!session_telnet_prompt_initial_nickname(ctx)) {
+      session_cleanup(ctx);
+      return NULL;
+    }
+  }
+
   session_assign_lan_privileges(ctx);
   session_apply_granted_privileges(ctx);
   session_apply_saved_preferences(ctx);
@@ -24469,6 +24629,18 @@ static void *session_thread(void *arg) {
           }
           session_render_prompt(ctx, false);
         }
+        continue;
+      }
+
+      if (ctx->transport_kind == SESSION_TRANSPORT_TELNET && ch == 0x00) {
+        ctx->input_buffer[ctx->input_length] = '\0';
+        session_apply_background_fill(ctx);
+        session_handle_exit(ctx);
+        session_clear_input(ctx);
+        if (ctx->should_exit) {
+          break;
+        }
+        session_render_prompt(ctx, false);
         continue;
       }
 
