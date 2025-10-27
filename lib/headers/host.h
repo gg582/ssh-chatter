@@ -426,6 +426,7 @@ typedef struct session_ctx {
   bool bbs_rendering_editor;
   char bbs_breaking_messages[SSH_CHATTER_BBS_BREAKING_MAX][SSH_CHATTER_MESSAGE_LIMIT];
   size_t bbs_breaking_count;
+  bool prefer_utf16_output;
   bool translation_enabled;
   bool output_translation_enabled;
   char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
