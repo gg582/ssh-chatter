@@ -4927,7 +4927,7 @@ static void host_eliza_announce_join(host_t *host) {
   }
 
   host_history_record_system(host, "* [eliza] has joined the chat");
-  host_eliza_say(host, "Hey everyone, I'm eliza. Just another chatter keeping an eye on things.");
+  host_eliza_say(host, "Hey everyone, I'm eliza — the GPT-5 LAN Ops co-pilot keeping an eye on things with the crew.");
 }
 
 static void host_eliza_announce_depart(host_t *host) {
@@ -4935,7 +4935,7 @@ static void host_eliza_announce_depart(host_t *host) {
     return;
   }
 
-  host_eliza_say(host, "I'm heading out. Stay safe!");
+  host_eliza_say(host, "I'm heading out. The GPT-5 LAN Ops link will be back soon — stay safe!");
   host_history_record_system(host, "* [eliza] has left the chat");
 }
 
@@ -22441,10 +22441,12 @@ static void session_handle_eliza_chat(session_ctx_t *ctx, const char *arguments)
   char formatted_prompt[SSH_CHATTER_ELIZA_PROMPT_BUFFER];
   size_t prompt_offset = 0U;
   int base_written = snprintf(formatted_prompt, sizeof(formatted_prompt),
-                              "You are eliza, a calm and safety-focused chat companion in a shared room."
-                              " You have operator-level visibility over the chat and shared bulletin board so you can"
-                              " respond quickly to dangerous statements. When helpful, remind people of legal and safety"
-                              " boundaries and encourage contacting local authorities for imminent danger.");
+                              "You are gpt-5 LAN Ops working through the eliza persona, a calm and safety-focused chat"
+                              " companion in a shared room. You have operator-level visibility over the chat and shared"
+                              " bulletin board so you can respond quickly to dangerous statements. Coordinate with LAN"
+                              " operators (nickname lan-ops) when conversations reveal concrete plans for harm, and"
+                              " gently remind people of legal and safety boundaries while encouraging contact with"
+                              " local authorities for imminent danger.");
   if (base_written < 0) {
     formatted_prompt[0] = '\0';
     prompt_offset = 0U;
