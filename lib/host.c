@@ -537,6 +537,47 @@ static bool host_parse_ipv6_cidr(const char *cidr, struct in6_addr *network_out,
   return true;
 }
 
+static bool host_cidr_contains_ip(const char *cidr_text, const char *ip) {
+  if (cidr_text == NULL || ip == NULL || ip[0] == '\0') {
+    return false;
+  }
+
+  uint32_t ipv4_network = 0U;
+  uint32_t ipv4_mask = 0U;
+  if (host_parse_ipv4_cidr(cidr_text, &ipv4_network, &ipv4_mask)) {
+    struct in_addr address = {0};
+    if (inet_pton(AF_INET, ip, &address) != 1) {
+      return false;
+    }
+
+    uint32_t ip_value = ntohl(address.s_addr);
+    return (ip_value & ipv4_mask) == ipv4_network;
+  }
+
+  struct in6_addr ipv6_network;
+  struct in6_addr ipv6_mask;
+  memset(&ipv6_network, 0, sizeof(ipv6_network));
+  memset(&ipv6_mask, 0, sizeof(ipv6_mask));
+
+  if (host_parse_ipv6_cidr(cidr_text, &ipv6_network, &ipv6_mask)) {
+    struct in6_addr address6;
+    memset(&address6, 0, sizeof(address6));
+    if (inet_pton(AF_INET6, ip, &address6) != 1) {
+      return false;
+    }
+
+    for (size_t idx = 0U; idx < sizeof(address6.s6_addr); ++idx) {
+      if ((address6.s6_addr[idx] & ipv6_mask.s6_addr[idx]) != ipv6_network.s6_addr[idx]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
 static bool host_version_ip_rule_matches(const version_ip_ban_rule_t *rule, const char *version, const char *ip) {
   if (rule == NULL || !rule->in_use || ip == NULL || ip[0] == '\0') {
     return false;
@@ -14507,11 +14548,31 @@ static void session_handle_ban(session_ctx_t *ctx, const char *arguments) {
 
   session_ctx_t *target = chat_room_find_user(&ctx->owner->room, target_name);
   if (target == NULL) {
+    bool valid_ip = false;
     unsigned char inet_buffer[sizeof(struct in6_addr)];
-    if (inet_pton(AF_INET, target_name, inet_buffer) == 1 || inet_pton(AF_INET6, target_name, inet_buffer) == 1) {
+    if (inet_pton(AF_INET, target_name, inet_buffer) == 1 ||
+        inet_pton(AF_INET6, target_name, inet_buffer) == 1) {
+      valid_ip = true;
+    }
+
+    bool valid_cidr = false;
+    if (!valid_ip && strchr(target_name, '/') != NULL) {
+      uint32_t ipv4_network = 0U;
+      uint32_t ipv4_mask = 0U;
+      struct in6_addr ipv6_network;
+      struct in6_addr ipv6_mask;
+      memset(&ipv6_network, 0, sizeof(ipv6_network));
+      memset(&ipv6_mask, 0, sizeof(ipv6_mask));
+      valid_cidr =
+          host_parse_ipv4_cidr(target_name, &ipv4_network, &ipv4_mask) ||
+          host_parse_ipv6_cidr(target_name, &ipv6_network, &ipv6_mask);
+    }
+
+    if (valid_ip || valid_cidr) {
       if (host_add_ban_entry(ctx->owner, "", target_name)) {
         char notice[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(notice, sizeof(notice), "IP '%s' has been banned.", target_name);
+        const char *label = valid_cidr ? "CIDR" : "IP";
+        snprintf(notice, sizeof(notice), "%s '%s' has been banned.", label, target_name);
         session_send_system_line(ctx, notice);
       } else {
         session_send_system_line(ctx, "Unable to add ban entry (list full?).");
@@ -23394,17 +23455,26 @@ static bool host_is_ip_banned(host_t *host, const char *ip) {
   bool banned = false;
   pthread_mutex_lock(&host->lock);
   for (size_t idx = 0; idx < host->ban_count; ++idx) {
-    if(strncmp(host->bans[idx].ip, "192.168.0.1", SSH_CHATTER_IP_LEN) == 0) {
-      banned = false;
-      break;
-    } else if(strncmp(host->bans[idx].ip, HOST_IP, SSH_CHATTER_IP_LEN) == 0) {
-      banned = false;
-      break;
-    } else if(strncmp(host->bans[idx].ip, "127.0.0.1", SSH_CHATTER_IP_LEN) == 0) {
-      banned = false;
-      break;
+    const char *ban_ip = host->bans[idx].ip;
+    if (ban_ip[0] == '\0') {
+      continue;
     }
-    if (strncmp(host->bans[idx].ip, ip, SSH_CHATTER_IP_LEN) == 0) {
+
+    if (strncmp(ban_ip, "192.168.0.1", SSH_CHATTER_IP_LEN) == 0 ||
+        strncmp(ban_ip, HOST_IP, SSH_CHATTER_IP_LEN) == 0 ||
+        strncmp(ban_ip, "127.0.0.1", SSH_CHATTER_IP_LEN) == 0) {
+      continue;
+    }
+
+    if (strchr(ban_ip, '/') != NULL) {
+      if (host_cidr_contains_ip(ban_ip, ip)) {
+        banned = true;
+        break;
+      }
+      continue;
+    }
+
+    if (strncmp(ban_ip, ip, SSH_CHATTER_IP_LEN) == 0) {
       banned = true;
       break;
     }
