@@ -1800,6 +1800,11 @@ static bool parse_bool_token(const char *token, bool *value);
 static bool session_transport_active(const session_ctx_t *ctx);
 static void session_transport_request_close(session_ctx_t *ctx);
 static void session_channel_write(session_ctx_t *ctx, const void *data, size_t length);
+static bool session_channel_write_utf16(session_ctx_t *ctx, const char *data, size_t length);
+static bool session_channel_write_utf16_segment(session_ctx_t *ctx, const char *data, size_t length);
+static size_t session_utf8_decode_codepoint(const unsigned char *data, size_t length, uint32_t *codepoint);
+static bool session_utf8_to_utf16le(const char *input, size_t length, unsigned char *output, size_t capacity,
+                                    size_t *produced);
 static bool session_channel_write_all(session_ctx_t *ctx, const void *data, size_t length);
 static bool session_channel_wait_writable(session_ctx_t *ctx, int timeout_ms);
 static void session_channel_log_write_failure(session_ctx_t *ctx, const char *reason);
@@ -1843,6 +1848,7 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch);
 static void session_cleanup(session_ctx_t *ctx);
 static void *session_thread(void *arg);
 static void host_telnet_listener_stop(host_t *host);
+static void session_refresh_output_encoding(session_ctx_t *ctx);
 static void session_history_record(session_ctx_t *ctx, const char *line);
 static void session_history_navigate(session_ctx_t *ctx, int direction);
 static void session_scrollback_navigate(session_ctx_t *ctx, int direction);
@@ -9150,6 +9156,23 @@ static void host_bbs_start_watchdog(host_t *host) {
 
   host->bbs_watchdog_thread_initialized = true;
 }
+
+static void session_refresh_output_encoding(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  bool use_utf16 = false;
+  if (ctx->os_name[0] != '\0') {
+    const os_descriptor_t *descriptor = session_lookup_os_descriptor(ctx->os_name);
+    if (descriptor != NULL && strcasecmp(descriptor->name, "windows") == 0) {
+      use_utf16 = true;
+    }
+  }
+
+  ctx->prefer_utf16_output = use_utf16;
+}
+
 static void session_apply_saved_preferences(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;
@@ -9166,6 +9189,8 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
     has_snapshot = true;
   }
   pthread_mutex_unlock(&host->lock);
+
+  ctx->prefer_utf16_output = false;
 
   ctx->translation_caption_spacing = 0U;
   ctx->translation_enabled = false;
@@ -9253,6 +9278,7 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
 
   (void)session_user_data_load(ctx);
   session_force_dark_mode_foreground(ctx);
+  session_refresh_output_encoding(ctx);
 }
 
 static bool session_argument_is_disable(const char *token) {
@@ -10729,9 +10755,236 @@ static void session_channel_write(session_ctx_t *ctx, const void *data, size_t l
     return;
   }
 
-  if (!session_channel_write_all(ctx, data, length)) {
+  bool success = true;
+  if (ctx->prefer_utf16_output) {
+    success = session_channel_write_utf16(ctx, (const char *)data, length);
+  } else {
+    success = session_channel_write_all(ctx, data, length);
+  }
+
+  if (!success) {
     ctx->should_exit = true;
   }
+}
+
+static bool session_channel_write_utf16(session_ctx_t *ctx, const char *data, size_t length) {
+  if (ctx == NULL || data == NULL) {
+    return true;
+  }
+
+  size_t idx = 0U;
+  while (idx < length) {
+    unsigned char byte = (unsigned char)data[idx];
+    if (byte == '\033') {
+      size_t start = idx++;
+      if (idx < length) {
+        unsigned char next = (unsigned char)data[idx];
+        if (next == '[') {
+          ++idx;
+          while (idx < length) {
+            unsigned char ch = (unsigned char)data[idx++];
+            if (ch >= '@' && ch <= '~') {
+              break;
+            }
+          }
+        } else if (next == ']') {
+          ++idx;
+          while (idx < length) {
+            unsigned char ch = (unsigned char)data[idx++];
+            if (ch == '\a') {
+              break;
+            }
+            if (ch == '\033' && idx < length) {
+              unsigned char terminator = (unsigned char)data[idx];
+              if (terminator == '\\') {
+                ++idx;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      if (!session_channel_write_all(ctx, data + start, idx - start)) {
+        return false;
+      }
+      continue;
+    }
+
+    if (byte < 0x20U || byte == 0x7FU) {
+      if (!session_channel_write_all(ctx, data + idx, 1U)) {
+        return false;
+      }
+      ++idx;
+      continue;
+    }
+
+    size_t start = idx;
+    while (idx < length) {
+      unsigned char ch = (unsigned char)data[idx];
+      if (ch == '\033' || ch < 0x20U || ch == 0x7FU) {
+        break;
+      }
+      ++idx;
+    }
+
+    if (!session_channel_write_utf16_segment(ctx, data + start, idx - start)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static bool session_channel_write_utf16_segment(session_ctx_t *ctx, const char *data, size_t length) {
+  if (ctx == NULL || data == NULL || length == 0U) {
+    return true;
+  }
+
+  size_t max_output = length * 4U;
+  if (max_output == 0U) {
+    return true;
+  }
+
+  unsigned char stack_buffer[512];
+  unsigned char *buffer = NULL;
+  bool use_stack = max_output <= sizeof(stack_buffer);
+  if (use_stack) {
+    buffer = stack_buffer;
+  } else {
+    buffer = (unsigned char *)malloc(max_output);
+    if (buffer == NULL) {
+      return session_channel_write_all(ctx, data, length);
+    }
+  }
+
+  size_t produced = 0U;
+  bool encoded = session_utf8_to_utf16le(data, length, buffer, max_output, &produced);
+  bool result = false;
+  if (encoded) {
+    result = session_channel_write_all(ctx, buffer, produced);
+  } else {
+    result = session_channel_write_all(ctx, data, length);
+  }
+
+  if (!use_stack) {
+    free(buffer);
+  }
+
+  return result;
+}
+
+static size_t session_utf8_decode_codepoint(const unsigned char *data, size_t length, uint32_t *codepoint) {
+  if (data == NULL || length == 0U || codepoint == NULL) {
+    return 0U;
+  }
+
+  unsigned char b0 = data[0];
+  if (b0 < 0x80U) {
+    *codepoint = b0;
+    return 1U;
+  }
+
+  if ((b0 & 0xE0U) == 0xC0U) {
+    if (length < 2U) {
+      return 0U;
+    }
+    unsigned char b1 = data[1];
+    if ((b1 & 0xC0U) != 0x80U) {
+      return 0U;
+    }
+    uint32_t value = ((uint32_t)(b0 & 0x1FU) << 6U) | (uint32_t)(b1 & 0x3FU);
+    if (value < 0x80U) {
+      return 0U;
+    }
+    *codepoint = value;
+    return 2U;
+  }
+
+  if ((b0 & 0xF0U) == 0xE0U) {
+    if (length < 3U) {
+      return 0U;
+    }
+    unsigned char b1 = data[1];
+    unsigned char b2 = data[2];
+    if ((b1 & 0xC0U) != 0x80U || (b2 & 0xC0U) != 0x80U) {
+      return 0U;
+    }
+    uint32_t value = ((uint32_t)(b0 & 0x0FU) << 12U) | ((uint32_t)(b1 & 0x3FU) << 6U) | (uint32_t)(b2 & 0x3FU);
+    if (value < 0x800U || (value >= 0xD800U && value <= 0xDFFFU)) {
+      return 0U;
+    }
+    *codepoint = value;
+    return 3U;
+  }
+
+  if ((b0 & 0xF8U) == 0xF0U) {
+    if (length < 4U) {
+      return 0U;
+    }
+    unsigned char b1 = data[1];
+    unsigned char b2 = data[2];
+    unsigned char b3 = data[3];
+    if ((b1 & 0xC0U) != 0x80U || (b2 & 0xC0U) != 0x80U || (b3 & 0xC0U) != 0x80U) {
+      return 0U;
+    }
+    uint32_t value = ((uint32_t)(b0 & 0x07U) << 18U) | ((uint32_t)(b1 & 0x3FU) << 12U) |
+                     ((uint32_t)(b2 & 0x3FU) << 6U) | (uint32_t)(b3 & 0x3FU);
+    if (value < 0x10000U || value > 0x10FFFFU) {
+      return 0U;
+    }
+    *codepoint = value;
+    return 4U;
+  }
+
+  return 0U;
+}
+
+static bool session_utf8_to_utf16le(const char *input, size_t length, unsigned char *output, size_t capacity,
+                                    size_t *produced) {
+  if (input == NULL || output == NULL) {
+    return false;
+  }
+
+  size_t out_idx = 0U;
+  size_t idx = 0U;
+  while (idx < length) {
+    uint32_t codepoint = 0U;
+    size_t consumed = session_utf8_decode_codepoint((const unsigned char *)input + idx, length - idx, &codepoint);
+    if (consumed == 0U) {
+      codepoint = 0xFFFD;
+      consumed = 1U;
+    }
+    idx += consumed;
+
+    if (codepoint <= 0xFFFFU) {
+      if (codepoint >= 0xD800U && codepoint <= 0xDFFFU) {
+        codepoint = 0xFFFD;
+      }
+      if (out_idx + 2U > capacity) {
+        return false;
+      }
+      output[out_idx++] = (unsigned char)(codepoint & 0xFFU);
+      output[out_idx++] = (unsigned char)((codepoint >> 8U) & 0xFFU);
+      continue;
+    }
+
+    uint32_t adjusted = codepoint - 0x10000U;
+    uint16_t high = (uint16_t)(0xD800U | ((adjusted >> 10U) & 0x3FFU));
+    uint16_t low = (uint16_t)(0xDC00U | (adjusted & 0x3FFU));
+    if (out_idx + 4U > capacity) {
+      return false;
+    }
+    output[out_idx++] = (unsigned char)(high & 0xFFU);
+    output[out_idx++] = (unsigned char)((high >> 8U) & 0xFFU);
+    output[out_idx++] = (unsigned char)(low & 0xFFU);
+    output[out_idx++] = (unsigned char)((low >> 8U) & 0xFFU);
+  }
+
+  if (produced != NULL) {
+    *produced = out_idx;
+  }
+  return true;
 }
 
 static void session_apply_background_fill(session_ctx_t *ctx) {
@@ -15777,6 +16030,7 @@ static void session_handle_os(session_ctx_t *ctx, const char *arguments) {
 
   snprintf(ctx->os_name, sizeof(ctx->os_name), "%s", descriptor->name);
   host_store_user_os(ctx->owner, ctx);
+  session_refresh_output_encoding(ctx);
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(message, sizeof(message), "Recorded your operating system as %s.", descriptor->display);
