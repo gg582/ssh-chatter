@@ -10427,6 +10427,11 @@ static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer, size_t
       }
     }
 
+    if (byte == '\0') {
+      ctx->should_exit = true;
+      return false;
+    }
+
     if (byte == '\r' || byte == '\n') {
       session_channel_write(ctx, "\r\n", 2U);
       if (byte == '\r') {
@@ -10472,6 +10477,10 @@ static bool session_telnet_prompt_initial_nickname(session_ctx_t *ctx) {
   }
 
   char nickname[SSH_CHATTER_USERNAME_LEN];
+
+  session_send_system_line(
+      ctx,
+      "Telnet escape character defaults to Ctrl+@. Press Ctrl+@ if you need to exit this prompt.");
 
   while (!ctx->should_exit) {
     session_send_system_line(ctx, "Set your nickname:");
@@ -24599,6 +24608,18 @@ static void *session_thread(void *arg) {
           }
           session_render_prompt(ctx, false);
         }
+        continue;
+      }
+
+      if (ctx->transport_kind == SESSION_TRANSPORT_TELNET && ch == 0x00) {
+        ctx->input_buffer[ctx->input_length] = '\0';
+        session_apply_background_fill(ctx);
+        session_handle_exit(ctx);
+        session_clear_input(ctx);
+        if (ctx->should_exit) {
+          break;
+        }
+        session_render_prompt(ctx, false);
         continue;
       }
 
