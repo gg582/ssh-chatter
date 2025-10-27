@@ -1,7 +1,7 @@
 CC := cc
 CFLAGS = -std=c2x -Ofast \
         -Ilib/headers \
-        -Wall -Wextra -Werror -Wshadow -Wformat=2 -Wundef -Wconversion -Wdouble-promotion \
+        -Wall -Wextra -Wshadow -Wformat=2 -Wundef -Wconversion -Wdouble-promotion \
         -fno-omit-frame-pointer -fstack-protector-strong -fno-common \
         -fPIC \
         -g -lgc \
@@ -25,8 +25,8 @@ CFLAGS = -std=c2x -Ofast \
        	-ffunction-sections \
 	-fno-asynchronous-unwind-tables \
 	-fstrict-aliasing \
-	-fstrict-overflow \
 	-fno-trapping-math \
+	-fstrict-overflow \
         -DGC_THREADS \
         -DPARALLEL_MARK \
         -DNO_DEBUGGING \
