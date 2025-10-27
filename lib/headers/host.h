@@ -39,6 +39,8 @@
 #define SSH_CHATTER_ATTACHMENT_TARGET_LEN 256
 #define SSH_CHATTER_ATTACHMENT_CAPTION_LEN 256
 #define SSH_CHATTER_REACTION_KIND_COUNT 7
+#define SSH_CHATTER_MAX_LAN_OPERATORS 5
+#define SSH_CHATTER_LAN_PASSWORD_LEN 128
 #define SSH_CHATTER_OS_NAME_LEN 16
 #define SSH_CHATTER_POLL_LABEL_LEN 32
 #define SSH_CHATTER_MAX_NAMED_POLLS 16
@@ -113,6 +115,12 @@ typedef struct chat_user {
   bool is_operator;
   bool is_lan_operator;
 } chat_user_t;
+
+typedef struct lan_operator_credential {
+  bool active;
+  char nickname[SSH_CHATTER_USERNAME_LEN];
+  char password[SSH_CHATTER_LAN_PASSWORD_LEN];
+} lan_operator_credential_t;
 
 typedef struct chat_room {
   pthread_mutex_t lock;
@@ -359,6 +367,7 @@ typedef struct session_ctx {
   bool telnet_pending_valid;
   int telnet_pending_char;
   chat_user_t user;
+  bool lan_operator_credentials_valid;
   auth_profile_t auth;
   struct host *owner;
   char input_buffer[SSH_CHATTER_MAX_INPUT_LEN];
@@ -634,6 +643,10 @@ typedef struct host {
   size_t operator_grant_count;
   version_ip_ban_rule_t version_ip_ban_rules[SSH_CHATTER_MAX_VERSION_IP_BANS];
   size_t version_ip_ban_rule_count;
+  struct {
+    lan_operator_credential_t entries[SSH_CHATTER_MAX_LAN_OPERATORS];
+    size_t count;
+  } lan_ops;
   struct timespec next_join_ready_time;
   bool join_throttle_initialised;
   size_t join_progress_length;

@@ -9,6 +9,7 @@
 #define  HOST_IP "59.23.169.247"
 #include "host.h"
 #include <libssh/libssh.h>
+#include <libssh/server.h>
 #include "client.h"
 #include "webssh_client.h"
 #include "translator.h"
@@ -102,6 +103,95 @@ static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
     sizeof(SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS[0]);
 #define SESSION_CHANNEL_TIMEOUT (-2)
 
+typedef struct lan_operator_env_pair {
+  const char *name_var;
+  const char *password_var;
+} lan_operator_env_pair_t;
+
+static const lan_operator_env_pair_t LAN_OPERATOR_ENV_PAIRS[] = {
+    {"ADMIN1", "ADMIN1PW"},
+    {"ADMIN2", "ADMIN2PW"},
+    {"ADMIN3", "ADMIN3PW"},
+    {"ADMIN4", "ADMIN4PW"},
+    {"BACKUP", "BACKUPPW"},
+};
+
+static const size_t LAN_OPERATOR_ENV_PAIR_COUNT =
+    sizeof(LAN_OPERATOR_ENV_PAIRS) / sizeof(LAN_OPERATOR_ENV_PAIRS[0]);
+
+static void host_clear_lan_operator_credentials(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  host->lan_ops.count = 0U;
+  memset(host->lan_ops.entries, 0, sizeof(host->lan_ops.entries));
+}
+
+static lan_operator_credential_t *host_find_lan_operator_credential(host_t *host, const char *username) {
+  if (host == NULL || username == NULL || username[0] == '\0') {
+    return NULL;
+  }
+
+  size_t limit = host->lan_ops.count;
+  if (limit > SSH_CHATTER_MAX_LAN_OPERATORS) {
+    limit = SSH_CHATTER_MAX_LAN_OPERATORS;
+  }
+
+  for (size_t idx = 0U; idx < limit; ++idx) {
+    lan_operator_credential_t *credential = &host->lan_ops.entries[idx];
+    if (!credential->active) {
+      continue;
+    }
+    if (strcasecmp(credential->nickname, username) == 0) {
+      return credential;
+    }
+  }
+
+  return NULL;
+}
+
+static bool host_is_lan_operator_username(host_t *host, const char *username) {
+  return host_find_lan_operator_credential(host, username) != NULL;
+}
+
+static void host_load_lan_operator_credentials(host_t *host) {
+  host_clear_lan_operator_credentials(host);
+  if (host == NULL) {
+    return;
+  }
+
+  for (size_t idx = 0U; idx < LAN_OPERATOR_ENV_PAIR_COUNT; ++idx) {
+    const lan_operator_env_pair_t *pair = &LAN_OPERATOR_ENV_PAIRS[idx];
+    const char *username = getenv(pair->name_var);
+    const char *password = getenv(pair->password_var);
+    if (username == NULL || username[0] == '\0') {
+      continue;
+    }
+    if (password == NULL || password[0] == '\0') {
+      continue;
+    }
+
+    lan_operator_credential_t *existing = host_find_lan_operator_credential(host, username);
+    if (existing != NULL) {
+      existing->active = true;
+      snprintf(existing->nickname, sizeof(existing->nickname), "%s", username);
+      snprintf(existing->password, sizeof(existing->password), "%s", password);
+      continue;
+    }
+
+    if (host->lan_ops.count >= SSH_CHATTER_MAX_LAN_OPERATORS) {
+      continue;
+    }
+
+    lan_operator_credential_t *credential = &host->lan_ops.entries[host->lan_ops.count++];
+    memset(credential, 0, sizeof(*credential));
+    credential->active = true;
+    snprintf(credential->nickname, sizeof(credential->nickname), "%s", username);
+    snprintf(credential->password, sizeof(credential->password), "%s", password);
+  }
+}
+
 typedef enum host_join_attempt_result {
   HOST_JOIN_ATTEMPT_OK = 0,
   HOST_JOIN_ATTEMPT_KICK,
@@ -120,7 +210,6 @@ typedef enum host_join_attempt_result {
 #define SSH_CHATTER_JOIN_NAME_THRESHOLD 6U
 #define SSH_CHATTER_JOIN_KICK_WINDOW_NS 60000000000LL
 #define SSH_CHATTER_JOIN_KICK_THRESHOLD 20U
-#define LAN_OPS_NICKNAME "lan-ops"
 #define SSH_CHATTER_SUSPICIOUS_EVENT_WINDOW_NS 300000000000LL
 #define SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD 2U
 #define SSH_CHATTER_CLAMAV_SCAN_INTERVAL_SECONDS (5 * 60 * 60)
@@ -3183,18 +3272,30 @@ static bool session_is_lan_client(const char *ip) {
 }
 
 static void session_assign_lan_privileges(session_ctx_t *ctx) {
-  if (ctx == NULL) {
+  if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
 
-  if (session_is_lan_client(ctx->client_ip)) {
-    ctx->user.is_operator = true;
-    ctx->auth.is_operator = true;
-    ctx->user.is_lan_operator = true;
-    if (ctx->user.name[0] == '\0') {
-      snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", LAN_OPS_NICKNAME);
-    }
+  if (!ctx->lan_operator_credentials_valid) {
+    ctx->user.is_lan_operator = false;
+    return;
   }
+
+  if (!session_is_lan_client(ctx->client_ip)) {
+    ctx->lan_operator_credentials_valid = false;
+    ctx->user.is_lan_operator = false;
+    return;
+  }
+
+  if (!host_is_lan_operator_username(ctx->owner, ctx->user.name)) {
+    ctx->lan_operator_credentials_valid = false;
+    ctx->user.is_lan_operator = false;
+    return;
+  }
+
+  ctx->user.is_operator = true;
+  ctx->auth.is_operator = true;
+  ctx->user.is_lan_operator = true;
 }
 
 static void session_apply_granted_privileges(session_ctx_t *ctx) {
@@ -11001,23 +11102,7 @@ static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer, size_t
 }
 
 static bool session_telnet_can_use_reserved_name(session_ctx_t *ctx) {
-  if (ctx == NULL) {
-    return false;
-  }
-
-  if (ctx->user.is_lan_operator) {
-    return true;
-  }
-
-  if (session_is_lan_client(ctx->client_ip)) {
-    return true;
-  }
-
-  if (ctx->owner != NULL && host_ip_has_grant(ctx->owner, ctx->client_ip)) {
-    return true;
-  }
-
-  return false;
+  return ctx != NULL && ctx->lan_operator_credentials_valid;
 }
 
 static bool session_telnet_prompt_initial_nickname(session_ctx_t *ctx) {
@@ -13550,6 +13635,9 @@ static bool session_handle_service_request(ssh_message message) {
 static int session_authenticate(session_ctx_t *ctx) {
   ssh_message message = NULL;
   bool authenticated = false;
+  if (ctx != NULL) {
+    ctx->lan_operator_credentials_valid = false;
+  }
 
   while (!authenticated && (message = ssh_message_get(ctx->session)) != NULL) {
     const int message_type = ssh_message_type(message);
@@ -13565,9 +13653,45 @@ static int session_authenticate(session_ctx_t *ctx) {
           if (username != NULL && username[0] != '\0') {
             snprintf(ctx->user.name, sizeof(ctx->user.name), "%.*s", SSH_CHATTER_USERNAME_LEN - 1, username);
           }
+
+          bool reserved_name = false;
+          lan_operator_credential_t *credential = NULL;
+          if (ctx->owner != NULL) {
+            credential = host_find_lan_operator_credential(ctx->owner, ctx->user.name);
+            reserved_name = credential != NULL;
+          }
+
+          if (!reserved_name) {
+            ssh_message_auth_reply_success(message, 0);
+            authenticated = true;
+            break;
+          }
+
+          if (!session_is_lan_client(ctx->client_ip)) {
+            ssh_message_auth_set_methods(message, SSH_AUTH_METHOD_PASSWORD);
+            ssh_message_reply_default(message);
+            break;
+          }
+
+          const int auth_method = ssh_message_subtype(message);
+          if (auth_method != SSH_AUTH_METHOD_PASSWORD) {
+            ssh_message_auth_set_methods(message, SSH_AUTH_METHOD_PASSWORD);
+            ssh_message_reply_default(message);
+            break;
+          }
+
+          const char *password = ssh_message_auth_password(message);
+          if (credential == NULL || password == NULL || credential->password[0] == '\0' || strcmp(credential->password, password) != 0) {
+            ssh_message_auth_set_methods(message, SSH_AUTH_METHOD_PASSWORD);
+            ssh_message_reply_default(message);
+            break;
+          }
+
+          ctx->lan_operator_credentials_valid = true;
+          snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", credential->nickname);
+          ssh_message_auth_reply_success(message, 0);
+          authenticated = true;
         }
-        ssh_message_auth_reply_success(message, 0);
-        authenticated = true;
         break;
       default:
         ssh_message_reply_default(message);
@@ -22652,6 +22776,11 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  if (ctx->user.is_lan_operator && strcmp(new_name, ctx->user.name) != 0) {
+    session_send_system_line(ctx, "LAN operator nicknames are fixed.");
+    return;
+  }
+
   for (size_t idx = 0; new_name[idx] != '\0'; ++idx) {
     const unsigned char ch = (unsigned char)new_name[idx];
     if (ch <= 0x1FU || ch == 0x7FU || ch == ' ' || ch == '\t') {
@@ -22773,12 +22902,11 @@ static session_ctx_t *chat_room_find_user(chat_room_t *room, const char *usernam
 }
 
 static bool host_username_reserved(host_t *host, const char *username) {
-  (void)host;
-  if (username == NULL) {
+  if (host == NULL || username == NULL) {
     return false;
   }
 
-  return strcasecmp(username, LAN_OPS_NICKNAME) == 0;
+  return host_is_lan_operator_username(host, username);
 }
 
 static join_activity_entry_t *host_find_join_activity_locked(host_t *host, const char *ip) {
@@ -23860,7 +23988,7 @@ static bool host_user_data_send_mail(host_t *host, const char *recipient, const 
     snprintf(resolved_ip, sizeof(resolved_ip), "%s", recipient_ip);
   }
 
-  const bool target_is_lan_ops = strcasecmp(recipient, LAN_OPS_NICKNAME) == 0;
+  const bool target_is_lan_ops = host_is_lan_operator_username(host, recipient);
   if (target_is_lan_ops) {
     session_ctx_t *target_session = chat_room_find_user(&host->room, recipient);
     if (target_session == NULL || !target_session->user.is_lan_operator) {
@@ -25378,6 +25506,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->auth = auth;
   host->clients = NULL;
   host->web_client = NULL;
+  host_load_lan_operator_credentials(host);
   const palette_descriptor_t *default_palette = palette_find_descriptor("clean");
   if (default_palette != NULL) {
     host_apply_palette_descriptor(host, default_palette);
