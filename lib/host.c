@@ -11365,10 +11365,6 @@ static bool session_telnet_prompt_initial_nickname(session_ctx_t *ctx) {
 
   char nickname[SSH_CHATTER_USERNAME_LEN];
 
-  session_send_system_line(
-      ctx,
-      "Telnet escape character defaults to Ctrl+@. Press Ctrl+@ if you need to exit this prompt.");
-
   while (!ctx->should_exit) {
     session_send_system_line(ctx, "Set your nickname:");
     session_channel_write(ctx, "> ", 2U);
