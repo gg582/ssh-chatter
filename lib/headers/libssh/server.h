@@ -37,6 +37,8 @@ void ssh_bind_free(ssh_bind bind);
 int ssh_bind_options_set(ssh_bind bind, ssh_bind_options_e type, const void *value);
 int ssh_bind_listen(ssh_bind bind);
 int ssh_bind_accept(ssh_bind bind, ssh_session session);
+const char *ssh_message_auth_password(ssh_message message);
+int ssh_message_auth_set_methods(ssh_message message, int methods);
 
 #ifdef __cplusplus
 }
