@@ -26292,36 +26292,47 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
           humanized_log_error("host", "Socket accept failed", EIO);
         }
 
-        bool fatal_socket_error = accept_error != 0;
-        switch (accept_error) {
-          case 0:
-          case EAGAIN:
+        bool fatal_socket_error = false;
+        bool should_backoff_after_socket_error = false;
+
+        if (accept_error != 0) {
+          should_backoff_after_socket_error = true;
+          switch (accept_error) {
+            case EAGAIN:
 #ifdef EWOULDBLOCK
 #if EWOULDBLOCK != EAGAIN
-          case EWOULDBLOCK:
+            case EWOULDBLOCK:
 #endif
 #endif
-          case EINTR:
-          case ECONNRESET:
-          case ECONNABORTED:
-          case ETIMEDOUT:
-          case ENOTCONN:
-          case EPIPE:
+            case EINTR:
+            case ECONNRESET:
+            case ECONNABORTED:
+            case ETIMEDOUT:
+            case ENOTCONN:
+            case EPIPE:
 #ifdef EPROTO
-          case EPROTO:
+            case EPROTO:
 #endif
-            fatal_socket_error = false;
-            break;
-          case EBADF:
-          case ENOTSOCK:
-          case EINVAL:
-            fatal_socket_error = true;
-            break;
-          default:
-            if (accept_error != 0) {
+              should_backoff_after_socket_error = false;
+              break;
+            case EBADF:
+            case ENOTSOCK:
+            case EINVAL:
               fatal_socket_error = true;
-            }
-            break;
+              break;
+            case EMFILE:
+            case ENFILE:
+            case ENOBUFS:
+#ifdef ENOMEM
+            case ENOMEM:
+#endif
+#ifdef ENOSR
+            case ENOSR:
+#endif
+              break;
+            default:
+              break;
+          }
         }
 
         if ((fatal_socket_error && bind_error != NULL)
@@ -26340,6 +26351,14 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
                  host->listener.restart_attempts);
           restart_listener = true;
           break;
+        }
+
+        if (should_backoff_after_socket_error) {
+          struct timespec retry_delay = {
+              .tv_sec = 0,
+              .tv_nsec = 200000000L,
+          };
+          nanosleep(&retry_delay, NULL);
         }
         continue;
       }
