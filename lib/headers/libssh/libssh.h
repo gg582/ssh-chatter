@@ -59,6 +59,12 @@ typedef enum {
 #define SSH_CHANNEL_REQUEST_WINDOW_CHANGE 6
 #define SSH_CHANNEL_REQUEST_X11 7
 
+#define SSH_AUTH_METHOD_NONE 0x0001u
+#define SSH_AUTH_METHOD_PASSWORD 0x0002u
+#define SSH_AUTH_METHOD_PUBLICKEY 0x0004u
+#define SSH_AUTH_METHOD_HOSTBASED 0x0008u
+#define SSH_AUTH_METHOD_INTERACTIVE 0x0010u
+
 int ssh_get_fd(ssh_session session);
 ssh_session ssh_new(void);
 void ssh_free(ssh_session session);
@@ -70,7 +76,7 @@ ssh_message ssh_message_get(ssh_session session);
 int ssh_message_type(ssh_message message);
 int ssh_message_subtype(ssh_message message);
 const char *ssh_message_auth_user(ssh_message message);
-void ssh_message_auth_reply_success(ssh_message message, int partial);
+int ssh_message_auth_reply_success(ssh_message message, int partial);
 const char *ssh_message_service_service(ssh_message message);
 int ssh_message_service_reply_success(ssh_message message);
 void ssh_message_free(ssh_message message);

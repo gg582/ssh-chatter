@@ -43,6 +43,7 @@ CFLAGS = -std=c2x -Ofast \
         -floop-nest-optimize \
         -fgraphite-identity -floop-interchange -floop-strip-mine -floop-block \
         -fno-semantic-interposition \
+        -MMD -MP \
 
     COMMON_LDFLAGS = \
         -lpthread -ldl -lcurl -lm -lgc \
@@ -70,6 +71,7 @@ SRC := main.c lib/host.c lib/client.c lib/webssh_client.c lib/translator.c \
 OBJ := $(SRC:.c=.o)
 SHARED_SRC := lib/translator.c lib/translation_helpers.c lib/ssh_chatter_backend.c
 SHARED_OBJ := $(SHARED_SRC:.c=.o)
+DEP := $(OBJ:.o=.d)
 
 .PHONY: all clean run
 
@@ -88,4 +90,6 @@ run: $(TARGET)
 	./$(TARGET)
 
 clean:
-	rm -f $(OBJ) $(TARGET) $(SHARED_TARGET)
+	rm -f $(OBJ) $(TARGET) $(SHARED_TARGET) $(DEP)
+
+-include $(DEP)
