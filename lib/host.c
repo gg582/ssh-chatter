@@ -1862,6 +1862,7 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message);
 static void session_send_raw_text(session_ctx_t *ctx, const char *text);
 static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text);
 static void session_send_system_lines_bulk(session_ctx_t *ctx, const char *const *lines, size_t line_count);
+static bool session_render_external_banner(session_ctx_t *ctx);
 static void session_render_banner(session_ctx_t *ctx);
 static void session_format_separator_line(session_ctx_t *ctx, const char *label, char *out, size_t length);
 static void session_render_separator(session_ctx_t *ctx, const char *label);
@@ -12654,6 +12655,39 @@ static void session_bbs_move_cursor(session_ctx_t *ctx, int direction) {
   session_bbs_render_editor(ctx, status);
 }
 
+static bool session_render_external_banner(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  static const char kExternalBannerPath[] = "/var/lib/ssh-chatter/banner";
+
+  struct stat banner_info;
+  if (stat(kExternalBannerPath, &banner_info) != 0 || !S_ISREG(banner_info.st_mode)) {
+    return false;
+  }
+
+  FILE *banner_file = fopen(kExternalBannerPath, "r");
+  if (banner_file == NULL) {
+    return false;
+  }
+
+  char line[SSH_CHATTER_MESSAGE_LIMIT];
+  bool rendered = false;
+  while (fgets(line, sizeof(line), banner_file) != NULL) {
+    size_t length = strlen(line);
+    while (length > 0U && (line[length - 1U] == '\n' || line[length - 1U] == '\r')) {
+      line[--length] = '\0';
+    }
+
+    session_send_plain_line(ctx, line);
+    rendered = true;
+  }
+
+  fclose(banner_file);
+  return rendered;
+}
+
 static void session_render_banner(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return;
@@ -12661,7 +12695,10 @@ static void session_render_banner(session_ctx_t *ctx) {
 
   session_apply_background_fill(ctx);
 
-  static const char *kBanner[] = {
+  const bool has_external_banner = session_render_external_banner(ctx);
+
+  if (!has_external_banner) {
+    static const char *kBanner[] = {
     "\033[1;35m+===================================================================+\033[0m",
     "\033[1;36m|  ██████╗██╗  ██╗ █████╗ ████████╗████████╗███████╗██████╗         |\033[0m",
     "\033[1;36m| ██╔════╝██║  ██║██╔══██╗╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗        |\033[0m",
@@ -12677,8 +12714,9 @@ static void session_render_banner(session_ctx_t *ctx) {
     "\033[1;35m+===================================================================+\033[0m",
   };
 
-  for (size_t idx = 0; idx < sizeof(kBanner) / sizeof(kBanner[0]); ++idx) {
-    session_send_system_line(ctx, kBanner[idx]);
+    for (size_t idx = 0; idx < sizeof(kBanner) / sizeof(kBanner[0]); ++idx) {
+      session_send_system_line(ctx, kBanner[idx]);
+    }
   }
 
   char welcome[SSH_CHATTER_MESSAGE_LIMIT];
@@ -12701,7 +12739,13 @@ static void session_render_banner(session_ctx_t *ctx) {
   }
   snprintf(version_line, sizeof(version_line), "\033[1;32m|  %s%*s|\033[0m", ctx->owner->version, version_padding, "");
   session_send_system_line(ctx, version_line);
-  session_send_system_line(ctx, "\033[1;32m+===================================================================+\033[0m");
+
+  if (!has_external_banner) {
+    session_send_system_line(ctx, "\033[1;32m+===================================================================+\033[0m");
+  }
+
+  session_send_plain_line(ctx, "\033[37m/help to see the manual\033[0m");
+  session_send_plain_line(ctx, "\033[37m/motd to see the information\033[0m");
   session_render_separator(ctx, "Chatroom");
 }
 
