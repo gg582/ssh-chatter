@@ -1969,6 +1969,7 @@ static void session_handle_status(session_ctx_t *ctx, const char *arguments);
 static void session_handle_showstatus(session_ctx_t *ctx, const char *arguments);
 static void session_handle_weather(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
+static void session_handle_ban_name(session_ctx_t *ctx, const char *arguments);
 static void session_handle_ban_list(session_ctx_t *ctx, const char *arguments);
 static void session_handle_kick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_usercount(session_ctx_t *ctx);
@@ -11435,7 +11436,8 @@ static bool session_telnet_prompt_initial_nickname(session_ctx_t *ctx) {
     }
 
     if (host_is_username_banned(ctx->owner, nickname)) {
-      session_send_system_line(ctx, "That name is banned.");
+      session_send_system_line(ctx,
+                               "That nickname is blocked for bot detection. Choose another.");
       continue;
     }
 
@@ -14246,6 +14248,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/poke <username>      - send a bell to call a user",
       "/kick <username>      - disconnect a user (operator only)",
       "/ban <username>       - ban a user (operator only)",
+      "/banname <nickname>   - block a nickname (operator only)",
       "/banlist             - list active bans (operator only)",
       "/delete-msg <id|start-end> - remove chat history messages (operator only)",
       "/block <user|ip>      - hide messages from a user or IP locally (/block list to review)",
@@ -14524,6 +14527,67 @@ static void session_handle_kick(session_ctx_t *ctx, const char *arguments) {
   }
 
   printf("[kick] %s kicked %s\n", ctx->user.name, target->user.name);
+}
+
+static void session_handle_ban_name(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (!ctx->user.is_operator) {
+    session_send_system_line(ctx, "You are not allowed to ban nicknames.");
+    return;
+  }
+
+  if (ctx->owner == NULL) {
+    session_send_system_line(ctx, "Host unavailable.");
+    return;
+  }
+
+  if (arguments == NULL || *arguments == '\0') {
+    session_send_system_line(ctx, "Usage: /banname <nickname>");
+    return;
+  }
+
+  char target_name[SSH_CHATTER_USERNAME_LEN];
+  snprintf(target_name, sizeof(target_name), "%s", arguments);
+  trim_whitespace_inplace(target_name);
+
+  if (target_name[0] == '\0') {
+    session_send_system_line(ctx, "Usage: /banname <nickname>");
+    return;
+  }
+
+  for (size_t idx = 0U; target_name[idx] != '\0'; ++idx) {
+    const unsigned char ch = (unsigned char)target_name[idx];
+    if (ch <= 0x1FU || ch == 0x7FU || ch == ' ' || ch == '\t') {
+      session_send_system_line(ctx, "Nicknames may not include control characters or whitespace.");
+      return;
+    }
+  }
+
+  if (host_is_username_banned(ctx->owner, target_name)) {
+    session_send_system_line(ctx, "That nickname is already blocked for bot detection.");
+    return;
+  }
+
+  if (!host_add_ban_entry(ctx->owner, target_name, "")) {
+    session_send_system_line(ctx, "Unable to add ban entry (list full?).");
+    return;
+  }
+
+  char notice[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(notice, sizeof(notice), "* Nickname '%s' blocked for bot detection by [%s]", target_name, ctx->user.name);
+  host_history_record_system(ctx->owner, notice);
+  chat_room_broadcast(&ctx->owner->room, notice, NULL);
+  session_send_system_line(ctx, "Nickname ban applied.");
+  printf("[banname] %s banned nickname %s\n", ctx->user.name, target_name);
+
+  session_ctx_t *active = chat_room_find_user(&ctx->owner->room, target_name);
+  if (active != NULL) {
+    session_send_system_line(active,
+                             "Your nickname is now blocked for bot detection. Use /nick <name> to change immediately.");
+  }
 }
 
 static void session_handle_ban(session_ctx_t *ctx, const char *arguments) {
@@ -23101,7 +23165,8 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (host_is_username_banned(ctx->owner, new_name)) {
-    session_send_system_line(ctx, "That name is banned.");
+    session_send_system_line(ctx,
+                             "That nickname is blocked for bot detection. Choose another.");
     return;
   }
 
@@ -23697,6 +23762,11 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
 
   else if (session_parse_command(line, "/banlist", &args)) {
     session_handle_ban_list(ctx, args);
+    return;
+  }
+
+  else if (session_parse_command(line, "/banname", &args)) {
+    session_handle_ban_name(ctx, args);
     return;
   }
 
@@ -25405,27 +25475,38 @@ static void *session_thread(void *arg) {
     return NULL;
   }
 
+  const bool banned_username = host_is_username_banned(ctx->owner, ctx->user.name);
   const bool reserved_username =
       host_username_reserved(ctx->owner, ctx->user.name) && !ctx->user.is_lan_operator;
   session_ctx_t *existing = chat_room_find_user(&ctx->owner->room, ctx->user.name);
-  if (reserved_username || existing != NULL) {
+  if (banned_username || reserved_username || existing != NULL) {
     ctx->username_conflict = true;
-    if (reserved_username) {
-      printf("[reject] reserved username requested: %s\n", ctx->user.name);
-    } else {
-      printf("[reject] username in use: %s\n", ctx->user.name);
-    }
     session_render_banner(ctx);
-    char message[SSH_CHATTER_MESSAGE_LIMIT];
-    if (reserved_username) {
-      snprintf(message, sizeof(message), "The username '%s' is reserved.", ctx->user.name);
+
+    if (banned_username) {
+      printf("[reject] banned nickname attempted: %s\n", ctx->user.name);
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(message, sizeof(message), "The nickname '%s' is blocked for bot detection.", ctx->user.name);
+      session_send_system_line(ctx, message);
+      session_send_system_line(ctx,
+                               "Reconnect with a different nickname before logging in again.");
+      session_send_system_line(ctx, "Type /exit to quit.");
     } else {
-      snprintf(message, sizeof(message), "The username '%s' is already in use.", ctx->user.name);
+      if (reserved_username) {
+        printf("[reject] reserved username requested: %s\n", ctx->user.name);
+        char message[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(message, sizeof(message), "The username '%s' is reserved.", ctx->user.name);
+        session_send_system_line(ctx, message);
+      } else {
+        printf("[reject] username in use: %s\n", ctx->user.name);
+        char message[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(message, sizeof(message), "The username '%s' is already in use.", ctx->user.name);
+        session_send_system_line(ctx, message);
+      }
+      session_send_system_line(ctx,
+                               "Reconnect with a different username by running: ssh newname@<server> (or ssh -l newname <server>).");
+      session_send_system_line(ctx, "Type /exit to quit.");
     }
-    session_send_system_line(ctx, message);
-    session_send_system_line(ctx,
-                             "Reconnect with a different username by running: ssh newname@<server> (or ssh -l newname <server>).");
-    session_send_system_line(ctx, "Type /exit to quit.");
   } else {
     (void)host_try_load_motd_from_path(ctx->owner, "/etc/ssh-chatter/motd");
     session_send_system_line(ctx, "Wait for a moment...");

@@ -7,6 +7,7 @@ SSH-Chatter has started from a C reimplementation of the Go [`ssh-chat`](https:/
 > **✨ Highlights from the latest builds**
 > - Named polls got quality-of-life upgrades: run `/vote <label> <question>|<choices...>` for multi-choice ballots, or `/vote-single <label> <question>|<choices...>` when you only need one pick.
 > - `/eliza-chat` now keeps shared memories in `eliza_memory.dat`, letting everyone continue a persistent conversation with the resident Eliza persona.
+> - `/banname <nickname>` lets operators block suspicious login names up front, forcing clients to pick something else before joining.
 > - Follow communities from inside the terminal with the `/rss` reader (`/rss list`, `/rss read <tag>`, operators manage feeds with `/rss add <url> <tag>` and `/rss del <tag>`).
 
 ## Recent enhancements
