@@ -2,6 +2,7 @@
 #define SSH_CHATTER_HOST_H
 
 #include <limits.h>
+#include <netinet/in.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -76,6 +77,10 @@
 #define SSH_CHATTER_TETRIS_LINES_PER_ROUND 10U
 #define SSH_CHATTER_TETRIS_MAX_ROUNDS 3U
 #define SSH_CHATTER_MAX_REPLIES 1024
+#define SSH_CHATTER_MAX_VERSION_IP_BANS 32
+#define SSH_CHATTER_VERSION_PATTERN_LEN 128
+#define SSH_CHATTER_VERSION_NOTE_LEN 96
+#define SSH_CHATTER_CIDR_TEXT_LEN 64
 
 #include "user_data.h"
 
@@ -156,6 +161,28 @@ typedef struct eliza_memory_entry {
   char prompt[SSH_CHATTER_MESSAGE_LIMIT];
   char reply[SSH_CHATTER_MESSAGE_LIMIT];
 } eliza_memory_entry_t;
+
+typedef enum version_pattern_match {
+  VERSION_PATTERN_MATCH_ANY = 0,
+  VERSION_PATTERN_MATCH_EXACT,
+  VERSION_PATTERN_MATCH_PREFIX,
+  VERSION_PATTERN_MATCH_SUFFIX,
+  VERSION_PATTERN_MATCH_SUBSTRING,
+} version_pattern_match_t;
+
+typedef struct version_ip_ban_rule {
+  bool in_use;
+  version_pattern_match_t match_mode;
+  char original_pattern[SSH_CHATTER_VERSION_PATTERN_LEN];
+  char normalized_pattern[SSH_CHATTER_VERSION_PATTERN_LEN];
+  char cidr_text[SSH_CHATTER_CIDR_TEXT_LEN];
+  char note[SSH_CHATTER_VERSION_NOTE_LEN];
+  bool is_ipv6;
+  uint32_t ipv4_network;
+  uint32_t ipv4_mask;
+  struct in6_addr ipv6_network;
+  struct in6_addr ipv6_mask;
+} version_ip_ban_rule_t;
 
 typedef struct session_block_entry {
   bool in_use;
@@ -605,6 +632,8 @@ typedef struct host {
     char ip[SSH_CHATTER_IP_LEN];
   } operator_grants[SSH_CHATTER_MAX_GRANTS];
   size_t operator_grant_count;
+  version_ip_ban_rule_t version_ip_ban_rules[SSH_CHATTER_MAX_VERSION_IP_BANS];
+  size_t version_ip_ban_rule_count;
   struct timespec next_join_ready_time;
   bool join_throttle_initialised;
   size_t join_progress_length;

@@ -194,6 +194,534 @@ static const char *const kAlphaWaystationNames[] = {
 #define O_NOFOLLOW 0
 #endif
 
+#define VERSION_IP_RULE_SEPARATOR ",;\n"
+
+typedef struct version_ip_ban_seed {
+  const char *pattern;
+  const char *cidr;
+  const char *note;
+} version_ip_ban_seed_t;
+
+static const version_ip_ban_seed_t kVersionIpBanSeeds[] = {
+    {"SSH-2.0-Go*", "34.80.0.0/12", "GCP Go spam cluster"},
+    {"SSH-2.0-Go*", "34.96.0.0/14", "GCP Go spam cluster (secondary)"},
+    {"SSH-2.0-paramiko_*", "52.78.0.0/15", "AWS Seoul paramiko automation"},
+    {"SSH-2.0-AsyncSSH_*", "20.214.0.0/15", "Azure AsyncSSH automation"},
+};
+
+static char *host_trim_whitespace(char *text) {
+  if (text == NULL) {
+    return NULL;
+  }
+
+  while (*text != '\0' && isspace((unsigned char)*text)) {
+    ++text;
+  }
+
+  if (*text == '\0') {
+    return text;
+  }
+
+  char *end = text + strlen(text) - 1U;
+  while (end > text && isspace((unsigned char)*end)) {
+    *end = '\0';
+    --end;
+  }
+
+  return text;
+}
+
+static bool host_version_ip_parse_pattern(const char *pattern, char *normalized, size_t normalized_len,
+                                          char *original, size_t original_len, version_pattern_match_t *mode) {
+  if (normalized == NULL || original == NULL || mode == NULL) {
+    return false;
+  }
+
+  char working[SSH_CHATTER_VERSION_PATTERN_LEN];
+  int written = snprintf(working, sizeof(working), "%s", pattern != NULL ? pattern : "");
+  if (written < 0 || (size_t)written >= sizeof(working)) {
+    return false;
+  }
+
+  char *trimmed = host_trim_whitespace(working);
+  if (trimmed == NULL) {
+    return false;
+  }
+
+  char trimmed_copy[SSH_CHATTER_VERSION_PATTERN_LEN];
+  int copy_written = snprintf(trimmed_copy, sizeof(trimmed_copy), "%s", trimmed);
+  if (copy_written < 0 || (size_t)copy_written >= sizeof(trimmed_copy)) {
+    return false;
+  }
+
+  if (trimmed[0] == '\0') {
+    return false;
+  }
+
+  size_t length = strlen(trimmed);
+  bool leading_star = trimmed[0] == '*';
+  bool trailing_star = (length > 0U && trimmed[length - 1U] == '*');
+
+  if (leading_star && trailing_star && length == 1U) {
+    if (original_len > 0U) {
+      size_t orig_len = (size_t)copy_written;
+      if (orig_len >= original_len) {
+        orig_len = original_len - 1U;
+      }
+      memcpy(original, trimmed_copy, orig_len);
+      original[orig_len] = '\0';
+    }
+    if (normalized_len > 0U) {
+      normalized[0] = '\0';
+    }
+    *mode = VERSION_PATTERN_MATCH_ANY;
+    return true;
+  }
+
+  if (trailing_star) {
+    trimmed[length - 1U] = '\0';
+    --length;
+  }
+
+  if (leading_star) {
+    ++trimmed;
+    length = strlen(trimmed);
+  }
+
+  if (length == 0U) {
+    if (original_len > 0U) {
+      size_t orig_len = (size_t)copy_written;
+      if (orig_len >= original_len) {
+        orig_len = original_len - 1U;
+      }
+      memcpy(original, trimmed_copy, orig_len);
+      original[orig_len] = '\0';
+    }
+    if (normalized_len > 0U) {
+      normalized[0] = '\0';
+    }
+    *mode = VERSION_PATTERN_MATCH_ANY;
+    return true;
+  }
+
+  for (size_t idx = 0U; idx < length; ++idx) {
+    if (trimmed[idx] == '*') {
+      return false;
+    }
+  }
+
+  if (normalized_len == 0U) {
+    return false;
+  }
+
+  size_t normalized_length = length;
+  if (normalized_length >= normalized_len) {
+    normalized_length = normalized_len - 1U;
+  }
+  memcpy(normalized, trimmed, normalized_length);
+  normalized[normalized_length] = '\0';
+
+  if (original_len > 0U) {
+    size_t orig_len = (size_t)copy_written;
+    if (orig_len >= original_len) {
+      orig_len = original_len - 1U;
+    }
+    memcpy(original, trimmed_copy, orig_len);
+    original[orig_len] = '\0';
+  }
+
+  if (leading_star && trailing_star) {
+    *mode = VERSION_PATTERN_MATCH_SUBSTRING;
+  } else if (leading_star) {
+    *mode = VERSION_PATTERN_MATCH_SUFFIX;
+  } else if (trailing_star) {
+    *mode = VERSION_PATTERN_MATCH_PREFIX;
+  } else {
+    *mode = VERSION_PATTERN_MATCH_EXACT;
+  }
+
+  return true;
+}
+
+static bool host_parse_ipv4_cidr(const char *cidr, uint32_t *network_out, uint32_t *mask_out) {
+  if (cidr == NULL) {
+    return false;
+  }
+
+  char buffer[SSH_CHATTER_CIDR_TEXT_LEN];
+  int written = snprintf(buffer, sizeof(buffer), "%s", cidr);
+  if (written < 0 || (size_t)written >= sizeof(buffer)) {
+    return false;
+  }
+
+  char *slash = strchr(buffer, '/');
+  if (slash == NULL) {
+    return false;
+  }
+  *slash = '\0';
+
+  char *prefix_str = slash + 1;
+  char *prefix_end = NULL;
+  long prefix_long = strtol(prefix_str, &prefix_end, 10);
+  if (prefix_str == prefix_end || prefix_long < 0L || prefix_long > 32L) {
+    return false;
+  }
+
+  struct in_addr address = {0};
+  if (inet_pton(AF_INET, buffer, &address) != 1) {
+    return false;
+  }
+
+  uint32_t prefix = (uint32_t)prefix_long;
+  uint32_t mask = prefix == 0U ? 0U : (uint32_t)(0xFFFFFFFFu << (32U - prefix));
+  uint32_t network = ntohl(address.s_addr) & mask;
+
+  if (network_out != NULL) {
+    *network_out = network;
+  }
+  if (mask_out != NULL) {
+    *mask_out = mask;
+  }
+
+  return true;
+}
+
+static bool host_parse_ipv6_cidr(const char *cidr, struct in6_addr *network_out, struct in6_addr *mask_out) {
+  if (cidr == NULL) {
+    return false;
+  }
+
+  char buffer[SSH_CHATTER_CIDR_TEXT_LEN];
+  int written = snprintf(buffer, sizeof(buffer), "%s", cidr);
+  if (written < 0 || (size_t)written >= sizeof(buffer)) {
+    return false;
+  }
+
+  char *slash = strchr(buffer, '/');
+  if (slash == NULL) {
+    return false;
+  }
+  *slash = '\0';
+
+  char *prefix_str = slash + 1;
+  char *prefix_end = NULL;
+  long prefix_long = strtol(prefix_str, &prefix_end, 10);
+  if (prefix_str == prefix_end || prefix_long < 0L || prefix_long > 128L) {
+    return false;
+  }
+
+  struct in6_addr address;
+  memset(&address, 0, sizeof(address));
+  if (inet_pton(AF_INET6, buffer, &address) != 1) {
+    return false;
+  }
+
+  struct in6_addr mask;
+  memset(&mask, 0, sizeof(mask));
+  int remaining = (int)prefix_long;
+  for (size_t idx = 0U; idx < sizeof(mask.s6_addr); ++idx) {
+    uint8_t value = 0U;
+    if (remaining >= 8) {
+      value = 0xFFU;
+      remaining -= 8;
+    } else if (remaining > 0) {
+      value = (uint8_t)((uint32_t)0xFFU << (unsigned int)(8 - remaining));
+      remaining = 0;
+    }
+    mask.s6_addr[idx] = value;
+  }
+
+  struct in6_addr network;
+  memset(&network, 0, sizeof(network));
+  for (size_t idx = 0U; idx < sizeof(network.s6_addr); ++idx) {
+    network.s6_addr[idx] = address.s6_addr[idx] & mask.s6_addr[idx];
+  }
+
+  if (network_out != NULL) {
+    *network_out = network;
+  }
+  if (mask_out != NULL) {
+    *mask_out = mask;
+  }
+
+  return true;
+}
+
+static bool host_version_ip_rule_matches(const version_ip_ban_rule_t *rule, const char *version, const char *ip) {
+  if (rule == NULL || !rule->in_use || ip == NULL || ip[0] == '\0') {
+    return false;
+  }
+
+  bool version_match = false;
+  switch (rule->match_mode) {
+    case VERSION_PATTERN_MATCH_ANY:
+      version_match = true;
+      break;
+    case VERSION_PATTERN_MATCH_EXACT:
+      if (version != NULL) {
+        version_match = strcmp(version, rule->normalized_pattern) == 0;
+      }
+      break;
+    case VERSION_PATTERN_MATCH_PREFIX:
+      if (version != NULL) {
+        size_t prefix_len = strnlen(rule->normalized_pattern, sizeof(rule->normalized_pattern));
+        version_match = (prefix_len > 0U && strncmp(version, rule->normalized_pattern, prefix_len) == 0);
+      }
+      break;
+    case VERSION_PATTERN_MATCH_SUFFIX:
+      if (version != NULL) {
+        size_t suffix_len = strnlen(rule->normalized_pattern, sizeof(rule->normalized_pattern));
+        size_t version_len = strlen(version);
+        if (suffix_len > 0U && version_len >= suffix_len) {
+          version_match = strncmp(version + (version_len - suffix_len), rule->normalized_pattern, suffix_len) == 0;
+        }
+      }
+      break;
+    case VERSION_PATTERN_MATCH_SUBSTRING:
+      if (version != NULL && rule->normalized_pattern[0] != '\0') {
+        version_match = strstr(version, rule->normalized_pattern) != NULL;
+      }
+      break;
+    default:
+      version_match = false;
+      break;
+  }
+
+  if (!version_match) {
+    return false;
+  }
+
+  if (!rule->is_ipv6) {
+    struct in_addr address = {0};
+    if (inet_pton(AF_INET, ip, &address) != 1) {
+      return false;
+    }
+    uint32_t ip_value = ntohl(address.s_addr);
+    return (ip_value & rule->ipv4_mask) == rule->ipv4_network;
+  }
+
+  struct in6_addr address6;
+  memset(&address6, 0, sizeof(address6));
+  if (inet_pton(AF_INET6, ip, &address6) != 1) {
+    return false;
+  }
+
+  for (size_t idx = 0U; idx < sizeof(address6.s6_addr); ++idx) {
+    if ((address6.s6_addr[idx] & rule->ipv6_mask.s6_addr[idx]) != rule->ipv6_network.s6_addr[idx]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static bool host_version_ip_rule_add(host_t *host, const char *pattern, const char *cidr, const char *note) {
+  if (host == NULL || pattern == NULL || cidr == NULL) {
+    return false;
+  }
+
+  if (host->version_ip_ban_rule_count >= SSH_CHATTER_MAX_VERSION_IP_BANS) {
+    printf("[security] version/IP rule capacity reached; skipping %s @ %s\n", pattern, cidr);
+    return false;
+  }
+
+  char normalized[SSH_CHATTER_VERSION_PATTERN_LEN];
+  char original[SSH_CHATTER_VERSION_PATTERN_LEN];
+  version_pattern_match_t match_mode = VERSION_PATTERN_MATCH_EXACT;
+  if (!host_version_ip_parse_pattern(pattern, normalized, sizeof(normalized), original, sizeof(original), &match_mode)) {
+    printf("[security] invalid version pattern '%s'\n", pattern);
+    return false;
+  }
+
+  char cidr_copy[SSH_CHATTER_CIDR_TEXT_LEN];
+  int cidr_written = snprintf(cidr_copy, sizeof(cidr_copy), "%s", cidr);
+  if (cidr_written < 0 || (size_t)cidr_written >= sizeof(cidr_copy)) {
+    printf("[security] invalid CIDR '%s'\n", cidr);
+    return false;
+  }
+
+  char *cidr_trimmed = host_trim_whitespace(cidr_copy);
+  if (cidr_trimmed == NULL || cidr_trimmed[0] == '\0') {
+    printf("[security] CIDR '%s' empty after trimming\n", cidr);
+    return false;
+  }
+
+  uint32_t ipv4_network = 0U;
+  uint32_t ipv4_mask = 0U;
+  struct in6_addr ipv6_network;
+  struct in6_addr ipv6_mask;
+  memset(&ipv6_network, 0, sizeof(ipv6_network));
+  memset(&ipv6_mask, 0, sizeof(ipv6_mask));
+  bool is_ipv6 = false;
+
+  if (host_parse_ipv4_cidr(cidr_trimmed, &ipv4_network, &ipv4_mask)) {
+    is_ipv6 = false;
+  } else if (host_parse_ipv6_cidr(cidr_trimmed, &ipv6_network, &ipv6_mask)) {
+    is_ipv6 = true;
+  } else {
+    printf("[security] failed to parse CIDR '%s'\n", cidr_trimmed);
+    return false;
+  }
+
+  for (size_t idx = 0U; idx < host->version_ip_ban_rule_count; ++idx) {
+    version_ip_ban_rule_t *existing = &host->version_ip_ban_rules[idx];
+    if (!existing->in_use) {
+      continue;
+    }
+    if (existing->match_mode != match_mode) {
+      continue;
+    }
+    if (strncmp(existing->normalized_pattern, normalized, sizeof(existing->normalized_pattern)) != 0) {
+      continue;
+    }
+    if (existing->is_ipv6 != is_ipv6) {
+      continue;
+    }
+    bool network_match = false;
+    if (!is_ipv6) {
+      network_match = (existing->ipv4_network == ipv4_network && existing->ipv4_mask == ipv4_mask);
+    } else {
+      network_match = (memcmp(existing->ipv6_network.s6_addr, ipv6_network.s6_addr, sizeof(ipv6_network.s6_addr)) == 0) &&
+                      (memcmp(existing->ipv6_mask.s6_addr, ipv6_mask.s6_addr, sizeof(ipv6_mask.s6_addr)) == 0);
+    }
+    if (network_match) {
+      if (note != NULL && note[0] != '\0') {
+        size_t note_len = strnlen(note, SSH_CHATTER_VERSION_NOTE_LEN - 1U);
+        memcpy(existing->note, note, note_len);
+        existing->note[note_len] = '\0';
+      }
+      return true;
+    }
+  }
+
+  version_ip_ban_rule_t *rule = &host->version_ip_ban_rules[host->version_ip_ban_rule_count];
+  memset(rule, 0, sizeof(*rule));
+  rule->in_use = true;
+  rule->match_mode = match_mode;
+  snprintf(rule->original_pattern, sizeof(rule->original_pattern), "%s", original);
+  snprintf(rule->normalized_pattern, sizeof(rule->normalized_pattern), "%s", normalized);
+  snprintf(rule->cidr_text, sizeof(rule->cidr_text), "%s", cidr_trimmed);
+  rule->is_ipv6 = is_ipv6;
+  if (!is_ipv6) {
+    rule->ipv4_network = ipv4_network;
+    rule->ipv4_mask = ipv4_mask;
+  } else {
+    rule->ipv6_network = ipv6_network;
+    rule->ipv6_mask = ipv6_mask;
+  }
+
+  if (note != NULL && note[0] != '\0') {
+    size_t note_len = strnlen(note, SSH_CHATTER_VERSION_NOTE_LEN - 1U);
+    memcpy(rule->note, note, note_len);
+    rule->note[note_len] = '\0';
+  } else {
+    rule->note[0] = '\0';
+  }
+
+  host->version_ip_ban_rule_count += 1U;
+
+  const char *note_display = rule->note[0] != '\0' ? rule->note : "version/IP policy";
+  const char *pattern_display = rule->original_pattern[0] != '\0' ? rule->original_pattern : "*";
+  printf("[security] loaded version/IP ban rule: %s @ %s (%s)\n", pattern_display, rule->cidr_text, note_display);
+
+  return true;
+}
+
+static void host_version_ip_rules_load_env(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  const char *env = getenv("CHATTER_VERSION_IP_BANS");
+  if (env == NULL || env[0] == '\0') {
+    return;
+  }
+
+  char *copy = strdup(env);
+  if (copy == NULL) {
+    return;
+  }
+
+  char *context = NULL;
+  for (char *token = strtok_r(copy, VERSION_IP_RULE_SEPARATOR, &context); token != NULL;
+       token = strtok_r(NULL, VERSION_IP_RULE_SEPARATOR, &context)) {
+    char *trimmed = host_trim_whitespace(token);
+    if (trimmed == NULL || trimmed[0] == '\0') {
+      continue;
+    }
+
+    char *note_part = NULL;
+    char *hash = strchr(trimmed, '#');
+    if (hash != NULL) {
+      *hash = '\0';
+      note_part = host_trim_whitespace(hash + 1);
+    }
+
+    char *separator = strchr(trimmed, '@');
+    if (separator == NULL) {
+      printf("[security] ignoring malformed version/IP rule '%s'\n", trimmed);
+      continue;
+    }
+
+    *separator = '\0';
+    char *pattern = host_trim_whitespace(trimmed);
+    char *cidr = host_trim_whitespace(separator + 1);
+    if (pattern == NULL || cidr == NULL || pattern[0] == '\0' || cidr[0] == '\0') {
+      printf("[security] ignoring malformed version/IP rule entry\n");
+      continue;
+    }
+
+    const char *note = (note_part != NULL && note_part[0] != '\0') ? note_part : "custom rule";
+    if (!host_version_ip_rule_add(host, pattern, cidr, note)) {
+      printf("[security] failed to register version/IP rule from environment: %s @ %s\n", pattern, cidr);
+    }
+  }
+
+  free(copy);
+}
+
+static bool host_version_ip_should_ban(host_t *host, const char *version, const char *ip,
+                                       const version_ip_ban_rule_t **matched_rule) {
+  if (matched_rule != NULL) {
+    *matched_rule = NULL;
+  }
+
+  if (host == NULL || ip == NULL || ip[0] == '\0') {
+    return false;
+  }
+
+  for (size_t idx = 0U; idx < host->version_ip_ban_rule_count; ++idx) {
+    const version_ip_ban_rule_t *rule = &host->version_ip_ban_rules[idx];
+    if (!rule->in_use) {
+      continue;
+    }
+    if (host_version_ip_rule_matches(rule, version, ip)) {
+      if (matched_rule != NULL) {
+        *matched_rule = rule;
+      }
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void host_version_ip_rules_init(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  host->version_ip_ban_rule_count = 0U;
+  memset(host->version_ip_ban_rules, 0, sizeof(host->version_ip_ban_rules));
+
+  for (size_t idx = 0U; idx < (sizeof(kVersionIpBanSeeds) / sizeof(kVersionIpBanSeeds[0])); ++idx) {
+    const version_ip_ban_seed_t *seed = &kVersionIpBanSeeds[idx];
+    (void)host_version_ip_rule_add(host, seed->pattern, seed->cidr, seed->note);
+  }
+
+  host_version_ip_rules_load_env(host);
+}
+
 #ifndef O_NOFOLLOW
 #define O_NOFOLLOW 0
 #endif
@@ -24933,6 +25461,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->rss_last_run.tv_sec = 0;
   host->rss_last_run.tv_nsec = 0L;
   host_security_configure(host);
+  host_version_ip_rules_init(host);
   pthread_mutex_init(&host->lock, NULL);
   poll_state_reset(&host->poll);
   for (size_t idx = 0U; idx < SSH_CHATTER_MAX_NAMED_POLLS; ++idx) {
@@ -25713,6 +26242,27 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       }
 
       printf("[connect] accepted client from %s\n", peer_address);
+
+      const char *client_banner = ssh_get_clientbanner(session);
+      const version_ip_ban_rule_t *matched_rule = NULL;
+      if (host_version_ip_should_ban(host, client_banner, peer_address, &matched_rule)) {
+        const char *version_display = (client_banner != NULL && client_banner[0] != '\0') ? client_banner : "unknown";
+        const char *pattern_display = (matched_rule != NULL && matched_rule->original_pattern[0] != '\0')
+                                          ? matched_rule->original_pattern
+                                          : "policy";
+        const char *cidr_display = (matched_rule != NULL && matched_rule->cidr_text[0] != '\0')
+                                       ? matched_rule->cidr_text
+                                       : "unknown range";
+        const char *note_display = (matched_rule != NULL && matched_rule->note[0] != '\0')
+                                       ? matched_rule->note
+                                       : "version/IP policy";
+        printf("[auto-ban] %s banned for client version '%s' (%s in %s; %s)\n", peer_address, version_display,
+               pattern_display, cidr_display, note_display);
+        (void)host_add_ban_entry(host, "", peer_address);
+        ssh_disconnect(session);
+        ssh_free(session);
+        continue;
+      }
 
       session_ctx_t *ctx = calloc(1U, sizeof(session_ctx_t));
       if (ctx == NULL) {

@@ -27,6 +27,11 @@ const char *ssh_get_error(void *error_source) {
   return "libssh stub error";
 }
 
+const char *ssh_get_clientbanner(ssh_session session) {
+  (void)session;
+  return NULL;
+}
+
 ssh_message ssh_message_get(ssh_session session) {
   (void)session;
   return NULL;
