@@ -1844,6 +1844,8 @@ static void host_eliza_handle_private_message(session_ctx_t *ctx, const char *me
 static void host_eliza_prepare_private_reply(const char *message, char *reply, size_t reply_length);
 static bool host_eliza_content_is_severe(const char *text);
 static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const char *reason, bool from_filter);
+static void host_eliza_intervene_execute(session_ctx_t *ctx, const char *reason, bool from_filter);
+static void *host_eliza_intervene_thread(void *arg);
 static bool session_security_check_text(session_ctx_t *ctx, const char *category, const char *content, size_t length);
 static void host_vote_resolve_path(host_t *host);
 static void host_vote_state_load(host_t *host);
@@ -4998,6 +5000,12 @@ static bool host_eliza_content_is_severe(const char *text) {
   return false;
 }
 
+typedef struct {
+  session_ctx_t *ctx;
+  bool from_filter;
+  char reason[SSH_CHATTER_MESSAGE_LIMIT];
+} host_eliza_intervene_task_t;
+
 static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const char *reason, bool from_filter) {
   if (ctx == NULL || ctx->owner == NULL) {
     return false;
@@ -5019,6 +5027,46 @@ static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const 
 
   if (!severe) {
     return false;
+  }
+
+  host_eliza_intervene_task_t *task = malloc(sizeof(*task));
+  if (task == NULL) {
+    host_eliza_intervene_execute(ctx, reason, from_filter);
+    return true;
+  }
+
+  task->ctx = ctx;
+  task->from_filter = from_filter;
+  if (reason != NULL) {
+    snprintf(task->reason, sizeof(task->reason), "%s", reason);
+  } else {
+    task->reason[0] = '\0';
+  }
+
+  pthread_t thread;
+  int create_result = pthread_create(&thread, NULL, host_eliza_intervene_thread, task);
+  if (create_result != 0) {
+    free(task);
+    host_eliza_intervene_execute(ctx, reason, from_filter);
+    return true;
+  }
+
+  pthread_detach(thread);
+  return true;
+}
+
+static void host_eliza_intervene_execute(session_ctx_t *ctx, const char *reason, bool from_filter) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  host_t *host = ctx->owner;
+  if (!atomic_load(&host->eliza_enabled)) {
+    return;
+  }
+
+  if (ctx->should_exit) {
+    return;
   }
 
   if (!atomic_load(&host->eliza_announced)) {
@@ -5049,8 +5097,19 @@ static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const 
     printf("[eliza] removing %s (%s) after manual keyword flag\n", ctx->user.name, ctx->client_ip);
   }
 
-  session_force_disconnect(ctx, "You have been removed by eliza for severe content."); // this is needed to avoid legal problems!
-  return true;
+  session_force_disconnect(ctx, "You have been removed by eliza for severe content.");
+}
+
+static void *host_eliza_intervene_thread(void *arg) {
+  host_eliza_intervene_task_t *task = (host_eliza_intervene_task_t *)arg;
+  if (task == NULL) {
+    return NULL;
+  }
+
+  const char *reason = (task->reason[0] != '\0') ? task->reason : NULL;
+  host_eliza_intervene_execute(task->ctx, reason, task->from_filter);
+  free(task);
+  return NULL;
 }
 
 static bool session_security_check_text(session_ctx_t *ctx, const char *category, const char *content, size_t length) {
