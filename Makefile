@@ -1,5 +1,6 @@
 CC := cc
 CFLAGS = -std=c2x -Ofast \
+	-Werror \
         -Ilib/headers \
         -Wall -Wextra -Wshadow -Wformat=2 -Wundef -Wconversion -Wdouble-promotion \
         -fno-omit-frame-pointer -fstack-protector-strong -fno-common \

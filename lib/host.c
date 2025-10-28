@@ -1640,6 +1640,7 @@ static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, cha
 static size_t host_history_delete_range(host_t *host, uint64_t start_id, uint64_t end_id, uint64_t *first_removed,
                                         uint64_t *last_removed, size_t *replies_removed);
 static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entry_t *entry, const session_ctx_t *from);
+static void chat_room_broadcast(chat_room_t *room, const char *message, const session_ctx_t *from);
 static void chat_room_broadcast_caption(chat_room_t *room, const char *message);
 static bool host_history_apply_reaction(host_t *host, uint64_t message_id, size_t reaction_index, chat_history_entry_t *updated_entry);
 static bool chat_history_entry_build_reaction_summary(const chat_history_entry_t *entry, char *buffer, size_t length);
