@@ -13,12 +13,33 @@
 #include <locale.h>
 #include <time.h>
 
+#define HOST_STABLE_RESET_SECONDS 10.0
+
 static void print_usage(const char *prog_name) {
   fprintf(stderr,
           "Usage: %s [-a address] [-p port] [-m motd_file] [-k host_key_dir] [-T telnet_port|off]\n"
           "       %s [-h]\n"
           "       %s [-V]\n",
           prog_name, prog_name, prog_name);
+}
+
+static double timespec_elapsed_seconds(const struct timespec *start, const struct timespec *end) {
+  if (start == NULL || end == NULL) {
+    return 0.0;
+  }
+
+  time_t sec = end->tv_sec - start->tv_sec;
+  long nsec = end->tv_nsec - start->tv_nsec;
+  if (nsec < 0L) {
+    --sec;
+    nsec += 1000000000L;
+  }
+  if (sec < 0) {
+    sec = 0;
+    nsec = 0L;
+  }
+
+  return (double)sec + (double)nsec / 1000000000.0;
 }
 
 static void sleep_before_restart(unsigned int attempts) {
@@ -159,9 +180,13 @@ int main(int argc, char **argv) {
     const char *port = bind_port != NULL ? bind_port : "2222";
     printf("Starting ssh-chatter on %s:%s\n", address, port);
 
+    struct timespec serve_start;
+    clock_gettime(CLOCK_MONOTONIC, &serve_start);
     errno = 0;
     const int serve_result = host_serve(host, bind_address, bind_port, host_key_dir, telnet_bind_address, telnet_port);
     const int serve_errno = errno;
+    struct timespec serve_end;
+    clock_gettime(CLOCK_MONOTONIC, &serve_end);
 
     host_shutdown(host);
     free(host);
@@ -169,6 +194,16 @@ int main(int argc, char **argv) {
 
     if (serve_result == 0) {
       return EXIT_SUCCESS;
+    }
+
+    double runtime_seconds = timespec_elapsed_seconds(&serve_start, &serve_end);
+    bool skip_restart_delay = false;
+    if (runtime_seconds >= HOST_STABLE_RESET_SECONDS) {
+      if (restart_attempts > 0U) {
+        printf("[daemon] host ran for %.3f seconds; clearing restart backoff\n", runtime_seconds);
+      }
+      restart_attempts = 0U;
+      skip_restart_delay = true;
     }
 
     ++restart_attempts;
@@ -182,6 +217,8 @@ int main(int argc, char **argv) {
     humanized_log_error("daemon", detail, serve_errno != 0 ? serve_errno : EIO);
     printf("[daemon] restarting ssh-chatter (attempt %u)\n", restart_attempts);
 
-    sleep_before_restart(restart_attempts);
+    if (!skip_restart_delay) {
+      sleep_before_restart(restart_attempts);
+    }
   }
 }
