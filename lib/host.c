@@ -1846,7 +1846,8 @@ static bool host_eliza_content_is_severe(const char *text);
 static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const char *reason, bool from_filter);
 static void host_eliza_intervene_execute(session_ctx_t *ctx, const char *reason, bool from_filter);
 static void *host_eliza_intervene_thread(void *arg);
-static bool session_security_check_text(session_ctx_t *ctx, const char *category, const char *content, size_t length);
+static host_security_scan_result_t session_security_check_text(session_ctx_t *ctx, const char *category,
+                                                               const char *content, size_t length, bool post_send);
 static void host_vote_resolve_path(host_t *host);
 static void host_vote_state_load(host_t *host);
 static void host_vote_state_save_locked(host_t *host);
@@ -5112,9 +5113,10 @@ static void *host_eliza_intervene_thread(void *arg) {
   return NULL;
 }
 
-static bool session_security_check_text(session_ctx_t *ctx, const char *category, const char *content, size_t length) {
+static host_security_scan_result_t session_security_check_text(session_ctx_t *ctx, const char *category,
+                                                               const char *content, size_t length, bool post_send) {
   if (ctx == NULL || ctx->owner == NULL || content == NULL || length == 0U) {
-    return true;
+    return HOST_SECURITY_SCAN_CLEAN;
   }
 
   char diagnostic[256];
@@ -5122,7 +5124,7 @@ static bool session_security_check_text(session_ctx_t *ctx, const char *category
       host_security_scan_payload(ctx->owner, category, content, length, diagnostic, sizeof(diagnostic));
 
   if (scan_result == HOST_SECURITY_SCAN_CLEAN) {
-    return true;
+    return HOST_SECURITY_SCAN_CLEAN;
   }
 
   const char *label = category != NULL ? category : "submission";
@@ -5134,7 +5136,11 @@ static bool session_security_check_text(session_ctx_t *ctx, const char *category
     printf("[security] blocked %s from %s: %s\n", label, ctx->user.name, diagnostic);
 
     char message[512];
-    snprintf(message, sizeof(message), "Security filter rejected your %s: %s", label, diagnostic);
+    if (post_send) {
+      snprintf(message, sizeof(message), "Security filter flagged your %s after delivery: %s", label, diagnostic);
+    } else {
+      snprintf(message, sizeof(message), "Security filter rejected your %s: %s", label, diagnostic);
+    }
     session_send_system_line(ctx, message);
 
     size_t attempts = 0U;
@@ -5151,17 +5157,16 @@ static bool session_security_check_text(session_ctx_t *ctx, const char *category
       snprintf(notice, sizeof(notice),
                "Repeated suspicious activity detected. You have been banned.");
       session_force_disconnect(ctx, notice);
-      return false;
     }
 
-    if (attempts > 0U) {
+    if (attempts > 0U && !banned) {
       char warning[256];
       snprintf(warning, sizeof(warning), "Further suspicious activity will result in a ban (%zu/%u).",
                attempts, (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
       session_send_system_line(ctx, warning);
     }
     (void)host_eliza_intervene(ctx, content, diagnostic, true);
-    return false;
+    return HOST_SECURITY_SCAN_BLOCKED;
   }
 
   const char *error = translator_last_error();
@@ -5177,12 +5182,23 @@ static bool session_security_check_text(session_ctx_t *ctx, const char *category
 
   char message[512];
   if (diagnostic[0] != '\0') {
-    snprintf(message, sizeof(message), "Security filter is unavailable (%s). Please try again later.", diagnostic);
+    if (post_send) {
+      snprintf(message, sizeof(message), "Security filter could not validate your %s after delivery (%s).", label, diagnostic);
+    } else {
+      snprintf(message, sizeof(message),
+               "Security filter is unavailable (%s). Please try again later.", diagnostic);
+    }
   } else {
-    snprintf(message, sizeof(message), "%s", "Security filter could not validate your submission. Please try again later.");
+    if (post_send) {
+      snprintf(message, sizeof(message),
+               "%s", "Security filter could not validate your submission after delivery. Please try again later.");
+    } else {
+      snprintf(message, sizeof(message), "%s",
+               "Security filter could not validate your submission. Please try again later.");
+    }
   }
   session_send_system_line(ctx, message);
-  return false;
+  return scan_result;
 }
 
 static void host_state_resolve_path(host_t *host) {
@@ -11313,14 +11329,7 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *mes
     return;
   }
 
-  if (host_eliza_intervene(ctx, message, NULL, false)) {
-    return;
-  }
-
   size_t message_length = strnlen(message, SSH_CHATTER_MESSAGE_LIMIT);
-  if (!session_security_check_text(ctx, "chat message", message, message_length)) {
-    return;
-  }
 
   chat_history_entry_t entry = {0};
   if (!host_history_record_user(ctx->owner, ctx, message, &entry)) {
@@ -11330,6 +11339,13 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *mes
   session_send_history_entry(ctx, &entry);
   chat_room_broadcast_entry(&ctx->owner->room, &entry, ctx);
   host_notify_external_clients(ctx->owner, &entry);
+
+  host_security_scan_result_t scan_result =
+      session_security_check_text(ctx, "chat message", message, message_length, true);
+
+  if (scan_result != HOST_SECURITY_SCAN_BLOCKED) {
+    (void)host_eliza_intervene(ctx, message, NULL, false);
+  }
 }
 
 // session_send_line writes a single line while preserving the session's
@@ -17771,7 +17787,8 @@ static void session_bbs_commit_pending_post(session_ctx_t *ctx) {
     return;
   }
 
-  if (!session_security_check_text(ctx, "BBS post", ctx->pending_bbs_body, ctx->pending_bbs_body_length)) {
+  if (session_security_check_text(ctx, "BBS post", ctx->pending_bbs_body, ctx->pending_bbs_body_length, false) !=
+      HOST_SECURITY_SCAN_CLEAN) {
     session_bbs_reset_pending_post(ctx);
     return;
   }
@@ -18057,7 +18074,8 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   }
 
   size_t comment_scan_length = strnlen(comment_text, SSH_CHATTER_BBS_COMMENT_LEN);
-  if (!session_security_check_text(ctx, "BBS comment", comment_text, comment_scan_length)) {
+  if (session_security_check_text(ctx, "BBS comment", comment_text, comment_scan_length, false) !=
+      HOST_SECURITY_SCAN_CLEAN) {
     return;
   }
 
@@ -18703,7 +18721,8 @@ static void session_asciiart_commit(session_ctx_t *ctx) {
 
   const char *security_label =
       target == SESSION_ASCIIART_TARGET_PROFILE_PICTURE ? "Profile picture" : "ASCII art";
-  if (!session_security_check_text(ctx, security_label, ctx->asciiart_buffer, ctx->asciiart_length)) {
+  if (session_security_check_text(ctx, security_label, ctx->asciiart_buffer, ctx->asciiart_length, false) !=
+      HOST_SECURITY_SCAN_CLEAN) {
     session_asciiart_reset(ctx);
     return;
   }
