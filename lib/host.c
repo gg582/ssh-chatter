@@ -17,6 +17,7 @@
 
 #include <curl/curl.h>
 #include <gc/gc.h>
+#include <iconv.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <dlfcn.h>
@@ -1049,6 +1050,109 @@ static bool string_contains_case_insensitive(const char *haystack, const char *n
   return false;
 }
 
+static bool string_contains_token_case_insensitive(const char *haystack, const char *needle) {
+  if (haystack == NULL || needle == NULL || *needle == '\0') {
+    return false;
+  }
+
+  const size_t haystack_length = strlen(haystack);
+  const size_t needle_length = strlen(needle);
+  if (needle_length == 0U || haystack_length < needle_length) {
+    return false;
+  }
+
+  for (size_t idx = 0; idx <= haystack_length - needle_length; ++idx) {
+    size_t matched = 0U;
+    while (matched < needle_length) {
+      const unsigned char hay = (unsigned char)haystack[idx + matched];
+      const unsigned char nee = (unsigned char)needle[matched];
+      if (tolower(hay) != tolower(nee)) {
+        break;
+      }
+      ++matched;
+    }
+
+    if (matched != needle_length) {
+      continue;
+    }
+
+    const bool has_prev = idx > 0U;
+    const bool has_next = (idx + needle_length) < haystack_length;
+    const unsigned char prev = has_prev ? (unsigned char)haystack[idx - 1U] : 0U;
+    const unsigned char next = has_next ? (unsigned char)haystack[idx + needle_length] : 0U;
+    const bool prev_boundary = !has_prev || (!isalnum(prev) && prev != '_');
+    const bool next_boundary = !has_next || (!isalnum(next) && next != '_');
+
+    if (prev_boundary && next_boundary) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void session_extract_banner_token(const char *banner, char *buffer, size_t length) {
+  if (buffer == NULL || length == 0U) {
+    return;
+  }
+
+  buffer[0] = '\0';
+  if (banner == NULL || *banner == '\0') {
+    return;
+  }
+
+  size_t idx = 0U;
+  while (banner[idx] != '\0' && isspace((unsigned char)banner[idx])) {
+    ++idx;
+  }
+
+  size_t produced = 0U;
+  while (banner[idx] != '\0' && !isspace((unsigned char)banner[idx])) {
+    if (produced + 1U >= length) {
+      break;
+    }
+    buffer[produced++] = banner[idx++];
+  }
+
+  if (produced == 0U) {
+    snprintf(buffer, length, "%.*s", (int)length - 1, banner);
+  } else {
+    buffer[produced] = '\0';
+  }
+}
+
+static void session_format_telnet_identity(session_ctx_t *ctx, const char *primary_label) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  ctx->telnet_identity[0] = '\0';
+  if (ctx->transport_kind != SESSION_TRANSPORT_TELNET) {
+    return;
+  }
+
+  const char *label = primary_label;
+  char snippet[SSH_CHATTER_TERMINAL_TYPE_LEN];
+  snippet[0] = '\0';
+
+  if (label == NULL || label[0] == '\0') {
+    if (ctx->terminal_type[0] != '\0') {
+      label = ctx->terminal_type;
+    } else if (ctx->client_banner[0] != '\0') {
+      session_extract_banner_token(ctx->client_banner, snippet, sizeof(snippet));
+      if (snippet[0] != '\0') {
+        label = snippet;
+      }
+    }
+  }
+
+  if (label == NULL || label[0] == '\0') {
+    label = "unknown";
+  }
+
+  snprintf(ctx->telnet_identity, sizeof(ctx->telnet_identity), "telnet/%s", label);
+}
+
 static bool host_is_leap_year(int year) {
   if (year <= 0) {
     return false;
@@ -1631,6 +1735,7 @@ static bool parse_bool_token(const char *token, bool *value);
 static bool session_transport_active(const session_ctx_t *ctx);
 static void session_transport_request_close(session_ctx_t *ctx);
 static void session_channel_write(session_ctx_t *ctx, const void *data, size_t length);
+static bool session_channel_write_cp437(session_ctx_t *ctx, const char *data, size_t length);
 static bool session_channel_write_utf16(session_ctx_t *ctx, const char *data, size_t length);
 static bool session_channel_write_utf16_segment(session_ctx_t *ctx, const char *data, size_t length);
 static size_t session_utf8_decode_codepoint(const unsigned char *data, size_t length, uint32_t *codepoint);
@@ -1653,6 +1758,8 @@ static void session_send_raw_text(session_ctx_t *ctx, const char *text);
 static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text);
 static void session_send_system_lines_bulk(session_ctx_t *ctx, const char *const *lines, size_t line_count);
 static bool session_render_external_banner(session_ctx_t *ctx);
+static void session_render_banner_ascii(session_ctx_t *ctx);
+static void session_render_prelogin_banner(session_ctx_t *ctx);
 static void session_render_banner(session_ctx_t *ctx);
 static void session_format_separator_line(session_ctx_t *ctx, const char *label, char *out, size_t length);
 static void session_render_separator(session_ctx_t *ctx, const char *label);
@@ -1681,6 +1788,9 @@ static void session_cleanup(session_ctx_t *ctx);
 static void *session_thread(void *arg);
 static void host_telnet_listener_stop(host_t *host);
 static void session_refresh_output_encoding(session_ctx_t *ctx);
+static bool session_detect_retro_client(session_ctx_t *ctx);
+static void session_telnet_request_terminal_type(session_ctx_t *ctx);
+static void session_telnet_capture_startup_metadata(session_ctx_t *ctx);
 static void session_history_record(session_ctx_t *ctx, const char *line);
 static void session_history_navigate(session_ctx_t *ctx, int direction);
 static void session_scrollback_navigate(session_ctx_t *ctx, int direction);
@@ -10006,7 +10116,168 @@ static void session_refresh_output_encoding(session_ctx_t *ctx) {
     }
   }
 
+  const bool previous_cp437 = ctx->prefer_cp437_output;
+  const bool use_cp437 = session_detect_retro_client(ctx);
+  ctx->prefer_cp437_output = use_cp437;
+
+  if (use_cp437 != previous_cp437) {
+    const char *subject = ctx->user.name[0] != '\0' ? ctx->user.name : ctx->client_ip;
+    if (subject == NULL || subject[0] == '\0') {
+      subject = "unknown";
+    }
+
+    if (use_cp437) {
+      const char *marker = ctx->retro_client_marker[0] != '\0' ? ctx->retro_client_marker : "retro client";
+      if (ctx->telnet_identity[0] != '\0') {
+        printf("[retro] enabling CP437 output for %s via %s (%s)\n", subject, marker, ctx->telnet_identity);
+      } else {
+        printf("[retro] enabling CP437 output for %s via %s\n", subject, marker);
+      }
+    } else {
+      printf("[retro] CP437 output disabled for %s\n", subject);
+    }
+  }
+
+  if (use_cp437) {
+    ctx->prefer_utf16_output = false;
+    return;
+  }
+
   ctx->prefer_utf16_output = use_utf16;
+}
+
+static bool session_detect_retro_client(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  ctx->retro_client_marker[0] = '\0';
+
+  typedef struct retro_marker {
+    const char *marker;
+    const char *label;
+  } retro_marker_t;
+
+  static const retro_marker_t kRetroMarkers[] = {
+      {"ftelnet", "fTelnet"},       {"htmlterm", "HTMLTerm"},       {"syncterm", "SyncTERM"},
+      {"netrunner", "NetRunner"},   {"netfury", "NetFury"},         {"qodem", "Qodem"},
+      {"mtelnet", "MTelnet"},       {"etherterm", "EtherTerm"},     {"mysticbbs", "Mystic BBS"},
+      {"ansi-bbs", "ANSI-BBS"},     {"pc-ansi", "PC-ANSI"},         {"cp-437", "CP437 terminal"},
+      {"cp437", "CP437 terminal"},   {"avatar", "AVATAR terminal"},  {"ripterm", "RIPTerm"},
+      {"ansiart", "ANSI art terminal"}, {"ansi", "ANSI terminal"},
+  };
+
+  const char *sources[] = {
+      ctx->terminal_type,
+      ctx->client_banner,
+  };
+
+  const char *label = NULL;
+  const char *identity_label = NULL;
+  bool detected = false;
+
+  for (size_t source_idx = 0U; source_idx < sizeof(sources) / sizeof(sources[0]) && !detected; ++source_idx) {
+    const char *candidate = sources[source_idx];
+    if (candidate == NULL || candidate[0] == '\0') {
+      continue;
+    }
+    for (size_t marker_idx = 0U; marker_idx < sizeof(kRetroMarkers) / sizeof(kRetroMarkers[0]); ++marker_idx) {
+      if (string_contains_case_insensitive(candidate, kRetroMarkers[marker_idx].marker)) {
+        label = kRetroMarkers[marker_idx].label;
+        identity_label = label;
+        detected = true;
+        break;
+      }
+    }
+  }
+
+  if (!detected && ctx->terminal_type[0] != '\0') {
+    const char *type = ctx->terminal_type;
+    if (string_contains_token_case_insensitive(type, "ANSI-BBS")) {
+      label = "ANSI-BBS terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "PC-ANSI")) {
+      label = "PC-ANSI terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "CP-437") ||
+               string_contains_token_case_insensitive(type, "CP437")) {
+      label = "CP437 terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "IBMGRAPHICS") ||
+               string_contains_token_case_insensitive(type, "IBM-ASCII") ||
+               string_contains_token_case_insensitive(type, "IBMPC")) {
+      label = "IBM PC terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "AVATAR")) {
+      label = "AVATAR terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "RIPTERM")) {
+      label = "RIPTerm terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "PETSCII") ||
+               string_contains_token_case_insensitive(type, "ATASCII")) {
+      label = "8-bit art terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "DOS")) {
+      label = "DOS ANSI terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "BBS")) {
+      label = "BBS terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "ANSI")) {
+      label = "ANSI terminal";
+      identity_label = label;
+      detected = true;
+    }
+  }
+
+  if (!detected && ctx->client_banner[0] != '\0') {
+    const char *banner = ctx->client_banner;
+    if (string_contains_token_case_insensitive(banner, "ANSI-BBS") ||
+        string_contains_token_case_insensitive(banner, "PC-ANSI")) {
+      label = "ANSI-BBS banner";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(banner, "BBS")) {
+      label = "BBS banner";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(banner, "ANSI")) {
+      label = "ANSI banner";
+      identity_label = label;
+      detected = true;
+    }
+  }
+
+  if (!detected && ctx->os_name[0] != '\0') {
+    static const char *const kDosFamilies[] = {"msdos", "drdos", "pcdos", "kdos"};
+    for (size_t idx = 0U; idx < sizeof(kDosFamilies) / sizeof(kDosFamilies[0]); ++idx) {
+      if (strcasecmp(ctx->os_name, kDosFamilies[idx]) == 0) {
+        label = "DOS OS";
+        identity_label = NULL;
+        detected = true;
+        break;
+      }
+    }
+  }
+
+  if (detected) {
+    const char *display = (label != NULL && label[0] != '\0') ? label : "Retro terminal";
+    snprintf(ctx->retro_client_marker, sizeof(ctx->retro_client_marker), "%s", display);
+  }
+
+  session_format_telnet_identity(ctx, detected ? identity_label : NULL);
+
+  return detected;
 }
 
 static void session_apply_saved_preferences(session_ctx_t *ctx) {
@@ -10027,6 +10298,7 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
   pthread_mutex_unlock(&host->lock);
 
   ctx->prefer_utf16_output = false;
+  ctx->prefer_cp437_output = false;
 
   ctx->translation_caption_spacing = 0U;
   ctx->translation_enabled = false;
@@ -10114,7 +10386,6 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
 
   (void)session_user_data_load(ctx);
   session_force_dark_mode_foreground(ctx);
-  session_refresh_output_encoding(ctx);
 }
 
 static bool session_argument_is_disable(const char *token) {
@@ -11586,13 +11857,100 @@ static bool session_channel_write_all(session_ctx_t *ctx, const void *data, size
   return true;
 }
 
+static bool session_channel_write_cp437(session_ctx_t *ctx, const char *data, size_t length) {
+  if (ctx == NULL || data == NULL || length == 0U) {
+    return true;
+  }
+
+  iconv_t descriptor = iconv_open("CP437//TRANSLIT", "UTF-8");
+  if (descriptor == (iconv_t)(-1)) {
+    return session_channel_write_all(ctx, data, length);
+  }
+
+  size_t capacity = (length > 0U ? length : 1U) * 4U + 16U;
+  char *buffer = (char *)malloc(capacity);
+  if (buffer == NULL) {
+    iconv_close(descriptor);
+    return session_channel_write_all(ctx, data, length);
+  }
+
+  const char *input_cursor = data;
+  size_t input_remaining = length;
+  char *output_cursor = buffer;
+  size_t output_remaining = capacity;
+
+  bool fallback_to_plaintext = false;
+
+  while (input_remaining > 0U) {
+    size_t result = iconv(descriptor, (char **)&input_cursor, &input_remaining, &output_cursor, &output_remaining);
+    if (result == (size_t)-1) {
+      if (errno == E2BIG) {
+        size_t produced = capacity - output_remaining;
+        size_t new_capacity = capacity * 2U;
+        if (new_capacity <= capacity) {
+          new_capacity = capacity + length + 32U;
+        }
+        char *resized = (char *)realloc(buffer, new_capacity);
+        if (resized == NULL) {
+          fallback_to_plaintext = true;
+          goto cleanup;
+        }
+        buffer = resized;
+        output_cursor = buffer + produced;
+        output_remaining = new_capacity - produced;
+        capacity = new_capacity;
+        continue;
+      }
+      if (errno == EILSEQ || errno == EINVAL) {
+        ++input_cursor;
+        --input_remaining;
+        if (output_remaining == 0U) {
+          size_t produced = capacity - output_remaining;
+          size_t new_capacity = capacity * 2U;
+          if (new_capacity <= capacity) {
+            new_capacity = capacity + length + 32U;
+          }
+          char *resized = (char *)realloc(buffer, new_capacity);
+          if (resized == NULL) {
+            fallback_to_plaintext = true;
+            goto cleanup;
+          }
+          buffer = resized;
+          output_cursor = buffer + produced;
+          output_remaining = new_capacity - produced;
+          capacity = new_capacity;
+        }
+        *output_cursor++ = '?';
+        output_remaining -= 1U;
+        continue;
+      }
+      fallback_to_plaintext = true;
+      goto cleanup;
+    }
+  }
+
+cleanup:
+  iconv_close(descriptor);
+  bool success = false;
+  if (fallback_to_plaintext) {
+    success = session_channel_write_all(ctx, data, length);
+  } else {
+    size_t produced = capacity - output_remaining;
+    success = session_channel_write_all(ctx, buffer, produced);
+  }
+  free(buffer);
+  return success;
+}
+
 static void session_channel_write(session_ctx_t *ctx, const void *data, size_t length) {
   if (ctx == NULL || data == NULL || length == 0U || ctx->should_exit || !session_transport_active(ctx)) {
     return;
   }
 
   bool success = true;
-  if (ctx->prefer_utf16_output) {
+  if (ctx->prefer_cp437_output) {
+    success = session_channel_write_cp437(ctx, (const char *)data, length);
+  } else if (ctx->prefer_utf16_output) {
     success = session_channel_write_utf16(ctx, (const char *)data, length);
   } else {
     success = session_channel_write_all(ctx, data, length);
@@ -11937,6 +12295,16 @@ static void session_telnet_send_option(session_ctx_t *ctx, unsigned char command
   send(ctx->telnet_fd, payload, sizeof(payload), MSG_NOSIGNAL);
 }
 
+static void session_telnet_request_terminal_type(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->telnet_fd < 0 || ctx->telnet_terminal_type_requested) {
+    return;
+  }
+
+  unsigned char payload[] = {TELNET_IAC, TELNET_CMD_SB, TELNET_OPT_TERMINAL_TYPE, 1U, TELNET_IAC, TELNET_CMD_SE};
+  send(ctx->telnet_fd, payload, sizeof(payload), MSG_NOSIGNAL);
+  ctx->telnet_terminal_type_requested = true;
+}
+
 static void session_telnet_handle_option(session_ctx_t *ctx, unsigned char command, unsigned char option) {
   if (ctx == NULL) {
     return;
@@ -11946,6 +12314,8 @@ static void session_telnet_handle_option(session_ctx_t *ctx, unsigned char comma
     case TELNET_CMD_DO:
       if (option == TELNET_OPT_SUPPRESS_GO_AHEAD || option == TELNET_OPT_ECHO) {
         session_telnet_send_option(ctx, TELNET_CMD_WILL, option);
+      } else if (option == TELNET_OPT_TERMINAL_TYPE) {
+        session_telnet_send_option(ctx, TELNET_CMD_WONT, option);
       } else {
         session_telnet_send_option(ctx, TELNET_CMD_WONT, option);
       }
@@ -11956,6 +12326,9 @@ static void session_telnet_handle_option(session_ctx_t *ctx, unsigned char comma
     case TELNET_CMD_WILL:
       if (option == TELNET_OPT_SUPPRESS_GO_AHEAD) {
         session_telnet_send_option(ctx, TELNET_CMD_DO, option);
+      } else if (option == TELNET_OPT_TERMINAL_TYPE) {
+        session_telnet_send_option(ctx, TELNET_CMD_DO, option);
+        session_telnet_request_terminal_type(ctx);
       } else {
         session_telnet_send_option(ctx, TELNET_CMD_DONT, option);
       }
@@ -11978,7 +12351,7 @@ static void session_telnet_initialize(session_ctx_t *ctx) {
   session_telnet_send_option(ctx, TELNET_CMD_DO, TELNET_OPT_SUPPRESS_GO_AHEAD);
   session_telnet_send_option(ctx, TELNET_CMD_DONT, TELNET_OPT_LINEMODE);
   session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_STATUS);
-  session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_TERMINAL_TYPE);
+  session_telnet_send_option(ctx, TELNET_CMD_DO, TELNET_OPT_TERMINAL_TYPE);
   session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_TERMINAL_SPEED);
   session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_NAWS);
 
@@ -12066,27 +12439,121 @@ static int session_telnet_read_byte(session_ctx_t *ctx, unsigned char *out, int 
       }
 
       if (command == TELNET_CMD_SB) {
-        unsigned char prev = 0U;
-        for (;;) {
-          unsigned char chunk = 0U;
-          ssize_t chunk_result = recv(ctx->telnet_fd, &chunk, 1, 0);
-          if (chunk_result < 0) {
-            if (errno == EINTR) {
+        unsigned char option = 0U;
+        ssize_t option_result = recv(ctx->telnet_fd, &option, 1, 0);
+        if (option_result <= 0) {
+          if (option_result < 0 && errno == EINTR) {
+            continue;
+          }
+          ctx->telnet_eof = (option_result == 0);
+          return ctx->telnet_eof ? 0 : SSH_ERROR;
+        }
+
+        if (option == TELNET_OPT_TERMINAL_TYPE) {
+          unsigned char qualifier = 0U;
+          ssize_t qual_result = recv(ctx->telnet_fd, &qualifier, 1, 0);
+          if (qual_result <= 0) {
+            if (qual_result < 0 && errno == EINTR) {
               continue;
             }
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            ctx->telnet_eof = (qual_result == 0);
+            return ctx->telnet_eof ? 0 : SSH_ERROR;
+          }
+
+          char type_buffer[SSH_CHATTER_TERMINAL_TYPE_LEN];
+          size_t type_len = 0U;
+          bool finished = false;
+
+          while (!finished) {
+            unsigned char chunk = 0U;
+            ssize_t chunk_result = recv(ctx->telnet_fd, &chunk, 1, 0);
+            if (chunk_result < 0) {
+              if (errno == EINTR) {
+                continue;
+              }
+              if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+              }
+              return SSH_ERROR;
+            }
+            if (chunk_result == 0) {
+              ctx->telnet_eof = true;
+              return 0;
+            }
+
+            if (chunk == TELNET_IAC) {
+              unsigned char next = 0U;
+              ssize_t next_result = recv(ctx->telnet_fd, &next, 1, 0);
+              if (next_result < 0) {
+                if (errno == EINTR) {
+                  continue;
+                }
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                  continue;
+                }
+                return SSH_ERROR;
+              }
+              if (next_result == 0) {
+                ctx->telnet_eof = true;
+                return 0;
+              }
+
+              if (next == TELNET_CMD_SE) {
+                finished = true;
+                break;
+              }
+              if (next == TELNET_IAC) {
+                if (type_len + 1U < sizeof(type_buffer)) {
+                  type_buffer[type_len++] = (char)TELNET_IAC;
+                }
+              }
               continue;
             }
-            return SSH_ERROR;
+
+            if (type_len + 1U < sizeof(type_buffer)) {
+              type_buffer[type_len++] = (char)chunk;
+            }
           }
-          if (chunk_result == 0) {
-            ctx->telnet_eof = true;
-            return 0;
+
+          if (type_len < sizeof(type_buffer)) {
+            type_buffer[type_len] = '\0';
+          } else {
+            type_buffer[sizeof(type_buffer) - 1U] = '\0';
           }
-          if (prev == TELNET_IAC && chunk == TELNET_CMD_SE) {
-            break;
+
+          if (qualifier == 0U) {
+            trim_whitespace_inplace(type_buffer);
+            if (type_buffer[0] != '\0') {
+              for (size_t idx = 0U; type_buffer[idx] != '\0'; ++idx) {
+                type_buffer[idx] = (char)toupper((unsigned char)type_buffer[idx]);
+              }
+              snprintf(ctx->terminal_type, sizeof(ctx->terminal_type), "%s", type_buffer);
+              session_refresh_output_encoding(ctx);
+            }
           }
-          prev = (chunk == TELNET_IAC) ? TELNET_IAC : 0U;
+        } else {
+          unsigned char prev = 0U;
+          for (;;) {
+            unsigned char chunk = 0U;
+            ssize_t chunk_result = recv(ctx->telnet_fd, &chunk, 1, 0);
+            if (chunk_result < 0) {
+              if (errno == EINTR) {
+                continue;
+              }
+              if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+              }
+              return SSH_ERROR;
+            }
+            if (chunk_result == 0) {
+              ctx->telnet_eof = true;
+              return 0;
+            }
+            if (prev == TELNET_IAC && chunk == TELNET_CMD_SE) {
+              break;
+            }
+            prev = (chunk == TELNET_IAC) ? TELNET_IAC : 0U;
+          }
         }
         continue;
       }
@@ -12505,6 +12972,42 @@ static bool host_lookup_member_ip(host_t *host, const char *username, char *ip, 
 
   snprintf(ip, length, "%s", member->client_ip);
   return true;
+}
+
+static void session_telnet_capture_startup_metadata(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->telnet_fd < 0) {
+    return;
+  }
+
+  while (!ctx->telnet_eof) {
+    struct pollfd pfd = {
+        .fd = ctx->telnet_fd,
+        .events = POLLIN,
+        .revents = 0,
+    };
+
+    int poll_result = poll(&pfd, 1, 0);
+    if (poll_result <= 0 || (pfd.revents & POLLIN) == 0) {
+      break;
+    }
+
+    unsigned char byte = 0U;
+    int read_result = session_telnet_read_byte(ctx, &byte, 0);
+    if (read_result == SSH_AGAIN) {
+      break;
+    }
+    if (read_result <= 0) {
+      break;
+    }
+
+    if (byte != 0U) {
+      if (!ctx->telnet_pending_valid) {
+        ctx->telnet_pending_char = (int)byte;
+        ctx->telnet_pending_valid = true;
+      }
+      break;
+    }
+  }
 }
 
 static bool session_detect_provider_ip(const char *ip, char *label, size_t length) {
@@ -13489,6 +13992,50 @@ static bool session_render_external_banner(session_ctx_t *ctx) {
   return rendered;
 }
 
+static void session_render_banner_ascii(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  static const char *kBanner[] = {
+      "\033[1;35m+===================================================================+\033[0m",
+      "\033[1;36m|  ██████╗██╗  ██╗ █████╗ ████████╗████████╗███████╗██████╗         |\033[0m",
+      "\033[1;36m| ██╔════╝██║  ██║██╔══██╗╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗        |\033[0m",
+      "\033[1;34m| ██║     ███████║███████║   ██║      ██║   █████╗  ██████╔╝        |\033[0m",
+      "\033[1;34m| ██║     ██╔══██║██╔══██║   ██║      ██║   ██╔══╝  ██╔══██╗        |\033[0m",
+      "\033[1;32m| ╚██████╗██║  ██║██║  ██║   ██║      ██║   ███████╗██║  ██║        |\033[0m",
+      "\033[1;32m|  ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝      ╚═╝   ╚══════╝╚═╝  ╚═╝        |\033[0m",
+      "\033[1;35m+===================================================================+\033[0m",
+      "\033[1;36m|        *** Welcome to CHATTER (2025) ***                          |\033[0m",
+      "\033[1;35m|   Cute and tiny SSH chat written in C.                            |\033[0m",
+      "\033[1;36m|   Type \033[1;33m/help\033[1;36m to see available commands.                           |\033[0m",
+      "\033[1;36m|   Type \033[1;33m/mode\033[1;36m to switch input modes.                               |\033[0m",
+      "\033[1;35m+===================================================================+\033[0m",
+  };
+
+  for (size_t idx = 0; idx < sizeof(kBanner) / sizeof(kBanner[0]); ++idx) {
+    session_send_system_line(ctx, kBanner[idx]);
+  }
+}
+
+static void session_render_prelogin_banner(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->prelogin_banner_rendered) {
+    return;
+  }
+
+  session_apply_background_fill(ctx);
+
+  bool has_external_banner = session_render_external_banner(ctx);
+  if (!has_external_banner) {
+    session_render_banner_ascii(ctx);
+  }
+
+  session_send_plain_line(ctx, "\033[37mConnection established.\033[0m");
+  session_send_plain_line(ctx, "\033[37mAuthenticate or choose a nickname to continue.\033[0m");
+
+  ctx->prelogin_banner_rendered = true;
+}
+
 static void session_render_banner(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return;
@@ -13496,27 +14043,12 @@ static void session_render_banner(session_ctx_t *ctx) {
 
   session_apply_background_fill(ctx);
 
-  const bool has_external_banner = session_render_external_banner(ctx);
-
-  if (!has_external_banner) {
-    static const char *kBanner[] = {
-    "\033[1;35m+===================================================================+\033[0m",
-    "\033[1;36m|  ██████╗██╗  ██╗ █████╗ ████████╗████████╗███████╗██████╗         |\033[0m",
-    "\033[1;36m| ██╔════╝██║  ██║██╔══██╗╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗        |\033[0m",
-    "\033[1;34m| ██║     ███████║███████║   ██║      ██║   █████╗  ██████╔╝        |\033[0m",
-    "\033[1;34m| ██║     ██╔══██║██╔══██║   ██║      ██║   ██╔══╝  ██╔══██╗        |\033[0m",
-    "\033[1;32m| ╚██████╗██║  ██║██║  ██║   ██║      ██║   ███████╗██║  ██║        |\033[0m",
-    "\033[1;32m|  ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝      ╚═╝   ╚══════╝╚═╝  ╚═╝        |\033[0m",
-    "\033[1;35m+===================================================================+\033[0m",
-    "\033[1;36m|        *** Welcome to CHATTER (2025) ***                          |\033[0m",
-    "\033[1;35m|   Cute and tiny SSH chat written in C.                            |\033[0m",
-    "\033[1;36m|   Type \033[1;33m/help\033[1;36m to see available commands.                           |\033[0m",
-    "\033[1;36m|   Type \033[1;33m/mode\033[1;36m to switch input modes.                               |\033[0m",
-    "\033[1;35m+===================================================================+\033[0m",
-  };
-
-    for (size_t idx = 0; idx < sizeof(kBanner) / sizeof(kBanner[0]); ++idx) {
-      session_send_system_line(ctx, kBanner[idx]);
+  bool show_graphics = !ctx->prelogin_banner_rendered;
+  bool has_external_banner = false;
+  if (show_graphics) {
+    has_external_banner = session_render_external_banner(ctx);
+    if (!has_external_banner) {
+      session_render_banner_ascii(ctx);
     }
   }
 
@@ -13541,7 +14073,7 @@ static void session_render_banner(session_ctx_t *ctx) {
   snprintf(version_line, sizeof(version_line), "\033[1;32m|  %s%*s|\033[0m", ctx->owner->version, version_padding, "");
   session_send_system_line(ctx, version_line);
 
-  if (!has_external_banner) {
+  if (show_graphics && !has_external_banner) {
     session_send_system_line(ctx, "\033[1;32m+===================================================================+\033[0m");
   }
 
@@ -26068,6 +26600,7 @@ static void session_reset_for_retry(session_ctx_t *ctx) {
   ctx->should_exit = false;
   ctx->username_conflict = false;
   ctx->has_joined_room = false;
+  ctx->prelogin_banner_rendered = false;
   ctx->input_length = 0U;
   ctx->input_buffer[0] = '\0';
   ctx->input_escape_active = false;
@@ -26088,6 +26621,9 @@ static void session_reset_for_retry(session_ctx_t *ctx) {
   ctx->bbs_rendering_editor = false;
   ctx->bbs_breaking_count = 0U;
   memset(ctx->bbs_breaking_messages, 0, sizeof(ctx->bbs_breaking_messages));
+  ctx->telnet_terminal_type_requested = false;
+  ctx->terminal_type[0] = '\0';
+  ctx->prefer_cp437_output = false;
   session_asciiart_reset(ctx);
   ctx->asciiart_has_cooldown = false;
   ctx->last_asciiart_post.tv_sec = 0;
@@ -26109,6 +26645,7 @@ static void session_reset_for_retry(session_ctx_t *ctx) {
   ctx->last_message_time.tv_nsec = 0;
   ctx->user_data_loaded = false;
   memset(&ctx->user_data, 0, sizeof(ctx->user_data));
+  session_refresh_output_encoding(ctx);
 }
 
 static int host_telnet_open_socket(host_t *host) {
@@ -26407,6 +26944,8 @@ static void *session_thread(void *arg) {
   unsigned int handshake_retries = 0U;
   if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
     session_telnet_initialize(ctx);
+    session_telnet_capture_startup_metadata(ctx);
+    session_render_prelogin_banner(ctx);
     authenticated = true;
   }
 
@@ -26439,6 +26978,10 @@ static void *session_thread(void *arg) {
     }
 
     break;
+  }
+
+  if (ctx->transport_kind == SESSION_TRANSPORT_SSH) {
+    session_render_prelogin_banner(ctx);
   }
 
   if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
@@ -27878,6 +28421,10 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       ctx->auth = (auth_profile_t){0};
       snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
       ctx->input_mode = SESSION_INPUT_MODE_CHAT;
+      if (client_banner != NULL && client_banner[0] != '\0') {
+        snprintf(ctx->client_banner, sizeof(ctx->client_banner), "%s", client_banner);
+      }
+      session_refresh_output_encoding(ctx);
 
       pthread_mutex_lock(&host->lock);
       ++host->connection_count;

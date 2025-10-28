@@ -68,6 +68,8 @@
 #define SSH_CHATTER_JOIN_BAR_MAX 17
 #define SSH_CHATTER_LANG_NAME_LEN 64
 #define SSH_CHATTER_STATUS_LEN 128
+#define SSH_CHATTER_CLIENT_BANNER_LEN 128
+#define SSH_CHATTER_TERMINAL_TYPE_LEN 64
 #define SSH_CHATTER_ASCIIART_MAX_LINES 640
 #define SSH_CHATTER_ASCIIART_BUFFER_LEN SSH_CHATTER_BBS_BODY_LEN
 #define SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS 600
@@ -386,6 +388,7 @@ typedef struct session_ctx {
   bool telnet_eof;
   bool telnet_pending_valid;
   int telnet_pending_char;
+  bool telnet_terminal_type_requested;
   chat_user_t user;
   bool lan_operator_credentials_valid;
   auth_profile_t auth;
@@ -401,6 +404,10 @@ typedef struct session_ctx {
   size_t input_escape_length;
   bool bracket_paste_active;
   char client_ip[SSH_CHATTER_IP_LEN];
+  char client_banner[SSH_CHATTER_CLIENT_BANNER_LEN];
+  char terminal_type[SSH_CHATTER_TERMINAL_TYPE_LEN];
+  char retro_client_marker[SSH_CHATTER_TERMINAL_TYPE_LEN];
+  char telnet_identity[SSH_CHATTER_CLIENT_BANNER_LEN];
   const char *user_color_code;
   const char *user_highlight_code;
   bool user_is_bold;
@@ -417,6 +424,7 @@ typedef struct session_ctx {
   bool should_exit;
   bool username_conflict;
   bool has_joined_room;
+  bool prelogin_banner_rendered;
   unsigned int channel_error_retries;
   size_t history_scroll_position;
   struct timespec last_message_time;
@@ -447,6 +455,7 @@ typedef struct session_ctx {
   char bbs_breaking_messages[SSH_CHATTER_BBS_BREAKING_MAX][SSH_CHATTER_MESSAGE_LIMIT];
   size_t bbs_breaking_count;
   bool prefer_utf16_output;
+  bool prefer_cp437_output;
   bool translation_enabled;
   bool output_translation_enabled;
   char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
