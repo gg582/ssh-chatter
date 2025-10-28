@@ -1597,6 +1597,7 @@ static void session_send_raw_text(session_ctx_t *ctx, const char *text);
 static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text);
 static void session_send_system_lines_bulk(session_ctx_t *ctx, const char *const *lines, size_t line_count);
 static bool session_render_external_banner(session_ctx_t *ctx);
+static void session_render_menu_bar(session_ctx_t *ctx);
 static void session_render_banner(session_ctx_t *ctx);
 static void session_format_separator_line(session_ctx_t *ctx, const char *label, char *out, size_t length);
 static void session_render_separator(session_ctx_t *ctx, const char *label);
@@ -12422,33 +12423,70 @@ static bool session_render_external_banner(session_ctx_t *ctx) {
   return rendered;
 }
 
+static void session_render_menu_bar(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  time_t now = time(NULL);
+  struct tm local_tm;
+  char time_buffer[16];
+  if (localtime_r(&now, &local_tm) != NULL) {
+    if (strftime(time_buffer, sizeof(time_buffer), "%H:%M", &local_tm) == 0U) {
+      snprintf(time_buffer, sizeof(time_buffer), "--:--");
+    }
+  } else {
+    snprintf(time_buffer, sizeof(time_buffer), "--:--");
+  }
+
+  static const char menu_section[] = " Terminal Bridge | Chat | BBS | RSS | Games ";
+  static const char status_section[] = "📶 5G  🔋100%";
+
+  const size_t total_width = 80U;
+  const size_t left_len = strnlen(menu_section, sizeof(menu_section) - 1U);
+  const size_t time_len = strnlen(time_buffer, sizeof(time_buffer) - 1U);
+  const size_t status_len = strnlen(status_section, sizeof(status_section) - 1U);
+
+  size_t used = left_len + time_len + status_len + 3U;
+  size_t padding = total_width > used ? total_width - used : 1U;
+  if (padding > 40U) {
+    padding = 40U;
+  }
+
+  char spacing[64];
+  memset(spacing, ' ', sizeof(spacing));
+  if (padding >= sizeof(spacing)) {
+    padding = sizeof(spacing) - 1U;
+  }
+  spacing[padding] = '\0';
+
+  char core[256];
+  snprintf(core, sizeof(core), "%s%.*s%s  %s", menu_section, (int)padding, spacing, time_buffer, status_section);
+
+  char decorated[320];
+  snprintf(decorated, sizeof(decorated), "\033[48;5;238m\033[38;5;255m%s\033[0m", core);
+
+  session_send_plain_line(ctx, decorated);
+}
+
 static void session_render_banner(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return;
   }
 
   session_apply_background_fill(ctx);
+  session_render_menu_bar(ctx);
+  session_send_plain_line(ctx, "");
 
   const bool has_external_banner = session_render_external_banner(ctx);
 
   if (!has_external_banner) {
     static const char *kBanner[] = {
-    "\033[1;35m+===================================================================+\033[0m",
-    "\033[1;36m|  ██████╗██╗  ██╗ █████╗ ████████╗████████╗███████╗██████╗         |\033[0m",
-    "\033[1;36m| ██╔════╝██║  ██║██╔══██╗╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗        |\033[0m",
-    "\033[1;34m| ██║     ███████║███████║   ██║      ██║   █████╗  ██████╔╝        |\033[0m",
-    "\033[1;34m| ██║     ██╔══██║██╔══██║   ██║      ██║   ██╔══╝  ██╔══██╗        |\033[0m",
-    "\033[1;32m| ╚██████╗██║  ██║██║  ██║   ██║      ██║   ███████╗██║  ██║        |\033[0m",
-    "\033[1;32m|  ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝      ╚═╝   ╚══════╝╚═╝  ╚═╝        |\033[0m",
-    "\033[1;35m+===================================================================+\033[0m",
-    "\033[1;36m|        *** Welcome to CHATTER (2025) ***                          |\033[0m",
-    "\033[1;35m|   Cute and tiny SSH chat written in C.                            |\033[0m",
-    "\033[1;36m|   Type \033[1;33m/help\033[1;36m to see available commands.                           |\033[0m",
-    "\033[1;36m|   Type \033[1;33m/mode\033[1;36m to switch input modes.                               |\033[0m",
-    "\033[1;35m+===================================================================+\033[0m",
-  };
+        "\033[1;36mCHATTER ready – Terminal Bridge controls now live in the top bar.\033[0m",
+        "\033[1;35mUse /help for the command list and /motd for community news.\033[0m",
+    };
 
-    for (size_t idx = 0; idx < sizeof(kBanner) / sizeof(kBanner[0]); ++idx) {
+    for (size_t idx = 0U; idx < sizeof(kBanner) / sizeof(kBanner[0]); ++idx) {
       session_send_system_line(ctx, kBanner[idx]);
     }
   }
@@ -12457,26 +12495,16 @@ static void session_render_banner(session_ctx_t *ctx) {
   size_t name_len = 0;
   if (ctx->user.name[0] != '\0')
     name_len = strlen(ctx->user.name);
-  int welcome_padding = 55 - (int)name_len;
-  if (welcome_padding < 0) {
-    welcome_padding = 0;
-  }
+  (void)name_len;
 
-  snprintf(welcome, sizeof(welcome), "\033[1;32m|  Welcome, %s!%*s|\033[0m", ctx->user.name, welcome_padding, "");
+  snprintf(welcome, sizeof(welcome), "\033[1;32mWelcome, %s!\033[0m", ctx->user.name);
   session_send_system_line(ctx, welcome);
 
   char version_line[SSH_CHATTER_MESSAGE_LIMIT];
   size_t version_len = strlen(ctx->owner->version);
-  int version_padding = 65 - (int)version_len;
-  if (version_padding < 0) {
-    version_padding = 0;
-  }
-  snprintf(version_line, sizeof(version_line), "\033[1;32m|  %s%*s|\033[0m", ctx->owner->version, version_padding, "");
+  (void)version_len;
+  snprintf(version_line, sizeof(version_line), "\033[1;32m%s\033[0m", ctx->owner->version);
   session_send_system_line(ctx, version_line);
-
-  if (!has_external_banner) {
-    session_send_system_line(ctx, "\033[1;32m+===================================================================+\033[0m");
-  }
 
   session_send_plain_line(ctx, "\033[37m/help to see the manual\033[0m");
   session_send_plain_line(ctx, "\033[37m/motd to see the information\033[0m");
