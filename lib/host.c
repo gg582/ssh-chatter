@@ -1788,6 +1788,7 @@ static void session_handle_vote(session_ctx_t *ctx, size_t option_index);
 static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, const char *label);
 static void session_handle_elect_command(session_ctx_t *ctx, const char *arguments);
 static void session_handle_vote_command(session_ctx_t *ctx, const char *arguments, bool allow_multiple);
+static void session_handle_alpha_centauri_landers(session_ctx_t *ctx);
 static bool session_line_is_exit_command(const char *line);
 static void session_handle_username_conflict_input(session_ctx_t *ctx, const char *line);
 static const char *session_consume_token(const char *input, char *token, size_t length);
@@ -14768,6 +14769,7 @@ static void session_print_help(session_ctx_t *ctx) {
       "/soulmate            - list users sharing your birthday",
       "/pair                - list users sharing your recorded OS",
       "/connected           - privately list everyone connected",
+      "/alpha-centauri-landers - view the Immigrants' Flag hall of fame",
       "/grant <ip>          - grant operator access to an IP (LAN only)",
       "/revoke <ip>         - revoke an IP's operator access (LAN top admin)",
       "/poll <question>|<option...> - start or view a poll",
@@ -16868,6 +16870,142 @@ static void session_handle_connected(session_ctx_t *ctx) {
   session_send_system_line(ctx, header);
   if (count > 0U) {
     session_send_system_line(ctx, buffer);
+  }
+}
+
+#define ALPHA_LANDERS_MAX_RECORDS 256U
+#define ALPHA_LANDERS_DISPLAY_LIMIT 10U
+
+typedef struct alpha_lander_entry {
+  char username[SSH_CHATTER_USERNAME_LEN];
+  uint32_t flag_count;
+  uint64_t last_flag_timestamp;
+} alpha_lander_entry_t;
+
+static int alpha_lander_entry_compare(const void *lhs, const void *rhs) {
+  const alpha_lander_entry_t *left = (const alpha_lander_entry_t *)lhs;
+  const alpha_lander_entry_t *right = (const alpha_lander_entry_t *)rhs;
+
+  if (left->flag_count < right->flag_count) {
+    return 1;
+  }
+  if (left->flag_count > right->flag_count) {
+    return -1;
+  }
+  if (left->last_flag_timestamp < right->last_flag_timestamp) {
+    return 1;
+  }
+  if (left->last_flag_timestamp > right->last_flag_timestamp) {
+    return -1;
+  }
+  return strcasecmp(left->username, right->username);
+}
+
+static void session_handle_alpha_centauri_landers(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (!session_user_data_available(ctx) || ctx->owner->user_data_root[0] == '\0') {
+    session_send_system_line(ctx, "Profile storage unavailable; the hall of fame is offline.");
+    return;
+  }
+
+  DIR *dir = opendir(ctx->owner->user_data_root);
+  if (dir == NULL) {
+    session_send_system_line(ctx, "Unable to inspect landing records right now.");
+    return;
+  }
+
+  alpha_lander_entry_t entries[ALPHA_LANDERS_MAX_RECORDS];
+  size_t entry_count = 0U;
+
+  struct dirent *entry = NULL;
+  while ((entry = readdir(dir)) != NULL) {
+    const char *name = entry->d_name;
+    if (name == NULL || name[0] == '\0') {
+      continue;
+    }
+    if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) {
+      continue;
+    }
+
+    size_t name_len = strlen(name);
+    if (name_len <= 4U || strcmp(name + name_len - 4U, ".dat") != 0) {
+      continue;
+    }
+    size_t base_len = name_len - 4U;
+    if (base_len == 0U || base_len >= SSH_CHATTER_USERNAME_LEN * 2U) {
+      continue;
+    }
+
+    char candidate[SSH_CHATTER_USERNAME_LEN * 2U];
+    memcpy(candidate, name, base_len);
+    candidate[base_len] = '\0';
+
+    user_data_record_t record;
+    if (!host_user_data_load_existing(ctx->owner, candidate, NULL, &record, false)) {
+      continue;
+    }
+    if (record.flag_count == 0U) {
+      continue;
+    }
+
+    uint64_t latest = 0U;
+    for (size_t idx = 0U; idx < record.flag_history_count; ++idx) {
+      if (record.flag_history[idx] > latest) {
+        latest = record.flag_history[idx];
+      }
+    }
+
+    if (entry_count >= ALPHA_LANDERS_MAX_RECORDS) {
+      continue;
+    }
+
+    alpha_lander_entry_t *slot = &entries[entry_count++];
+    snprintf(slot->username, sizeof(slot->username), "%s", record.username[0] != '\0' ? record.username : candidate);
+    slot->flag_count = record.flag_count;
+    slot->last_flag_timestamp = latest;
+  }
+
+  closedir(dir);
+
+  session_send_system_line(ctx, "Alpha Centauri Landers — Immigrants' Flag Hall of Fame:");
+
+  if (entry_count == 0U) {
+    session_send_system_line(ctx, "No landings logged yet. Finish the expedition to claim the first flag!");
+    return;
+  }
+
+  qsort(entries, entry_count, sizeof(entries[0]), alpha_lander_entry_compare);
+
+  size_t display_count = entry_count < ALPHA_LANDERS_DISPLAY_LIMIT ? entry_count : ALPHA_LANDERS_DISPLAY_LIMIT;
+  for (size_t idx = 0U; idx < display_count; ++idx) {
+    const alpha_lander_entry_t *lander = &entries[idx];
+    char when[64];
+    when[0] = '\0';
+    if (lander->last_flag_timestamp != 0U) {
+      time_t when_time = (time_t)lander->last_flag_timestamp;
+      struct tm tm_buf;
+      if (gmtime_r(&when_time, &tm_buf) != NULL) {
+        strftime(when, sizeof(when), "%Y-%m-%d %H:%M UTC", &tm_buf);
+      }
+    }
+    if (when[0] == '\0') {
+      snprintf(when, sizeof(when), "unknown");
+    }
+
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(line, sizeof(line), "#%zu %s — flags planted: %u (last landing %s)", idx + 1U, lander->username,
+             lander->flag_count, when);
+    session_send_system_line(ctx, line);
+  }
+
+  if (entry_count > display_count) {
+    size_t remaining = entry_count - display_count;
+    char summary[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(summary, sizeof(summary), "…and %zu more landers recorded in the archives.", remaining);
+    session_send_system_line(ctx, summary);
   }
 }
 
@@ -24552,6 +24690,14 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
       session_send_system_line(ctx, "Usage: /connected");
     } else {
       session_handle_connected(ctx);
+    }
+    return;
+  }
+  else if (session_parse_command(line, "/alpha-centauri-landers", &args)) {
+    if (*args != '\0') {
+      session_send_system_line(ctx, "Usage: /alpha-centauri-landers");
+    } else {
+      session_handle_alpha_centauri_landers(ctx);
     }
     return;
   }
