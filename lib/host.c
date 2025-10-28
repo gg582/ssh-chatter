@@ -11762,9 +11762,7 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
     session_append_fragment(formatted_empty, sizeof(formatted_empty), offset, ANSI_RESET);
     session_send_line(ctx, formatted_empty);
     return;
-  }yjlee@yjlee-linuxonmac:~/ssh-chatter$ 
-  yjlee@yjlee-linuxonmac:~/ssh-chatter$ 
-  yjlee@yjlee-linuxonmac:~/
+  }
 
   const bool scope_allows_translation =
       (!translator_should_limit_to_chat_bbs() || ctx->translation_manual_scope_override);
