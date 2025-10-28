@@ -2652,11 +2652,12 @@ static const os_descriptor_t OS_CATALOG[] = {
 
 static const os_descriptor_t *session_lookup_os_descriptor(const char *name);
 
+// random pool for daily functions
 static const char *DAILY_FUNCTIONS[] = {"sin",   "cos",   "tan",   "sqrt",  "log",   "exp",     "printf",
                                         "malloc", "free",  "memcpy", "strncpy", "qsort", "fopen",   "close",
                                         "select", "poll",  "fork",  "exec",  "pthread_create", "strtok"};
 
-static bool chat_room_ensure_capacity(chat_room_t *room, size_t required) {
+static bool chat_room_ensure_capacity(chat_room_t *room, size_t required) { // chat members should be within capacity
   if (room == NULL) {
     return false;
   }
@@ -2751,7 +2752,7 @@ static void host_format_sockaddr(const struct sockaddr *addr, socklen_t len, cha
 typedef enum {
   HOSTKEY_SUPPORT_UNKNOWN = 0,
   HOSTKEY_SUPPORT_ACCEPTED,
-  HOSTKEY_SUPPORT_REJECTED,
+  HOSTKEY_SUPPORT_REJECTED, // unlisted auth key should be rejected.
 } hostkey_support_status_t;
 
 typedef struct {
@@ -4959,58 +4960,36 @@ static bool host_eliza_content_is_severe(const char *text) {
     return false;
   }
 
-  static const char *const kPhrases[] = {
-    // 혐오 단어 찾는 것도 고역입니다. 겨우 여기까지만 어떻게 저떻게 찾았는데 솔직히 치면서 숨막힙니다..
-    // It is really painful to find hate speech...It is really hard and sad to type these kinds of words
-    "찢재명", "찢가카", "찢칠라", "화짱조", 
-    "노묵훈", "노무쿤", "노알라", "노미현", "운지", "딱좋노", "야기분좋다", "이기야", // 진짜 왜 하필 노무현에만 이만큼 있나요?
-    "문재앙", "문코리타", "문켓몬", "문크예거", "문슬람", // 이쪽도 만만찮긴 한데....
-    "닭근혜", "닥그네", "닭그네",
-    "고담대구", "광주 폭동", "광주폭동", // 지역드립은 얄짤없습니다. 
-    "7시", "쌍도", "전라디언", "전라민국", 
-    "통구이", "엔젤두환", "즌라도",
-    "깜둥이", "좆슬람", "개슬람", "흑좆", "백좆", "똥남아", "깜씨", "쪽바리", "쪽발이", "짱꼴라", "좆선족", // 외국인 혐오와 일반화는 좋지 않아요. 물론 일부 밀입국자들이 문제라고는 하지만...
-    "ㅈ선족", 
-    // 어..이게...우리가 아는 그 ㅉㄲ는 아무래도.....이게 중국집에 대한 은어기도 해서 금지하고 싶어도 힘드네요
-  };
-
-  for (size_t idx = 0U; idx < sizeof(kPhrases) / sizeof(kPhrases[0]); ++idx) {
-    if (string_contains_case_insensitive(text, kPhrases[idx])) {
+  char formatted_prompt[SSH_CHATTER_MESSAGE_LIMIT];
+  char reply[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(formatted_prompt, SSH_CHATTER_MESSAGE_LIMIT, 
+    "You are a modbot of this mesage. If you think that this message is harmful,"
+    "You should say \"My favorite fruit is Melon.\""
+    "If you think that this is okay,"
+    "You should say \"My favorate fruit is Pear.\""
+    "Here's the message: %s",
+    text);
+  if (!translator_eliza_respond(formatted_prompt, reply, sizeof(reply))) {
+    if(string_contains_case_insensitive(text, "melon")) {
       return true;
     }
   }
-
-  if (string_contains_case_insensitive(text, "nigger")) {
-    if (string_contains_case_insensitive(text, "ching chang") ||
-        string_contains_case_insensitive(text, "goy") ||
-        string_contains_case_insensitive(text, "nxxxxx") ||
-        string_contains_case_insensitive(text, "nxxxxr") ||
-        string_contains_case_insensitive(text, "nxxxer") ||
-        string_contains_case_insensitive(text, "nixxer") ||
-	string_contains_case_insensitive(text, "n_____") ||
-	string_contains_case_insensitive(text, "n____r") ||
-	string_contains_case_insensitive(text, "n___er") ||
-	string_contains_case_insensitive(text, "ni__er") ||
-	string_contains_case_insensitive(text, "nig_er") ||
-	string_contains_case_insensitive(text, "n___a") ||
-        string_contains_case_insensitive(text, "nig_er") ||
-        string_contains_case_insensitive(text, "n___a") ||
-        string_contains_case_insensitive(text, "ni__a")) {
-      return true;
-    }
-  }
-
   if (string_contains_case_insensitive(text, "child")) {
     if (string_contains_case_insensitive(text, "exploitation") || string_contains_case_insensitive(text, "abuse") ||
         string_contains_case_insensitive(text, "porn")) {
-      return true;
+        if(string_contains_case_insensitive(text, "http"))
+          return true;
     }
   }
 
+  if (string_contains_case_insensitive(text, "아청물")
+  &&  string_contains_case_insensitive(text, "http")) return true;
   if (string_contains_case_insensitive(text, "아동")) {
-    if (string_contains_case_insensitive(text, "학대") || string_contains_case_insensitive(text, "착취") ||
-        string_contains_case_insensitive(text, "포르노")) {
-      return true;
+    if(string_contains_case_insensitive(text, "초딩")
+    || string_contains_case_insensitive(text, "중딩")) {
+      if (string_contains_case_insensitive(text, "http")) {
+        return true;
+      }
     }
   }
 
@@ -5068,7 +5047,7 @@ static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const 
     printf("[eliza] removing %s (%s) after manual keyword flag\n", ctx->user.name, ctx->client_ip);
   }
 
-  session_force_disconnect(ctx, "You have been removed by eliza for severe content.");
+  session_force_disconnect(ctx, "You have been removed by eliza for severe content."); // this is needed to avoid legal problems!
   return true;
 }
 

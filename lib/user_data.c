@@ -241,6 +241,7 @@ static bool user_data_load_raw(const char *path, user_data_record_t *record, boo
   bool upgrade = false;
   bool loaded = false;
 
+  // curent  userdata
   if (file_size == expected_size) {
     size_t read = fread(&temp, sizeof(temp), 1U, fp);
     if (read == 1U && temp.magic == USER_DATA_MAGIC && temp.version == USER_DATA_VERSION) {
@@ -267,7 +268,7 @@ static bool user_data_load_raw(const char *path, user_data_record_t *record, boo
       upgrade = true;
       loaded = true;
     }
-  } else if (file_size == v3_size) {
+  } else if (file_size == v3_size) { //legacy userdata; profile picture size is different
     user_data_record_v3_t legacy3;
     size_t read = fread(&legacy3, sizeof(legacy3), 1U, fp);
     if (read == 1U && legacy3.magic == USER_DATA_MAGIC && legacy3.version == USER_DATA_VERSION_V3) {
