@@ -1050,6 +1050,109 @@ static bool string_contains_case_insensitive(const char *haystack, const char *n
   return false;
 }
 
+static bool string_contains_token_case_insensitive(const char *haystack, const char *needle) {
+  if (haystack == NULL || needle == NULL || *needle == '\0') {
+    return false;
+  }
+
+  const size_t haystack_length = strlen(haystack);
+  const size_t needle_length = strlen(needle);
+  if (needle_length == 0U || haystack_length < needle_length) {
+    return false;
+  }
+
+  for (size_t idx = 0; idx <= haystack_length - needle_length; ++idx) {
+    size_t matched = 0U;
+    while (matched < needle_length) {
+      const unsigned char hay = (unsigned char)haystack[idx + matched];
+      const unsigned char nee = (unsigned char)needle[matched];
+      if (tolower(hay) != tolower(nee)) {
+        break;
+      }
+      ++matched;
+    }
+
+    if (matched != needle_length) {
+      continue;
+    }
+
+    const bool has_prev = idx > 0U;
+    const bool has_next = (idx + needle_length) < haystack_length;
+    const unsigned char prev = has_prev ? (unsigned char)haystack[idx - 1U] : 0U;
+    const unsigned char next = has_next ? (unsigned char)haystack[idx + needle_length] : 0U;
+    const bool prev_boundary = !has_prev || (!isalnum(prev) && prev != '_');
+    const bool next_boundary = !has_next || (!isalnum(next) && next != '_');
+
+    if (prev_boundary && next_boundary) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void session_extract_banner_token(const char *banner, char *buffer, size_t length) {
+  if (buffer == NULL || length == 0U) {
+    return;
+  }
+
+  buffer[0] = '\0';
+  if (banner == NULL || *banner == '\0') {
+    return;
+  }
+
+  size_t idx = 0U;
+  while (banner[idx] != '\0' && isspace((unsigned char)banner[idx])) {
+    ++idx;
+  }
+
+  size_t produced = 0U;
+  while (banner[idx] != '\0' && !isspace((unsigned char)banner[idx])) {
+    if (produced + 1U >= length) {
+      break;
+    }
+    buffer[produced++] = banner[idx++];
+  }
+
+  if (produced == 0U) {
+    snprintf(buffer, length, "%.*s", (int)length - 1, banner);
+  } else {
+    buffer[produced] = '\0';
+  }
+}
+
+static void session_format_telnet_identity(session_ctx_t *ctx, const char *primary_label) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  ctx->telnet_identity[0] = '\0';
+  if (ctx->transport_kind != SESSION_TRANSPORT_TELNET) {
+    return;
+  }
+
+  const char *label = primary_label;
+  char snippet[SSH_CHATTER_TERMINAL_TYPE_LEN];
+  snippet[0] = '\0';
+
+  if (label == NULL || label[0] == '\0') {
+    if (ctx->terminal_type[0] != '\0') {
+      label = ctx->terminal_type;
+    } else if (ctx->client_banner[0] != '\0') {
+      session_extract_banner_token(ctx->client_banner, snippet, sizeof(snippet));
+      if (snippet[0] != '\0') {
+        label = snippet;
+      }
+    }
+  }
+
+  if (label == NULL || label[0] == '\0') {
+    label = "unknown";
+  }
+
+  snprintf(ctx->telnet_identity, sizeof(ctx->telnet_identity), "telnet/%s", label);
+}
+
 static bool host_is_leap_year(int year) {
   if (year <= 0) {
     return false;
@@ -1685,7 +1788,7 @@ static void session_cleanup(session_ctx_t *ctx);
 static void *session_thread(void *arg);
 static void host_telnet_listener_stop(host_t *host);
 static void session_refresh_output_encoding(session_ctx_t *ctx);
-static bool session_detect_retro_client(const session_ctx_t *ctx);
+static bool session_detect_retro_client(session_ctx_t *ctx);
 static void session_telnet_request_terminal_type(session_ctx_t *ctx);
 static void session_telnet_capture_startup_metadata(session_ctx_t *ctx);
 static void session_history_record(session_ctx_t *ctx, const char *line);
@@ -10013,8 +10116,28 @@ static void session_refresh_output_encoding(session_ctx_t *ctx) {
     }
   }
 
+  const bool previous_cp437 = ctx->prefer_cp437_output;
   const bool use_cp437 = session_detect_retro_client(ctx);
   ctx->prefer_cp437_output = use_cp437;
+
+  if (use_cp437 != previous_cp437) {
+    const char *subject = ctx->user.name[0] != '\0' ? ctx->user.name : ctx->client_ip;
+    if (subject == NULL || subject[0] == '\0') {
+      subject = "unknown";
+    }
+
+    if (use_cp437) {
+      const char *marker = ctx->retro_client_marker[0] != '\0' ? ctx->retro_client_marker : "retro client";
+      if (ctx->telnet_identity[0] != '\0') {
+        printf("[retro] enabling CP437 output for %s via %s (%s)\n", subject, marker, ctx->telnet_identity);
+      } else {
+        printf("[retro] enabling CP437 output for %s via %s\n", subject, marker);
+      }
+    } else {
+      printf("[retro] CP437 output disabled for %s\n", subject);
+    }
+  }
+
   if (use_cp437) {
     ctx->prefer_utf16_output = false;
     return;
@@ -10023,13 +10146,25 @@ static void session_refresh_output_encoding(session_ctx_t *ctx) {
   ctx->prefer_utf16_output = use_utf16;
 }
 
-static bool session_detect_retro_client(const session_ctx_t *ctx) {
+static bool session_detect_retro_client(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return false;
   }
 
-  static const char *const kRetroMarkers[] = {
-      "ftelnet", "syncterm", "netrunner", "qodem", "netfury", "mtelnet", "ansi-bbs", "pc-ansi",
+  ctx->retro_client_marker[0] = '\0';
+
+  typedef struct retro_marker {
+    const char *marker;
+    const char *label;
+  } retro_marker_t;
+
+  static const retro_marker_t kRetroMarkers[] = {
+      {"ftelnet", "fTelnet"},       {"htmlterm", "HTMLTerm"},       {"syncterm", "SyncTERM"},
+      {"netrunner", "NetRunner"},   {"netfury", "NetFury"},         {"qodem", "Qodem"},
+      {"mtelnet", "MTelnet"},       {"etherterm", "EtherTerm"},     {"mysticbbs", "Mystic BBS"},
+      {"ansi-bbs", "ANSI-BBS"},     {"pc-ansi", "PC-ANSI"},         {"cp-437", "CP437 terminal"},
+      {"cp437", "CP437 terminal"},   {"avatar", "AVATAR terminal"},  {"ripterm", "RIPTerm"},
+      {"ansiart", "ANSI art terminal"}, {"ansi", "ANSI terminal"},
   };
 
   const char *sources[] = {
@@ -10037,28 +10172,112 @@ static bool session_detect_retro_client(const session_ctx_t *ctx) {
       ctx->client_banner,
   };
 
-  for (size_t source_idx = 0U; source_idx < sizeof(sources) / sizeof(sources[0]); ++source_idx) {
+  const char *label = NULL;
+  const char *identity_label = NULL;
+  bool detected = false;
+
+  for (size_t source_idx = 0U; source_idx < sizeof(sources) / sizeof(sources[0]) && !detected; ++source_idx) {
     const char *candidate = sources[source_idx];
     if (candidate == NULL || candidate[0] == '\0') {
       continue;
     }
     for (size_t marker_idx = 0U; marker_idx < sizeof(kRetroMarkers) / sizeof(kRetroMarkers[0]); ++marker_idx) {
-      if (string_contains_case_insensitive(candidate, kRetroMarkers[marker_idx])) {
-        return true;
+      if (string_contains_case_insensitive(candidate, kRetroMarkers[marker_idx].marker)) {
+        label = kRetroMarkers[marker_idx].label;
+        identity_label = label;
+        detected = true;
+        break;
       }
     }
   }
 
-  if (ctx->os_name[0] != '\0') {
+  if (!detected && ctx->terminal_type[0] != '\0') {
+    const char *type = ctx->terminal_type;
+    if (string_contains_token_case_insensitive(type, "ANSI-BBS")) {
+      label = "ANSI-BBS terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "PC-ANSI")) {
+      label = "PC-ANSI terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "CP-437") ||
+               string_contains_token_case_insensitive(type, "CP437")) {
+      label = "CP437 terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "IBMGRAPHICS") ||
+               string_contains_token_case_insensitive(type, "IBM-ASCII") ||
+               string_contains_token_case_insensitive(type, "IBMPC")) {
+      label = "IBM PC terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "AVATAR")) {
+      label = "AVATAR terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "RIPTERM")) {
+      label = "RIPTerm terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "PETSCII") ||
+               string_contains_token_case_insensitive(type, "ATASCII")) {
+      label = "8-bit art terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "DOS")) {
+      label = "DOS ANSI terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "BBS")) {
+      label = "BBS terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "ANSI")) {
+      label = "ANSI terminal";
+      identity_label = label;
+      detected = true;
+    }
+  }
+
+  if (!detected && ctx->client_banner[0] != '\0') {
+    const char *banner = ctx->client_banner;
+    if (string_contains_token_case_insensitive(banner, "ANSI-BBS") ||
+        string_contains_token_case_insensitive(banner, "PC-ANSI")) {
+      label = "ANSI-BBS banner";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(banner, "BBS")) {
+      label = "BBS banner";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(banner, "ANSI")) {
+      label = "ANSI banner";
+      identity_label = label;
+      detected = true;
+    }
+  }
+
+  if (!detected && ctx->os_name[0] != '\0') {
     static const char *const kDosFamilies[] = {"msdos", "drdos", "pcdos", "kdos"};
     for (size_t idx = 0U; idx < sizeof(kDosFamilies) / sizeof(kDosFamilies[0]); ++idx) {
       if (strcasecmp(ctx->os_name, kDosFamilies[idx]) == 0) {
-        return true;
+        label = "DOS OS";
+        identity_label = NULL;
+        detected = true;
+        break;
       }
     }
   }
 
-  return false;
+  if (detected) {
+    const char *display = (label != NULL && label[0] != '\0') ? label : "Retro terminal";
+    snprintf(ctx->retro_client_marker, sizeof(ctx->retro_client_marker), "%s", display);
+  }
+
+  session_format_telnet_identity(ctx, detected ? identity_label : NULL);
+
+  return detected;
 }
 
 static void session_apply_saved_preferences(session_ctx_t *ctx) {

@@ -406,6 +406,8 @@ typedef struct session_ctx {
   char client_ip[SSH_CHATTER_IP_LEN];
   char client_banner[SSH_CHATTER_CLIENT_BANNER_LEN];
   char terminal_type[SSH_CHATTER_TERMINAL_TYPE_LEN];
+  char retro_client_marker[SSH_CHATTER_TERMINAL_TYPE_LEN];
+  char telnet_identity[SSH_CHATTER_CLIENT_BANNER_LEN];
   const char *user_color_code;
   const char *user_highlight_code;
   bool user_is_bold;
