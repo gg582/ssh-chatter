@@ -618,10 +618,13 @@ typedef struct host {
   char vote_state_file_path[PATH_MAX];
   char ban_state_file_path[PATH_MAX];
   char reply_state_file_path[PATH_MAX];
+  char alpha_landers_file_path[PATH_MAX];
   char user_data_root[PATH_MAX];
   bool user_data_ready;
   pthread_mutex_t user_data_lock;
   bool user_data_lock_initialized;
+  pthread_mutex_t alpha_landers_lock;
+  bool alpha_landers_lock_initialized;
   _Atomic bool security_filter_enabled;
   _Atomic bool security_filter_failure_logged;
   _Atomic bool security_ai_enabled;
