@@ -1806,7 +1806,8 @@ static int session_utf8_char_width(const char *bytes, size_t length);
 static void host_history_record_system(host_t *host, const char *message);
 static void session_send_history(session_ctx_t *ctx);
 static void session_send_history_entry(session_ctx_t *ctx, const chat_history_entry_t *entry);
-static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *message);
+static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *message,
+                                             bool clear_prompt_text);
 static void chat_room_broadcast_reaction_update(host_t *host, const chat_history_entry_t *entry);
 static user_preference_t *host_find_preference_locked(host_t *host, const char *username);
 static user_preference_t *host_ensure_preference_locked(host_t *host, const char *username);
@@ -10406,13 +10407,13 @@ static void session_translation_flush_ready(session_ctx_t *ctx) {
           snprintf(ctx->last_detected_input_language, sizeof(ctx->last_detected_input_language), "%s",
                    ready->detected_language);
         }
-        session_deliver_outgoing_message(ctx, ready->translated);
+        session_deliver_outgoing_message(ctx, ready->translated, false);
       } else {
         const char *error_message = ready->error_message[0] != '\0'
                                         ? ready->error_message
                                         : "Translation failed; sending your original message.";
         session_send_system_line(ctx, error_message);
-        session_deliver_outgoing_message(ctx, ready->original);
+        session_deliver_outgoing_message(ctx, ready->original, false);
       }
       refreshed = true;
       session_translation_result_free(ready);
@@ -11980,7 +11981,8 @@ static int session_transport_read(session_ctx_t *ctx, void *buffer, size_t lengt
   return ssh_channel_read(ctx->channel, buffer, chunk, 0);
 }
 
-static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *message) {
+static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *message,
+                                             bool clear_prompt_text) {
   if (ctx == NULL || ctx->owner == NULL || message == NULL) {
     return;
   }
@@ -11991,7 +11993,11 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *mes
   }
 
   session_send_history_entry(ctx, &entry);
-  if (ctx->history_scroll_position == 0U) {
+  if (ctx->history_scroll_position == 0U && !ctx->bracket_paste_active) {
+    if (clear_prompt_text) {
+      ctx->input_length = 0U;
+      ctx->input_buffer[0] = '\0';
+    }
     session_refresh_input_line(ctx);
   }
   chat_room_broadcast_entry(&ctx->owner->room, &entry, ctx);
@@ -14993,7 +14999,7 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
     session_send_system_line(ctx, "Translation unavailable; sending your original message.");
   }
 
-  session_deliver_outgoing_message(ctx, normalized);
+  session_deliver_outgoing_message(ctx, normalized, true);
 }
 
 static void session_handle_kick(session_ctx_t *ctx, const char *arguments) {
