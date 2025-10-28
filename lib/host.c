@@ -864,17 +864,17 @@ static const char kTranslationQuotaSystemMessage[] =
 
 static const char *const kSessionCommandNames[] = {
     "asciiart",      "audio",       "ban",          "banlist",     "bbs",
-    "birthday",      "block",       "chat",         "chat-spacing", "color",
-    "connected",     "date",        "delete-msg",   "elect",       "eliza",
-    "eliza-chat",    "exit",        "files",        "game",        "gemini",
-    "gemini-unfreeze","getos",      "grant",        "help",        "image",
-    "kick",          "mode",        "motd",         "nick",        "os",
-    "pair",          "palette",     "pardon",       "pm",          "poke",
-    "poll",          "reply",       "revoke",       "rss",         "search",
-    "set-target-lang","set-trans-lang","showstatus", "soulmate",    "status",
-    "suspend!",      "systemcolor", "today",        "translate",   "translate-scope",
-    "unblock",       "users",       "video",        "vote",        "vote-single",
-    "weather",
+    "birthday",      "block",       "captcha",      "chat",         "chat-spacing",
+    "color",         "connected",   "date",         "delete-msg",   "elect",
+    "eliza",         "eliza-chat",  "exit",         "files",        "game",
+    "gemini",        "gemini-unfreeze","getos",      "grant",        "help",
+    "image",         "kick",        "mode",         "motd",         "nick",
+    "os",            "pair",        "palette",     "pardon",       "pm",
+    "poke",          "poll",        "reply",       "revoke",       "rss",
+    "search",        "set-target-lang","set-trans-lang","showstatus", "soulmate",
+    "status",        "suspend!",    "systemcolor",  "today",        "translate",
+    "translate-scope","unblock",    "users",        "video",        "vote",
+    "vote-single",   "weather",
 };
 #define SSH_CHATTER_COMMAND_COUNT (sizeof(kSessionCommandNames) / sizeof(kSessionCommandNames[0]))
 
@@ -891,89 +891,11 @@ typedef struct {
 } captcha_prompt_t;
 
 typedef enum {
-  CAPTCHA_NAME_LANGUAGE_KOREAN,
-  CAPTCHA_NAME_LANGUAGE_ENGLISH,
-  CAPTCHA_NAME_LANGUAGE_RUSSIAN,
-  CAPTCHA_NAME_LANGUAGE_CHINESE_TRADITIONAL,
-  CAPTCHA_NAME_LANGUAGE_COUNT,
-} captcha_name_language_t;
-
-typedef struct {
-  const char *text;
-  captcha_name_language_t language;
-} captcha_name_entry_t;
-
-typedef struct {
-  const char *ko;
-  const char *en;
-  const char *ru;
-  const char *zh;
-} captcha_language_phrase_t;
-
-typedef struct {
-  const char *const *names;
-  size_t name_count;
-} captcha_language_name_list_t;
-
-typedef enum {
   HOST_SECURITY_SCAN_CLEAN = 0,
   HOST_SECURITY_SCAN_BLOCKED,
   HOST_SECURITY_SCAN_ERROR,
 } host_security_scan_result_t;
 
-static const captcha_language_phrase_t CAPTCHA_LANGUAGE_PHRASES[CAPTCHA_NAME_LANGUAGE_COUNT] = {
-    [CAPTCHA_NAME_LANGUAGE_KOREAN] = {
-        .ko = "한국어 이름",
-        .en = "Korean names",
-        .ru = "корейских имён",
-        .zh = "韓文名字",
-    },
-    [CAPTCHA_NAME_LANGUAGE_ENGLISH] = {
-        .ko = "영어 이름",
-        .en = "English names",
-        .ru = "английских имён",
-        .zh = "英文名字",
-    },
-    [CAPTCHA_NAME_LANGUAGE_RUSSIAN] = {
-        .ko = "러시아어 이름",
-        .en = "Russian names",
-        .ru = "русских имён",
-        .zh = "俄文名字",
-    },
-    [CAPTCHA_NAME_LANGUAGE_CHINESE_TRADITIONAL] = {
-        .ko = "중국어 이름",
-        .en = "Chinese names",
-        .ru = "китайских имён",
-        .zh = "中文姓名",
-    },
-};
-
-#define CAPTCHA_NAME_LIST_MIN ((size_t)4U)
-#define CAPTCHA_NAME_LIST_MAX ((size_t)8U)
-#define CAPTCHA_LANGUAGE_POOL_MAX ((size_t)16U)
-
-static const char *const CAPTCHA_NAME_POOL_KO[] = {
-    "민수", "지영", "서준", "민아", "하준", "수빈", "지후", "서연", "윤우", "다은",
-};
-
-static const char *const CAPTCHA_NAME_POOL_EN[] = {
-    "Alice", "Oliver", "Grace", "Sophie", "John", "Ethan", "Mia", "Lucas", "Emma", "Noah",
-};
-
-static const char *const CAPTCHA_NAME_POOL_RU[] = {
-    "Андрей", "Ольга", "Дмитрий", "Екатерина", "Наталья", "Сергей", "Иван", "Мария", "Алексей", "Юлия",
-};
-
-static const char *const CAPTCHA_NAME_POOL_ZH[] = {
-    "張偉", "陳美玲", "劉德華", "王麗君", "林嘉慧", "李小龍", "趙雅芝", "黃志強", "鄭秀文", "周杰倫",
-};
-
-static const captcha_language_name_list_t CAPTCHA_LANGUAGE_NAME_LISTS[CAPTCHA_NAME_LANGUAGE_COUNT] = {
-    [CAPTCHA_NAME_LANGUAGE_KOREAN] = {CAPTCHA_NAME_POOL_KO, sizeof(CAPTCHA_NAME_POOL_KO) / sizeof(CAPTCHA_NAME_POOL_KO[0])},
-    [CAPTCHA_NAME_LANGUAGE_ENGLISH] = {CAPTCHA_NAME_POOL_EN, sizeof(CAPTCHA_NAME_POOL_EN) / sizeof(CAPTCHA_NAME_POOL_EN[0])},
-    [CAPTCHA_NAME_LANGUAGE_RUSSIAN] = {CAPTCHA_NAME_POOL_RU, sizeof(CAPTCHA_NAME_POOL_RU) / sizeof(CAPTCHA_NAME_POOL_RU[0])},
-    [CAPTCHA_NAME_LANGUAGE_CHINESE_TRADITIONAL] = {CAPTCHA_NAME_POOL_ZH, sizeof(CAPTCHA_NAME_POOL_ZH) / sizeof(CAPTCHA_NAME_POOL_ZH[0])},
-};
 
 static unsigned session_prng_next(unsigned *state) {
   if (state == NULL) {
@@ -984,243 +906,62 @@ static unsigned session_prng_next(unsigned *state) {
   return *state;
 }
 
-static size_t session_pick_unique_name_index(unsigned *state, size_t limit, bool used[], size_t used_capacity) {
-  if (limit == 0U || used == NULL || used_capacity < limit) {
-    return 0U;
-  }
-
-  for (size_t attempt = 0U; attempt < (limit * 2U); ++attempt) {
-    const size_t candidate = (size_t)(session_prng_next(state) % limit);
-    if (!used[candidate]) {
-      used[candidate] = true;
-      return candidate;
-    }
-  }
-
-  for (size_t idx = 0U; idx < limit; ++idx) {
-    if (!used[idx]) {
-      used[idx] = true;
-      return idx;
-    }
-  }
-
-  return (size_t)(session_prng_next(state) % limit);
-}
-
-static void session_shuffle_captcha_entries(captcha_name_entry_t *entries, size_t count, unsigned *state) {
-  if (entries == NULL || state == NULL || count < 2U) {
-    return;
-  }
-
-  for (size_t remaining = count; remaining > 1U; --remaining) {
-    const size_t swap_idx = (size_t)(session_prng_next(state) % remaining);
-    const size_t current = remaining - 1U;
-    const captcha_name_entry_t temp = entries[current];
-    entries[current] = entries[swap_idx];
-    entries[swap_idx] = temp;
-  }
-}
-
-static void session_format_decimal(double value, char *buffer, size_t length) {
-  if (buffer == NULL || length == 0U) {
-    return;
-  }
-
-  const int written = snprintf(buffer, length, "%.2f", value);
-  if (written < 0) {
-    buffer[0] = '\0';
-    return;
-  }
-
-  char *const dot = strchr(buffer, '.');
-  if (dot == NULL) {
-    return;
-  }
-
-  char *end = buffer + (size_t)written;
-  if (end > buffer) {
-    --end;
-  }
-  while (end > dot && *end == '0') {
-    *end = '\0';
-    --end;
-  }
-  if (end == dot) {
-    *end = '\0';
-  }
-}
-
-static size_t session_count_target_names(const captcha_name_entry_t *names, size_t name_count,
-                                         captcha_name_language_t target) {
-  if (names == NULL) {
-    return 0U;
-  }
-
-  size_t total = 0U;
-  for (size_t idx = 0U; idx < name_count; ++idx) {
-    if (names[idx].language == target) {
-      ++total;
-    }
-  }
-
-  return total;
-}
-
-static void session_join_name_list(const captcha_name_entry_t *names, size_t name_count, char *buffer, size_t buffer_length) {
-  if (buffer == NULL || buffer_length == 0U) {
-    return;
-  }
-
-  buffer[0] = '\0';
-  size_t written = 0U;
-  for (size_t idx = 0U; idx < name_count; ++idx) {
-    const char *name = (names != NULL && names[idx].text != NULL) ? names[idx].text : NULL;
-    if (name == NULL) {
-      continue;
-    }
-
-    int append = 0;
-    if (written > 0U) {
-      append = snprintf(buffer + written, buffer_length - written, ", %s", name);
-    } else {
-      append = snprintf(buffer + written, buffer_length - written, "%s", name);
-    }
-    if (append < 0) {
-      buffer[buffer_length - 1U] = '\0';
-      return;
-    }
-
-    size_t appended = (size_t)append;
-    if (appended >= buffer_length - written) {
-      buffer[buffer_length - 1U] = '\0';
-      return;
-    }
-
-    written += appended;
-  }
-}
-
-static bool session_fill_name_count_prompt(captcha_prompt_t *prompt, unsigned *state) {
-  if (prompt == NULL || state == NULL) {
-    return false;
-  }
-
-  captcha_name_entry_t generated[CAPTCHA_NAME_LIST_MAX];
-  bool used_names[CAPTCHA_NAME_LANGUAGE_COUNT][CAPTCHA_LANGUAGE_POOL_MAX];
-  memset(used_names, 0, sizeof(used_names));
-
-  const captcha_name_language_t target =
-      (captcha_name_language_t)(session_prng_next(state) % (unsigned)CAPTCHA_NAME_LANGUAGE_COUNT);
-  const captcha_language_name_list_t *const target_pool = &CAPTCHA_LANGUAGE_NAME_LISTS[target];
-  if (target_pool->names == NULL || target_pool->name_count == 0U) {
-    return false;
-  }
-
-  const size_t list_range = CAPTCHA_NAME_LIST_MAX - CAPTCHA_NAME_LIST_MIN + (size_t)1U;
-  const size_t list_offset = (size_t)(session_prng_next(state) % list_range);
-  const size_t desired_count = CAPTCHA_NAME_LIST_MIN + list_offset;
-
-  size_t max_target = target_pool->name_count;
-  if (max_target > desired_count) {
-    max_target = desired_count;
-  }
-  const size_t target_range = max_target + (size_t)1U;
-  size_t target_count = (size_t)(session_prng_next(state) % target_range);
-  if (target_count > desired_count) {
-    target_count = desired_count;
-  }
-
-  size_t generated_count = 0U;
-  while (generated_count < target_count && generated_count < CAPTCHA_NAME_LIST_MAX) {
-    const size_t index =
-        session_pick_unique_name_index(state, target_pool->name_count, used_names[target], CAPTCHA_LANGUAGE_POOL_MAX);
-    generated[generated_count].text = target_pool->names[index];
-    generated[generated_count].language = target;
-    ++generated_count;
-  }
-
-  size_t safety = CAPTCHA_NAME_LIST_MAX * (size_t)4U;
-  while (generated_count < desired_count && generated_count < CAPTCHA_NAME_LIST_MAX && safety > 0U) {
-    --safety;
-    if (CAPTCHA_NAME_LANGUAGE_COUNT <= 1U) {
-      break;
-    }
-
-    unsigned raw_language = session_prng_next(state);
-    captcha_name_language_t language =
-        (captcha_name_language_t)(raw_language % (unsigned)(CAPTCHA_NAME_LANGUAGE_COUNT - 1U));
-    if (language >= target) {
-      language = (captcha_name_language_t)((unsigned)language + 1U);
-    }
-
-    const captcha_language_name_list_t *const pool = &CAPTCHA_LANGUAGE_NAME_LISTS[language];
-    if (pool->names == NULL || pool->name_count == 0U) {
-      continue;
-    }
-
-    const size_t index =
-        session_pick_unique_name_index(state, pool->name_count, used_names[language], CAPTCHA_LANGUAGE_POOL_MAX);
-    generated[generated_count].text = pool->names[index];
-    generated[generated_count].language = language;
-    ++generated_count;
-  }
-
-  if (generated_count == 0U) {
-    return false;
-  }
-
-  session_shuffle_captcha_entries(generated, generated_count, state);
-
-  char name_list[256];
-  session_join_name_list(generated, generated_count, name_list, sizeof(name_list));
-
-  const captcha_language_phrase_t *const phrases = &CAPTCHA_LANGUAGE_PHRASES[target];
-  const size_t answer_count = session_count_target_names(generated, generated_count, target);
-
-  snprintf(prompt->question_ko, sizeof(prompt->question_ko),
-           "다음 이름 목록에서 %s은(는) 몇 개입니까? 목록: %s", phrases->ko, name_list);
-  snprintf(prompt->question_en, sizeof(prompt->question_en),
-           "In the following list of names, how many %s are there? List: %s", phrases->en, name_list);
-  snprintf(prompt->question_ru, sizeof(prompt->question_ru),
-           "Сколько %s в следующем списке? Список: %s", phrases->ru, name_list);
-  snprintf(prompt->question_zh, sizeof(prompt->question_zh),
-           "在以下名字列表中，有多少個%s？名單：%s", phrases->zh, name_list);
-  snprintf(prompt->answer, sizeof(prompt->answer), "%zu", answer_count);
-
-  return true;
-}
-
-static void session_fill_comparison_prompt(captcha_prompt_t *prompt, unsigned *state) {
+static void session_fill_digit_sum_prompt(captcha_prompt_t *prompt, unsigned *state) {
   if (prompt == NULL) {
     return;
   }
 
-  unsigned first_raw = 311U;
-  unsigned second_raw = 390U;
+  unsigned digits_count = 3U;
   if (state != NULL) {
-    first_raw = 100U + (session_prng_next(state) % 900U);
-    second_raw = 100U + (session_prng_next(state) % 900U);
-    if (first_raw == second_raw) {
-      const unsigned offset = (unsigned)(((second_raw - 100U) + 1U) % 900U);
-      second_raw = 100U + offset;
-    }
+    digits_count = 2U + (session_prng_next(state) % 3U);
+  }
+  if (digits_count < 2U) {
+    digits_count = 2U;
+  }
+  if (digits_count > 4U) {
+    digits_count = 4U;
   }
 
-  const double first_value = (double)first_raw / 100.0;
-  const double second_value = (double)second_raw / 100.0;
+  unsigned digits[4];
+  unsigned sum = 0U;
+  for (unsigned idx = 0U; idx < digits_count; ++idx) {
+    unsigned raw = (unsigned)(idx + 1U);
+    if (state != NULL) {
+      raw = (session_prng_next(state) % 9U) + 1U;
+    } else {
+      raw = (raw % 9U) + 1U;
+    }
+    digits[idx] = raw;
+    sum += raw;
+  }
 
-  char first_text[32];
-  char second_text[32];
-  session_format_decimal(first_value, first_text, sizeof(first_text));
-  session_format_decimal(second_value, second_text, sizeof(second_text));
+  char expression[64];
+  expression[0] = '\0';
+  size_t written = 0U;
+  for (unsigned idx = 0U; idx < digits_count; ++idx) {
+    int appended = 0;
+    if (idx == 0U) {
+      appended = snprintf(expression + written, sizeof(expression) - written, "%u", digits[idx]);
+    } else {
+      appended = snprintf(expression + written, sizeof(expression) - written, " + %u", digits[idx]);
+    }
+    if (appended < 0) {
+      expression[sizeof(expression) - 1U] = '\0';
+      break;
+    }
+    size_t appended_size = (size_t)appended;
+    if (appended_size >= sizeof(expression) - written) {
+      expression[sizeof(expression) - 1U] = '\0';
+      break;
+    }
+    written += appended_size;
+  }
 
-  snprintf(prompt->question_en, sizeof(prompt->question_en), "Which number is larger, %s or %s?", first_text, second_text);
-  snprintf(prompt->question_ko, sizeof(prompt->question_ko), "%s와 %s 중 어떤 게 더 큰가요?", first_text, second_text);
-  snprintf(prompt->question_ru, sizeof(prompt->question_ru), "Какое число больше: %s или %s?", first_text, second_text);
-  snprintf(prompt->question_zh, sizeof(prompt->question_zh), "%s 和 %s 中哪一個數字較大？", first_text, second_text);
-
-  const char *const answer_text = (first_value > second_value) ? first_text : second_text;
-  snprintf(prompt->answer, sizeof(prompt->answer), "%s", answer_text);
+  snprintf(prompt->question_en, sizeof(prompt->question_en), "Add the digits: %s = ?", expression);
+  snprintf(prompt->question_ko, sizeof(prompt->question_ko), "다음 숫자들의 합은 얼마인가요? %s = ?", expression);
+  snprintf(prompt->question_ru, sizeof(prompt->question_ru), "Чему равна сумма цифр: %s = ?", expression);
+  snprintf(prompt->question_zh, sizeof(prompt->question_zh), "請計算以下數字的總和：%s = ?", expression);
+  snprintf(prompt->answer, sizeof(prompt->answer), "%u", sum);
 }
 
 static bool string_contains_case_insensitive(const char *haystack, const char *needle) {
@@ -1645,14 +1386,7 @@ static void session_build_captcha_prompt(session_ctx_t *ctx, captcha_prompt_t *p
   const unsigned variant_seed = basis ^ (basis >> 16U) ^ (entropy << 1U);
   unsigned prng_state = variant_seed | 1U;
 
-  if ((variant_seed & 1U) == 0U) {
-    session_fill_comparison_prompt(prompt, &prng_state);
-    return;
-  }
-
-  if (!session_fill_name_count_prompt(prompt, &prng_state)) {
-    session_fill_comparison_prompt(prompt, &prng_state);
-  }
+  session_fill_digit_sum_prompt(prompt, &prng_state);
 }
 
 typedef struct {
