@@ -51,6 +51,7 @@
 #ifndef NI_MAXHOST
 #define NI_MAXHOST 1025
 #endif
+#include "server.h"
 
 #ifndef RTLD_LOCAL
 #define RTLD_LOCAL 0
