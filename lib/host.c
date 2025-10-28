@@ -864,17 +864,17 @@ static const char kTranslationQuotaSystemMessage[] =
 
 static const char *const kSessionCommandNames[] = {
     "asciiart",      "audio",       "ban",          "banlist",     "bbs",
-    "birthday",      "block",       "chat",         "chat-spacing", "color",
-    "connected",     "date",        "delete-msg",   "elect",       "eliza",
-    "eliza-chat",    "exit",        "files",        "game",        "gemini",
-    "gemini-unfreeze","getos",      "grant",        "help",        "image",
-    "kick",          "mode",        "motd",         "nick",        "os",
-    "pair",          "palette",     "pardon",       "pm",          "poke",
-    "poll",          "reply",       "revoke",       "rss",         "search",
-    "set-target-lang","set-trans-lang","showstatus", "soulmate",    "status",
-    "suspend!",      "systemcolor", "today",        "translate",   "translate-scope",
-    "unblock",       "users",       "video",        "vote",        "vote-single",
-    "weather",
+    "birthday",      "block",       "captcha",      "chat",         "chat-spacing",
+    "color",         "connected",   "date",         "delete-msg",   "elect",
+    "eliza",         "eliza-chat",  "exit",         "files",        "game",
+    "gemini",        "gemini-unfreeze","getos",      "grant",        "help",
+    "image",         "kick",        "mode",         "motd",         "nick",
+    "os",            "pair",        "palette",     "pardon",       "pm",
+    "poke",          "poll",        "reply",       "revoke",       "rss",
+    "search",        "set-target-lang","set-trans-lang","showstatus", "soulmate",
+    "status",        "suspend!",    "systemcolor",  "today",        "translate",
+    "translate-scope","unblock",    "users",        "video",        "vote",
+    "vote-single",   "weather",
 };
 #define SSH_CHATTER_COMMAND_COUNT (sizeof(kSessionCommandNames) / sizeof(kSessionCommandNames[0]))
 
