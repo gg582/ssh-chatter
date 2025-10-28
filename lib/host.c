@@ -197,6 +197,34 @@ typedef enum host_join_attempt_result {
   HOST_JOIN_ATTEMPT_KICK,
   HOST_JOIN_ATTEMPT_BAN,
 } host_join_attempt_result_t;
+#define HOST_MODERATION_CATEGORY_LEN 64U
+#define HOST_MODERATION_SNIPPET_LEN 1024U
+#define HOST_MODERATION_WORKER_EXIT_CODE 0
+
+typedef struct host_moderation_task {
+  struct host_moderation_task *next;
+  uint64_t task_id;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  char client_ip[SSH_CHATTER_IP_LEN];
+  char category[HOST_MODERATION_CATEGORY_LEN];
+  char snippet[HOST_MODERATION_SNIPPET_LEN];
+  size_t snippet_length;
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  bool post_send;
+} host_moderation_task_t;
+
+typedef struct {
+  uint64_t task_id;
+  uint32_t category_length;
+  uint32_t content_length;
+} host_moderation_ipc_request_t;
+
+typedef struct {
+  uint64_t task_id;
+  int32_t result;
+  uint32_t message_length;
+  uint32_t disable_filter;
+} host_moderation_ipc_response_t;
 #define SSH_CHATTER_CHANNEL_RECOVERY_LIMIT ((unsigned int)INT_MAX)
 #define SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS 200000000L
 #define SSH_CHATTER_CHANNEL_WRITE_TIMEOUT_MS 200
@@ -1679,6 +1707,7 @@ static void session_force_disconnect(session_ctx_t *ctx, const char *reason);
 static void session_handle_nick(session_ctx_t *ctx, const char *arguments);
 static bool session_detect_provider_ip(const char *ip, char *label, size_t length);
 static bool host_lookup_member_ip(host_t *host, const char *username, char *ip, size_t length);
+static bool host_lookup_last_ip(host_t *host, const char *username, char *ip, size_t length);
 static bool session_should_hide_entry(session_ctx_t *ctx, const chat_history_entry_t *entry);
 static bool session_blocklist_add(session_ctx_t *ctx, const char *ip, const char *username, bool ip_wide,
                                   bool *already_present);
@@ -1724,6 +1753,7 @@ static void session_handle_today(session_ctx_t *ctx);
 static void session_handle_date(session_ctx_t *ctx, const char *arguments);
 static void session_handle_os(session_ctx_t *ctx, const char *arguments);
 static void session_handle_getos(session_ctx_t *ctx, const char *arguments);
+static void session_handle_getaddr(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pair(session_ctx_t *ctx);
 static void session_handle_connected(session_ctx_t *ctx);
 static bool session_parse_birthday(const char *input, char *normalized, size_t length);
@@ -1835,6 +1865,23 @@ static void host_security_disable_filter(host_t *host, const char *reason);
 static void host_security_disable_clamav(host_t *host, const char *reason);
 static host_security_scan_result_t host_security_scan_payload(host_t *host, const char *category, const char *payload,
                                                               size_t length, char *diagnostic, size_t diagnostic_length);
+static void host_security_process_blocked(host_t *host, const char *category, const char *diagnostic,
+                                         const char *username, const char *ip, session_ctx_t *session,
+                                         bool post_send, const char *content);
+static void host_security_process_error(host_t *host, const char *category, const char *diagnostic,
+                                       const char *username, const char *ip, session_ctx_t *session,
+                                       bool post_send);
+static bool host_moderation_init(host_t *host);
+static void host_moderation_shutdown(host_t *host);
+static bool host_moderation_queue_chat(session_ctx_t *ctx, const char *message, size_t length);
+static void *host_moderation_thread(void *arg);
+static bool host_moderation_write_all(int fd, const void *buffer, size_t length);
+static bool host_moderation_read_all(int fd, void *buffer, size_t length);
+static void host_moderation_worker_loop(int request_fd, int response_fd);
+static void host_moderation_handle_failure(host_t *host, host_moderation_task_t *task, const char *diagnostic);
+static void host_moderation_apply_result(host_t *host, host_moderation_task_t *task,
+                                        const host_moderation_ipc_response_t *response, const char *message);
+static void host_moderation_flush_pending(host_t *host, const char *diagnostic);
 static bool host_eliza_enable(host_t *host);
 static bool host_eliza_disable(host_t *host);
 static void host_eliza_announce_join(host_t *host);
@@ -1846,7 +1893,8 @@ static bool host_eliza_content_is_severe(const char *text);
 static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const char *reason, bool from_filter);
 static void host_eliza_intervene_execute(session_ctx_t *ctx, const char *reason, bool from_filter);
 static void *host_eliza_intervene_thread(void *arg);
-static bool session_security_check_text(session_ctx_t *ctx, const char *category, const char *content, size_t length);
+static host_security_scan_result_t session_security_check_text(session_ctx_t *ctx, const char *category,
+                                                               const char *content, size_t length, bool post_send);
 static void host_vote_resolve_path(host_t *host);
 static void host_vote_state_load(host_t *host);
 static void host_vote_state_save_locked(host_t *host);
@@ -4781,6 +4829,674 @@ static host_security_scan_result_t host_security_scan_payload(host_t *host, cons
   return HOST_SECURITY_SCAN_BLOCKED;
 }
 
+static void host_security_process_blocked(host_t *host, const char *category, const char *diagnostic,
+                                         const char *username, const char *ip, session_ctx_t *session,
+                                         bool post_send, const char *content) {
+  const char *label = (category != NULL && category[0] != '\0') ? category : "submission";
+  const char *name = (username != NULL && username[0] != '\0') ? username : "unknown";
+
+  char resolved_ip[SSH_CHATTER_IP_LEN];
+  resolved_ip[0] = '\0';
+  if (ip != NULL && ip[0] != '\0' && strncmp(ip, "unknown", SSH_CHATTER_IP_LEN) != 0) {
+    snprintf(resolved_ip, sizeof(resolved_ip), "%s", ip);
+  }
+  if (resolved_ip[0] == '\0' && host != NULL && username != NULL && username[0] != '\0') {
+    host_lookup_last_ip(host, username, resolved_ip, sizeof(resolved_ip));
+  }
+
+  const char *address = resolved_ip[0] != '\0' ? resolved_ip :
+                                             ((ip != NULL && ip[0] != '\0') ? ip : "unknown");
+
+  char diagnostic_buffer[256];
+  const char *use_diagnostic = diagnostic;
+  if (use_diagnostic == NULL || use_diagnostic[0] == '\0') {
+    snprintf(diagnostic_buffer, sizeof(diagnostic_buffer), "%s", "suspected intrusion content");
+    use_diagnostic = diagnostic_buffer;
+  }
+
+  printf("[security] blocked %s from %s: %s\n", label, name, use_diagnostic);
+
+  if (session != NULL) {
+    char message[512];
+    if (post_send) {
+      snprintf(message, sizeof(message), "Security filter flagged your %s after delivery: %s", label, use_diagnostic);
+    } else {
+      snprintf(message, sizeof(message), "Security filter rejected your %s: %s", label, use_diagnostic);
+    }
+    session_send_system_line(session, message);
+  }
+
+  const char *register_ip = NULL;
+  if (resolved_ip[0] != '\0') {
+    register_ip = resolved_ip;
+  } else if (ip != NULL && ip[0] != '\0' && strncmp(ip, "unknown", SSH_CHATTER_IP_LEN) != 0) {
+    register_ip = ip;
+  }
+
+  size_t attempts = 0U;
+  bool banned = false;
+  if (host != NULL) {
+    banned = host_register_suspicious_activity(host, name, register_ip != NULL ? register_ip : "", &attempts);
+  }
+
+  if (attempts > 0U) {
+    printf("[security] suspicious payload counter for %s (%s): %zu/%u\n", name, address, attempts,
+           (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
+  }
+
+  if (banned) {
+    printf("[security] auto-banned %s (%s) for repeated suspicious payloads\n", name, address);
+    if (session != NULL) {
+      char notice[256];
+      snprintf(notice, sizeof(notice), "Repeated suspicious activity detected. You have been banned.");
+      session_force_disconnect(session, notice);
+    }
+  } else if (attempts > 0U && session != NULL) {
+    char warning[256];
+    snprintf(warning, sizeof(warning), "Further suspicious activity will result in a ban (%zu/%u).", attempts,
+             (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
+    session_send_system_line(session, warning);
+  }
+
+  if (session != NULL) {
+    (void)host_eliza_intervene(session, content, use_diagnostic, true);
+  }
+}
+
+static void host_security_process_error(host_t *host, const char *category, const char *diagnostic,
+                                       const char *username, const char *ip, session_ctx_t *session,
+                                       bool post_send) {
+  (void)host;
+  (void)ip;
+
+  const char *label = (category != NULL && category[0] != '\0') ? category : "submission";
+  const char *name = (username != NULL && username[0] != '\0') ? username : "unknown";
+
+  if (diagnostic != NULL && diagnostic[0] != '\0') {
+    printf("[security] unable to moderate %s from %s: %s\n", label, name, diagnostic);
+  } else {
+    printf("[security] unable to moderate %s from %s\n", label, name);
+  }
+
+  if (session == NULL) {
+    return;
+  }
+
+  char message[512];
+  if (diagnostic != NULL && diagnostic[0] != '\0') {
+    if (post_send) {
+      snprintf(message, sizeof(message), "Security filter could not validate your %s after delivery (%s).", label,
+               diagnostic);
+    } else {
+      snprintf(message, sizeof(message), "Security filter is unavailable (%s). Please try again later.", diagnostic);
+    }
+  } else {
+    if (post_send) {
+      snprintf(message, sizeof(message),
+               "%s", "Security filter could not validate your submission after delivery. Please try again later.");
+    } else {
+      snprintf(message, sizeof(message), "%s",
+               "Security filter could not validate your submission. Please try again later.");
+    }
+  }
+
+  session_send_system_line(session, message);
+}
+
+static bool host_moderation_write_all(int fd, const void *buffer, size_t length) {
+  if (fd < 0 || buffer == NULL) {
+    return false;
+  }
+
+  const unsigned char *data = (const unsigned char *)buffer;
+  size_t written = 0U;
+  while (written < length) {
+    ssize_t result = write(fd, data + written, length - written);
+    if (result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return false;
+    }
+    if (result == 0) {
+      return false;
+    }
+    written += (size_t)result;
+  }
+
+  return true;
+}
+
+static bool host_moderation_read_all(int fd, void *buffer, size_t length) {
+  if (fd < 0 || buffer == NULL) {
+    return false;
+  }
+
+  unsigned char *data = (unsigned char *)buffer;
+  size_t read_total = 0U;
+  while (read_total < length) {
+    ssize_t result = read(fd, data + read_total, length - read_total);
+    if (result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return false;
+    }
+    if (result == 0) {
+      return false;
+    }
+    read_total += (size_t)result;
+  }
+
+  return true;
+}
+
+static void host_moderation_worker_loop(int request_fd, int response_fd) {
+  if (request_fd < 0 || response_fd < 0) {
+    _exit(HOST_MODERATION_WORKER_EXIT_CODE);
+  }
+
+  translator_global_init();
+
+  while (true) {
+    host_moderation_ipc_request_t request;
+    if (!host_moderation_read_all(request_fd, &request, sizeof(request))) {
+      break;
+    }
+
+    if (request.category_length == 0U && request.content_length == 0U && request.task_id == 0U) {
+      break;
+    }
+
+    if (request.category_length >= HOST_MODERATION_CATEGORY_LEN) {
+      request.category_length = HOST_MODERATION_CATEGORY_LEN - 1U;
+    }
+    if (request.content_length >= HOST_MODERATION_SNIPPET_LEN) {
+      request.content_length = HOST_MODERATION_SNIPPET_LEN - 1U;
+    }
+
+    char category[HOST_MODERATION_CATEGORY_LEN];
+    memset(category, 0, sizeof(category));
+    if (!host_moderation_read_all(request_fd, category, request.category_length)) {
+      break;
+    }
+    category[request.category_length] = '\0';
+
+    char content[HOST_MODERATION_SNIPPET_LEN];
+    memset(content, 0, sizeof(content));
+    if (!host_moderation_read_all(request_fd, content, request.content_length)) {
+      break;
+    }
+    content[request.content_length] = '\0';
+
+    bool blocked = false;
+    char reason[256];
+    reason[0] = '\0';
+    bool success = translator_moderate_text(category, content, &blocked, reason, sizeof(reason));
+
+    host_moderation_ipc_response_t response;
+    memset(&response, 0, sizeof(response));
+    response.task_id = request.task_id;
+
+    char message[256];
+    message[0] = '\0';
+    size_t message_length = 0U;
+
+    if (!success) {
+      response.result = HOST_SECURITY_SCAN_ERROR;
+      response.disable_filter = 1U;
+      const char *error = translator_last_error();
+      if (error != NULL && error[0] != '\0') {
+        message_length = strnlen(error, sizeof(message) - 1U);
+        memcpy(message, error, message_length);
+      } else {
+        const char *fallback = "moderation unavailable";
+        message_length = strnlen(fallback, sizeof(message) - 1U);
+        memcpy(message, fallback, message_length);
+      }
+      message[message_length] = '\0';
+    } else if (blocked) {
+      response.result = HOST_SECURITY_SCAN_BLOCKED;
+      if (reason[0] != '\0') {
+        message_length = strnlen(reason, sizeof(message) - 1U);
+        memcpy(message, reason, message_length);
+        message[message_length] = '\0';
+      }
+    } else {
+      response.result = HOST_SECURITY_SCAN_CLEAN;
+    }
+
+    response.message_length = (uint32_t)message_length;
+
+    if (!host_moderation_write_all(response_fd, &response, sizeof(response))) {
+      break;
+    }
+
+    if (message_length > 0U) {
+      if (!host_moderation_write_all(response_fd, message, message_length)) {
+        break;
+      }
+    }
+  }
+
+  _exit(HOST_MODERATION_WORKER_EXIT_CODE);
+}
+
+static void host_moderation_apply_result(host_t *host, host_moderation_task_t *task,
+                                        const host_moderation_ipc_response_t *response, const char *message) {
+  if (host == NULL || task == NULL || response == NULL) {
+    free(task);
+    return;
+  }
+
+  session_ctx_t *session = chat_room_find_user(&host->room, task->username);
+
+  if (response->disable_filter != 0U) {
+    const char *reason = (message != NULL && message[0] != '\0') ? message : "moderation pipeline unavailable";
+    host_security_disable_filter(host, reason);
+  }
+
+  switch (response->result) {
+    case HOST_SECURITY_SCAN_CLEAN:
+      break;
+    case HOST_SECURITY_SCAN_BLOCKED:
+      host_security_process_blocked(host, task->category, message, task->username, task->client_ip, session,
+                                    task->post_send, task->message);
+      break;
+    case HOST_SECURITY_SCAN_ERROR:
+    default:
+      host_security_process_error(host, task->category, message, task->username, task->client_ip, session,
+                                  task->post_send);
+      break;
+  }
+
+  free(task);
+}
+
+static void host_moderation_handle_failure(host_t *host, host_moderation_task_t *task, const char *diagnostic) {
+  if (host == NULL || task == NULL) {
+    free(task);
+    return;
+  }
+
+  const char *message = (diagnostic != NULL && diagnostic[0] != '\0') ? diagnostic : "moderation pipeline unavailable";
+  host_security_disable_filter(host, message);
+
+  session_ctx_t *session = chat_room_find_user(&host->room, task->username);
+  host_security_process_error(host, task->category, message, task->username, task->client_ip, session,
+                              task->post_send);
+  free(task);
+}
+
+static void host_moderation_flush_pending(host_t *host, const char *diagnostic) {
+  if (host == NULL) {
+    return;
+  }
+
+  host_moderation_task_t *task = NULL;
+
+  if (host->moderation.mutex_initialized) {
+    pthread_mutex_lock(&host->moderation.mutex);
+    task = host->moderation.head;
+    host->moderation.head = NULL;
+    host->moderation.tail = NULL;
+    pthread_mutex_unlock(&host->moderation.mutex);
+  }
+
+  const char *message = (diagnostic != NULL && diagnostic[0] != '\0') ? diagnostic : "moderation unavailable";
+
+  while (task != NULL) {
+    host_moderation_task_t *next = task->next;
+    session_ctx_t *session = chat_room_find_user(&host->room, task->username);
+    host_security_process_error(host, task->category, message, task->username, task->client_ip, session,
+                                task->post_send);
+    free(task);
+    task = next;
+  }
+}
+
+static void *host_moderation_thread(void *arg) {
+  host_t *host = (host_t *)arg;
+  if (host == NULL) {
+    return NULL;
+  }
+
+  const char *failure_reason = NULL;
+
+  while (true) {
+    pthread_mutex_lock(&host->moderation.mutex);
+    while (!host->moderation.stop && host->moderation.head == NULL && host->moderation.active) {
+      pthread_cond_wait(&host->moderation.cond, &host->moderation.mutex);
+    }
+
+    if (!host->moderation.active ||
+        (host->moderation.stop && host->moderation.head == NULL)) {
+      pthread_mutex_unlock(&host->moderation.mutex);
+      break;
+    }
+
+    host_moderation_task_t *task = host->moderation.head;
+    if (task != NULL) {
+      host->moderation.head = task->next;
+      if (host->moderation.head == NULL) {
+        host->moderation.tail = NULL;
+      }
+    }
+    pthread_mutex_unlock(&host->moderation.mutex);
+
+    if (task == NULL) {
+      continue;
+    }
+
+    host_moderation_ipc_request_t request;
+    memset(&request, 0, sizeof(request));
+    request.task_id = task->task_id;
+    request.category_length = (uint32_t)strnlen(task->category, HOST_MODERATION_CATEGORY_LEN - 1U);
+    request.content_length = (uint32_t)task->snippet_length;
+
+    bool success = true;
+    if (!host_moderation_write_all(host->moderation.request_fd, &request, sizeof(request)) ||
+        (request.category_length > 0U &&
+         !host_moderation_write_all(host->moderation.request_fd, task->category, request.category_length)) ||
+        (request.content_length > 0U &&
+         !host_moderation_write_all(host->moderation.request_fd, task->snippet, request.content_length))) {
+      success = false;
+    }
+
+    if (!success) {
+      failure_reason = "moderation worker unavailable";
+      host_moderation_handle_failure(host, task, failure_reason);
+      pthread_mutex_lock(&host->moderation.mutex);
+      host->moderation.active = false;
+      host->moderation.stop = true;
+      pthread_cond_broadcast(&host->moderation.cond);
+      pthread_mutex_unlock(&host->moderation.mutex);
+      break;
+    }
+
+    host_moderation_ipc_response_t response;
+    if (!host_moderation_read_all(host->moderation.response_fd, &response, sizeof(response))) {
+      failure_reason = "moderation worker unavailable";
+      host_moderation_handle_failure(host, task, failure_reason);
+      pthread_mutex_lock(&host->moderation.mutex);
+      host->moderation.active = false;
+      host->moderation.stop = true;
+      pthread_cond_broadcast(&host->moderation.cond);
+      pthread_mutex_unlock(&host->moderation.mutex);
+      break;
+    }
+
+    size_t message_length = response.message_length;
+    char *message = NULL;
+
+    if (message_length > 0U) {
+      message = (char *)malloc(message_length + 1U);
+      if (message == NULL) {
+        char *discard = (char *)malloc(message_length);
+        if (discard != NULL) {
+          (void)host_moderation_read_all(host->moderation.response_fd, discard, message_length);
+          free(discard);
+        }
+        failure_reason = "moderation worker unavailable";
+        host_moderation_handle_failure(host, task, failure_reason);
+        pthread_mutex_lock(&host->moderation.mutex);
+        host->moderation.active = false;
+        host->moderation.stop = true;
+        pthread_cond_broadcast(&host->moderation.cond);
+        pthread_mutex_unlock(&host->moderation.mutex);
+        break;
+      }
+
+      if (!host_moderation_read_all(host->moderation.response_fd, message, message_length)) {
+        free(message);
+        failure_reason = "moderation worker unavailable";
+        host_moderation_handle_failure(host, task, failure_reason);
+        pthread_mutex_lock(&host->moderation.mutex);
+        host->moderation.active = false;
+        host->moderation.stop = true;
+        pthread_cond_broadcast(&host->moderation.cond);
+        pthread_mutex_unlock(&host->moderation.mutex);
+        break;
+      }
+      message[message_length] = '\0';
+    }
+
+    const char *message_text = (message != NULL) ? message : "";
+    host_moderation_apply_result(host, task, &response, message_text);
+    free(message);
+  }
+
+  host_moderation_flush_pending(host, failure_reason);
+  return NULL;
+}
+
+static bool host_moderation_init(host_t *host) {
+  if (host == NULL) {
+    return false;
+  }
+
+  host->moderation.active = false;
+  host->moderation.stop = false;
+  host->moderation.head = NULL;
+  host->moderation.tail = NULL;
+  host->moderation.next_task_id = 1U;
+  host->moderation.request_fd = -1;
+  host->moderation.response_fd = -1;
+  host->moderation.worker_pid = -1;
+  host->moderation.thread_started = false;
+  host->moderation.mutex_initialized = false;
+  host->moderation.cond_initialized = false;
+
+  if (pthread_mutex_init(&host->moderation.mutex, NULL) != 0) {
+    return false;
+  }
+  host->moderation.mutex_initialized = true;
+
+  if (pthread_cond_init(&host->moderation.cond, NULL) != 0) {
+    pthread_mutex_destroy(&host->moderation.mutex);
+    host->moderation.mutex_initialized = false;
+    return false;
+  }
+  host->moderation.cond_initialized = true;
+
+  int request_pipe[2];
+  int response_pipe[2];
+  if (pipe(request_pipe) != 0) {
+    host_moderation_shutdown(host);
+    return false;
+  }
+  if (pipe(response_pipe) != 0) {
+    close(request_pipe[0]);
+    close(request_pipe[1]);
+    host_moderation_shutdown(host);
+    return false;
+  }
+
+  pid_t pid = fork();
+  if (pid < 0) {
+    close(request_pipe[0]);
+    close(request_pipe[1]);
+    close(response_pipe[0]);
+    close(response_pipe[1]);
+    host_moderation_shutdown(host);
+    return false;
+  }
+
+  if (pid == 0) {
+    close(request_pipe[1]);
+    close(response_pipe[0]);
+    host_moderation_worker_loop(request_pipe[0], response_pipe[1]);
+  }
+
+  host->moderation.worker_pid = pid;
+  host->moderation.request_fd = request_pipe[1];
+  host->moderation.response_fd = response_pipe[0];
+  close(request_pipe[0]);
+  close(response_pipe[1]);
+
+  host->moderation.active = true;
+  host->moderation.stop = false;
+
+  if (pthread_create(&host->moderation.thread, NULL, host_moderation_thread, host) != 0) {
+    host->moderation.active = false;
+    host->moderation.stop = true;
+    host_moderation_shutdown(host);
+    return false;
+  }
+
+  host->moderation.thread_started = true;
+  return true;
+}
+
+static void host_moderation_shutdown(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (!host->moderation.active && !host->moderation.thread_started) {
+    if (host->moderation.mutex_initialized) {
+      pthread_mutex_destroy(&host->moderation.mutex);
+      host->moderation.mutex_initialized = false;
+    }
+    if (host->moderation.cond_initialized) {
+      pthread_cond_destroy(&host->moderation.cond);
+      host->moderation.cond_initialized = false;
+    }
+    return;
+  }
+
+  if (host->moderation.mutex_initialized) {
+    pthread_mutex_lock(&host->moderation.mutex);
+    host->moderation.stop = true;
+    pthread_cond_broadcast(&host->moderation.cond);
+    pthread_mutex_unlock(&host->moderation.mutex);
+  }
+
+  if (host->moderation.thread_started) {
+    pthread_join(host->moderation.thread, NULL);
+    host->moderation.thread_started = false;
+  }
+
+  if (host->moderation.request_fd >= 0) {
+    close(host->moderation.request_fd);
+    host->moderation.request_fd = -1;
+  }
+  if (host->moderation.response_fd >= 0) {
+    close(host->moderation.response_fd);
+    host->moderation.response_fd = -1;
+  }
+
+  if (host->moderation.worker_pid > 0) {
+    int status = 0;
+    (void)waitpid(host->moderation.worker_pid, &status, 0);
+    host->moderation.worker_pid = -1;
+  }
+
+  host_moderation_flush_pending(host, NULL);
+
+  if (host->moderation.mutex_initialized) {
+    pthread_mutex_destroy(&host->moderation.mutex);
+    host->moderation.mutex_initialized = false;
+  }
+  if (host->moderation.cond_initialized) {
+    pthread_cond_destroy(&host->moderation.cond);
+    host->moderation.cond_initialized = false;
+  }
+
+  host->moderation.active = false;
+}
+
+static bool host_moderation_queue_chat(session_ctx_t *ctx, const char *message, size_t length) {
+  if (ctx == NULL || ctx->owner == NULL || message == NULL || length == 0U) {
+    return false;
+  }
+
+  host_t *host = ctx->owner;
+  if (!host->moderation.active || host->moderation.request_fd < 0 || host->moderation.response_fd < 0) {
+    return false;
+  }
+
+  if (!atomic_load(&host->security_filter_enabled)) {
+    return false;
+  }
+
+  bool clamav_active = atomic_load(&host->security_clamav_enabled);
+  bool ai_active = atomic_load(&host->security_ai_enabled);
+  if (!clamav_active && !ai_active) {
+    atomic_store(&host->security_filter_enabled, false);
+    return false;
+  }
+
+  if (!ai_active) {
+    return false;
+  }
+
+  if (!atomic_load(&host->eliza_enabled)) {
+    return false;
+  }
+
+  host_moderation_task_t *task = (host_moderation_task_t *)malloc(sizeof(*task));
+  if (task == NULL) {
+    return false;
+  }
+
+  memset(task, 0, sizeof(*task));
+  snprintf(task->username, sizeof(task->username), "%s", ctx->user.name);
+  snprintf(task->client_ip, sizeof(task->client_ip), "%s", ctx->client_ip);
+  snprintf(task->category, sizeof(task->category), "%s", "chat message");
+
+  size_t effective_length = strnlen(message, SSH_CHATTER_MESSAGE_LIMIT - 1U);
+  if (effective_length > length) {
+    effective_length = length;
+  }
+
+  task->snippet_length = effective_length;
+  if (task->snippet_length >= HOST_MODERATION_SNIPPET_LEN) {
+    task->snippet_length = HOST_MODERATION_SNIPPET_LEN - 1U;
+  }
+  memcpy(task->snippet, message, task->snippet_length);
+  for (size_t idx = 0U; idx < task->snippet_length; ++idx) {
+    unsigned char ch = (unsigned char)task->snippet[idx];
+    if (ch == '\0') {
+      task->snippet_length = idx;
+      break;
+    }
+    if (ch < 0x20U && ch != '\n' && ch != '\r' && ch != '\t') {
+      task->snippet[idx] = ' ';
+    }
+  }
+  task->snippet[task->snippet_length] = '\0';
+
+  size_t message_copy = effective_length;
+  if (message_copy >= sizeof(task->message)) {
+    message_copy = sizeof(task->message) - 1U;
+  }
+  memcpy(task->message, message, message_copy);
+  task->message[message_copy] = '\0';
+  task->post_send = true;
+
+  pthread_mutex_lock(&host->moderation.mutex);
+  if (!host->moderation.active || host->moderation.stop) {
+    pthread_mutex_unlock(&host->moderation.mutex);
+    free(task);
+    return false;
+  }
+
+  task->task_id = host->moderation.next_task_id++;
+  task->next = NULL;
+  if (host->moderation.tail == NULL) {
+    host->moderation.head = task;
+    host->moderation.tail = task;
+  } else {
+    host->moderation.tail->next = task;
+    host->moderation.tail = task;
+  }
+  pthread_cond_signal(&host->moderation.cond);
+  pthread_mutex_unlock(&host->moderation.mutex);
+
+  return true;
+}
+
 static bool host_eliza_enable(host_t *host) {
   if (host == NULL) {
     return false;
@@ -5112,9 +5828,10 @@ static void *host_eliza_intervene_thread(void *arg) {
   return NULL;
 }
 
-static bool session_security_check_text(session_ctx_t *ctx, const char *category, const char *content, size_t length) {
+static host_security_scan_result_t session_security_check_text(session_ctx_t *ctx, const char *category,
+                                                               const char *content, size_t length, bool post_send) {
   if (ctx == NULL || ctx->owner == NULL || content == NULL || length == 0U) {
-    return true;
+    return HOST_SECURITY_SCAN_CLEAN;
   }
 
   char diagnostic[256];
@@ -5122,46 +5839,13 @@ static bool session_security_check_text(session_ctx_t *ctx, const char *category
       host_security_scan_payload(ctx->owner, category, content, length, diagnostic, sizeof(diagnostic));
 
   if (scan_result == HOST_SECURITY_SCAN_CLEAN) {
-    return true;
+    return HOST_SECURITY_SCAN_CLEAN;
   }
 
-  const char *label = category != NULL ? category : "submission";
-
   if (scan_result == HOST_SECURITY_SCAN_BLOCKED) {
-    if (diagnostic[0] == '\0') {
-      snprintf(diagnostic, sizeof(diagnostic), "%s", "suspected intrusion content");
-    }
-    printf("[security] blocked %s from %s: %s\n", label, ctx->user.name, diagnostic);
-
-    char message[512];
-    snprintf(message, sizeof(message), "Security filter rejected your %s: %s", label, diagnostic);
-    session_send_system_line(ctx, message);
-
-    size_t attempts = 0U;
-    bool banned = host_register_suspicious_activity(ctx->owner, ctx->user.name, ctx->client_ip, &attempts);
-    if (attempts > 0U) {
-      printf("[security] suspicious payload counter for %s (%s): %zu/%u\n", ctx->user.name,
-             ctx->client_ip, attempts, (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
-    }
-
-    if (banned) {
-      printf("[security] auto-banned %s (%s) for repeated suspicious payloads\n", ctx->user.name,
-             ctx->client_ip);
-      char notice[256];
-      snprintf(notice, sizeof(notice),
-               "Repeated suspicious activity detected. You have been banned.");
-      session_force_disconnect(ctx, notice);
-      return false;
-    }
-
-    if (attempts > 0U) {
-      char warning[256];
-      snprintf(warning, sizeof(warning), "Further suspicious activity will result in a ban (%zu/%u).",
-               attempts, (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
-      session_send_system_line(ctx, warning);
-    }
-    (void)host_eliza_intervene(ctx, content, diagnostic, true);
-    return false;
+    host_security_process_blocked(ctx->owner, category, diagnostic, ctx->user.name, ctx->client_ip, ctx, post_send,
+                                  content);
+    return HOST_SECURITY_SCAN_BLOCKED;
   }
 
   const char *error = translator_last_error();
@@ -5169,20 +5853,8 @@ static bool session_security_check_text(session_ctx_t *ctx, const char *category
     snprintf(diagnostic, sizeof(diagnostic), "%s", error);
   }
 
-  if (diagnostic[0] != '\0') {
-    printf("[security] unable to moderate %s from %s: %s\n", label, ctx->user.name, diagnostic);
-  } else {
-    printf("[security] unable to moderate %s from %s\n", label, ctx->user.name);
-  }
-
-  char message[512];
-  if (diagnostic[0] != '\0') {
-    snprintf(message, sizeof(message), "Security filter is unavailable (%s). Please try again later.", diagnostic);
-  } else {
-    snprintf(message, sizeof(message), "%s", "Security filter could not validate your submission. Please try again later.");
-  }
-  session_send_system_line(ctx, message);
-  return false;
+  host_security_process_error(ctx->owner, category, diagnostic, ctx->user.name, ctx->client_ip, ctx, post_send);
+  return scan_result;
 }
 
 static void host_state_resolve_path(host_t *host) {
@@ -11313,15 +11985,6 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *mes
     return;
   }
 
-  if (host_eliza_intervene(ctx, message, NULL, false)) {
-    return;
-  }
-
-  size_t message_length = strnlen(message, SSH_CHATTER_MESSAGE_LIMIT);
-  if (!session_security_check_text(ctx, "chat message", message, message_length)) {
-    return;
-  }
-
   chat_history_entry_t entry = {0};
   if (!host_history_record_user(ctx->owner, ctx, message, &entry)) {
     return;
@@ -11330,6 +11993,14 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *mes
   session_send_history_entry(ctx, &entry);
   chat_room_broadcast_entry(&ctx->owner->room, &entry, ctx);
   host_notify_external_clients(ctx->owner, &entry);
+
+  (void)host_eliza_intervene(ctx, message, NULL, false);
+
+  size_t message_length = strnlen(message, SSH_CHATTER_MESSAGE_LIMIT);
+
+  if (!host_moderation_queue_chat(ctx, message, message_length)) {
+    (void)session_security_check_text(ctx, "chat message", message, message_length, true);
+  }
 }
 
 // session_send_line writes a single line while preserving the session's
@@ -14116,6 +14787,10 @@ static void session_print_help(session_ctx_t *ctx) {
   };
 
   session_send_system_lines_bulk(ctx, kHelpLines, sizeof(kHelpLines) / sizeof(kHelpLines[0]));
+
+  if (ctx->user.is_operator || ctx->user.is_lan_operator) {
+    session_send_system_line(ctx, "/getaddr <username>    - look up a user's last known address (operator only)");
+  }
 }
 
 static bool session_line_is_exit_command(const char *line) {
@@ -14591,6 +15266,49 @@ static void session_handle_ban_list(session_ctx_t *ctx, const char *arguments) {
     }
     session_send_system_line(ctx, message);
   }
+}
+
+static void session_handle_getaddr(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
+    session_send_system_line(ctx, "You are not allowed to run that command.");
+    return;
+  }
+
+  if (arguments == NULL || *arguments == '\0') {
+    session_send_system_line(ctx, "Usage: /getaddr <username>");
+    return;
+  }
+
+  char target_name[SSH_CHATTER_USERNAME_LEN];
+  snprintf(target_name, sizeof(target_name), "%s", arguments);
+  trim_whitespace_inplace(target_name);
+
+  if (target_name[0] == '\0') {
+    session_send_system_line(ctx, "Usage: /getaddr <username>");
+    return;
+  }
+
+  host_t *host = ctx->owner;
+  if (host == NULL) {
+    session_send_system_line(ctx, "Host unavailable.");
+    return;
+  }
+
+  char ip[SSH_CHATTER_IP_LEN];
+  if (!host_lookup_last_ip(host, target_name, ip, sizeof(ip)) || ip[0] == '\0') {
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "No recorded address for '%s'.", target_name);
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(message, sizeof(message), "Last known address for '%s': %s", target_name, ip);
+  session_send_system_line(ctx, message);
 }
 
 static void session_handle_poke(session_ctx_t *ctx, const char *arguments) {
@@ -17771,7 +18489,8 @@ static void session_bbs_commit_pending_post(session_ctx_t *ctx) {
     return;
   }
 
-  if (!session_security_check_text(ctx, "BBS post", ctx->pending_bbs_body, ctx->pending_bbs_body_length)) {
+  if (session_security_check_text(ctx, "BBS post", ctx->pending_bbs_body, ctx->pending_bbs_body_length, false) !=
+      HOST_SECURITY_SCAN_CLEAN) {
     session_bbs_reset_pending_post(ctx);
     return;
   }
@@ -18057,7 +18776,8 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   }
 
   size_t comment_scan_length = strnlen(comment_text, SSH_CHATTER_BBS_COMMENT_LEN);
-  if (!session_security_check_text(ctx, "BBS comment", comment_text, comment_scan_length)) {
+  if (session_security_check_text(ctx, "BBS comment", comment_text, comment_scan_length, false) !=
+      HOST_SECURITY_SCAN_CLEAN) {
     return;
   }
 
@@ -18703,7 +19423,8 @@ static void session_asciiart_commit(session_ctx_t *ctx) {
 
   const char *security_label =
       target == SESSION_ASCIIART_TARGET_PROFILE_PICTURE ? "Profile picture" : "ASCII art";
-  if (!session_security_check_text(ctx, security_label, ctx->asciiart_buffer, ctx->asciiart_length)) {
+  if (session_security_check_text(ctx, security_label, ctx->asciiart_buffer, ctx->asciiart_length, false) !=
+      HOST_SECURITY_SCAN_CLEAN) {
     session_asciiart_reset(ctx);
     return;
   }
@@ -23757,6 +24478,14 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_getos(ctx, arguments);
     return;
   }
+  else if (strncmp(line, "/getaddr", 8) == 0) {
+    const char *arguments = line + 8;
+    while (*arguments == ' ' || *arguments == '\t') {
+      ++arguments;
+    }
+    session_handle_getaddr(ctx, arguments);
+    return;
+  }
   else if (strncmp(line, "/birthday", 9) == 0) {
     const char *arguments = line + 9;
     while (*arguments == ' ' || *arguments == '\t') {
@@ -24157,6 +24886,32 @@ static bool host_user_data_load_existing(host_t *host, const char *username, con
   }
 
   return success;
+}
+
+static bool host_lookup_last_ip(host_t *host, const char *username, char *ip, size_t length) {
+  if (ip != NULL && length > 0U) {
+    ip[0] = '\0';
+  }
+
+  if (host == NULL || username == NULL || username[0] == '\0' || ip == NULL || length == 0U) {
+    return false;
+  }
+
+  if (host_lookup_member_ip(host, username, ip, length)) {
+    return true;
+  }
+
+  user_data_record_t record;
+  if (!host_user_data_load_existing(host, username, NULL, &record, false)) {
+    return false;
+  }
+
+  if (record.last_ip[0] == '\0') {
+    return false;
+  }
+
+  snprintf(ip, length, "%s", record.last_ip);
+  return true;
 }
 
 static bool session_user_data_load(session_ctx_t *ctx) {
@@ -25751,6 +26506,10 @@ void host_init(host_t *host, auth_profile_t *auth) {
 
   translator_global_init();
 
+  if (!host_moderation_init(host)) {
+    printf("[security] moderation worker unavailable; using synchronous checks\n");
+  }
+
   chat_room_init(&host->room);
   host->listener.handle = NULL;
   host->listener.inplace_recoveries = 0U;
@@ -26322,6 +27081,8 @@ void host_shutdown(host_t *host) {
   if (host == NULL) {
     return;
   }
+
+  host_moderation_shutdown(host);
 
   host_telnet_listener_stop(host);
 
