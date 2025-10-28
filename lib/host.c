@@ -83,6 +83,34 @@
   "diffie-hellman-group14-sha1"
 #define SSH_CHATTER_BIRTHDAY_WINDOW_SECONDS (7 * 24 * 60 * 60)
 
+#define ALPHA_LANDERS_MAX_RECORDS 256U
+#define ALPHA_LANDERS_DISPLAY_LIMIT 10U
+
+typedef struct alpha_lander_entry {
+  char username[SSH_CHATTER_USERNAME_LEN];
+  uint32_t flag_count;
+  uint64_t last_flag_timestamp;
+} alpha_lander_entry_t;
+
+static int alpha_lander_entry_compare(const void *lhs, const void *rhs) {
+  const alpha_lander_entry_t *left = (const alpha_lander_entry_t *)lhs;
+  const alpha_lander_entry_t *right = (const alpha_lander_entry_t *)rhs;
+
+  if (left->flag_count < right->flag_count) {
+    return 1;
+  }
+  if (left->flag_count > right->flag_count) {
+    return -1;
+  }
+  if (left->last_flag_timestamp < right->last_flag_timestamp) {
+    return 1;
+  }
+  if (left->last_flag_timestamp > right->last_flag_timestamp) {
+    return -1;
+  }
+  return strcasecmp(left->username, right->username);
+}
+
 static const char *const SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS[] = {
     "rsa-sha2-512",
     "rsa-sha2-256",
@@ -2631,6 +2659,23 @@ typedef struct rss_state_entry {
   char url[SSH_CHATTER_RSS_URL_LEN];
   char last_item_key[SSH_CHATTER_RSS_ITEM_KEY_LEN];
 } rss_state_entry_t;
+
+static const uint32_t ALPHA_LANDERS_STATE_MAGIC = 0x464C4147U; /* 'FLAG' */
+static const uint32_t ALPHA_LANDERS_STATE_VERSION = 1U;
+
+typedef struct alpha_landers_file_header {
+  uint32_t magic;
+  uint32_t version;
+  uint32_t entry_count;
+  uint32_t reserved;
+} alpha_landers_file_header_t;
+
+typedef struct alpha_landers_file_entry {
+  char username[SSH_CHATTER_USERNAME_LEN];
+  uint32_t flag_count;
+  uint64_t last_flag_timestamp;
+  uint32_t reserved;
+} alpha_landers_file_entry_t;
 
 static const uint32_t VOTE_STATE_MAGIC = 0x564F5445U; /* 'VOTE' */
 static const uint32_t VOTE_STATE_VERSION = 1U;
@@ -5924,6 +5969,276 @@ static void host_reply_state_resolve_path(host_t *host) {
   if (written < 0 || (size_t)written >= sizeof(host->reply_state_file_path)) {
     humanized_log_error("host", "reply state file path is too long", ENAMETOOLONG);
     host->reply_state_file_path[0] = '\0';
+  }
+}
+
+static void host_alpha_landers_resolve_path(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  const char *landers_path = getenv("CHATTER_ALPHA_LANDERS_FILE");
+  if (landers_path == NULL || landers_path[0] == '\0') {
+    landers_path = "alpha_landers.dat";
+  }
+
+  int written = snprintf(host->alpha_landers_file_path, sizeof(host->alpha_landers_file_path), "%s", landers_path);
+  if (written < 0 || (size_t)written >= sizeof(host->alpha_landers_file_path)) {
+    humanized_log_error("host", "alpha landers file path is too long", ENAMETOOLONG);
+    host->alpha_landers_file_path[0] = '\0';
+  }
+}
+
+static bool host_alpha_landers_load_locked(host_t *host, alpha_lander_entry_t *entries, size_t capacity,
+                                           size_t *entry_count) {
+  if (entry_count != NULL) {
+    *entry_count = 0U;
+  }
+  if (host == NULL || entries == NULL || capacity == 0U || entry_count == NULL) {
+    errno = EINVAL;
+    return false;
+  }
+
+  if (host->alpha_landers_file_path[0] == '\0') {
+    errno = ENOENT;
+    return false;
+  }
+
+  memset(entries, 0, sizeof(entries[0]) * capacity);
+
+  FILE *fp = fopen(host->alpha_landers_file_path, "rb");
+  if (fp == NULL) {
+    if (errno == ENOENT) {
+      return true;
+    }
+    return false;
+  }
+
+  alpha_landers_file_header_t header = {0};
+  if (fread(&header, sizeof(header), 1U, fp) != 1U) {
+    if (errno == 0) {
+      errno = EIO;
+    }
+    fclose(fp);
+    return false;
+  }
+
+  if (header.magic != ALPHA_LANDERS_STATE_MAGIC || header.version == 0U ||
+      header.version > ALPHA_LANDERS_STATE_VERSION) {
+    errno = EINVAL;
+    fclose(fp);
+    return false;
+  }
+
+  size_t total = header.entry_count;
+  size_t stored = 0U;
+  for (size_t idx = 0U; idx < total; ++idx) {
+    alpha_landers_file_entry_t raw = {0};
+    if (fread(&raw, sizeof(raw), 1U, fp) != 1U) {
+      if (errno == 0) {
+        errno = EIO;
+      }
+      fclose(fp);
+      return false;
+    }
+    if (stored < capacity) {
+      alpha_lander_entry_t *dest = &entries[stored++];
+      memset(dest->username, 0, sizeof(dest->username));
+      memcpy(dest->username, raw.username, sizeof(raw.username));
+      dest->username[sizeof(dest->username) - 1U] = '\0';
+      dest->flag_count = raw.flag_count;
+      dest->last_flag_timestamp = raw.last_flag_timestamp;
+    }
+  }
+
+  if (entry_count != NULL) {
+    *entry_count = stored;
+  }
+
+  fclose(fp);
+  return true;
+}
+
+static bool host_alpha_landers_save_locked(host_t *host, const alpha_lander_entry_t *entries, size_t entry_count) {
+  if (host == NULL || entries == NULL) {
+    errno = EINVAL;
+    return false;
+  }
+
+  if (host->alpha_landers_file_path[0] == '\0') {
+    errno = ENOENT;
+    return false;
+  }
+
+  size_t count = entry_count;
+  if (count > ALPHA_LANDERS_MAX_RECORDS) {
+    count = ALPHA_LANDERS_MAX_RECORDS;
+  }
+
+  char temp_path[PATH_MAX];
+  int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp", host->alpha_landers_file_path);
+  if (written < 0 || (size_t)written >= sizeof(temp_path)) {
+    humanized_log_error("alpha", "alpha landers file path is too long", ENAMETOOLONG);
+    return false;
+  }
+
+  FILE *fp = fopen(temp_path, "wb");
+  if (fp == NULL) {
+    humanized_log_error("alpha", "failed to open alpha landers file", errno != 0 ? errno : EIO);
+    return false;
+  }
+
+  alpha_landers_file_header_t header = {0};
+  header.magic = ALPHA_LANDERS_STATE_MAGIC;
+  header.version = ALPHA_LANDERS_STATE_VERSION;
+  header.entry_count = (uint32_t)count;
+
+  bool success = fwrite(&header, sizeof(header), 1U, fp) == 1U;
+  int write_error = 0;
+  if (!success && errno != 0) {
+    write_error = errno;
+  }
+
+  for (size_t idx = 0U; success && idx < count; ++idx) {
+    alpha_landers_file_entry_t raw = {0};
+    snprintf(raw.username, sizeof(raw.username), "%s", entries[idx].username);
+    raw.flag_count = entries[idx].flag_count;
+    raw.last_flag_timestamp = entries[idx].last_flag_timestamp;
+    if (fwrite(&raw, sizeof(raw), 1U, fp) != 1U) {
+      success = false;
+      if (errno != 0) {
+        write_error = errno;
+      }
+      break;
+    }
+  }
+
+  if (success && fflush(fp) != 0) {
+    success = false;
+    if (errno != 0) {
+      write_error = errno;
+    }
+  }
+
+  if (success) {
+    int fd = fileno(fp);
+    if (fd >= 0 && fsync(fd) != 0) {
+      success = false;
+      if (errno != 0) {
+        write_error = errno;
+      }
+    }
+  }
+
+  if (fclose(fp) != 0) {
+    success = false;
+    if (errno != 0) {
+      write_error = errno;
+    }
+  }
+
+  if (!success) {
+    humanized_log_error("alpha", "failed to write alpha landers file", write_error != 0 ? write_error : EIO);
+    unlink(temp_path);
+    return false;
+  }
+
+  if (rename(temp_path, host->alpha_landers_file_path) != 0) {
+    humanized_log_error("alpha", "failed to update alpha landers file", errno != 0 ? errno : EIO);
+    unlink(temp_path);
+    return false;
+  }
+
+  return true;
+}
+
+static bool host_alpha_landers_snapshot(host_t *host, alpha_lander_entry_t *entries, size_t capacity,
+                                        size_t *entry_count) {
+  if (entry_count != NULL) {
+    *entry_count = 0U;
+  }
+  if (host == NULL || entries == NULL || capacity == 0U || entry_count == NULL) {
+    errno = EINVAL;
+    return false;
+  }
+
+  if (host->alpha_landers_lock_initialized) {
+    pthread_mutex_lock(&host->alpha_landers_lock);
+    bool success = host_alpha_landers_load_locked(host, entries, capacity, entry_count);
+    pthread_mutex_unlock(&host->alpha_landers_lock);
+    return success;
+  }
+
+  return host_alpha_landers_load_locked(host, entries, capacity, entry_count);
+}
+
+static void host_alpha_landers_record(host_t *host, const char *username, uint32_t flag_count, uint64_t timestamp) {
+  if (host == NULL || username == NULL || username[0] == '\0' || flag_count == 0U) {
+    return;
+  }
+
+  if (host->alpha_landers_file_path[0] == '\0') {
+    return;
+  }
+
+  alpha_lander_entry_t entries[ALPHA_LANDERS_MAX_RECORDS];
+  size_t entry_count = 0U;
+
+  bool locked = false;
+  if (host->alpha_landers_lock_initialized) {
+    pthread_mutex_lock(&host->alpha_landers_lock);
+    locked = true;
+  }
+
+  bool loaded = host_alpha_landers_load_locked(host, entries, ALPHA_LANDERS_MAX_RECORDS, &entry_count);
+  if (!loaded) {
+    if (locked) {
+      pthread_mutex_unlock(&host->alpha_landers_lock);
+    }
+    humanized_log_error("alpha", "failed to load alpha landers file", errno != 0 ? errno : EIO);
+    return;
+  }
+
+  bool found = false;
+  for (size_t idx = 0U; idx < entry_count; ++idx) {
+    alpha_lander_entry_t *entry = &entries[idx];
+    if (strcasecmp(entry->username, username) == 0) {
+      found = true;
+      if (flag_count > entry->flag_count) {
+        entry->flag_count = flag_count;
+      }
+      if (timestamp != 0U || entry->last_flag_timestamp == 0U) {
+        entry->last_flag_timestamp = timestamp;
+      }
+      break;
+    }
+  }
+
+  if (!found) {
+    alpha_lander_entry_t candidate = {0};
+    snprintf(candidate.username, sizeof(candidate.username), "%s", username);
+    candidate.flag_count = flag_count;
+    candidate.last_flag_timestamp = timestamp;
+
+    if (entry_count < ALPHA_LANDERS_MAX_RECORDS) {
+      entries[entry_count++] = candidate;
+    } else {
+      size_t worst = 0U;
+      for (size_t idx = 1U; idx < entry_count; ++idx) {
+        if (alpha_lander_entry_compare(&entries[idx], &entries[worst]) > 0) {
+          worst = idx;
+        }
+      }
+      if (alpha_lander_entry_compare(&candidate, &entries[worst]) < 0) {
+        entries[worst] = candidate;
+      }
+    }
+  }
+
+  (void)host_alpha_landers_save_locked(host, entries, entry_count);
+
+  if (locked) {
+    pthread_mutex_unlock(&host->alpha_landers_lock);
   }
 }
 
@@ -16873,102 +17188,18 @@ static void session_handle_connected(session_ctx_t *ctx) {
   }
 }
 
-#define ALPHA_LANDERS_MAX_RECORDS 256U
-#define ALPHA_LANDERS_DISPLAY_LIMIT 10U
-
-typedef struct alpha_lander_entry {
-  char username[SSH_CHATTER_USERNAME_LEN];
-  uint32_t flag_count;
-  uint64_t last_flag_timestamp;
-} alpha_lander_entry_t;
-
-static int alpha_lander_entry_compare(const void *lhs, const void *rhs) {
-  const alpha_lander_entry_t *left = (const alpha_lander_entry_t *)lhs;
-  const alpha_lander_entry_t *right = (const alpha_lander_entry_t *)rhs;
-
-  if (left->flag_count < right->flag_count) {
-    return 1;
-  }
-  if (left->flag_count > right->flag_count) {
-    return -1;
-  }
-  if (left->last_flag_timestamp < right->last_flag_timestamp) {
-    return 1;
-  }
-  if (left->last_flag_timestamp > right->last_flag_timestamp) {
-    return -1;
-  }
-  return strcasecmp(left->username, right->username);
-}
-
 static void session_handle_alpha_centauri_landers(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->owner == NULL) {
-    return;
-  }
-
-  if (!session_user_data_available(ctx) || ctx->owner->user_data_root[0] == '\0') {
-    session_send_system_line(ctx, "Profile storage unavailable; the hall of fame is offline.");
-    return;
-  }
-
-  DIR *dir = opendir(ctx->owner->user_data_root);
-  if (dir == NULL) {
-    session_send_system_line(ctx, "Unable to inspect landing records right now.");
     return;
   }
 
   alpha_lander_entry_t entries[ALPHA_LANDERS_MAX_RECORDS];
   size_t entry_count = 0U;
 
-  struct dirent *entry = NULL;
-  while ((entry = readdir(dir)) != NULL) {
-    const char *name = entry->d_name;
-    if (name == NULL || name[0] == '\0') {
-      continue;
-    }
-    if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) {
-      continue;
-    }
-
-    size_t name_len = strlen(name);
-    if (name_len <= 4U || strcmp(name + name_len - 4U, ".dat") != 0) {
-      continue;
-    }
-    size_t base_len = name_len - 4U;
-    if (base_len == 0U || base_len >= SSH_CHATTER_USERNAME_LEN * 2U) {
-      continue;
-    }
-
-    char candidate[SSH_CHATTER_USERNAME_LEN * 2U];
-    memcpy(candidate, name, base_len);
-    candidate[base_len] = '\0';
-
-    user_data_record_t record;
-    if (!host_user_data_load_existing(ctx->owner, candidate, NULL, &record, false)) {
-      continue;
-    }
-    if (record.flag_count == 0U) {
-      continue;
-    }
-
-    uint64_t latest = 0U;
-    for (size_t idx = 0U; idx < record.flag_history_count; ++idx) {
-      if (record.flag_history[idx] > latest) {
-        latest = record.flag_history[idx];
-      }
-    }
-
-    if (entry_count >= ALPHA_LANDERS_MAX_RECORDS) {
-      continue;
-    }
-
-    alpha_lander_entry_t *slot = &entries[entry_count++];
-    snprintf(slot->username, sizeof(slot->username), "%s", record.username[0] != '\0' ? record.username : candidate);
-    slot->flag_count = record.flag_count;
-    slot->last_flag_timestamp = latest;
+  if (!host_alpha_landers_snapshot(ctx->owner, entries, ALPHA_LANDERS_MAX_RECORDS, &entry_count)) {
+    session_send_system_line(ctx, "Unable to inspect landing records right now.");
+    return;
   }
-
-  closedir(dir);
 
   session_send_system_line(ctx, "Alpha Centauri Landers — Immigrants' Flag Hall of Fame:");
 
@@ -21693,9 +21924,17 @@ static void session_game_alpha_log_completion(session_ctx_t *ctx) {
   double total_years = state->mission_time_years;
   double total_radiation = state->radiation_msv;
 
+  time_t now = time(NULL);
+  uint64_t landing_timestamp = 0U;
+  if (now != (time_t)-1) {
+    landing_timestamp = (uint64_t)now;
+  }
+  bool recorded = false;
+  uint32_t updated_flag_count = 0U;
+
   if (session_user_data_load(ctx)) {
     ctx->user_data.flag_count += 1U;
-    uint64_t timestamp = (uint64_t)time(NULL);
+    uint64_t timestamp = landing_timestamp;
     if (ctx->user_data.flag_history_count < USER_DATA_FLAG_HISTORY_LIMIT) {
       ctx->user_data.flag_history[ctx->user_data.flag_history_count++] = timestamp;
     } else {
@@ -21704,6 +21943,8 @@ static void session_game_alpha_log_completion(session_ctx_t *ctx) {
       }
       ctx->user_data.flag_history[USER_DATA_FLAG_HISTORY_LIMIT - 1U] = timestamp;
     }
+    recorded = true;
+    updated_flag_count = ctx->user_data.flag_count;
   }
 
   bool previous_translation = ctx->translation_suppress_output;
@@ -21721,6 +21962,10 @@ static void session_game_alpha_log_completion(session_ctx_t *ctx) {
   chat_room_broadcast(&ctx->owner->room, notice, NULL);
 
   ctx->translation_suppress_output = previous_translation;
+
+  if (recorded) {
+    host_alpha_landers_record(ctx->owner, ctx->user.name, updated_flag_count, landing_timestamp);
+  }
 
   session_game_alpha_reset(ctx);
   state->active = true;
@@ -26748,6 +26993,8 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_ban_resolve_path(host);
   host->reply_state_file_path[0] = '\0';
   host_reply_state_resolve_path(host);
+  host->alpha_landers_file_path[0] = '\0';
+  host_alpha_landers_resolve_path(host);
   snprintf(host->user_data_root, sizeof(host->user_data_root), "%s", "/var/lib/mailbox");
   host->user_data_ready = user_data_ensure_root(host->user_data_root);
   if (pthread_mutex_init(&host->user_data_lock, NULL) == 0) {
@@ -26756,6 +27003,12 @@ void host_init(host_t *host, auth_profile_t *auth) {
     humanized_log_error("mailbox", "failed to initialise mailbox lock", errno != 0 ? errno : ENOMEM);
     host->user_data_lock_initialized = false;
     host->user_data_ready = false;
+  }
+  if (pthread_mutex_init(&host->alpha_landers_lock, NULL) == 0) {
+    host->alpha_landers_lock_initialized = true;
+  } else {
+    humanized_log_error("alpha", "failed to initialise alpha landers lock", errno != 0 ? errno : ENOMEM);
+    host->alpha_landers_lock_initialized = false;
   }
   host->rss_state_file_path[0] = '\0';
   host_rss_resolve_path(host);
@@ -27289,6 +27542,10 @@ void host_shutdown(host_t *host) {
   if (host->user_data_lock_initialized) {
     pthread_mutex_destroy(&host->user_data_lock);
     host->user_data_lock_initialized = false;
+  }
+  if (host->alpha_landers_lock_initialized) {
+    pthread_mutex_destroy(&host->alpha_landers_lock);
+    host->alpha_landers_lock_initialized = false;
   }
 }
 
