@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <time.h>
+#include <sys/types.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -128,6 +129,25 @@ typedef struct chat_room {
   size_t member_count;
   size_t member_capacity;
 } chat_room_t;
+
+typedef struct host_moderation_task host_moderation_task_t;
+
+typedef struct host_moderation_state {
+  bool active;
+  pthread_mutex_t mutex;
+  pthread_cond_t cond;
+  bool mutex_initialized;
+  bool cond_initialized;
+  bool thread_started;
+  bool stop;
+  pthread_t thread;
+  host_moderation_task_t *head;
+  host_moderation_task_t *tail;
+  uint64_t next_task_id;
+  int request_fd;
+  int response_fd;
+  pid_t worker_pid;
+} host_moderation_state_t;
 
 typedef enum chat_attachment_type {
   CHAT_ATTACHMENT_NONE = 0,
@@ -613,6 +633,7 @@ typedef struct host {
   _Atomic bool security_clamav_thread_running;
   _Atomic bool security_clamav_thread_stop;
   struct timespec security_clamav_last_run;
+  host_moderation_state_t moderation;
   pthread_t bbs_watchdog_thread;
   bool bbs_watchdog_thread_initialized;
   _Atomic bool bbs_watchdog_thread_running;
