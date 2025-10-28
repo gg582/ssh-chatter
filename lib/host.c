@@ -51,7 +51,6 @@
 #ifndef NI_MAXHOST
 #define NI_MAXHOST 1025
 #endif
-#include "server.h"
 
 #ifndef RTLD_LOCAL
 #define RTLD_LOCAL 0
@@ -11739,6 +11738,7 @@ static bool session_should_hide_entry(session_ctx_t *ctx, const chat_history_ent
   return false;
 }
 
+// this displays a message to a chatting room.
 static void session_send_system_line(session_ctx_t *ctx, const char *message) {
   if (ctx == NULL || !session_transport_active(ctx) || message == NULL) {
     return;
@@ -11762,7 +11762,9 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
     session_append_fragment(formatted_empty, sizeof(formatted_empty), offset, ANSI_RESET);
     session_send_line(ctx, formatted_empty);
     return;
-  }
+  }yjlee@yjlee-linuxonmac:~/ssh-chatter$ 
+  yjlee@yjlee-linuxonmac:~/ssh-chatter$ 
+  yjlee@yjlee-linuxonmac:~/
 
   const bool scope_allows_translation =
       (!translator_should_limit_to_chat_bbs() || ctx->translation_manual_scope_override);
@@ -14664,6 +14666,14 @@ static void session_handle_block(session_ctx_t *ctx, const char *arguments) {
     bool already_present = false;
     char label[64];
     bool provider = session_detect_provider_ip(working, label, sizeof(label));
+    if (provider && label[0] != '\0') {
+      char warning[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(warning, sizeof(warning),
+               "Error: You cannot ban a country."
+               "%.256s is flagged as %.63s; other people may also be hidden.", working, label);
+      session_send_system_line(ctx, warning);
+      return;
+    }
     if (!session_blocklist_add(ctx, working, "", true, &already_present)) {
       if (already_present) {
         session_send_system_line(ctx, "That IP is already blocked.");
@@ -14674,12 +14684,6 @@ static void session_handle_block(session_ctx_t *ctx, const char *arguments) {
       char message[SSH_CHATTER_MESSAGE_LIMIT];
       snprintf(message, sizeof(message), "Blocking all users from %.256s.", working);
       session_send_system_line(ctx, message);
-      if (provider && label[0] != '\0') {
-        char warning[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(warning, sizeof(warning),
-                 "Warning: %.256s is flagged as %.63s; other people may also be hidden.", working, label);
-        session_send_system_line(ctx, warning);
-      }
     }
     return;
   }
@@ -19591,7 +19595,7 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
              state->lines_cleared, state->round, SSH_CHATTER_TETRIS_MAX_ROUNDS, next_char);
   }
   session_send_system_line(ctx, header);
-  session_send_system_line(ctx, "Controls: left, right, down, Ctrl+R rotate, drop. Blank line = down.");
+  session_send_system_line(ctx, "Controls: left, right, down, Ctrl+R or up: rotate, drop. Blank line = down.");
 
   char border[SSH_CHATTER_TETRIS_WIDTH + 3];
   border[0] = '+';
