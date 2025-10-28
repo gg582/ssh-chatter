@@ -5098,9 +5098,6 @@ static void host_moderation_apply_result(host_t *host, host_moderation_task_t *t
 
   switch (response->result) {
     case HOST_SECURITY_SCAN_CLEAN:
-      if (task->post_send && session != NULL) {
-        (void)host_eliza_intervene(session, task->message, NULL, false);
-      }
       break;
     case HOST_SECURITY_SCAN_BLOCKED:
       host_security_process_blocked(host, task->category, message, task->username, task->client_ip, session,
@@ -11988,24 +11985,24 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *mes
     return;
   }
 
-  size_t message_length = strnlen(message, SSH_CHATTER_MESSAGE_LIMIT);
-
   chat_history_entry_t entry = {0};
   if (!host_history_record_user(ctx->owner, ctx, message, &entry)) {
     return;
   }
 
   session_send_history_entry(ctx, &entry);
+  if (ctx->history_scroll_position == 0U) {
+    session_refresh_input_line(ctx);
+  }
   chat_room_broadcast_entry(&ctx->owner->room, &entry, ctx);
   host_notify_external_clients(ctx->owner, &entry);
 
-  if (!host_moderation_queue_chat(ctx, message, message_length)) {
-    host_security_scan_result_t scan_result =
-        session_security_check_text(ctx, "chat message", message, message_length, true);
+  (void)host_eliza_intervene(ctx, message, NULL, false);
 
-    if (scan_result != HOST_SECURITY_SCAN_BLOCKED) {
-      (void)host_eliza_intervene(ctx, message, NULL, false);
-    }
+  size_t message_length = strnlen(message, SSH_CHATTER_MESSAGE_LIMIT);
+
+  if (!host_moderation_queue_chat(ctx, message, message_length)) {
+    (void)session_security_check_text(ctx, "chat message", message, message_length, true);
   }
 }
 
