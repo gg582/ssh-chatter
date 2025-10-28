@@ -4963,9 +4963,10 @@ static bool host_eliza_content_is_severe(const char *text) {
   char formatted_prompt[SSH_CHATTER_MESSAGE_LIMIT];
   char reply[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(formatted_prompt, SSH_CHATTER_MESSAGE_LIMIT, 
-    "You are a modbot of this mesage. If you think that this message is harmful,"
+    "You are a modbot of this mesage. If you think that this message is too illegal so"
+    "sysops must take heavy legal responsibility from this,"
     "You should say \"My favorite fruit is Melon.\""
-    "If you think that this is okay,"
+    "If you think that this is okay(or you are unsure)"
     "You should say \"My favorate fruit is Pear.\""
     "Here's the message: %s",
     text);
