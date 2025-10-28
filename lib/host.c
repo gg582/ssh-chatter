@@ -1709,6 +1709,7 @@ static void session_handle_ban_list(session_ctx_t *ctx, const char *arguments);
 static void session_handle_kick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_usercount(session_ctx_t *ctx);
 static bool host_username_reserved(host_t *host, const char *username);
+static bool host_disconnect_duplicate_session(host_t *host, session_ctx_t *session);
 static void session_handle_search(session_ctx_t *ctx, const char *arguments);
 static void session_handle_chat_lookup(session_ctx_t *ctx, const char *arguments);
 static void session_handle_image(session_ctx_t *ctx, const char *arguments);
@@ -3123,6 +3124,34 @@ static void chat_room_remove(chat_room_t *room, const session_ctx_t *session) {
     }
   }
   pthread_mutex_unlock(&room->lock);
+}
+
+static bool host_disconnect_duplicate_session(host_t *host, session_ctx_t *session) {
+  if (host == NULL || session == NULL) {
+    return false;
+  }
+
+  char notice[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(notice, sizeof(notice), "* [%s] has been disconnected due to a duplicate login", session->user.name);
+  host_history_record_system(host, notice);
+  chat_room_broadcast(&host->room, notice, NULL);
+
+  const bool target_active = session_transport_active(session);
+  if (target_active && !(session->transport_kind == SESSION_TRANSPORT_SSH && session->session == NULL)) {
+    session_send_system_line(session, "Duplicate login detected. You have been disconnected.");
+    session->should_exit = true;
+    session_transport_request_close(session);
+  } else {
+    session->should_exit = true;
+  }
+
+  session->has_joined_room = false;
+  chat_room_remove(&host->room, session);
+
+  printf("[duplicate-login] %s (%s) removed due to duplicate login\n", session->user.name,
+         session->client_ip[0] != '\0' ? session->client_ip : "unknown");
+
+  return true;
 }
 
 static void chat_room_broadcast(chat_room_t *room, const char *message, const session_ctx_t *from) {
@@ -25257,6 +25286,15 @@ static void *session_thread(void *arg) {
   const bool reserved_username =
       host_username_reserved(ctx->owner, ctx->user.name) && !ctx->user.is_lan_operator;
   session_ctx_t *existing = chat_room_find_user(&ctx->owner->room, ctx->user.name);
+  bool duplicate_replaced = false;
+  if (existing != NULL && ctx->client_ip[0] != '\0' && existing->client_ip[0] != '\0' &&
+      strncmp(existing->client_ip, ctx->client_ip, SSH_CHATTER_IP_LEN) == 0) {
+    if (host_disconnect_duplicate_session(ctx->owner, existing)) {
+      duplicate_replaced = true;
+      existing = NULL;
+    }
+  }
+
   if (banned_username || reserved_username || existing != NULL) {
     ctx->username_conflict = true;
     session_render_banner(ctx);
@@ -25287,6 +25325,9 @@ static void *session_thread(void *arg) {
     }
   } else {
     (void)host_try_load_motd_from_path(ctx->owner, "/etc/ssh-chatter/motd");
+    if (duplicate_replaced) {
+      session_send_system_line(ctx, "Existing session from your IP with this nickname was disconnected.");
+    }
     session_send_system_line(ctx, "Wait for a moment...");
     struct timespec wait_time = {0, 0};
     size_t progress = host_prepare_join_delay(ctx->owner, &wait_time);
