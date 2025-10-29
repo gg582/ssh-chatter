@@ -1255,6 +1255,77 @@ static const session_command_alias_t kSessionCommandAliases[] = {
 static const size_t kSessionCommandAliasCount =
     sizeof(kSessionCommandAliases) / sizeof(kSessionCommandAliases[0]);
 
+typedef struct session_bbs_subcommand_alias {
+  const char *canonical;
+  const char *localized[SESSION_UI_LANGUAGE_COUNT];
+} session_bbs_subcommand_alias_t;
+
+static const session_bbs_subcommand_alias_t kSessionBbsSubcommands[] = {
+    {
+        .canonical = "list",
+        .localized = {
+            [SESSION_UI_LANGUAGE_EN] = "list",
+            [SESSION_UI_LANGUAGE_KO] = "목록",
+            [SESSION_UI_LANGUAGE_JP] = "一覧",
+            [SESSION_UI_LANGUAGE_ZH] = "列表",
+            [SESSION_UI_LANGUAGE_RU] = "список",
+        },
+    },
+    {
+        .canonical = "read",
+        .localized = {
+            [SESSION_UI_LANGUAGE_EN] = "read",
+            [SESSION_UI_LANGUAGE_KO] = "읽기",
+            [SESSION_UI_LANGUAGE_JP] = "閲覧",
+            [SESSION_UI_LANGUAGE_ZH] = "阅读",
+            [SESSION_UI_LANGUAGE_RU] = "читать",
+        },
+    },
+    {
+        .canonical = "post",
+        .localized = {
+            [SESSION_UI_LANGUAGE_EN] = "post",
+            [SESSION_UI_LANGUAGE_KO] = "게시",
+            [SESSION_UI_LANGUAGE_JP] = "投稿",
+            [SESSION_UI_LANGUAGE_ZH] = "发布",
+            [SESSION_UI_LANGUAGE_RU] = "пост",
+        },
+    },
+    {
+        .canonical = "comment",
+        .localized = {
+            [SESSION_UI_LANGUAGE_EN] = "comment",
+            [SESSION_UI_LANGUAGE_KO] = "댓글",
+            [SESSION_UI_LANGUAGE_JP] = "コメント",
+            [SESSION_UI_LANGUAGE_ZH] = "评论",
+            [SESSION_UI_LANGUAGE_RU] = "коммент",
+        },
+    },
+    {
+        .canonical = "regen",
+        .localized = {
+            [SESSION_UI_LANGUAGE_EN] = "regen",
+            [SESSION_UI_LANGUAGE_KO] = "갱신",
+            [SESSION_UI_LANGUAGE_JP] = "再掲",
+            [SESSION_UI_LANGUAGE_ZH] = "置顶",
+            [SESSION_UI_LANGUAGE_RU] = "поднять",
+        },
+    },
+    {
+        .canonical = "delete",
+        .localized = {
+            [SESSION_UI_LANGUAGE_EN] = "delete",
+            [SESSION_UI_LANGUAGE_KO] = "삭제",
+            [SESSION_UI_LANGUAGE_JP] = "削除",
+            [SESSION_UI_LANGUAGE_ZH] = "删除",
+            [SESSION_UI_LANGUAGE_RU] = "удалить",
+        },
+    },
+};
+
+static const size_t kSessionBbsSubcommandCount =
+    sizeof(kSessionBbsSubcommands) / sizeof(kSessionBbsSubcommands[0]);
+
 static const session_help_entry_t kSessionHelpEssential[] = {
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1394,10 +1465,10 @@ static const session_help_entry_t kSessionHelpEssential[] = {
             "Открыть доску объявлений (завершайте ввод строкой %s).",
         },
         .label_translations = {
-            [SESSION_UI_LANGUAGE_KO] = "게시판 [list|read|post|comment|regen|delete]",
-            [SESSION_UI_LANGUAGE_JP] = "掲示板 [list|read|post|comment|regen|delete]",
-            [SESSION_UI_LANGUAGE_ZH] = "公告板 [list|read|post|comment|regen|delete]",
-            [SESSION_UI_LANGUAGE_RU] = "доска [list|read|post|comment|regen|delete]",
+            [SESSION_UI_LANGUAGE_KO] = "게시판 [목록|읽기|게시|댓글|갱신|삭제]",
+            [SESSION_UI_LANGUAGE_JP] = "掲示板 [一覧|閲覧|投稿|コメント|再掲|削除]",
+            [SESSION_UI_LANGUAGE_ZH] = "公告板 [列表|阅读|发布|评论|置顶|删除]",
+            [SESSION_UI_LANGUAGE_RU] = "доска [список|читать|пост|коммент|поднять|удалить]",
         },
         .description_arg_count = 1,
         .description_args = {SESSION_HELP_TEMPLATE_ARG_BBS_TERMINATOR},
@@ -2168,6 +2239,109 @@ static bool session_bbs_matches_terminator(const char *line) {
     }
   }
   return false;
+}
+
+static const char *session_command_alias_preferred_by_canonical(const session_ctx_t *ctx, const char *canonical);
+static void session_send_system_line(session_ctx_t *ctx, const char *message);
+
+static const session_bbs_subcommand_alias_t *session_bbs_subcommand_lookup(const char *canonical) {
+  if (canonical == NULL || canonical[0] == '\0') {
+    return NULL;
+  }
+  for (size_t idx = 0; idx < kSessionBbsSubcommandCount; ++idx) {
+    if (strcmp(kSessionBbsSubcommands[idx].canonical, canonical) == 0) {
+      return &kSessionBbsSubcommands[idx];
+    }
+  }
+  return NULL;
+}
+
+static const char *session_bbs_subcommand_localized(const session_bbs_subcommand_alias_t *alias,
+                                                    session_ui_language_t language) {
+  if (alias == NULL) {
+    return NULL;
+  }
+  if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
+    language = SESSION_UI_LANGUAGE_KO;
+  }
+  const char *localized = alias->localized[language];
+  if (localized != NULL && localized[0] != '\0') {
+    return localized;
+  }
+  return NULL;
+}
+
+static const char *session_bbs_subcommand_preferred(const session_ctx_t *ctx, const char *canonical) {
+  const session_bbs_subcommand_alias_t *alias = session_bbs_subcommand_lookup(canonical);
+  if (alias == NULL) {
+    return canonical;
+  }
+  const char *localized = session_bbs_subcommand_localized(alias, session_ui_language_current(ctx));
+  if (localized != NULL) {
+    return localized;
+  }
+  return alias->canonical;
+}
+
+static const char *session_bbs_subcommand_canonicalize(const session_ctx_t *ctx, const char *command) {
+  if (command == NULL || command[0] == '\0') {
+    return NULL;
+  }
+
+  for (size_t idx = 0; idx < kSessionBbsSubcommandCount; ++idx) {
+    if (strcmp(command, kSessionBbsSubcommands[idx].canonical) == 0) {
+      return kSessionBbsSubcommands[idx].canonical;
+    }
+  }
+
+  session_ui_language_t language = session_ui_language_current(ctx);
+  for (size_t idx = 0; idx < kSessionBbsSubcommandCount; ++idx) {
+    const char *localized = session_bbs_subcommand_localized(&kSessionBbsSubcommands[idx], language);
+    if (localized != NULL && strcmp(command, localized) == 0) {
+      return kSessionBbsSubcommands[idx].canonical;
+    }
+  }
+
+  for (size_t idx = 0; idx < kSessionBbsSubcommandCount; ++idx) {
+    for (size_t lang = 0; lang < SESSION_UI_LANGUAGE_COUNT; ++lang) {
+      const char *localized =
+          session_bbs_subcommand_localized(&kSessionBbsSubcommands[idx], (session_ui_language_t)lang);
+      if (localized != NULL && strcmp(command, localized) == 0) {
+        return kSessionBbsSubcommands[idx].canonical;
+      }
+    }
+  }
+
+  return NULL;
+}
+
+static void session_bbs_format_usage(session_ctx_t *ctx, const char *canonical, const char *arguments,
+                                     char *buffer, size_t length) {
+  if (buffer == NULL || length == 0U) {
+    return;
+  }
+
+  buffer[0] = '\0';
+  const char *bbs_command = session_command_alias_preferred_by_canonical(ctx, "/bbs");
+  if (bbs_command == NULL || bbs_command[0] == '\0') {
+    bbs_command = "/bbs";
+  }
+
+  const char *subcommand = canonical != NULL ? session_bbs_subcommand_preferred(ctx, canonical) : NULL;
+  if (subcommand == NULL || subcommand[0] == '\0') {
+    subcommand = canonical != NULL ? canonical : "";
+  }
+
+  const char *args = arguments != NULL ? arguments : "";
+  const char *separator = args[0] != '\0' ? " " : "";
+
+  snprintf(buffer, length, "Usage: %s %s%s%s", bbs_command, subcommand, separator, args);
+}
+
+static void session_bbs_send_usage(session_ctx_t *ctx, const char *canonical, const char *arguments) {
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_bbs_format_usage(ctx, canonical, arguments, usage, sizeof(usage));
+  session_send_system_line(ctx, usage);
 }
 
 static const session_command_alias_t *session_command_alias_lookup(const char *canonical) {
@@ -21315,10 +21489,7 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
   session_bbs_reset_pending_post(ctx);
 
   if (arguments == NULL) {
-    char usage[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(usage, sizeof(usage), "Usage: %s post <title>[|tags...]",
-             session_command_alias_preferred_by_canonical(ctx, "/bbs"));
-    session_send_system_line(ctx, usage);
+    session_bbs_send_usage(ctx, "post", "<title>[|tags...]");
     session_send_system_line(ctx, "Use | to separate tags when the title has spaces.");
     return;
   }
@@ -21327,10 +21498,7 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
   snprintf(working, sizeof(working), "%s", arguments);
   trim_whitespace_inplace(working);
   if (working[0] == '\0') {
-    char usage[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(usage, sizeof(usage), "Usage: %s post <title>[|tags...]",
-             session_command_alias_preferred_by_canonical(ctx, "/bbs"));
-    session_send_system_line(ctx, usage);
+    session_bbs_send_usage(ctx, "post", "<title>[|tags...]");
     session_send_system_line(ctx, "Use | to separate tags when the title has spaces.");
     return;
   }
@@ -21508,10 +21676,7 @@ static void session_bbs_capture_body_line(session_ctx_t *ctx, const char *line) 
 // Append a comment to a post.
 static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL || ctx->owner == NULL || arguments == NULL) {
-    char usage[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(usage, sizeof(usage), "Usage: %s comment <id>|<text>",
-             session_command_alias_preferred_by_canonical(ctx, "/bbs"));
-    session_send_system_line(ctx, usage);
+    session_bbs_send_usage(ctx, "comment", "<id>|<text>");
     return;
   }
 
@@ -21519,19 +21684,13 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   snprintf(working, sizeof(working), "%s", arguments);
   trim_whitespace_inplace(working);
   if (working[0] == '\0') {
-    char usage[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(usage, sizeof(usage), "Usage: %s comment <id>|<text>",
-             session_command_alias_preferred_by_canonical(ctx, "/bbs"));
-    session_send_system_line(ctx, usage);
+    session_bbs_send_usage(ctx, "comment", "<id>|<text>");
     return;
   }
 
   char *separator = strchr(working, '|');
   if (separator == NULL) {
-    char usage[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(usage, sizeof(usage), "Usage: %s comment <id>|<text>",
-             session_command_alias_preferred_by_canonical(ctx, "/bbs"));
-    session_send_system_line(ctx, usage);
+    session_bbs_send_usage(ctx, "comment", "<id>|<text>");
     return;
   }
   *separator = '\0';
@@ -21541,10 +21700,7 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(comment_text);
 
   if (id_text[0] == '\0' || comment_text[0] == '\0') {
-    char usage[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(usage, sizeof(usage), "Usage: %s comment <id>|<text>",
-             session_command_alias_preferred_by_canonical(ctx, "/bbs"));
-    session_send_system_line(ctx, usage);
+    session_bbs_send_usage(ctx, "comment", "<id>|<text>");
     return;
   }
 
@@ -22494,39 +22650,36 @@ static void session_handle_bbs(session_ctx_t *ctx, const char *arguments) {
 
   ctx->in_bbs_mode = true;
 
-  if (strcmp(command, "list") == 0) {
+  const char *canonical_command = session_bbs_subcommand_canonicalize(ctx, command);
+  if (canonical_command == NULL) {
+    session_send_system_line(ctx, "Unknown /bbs subcommand. Try /bbs for usage.");
+    return;
+  }
+
+  if (strcmp(canonical_command, "list") == 0) {
     session_bbs_prepare_canvas(ctx);
     session_bbs_list(ctx);
-  } else if (strcmp(command, "read") == 0) {
+  } else if (strcmp(canonical_command, "read") == 0) {
     if (rest == NULL || rest[0] == '\0') {
-      char usage[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(usage, sizeof(usage), "Usage: %s read <id>",
-               session_command_alias_preferred_by_canonical(ctx, "/bbs"));
-      session_send_system_line(ctx, usage);
+      session_bbs_send_usage(ctx, "read", "<id>");
       return;
     }
     uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
     session_bbs_read(ctx, id);
-  } else if (strcmp(command, "post") == 0) {
+  } else if (strcmp(canonical_command, "post") == 0) {
     session_bbs_begin_post(ctx, rest);
-  } else if (strcmp(command, "comment") == 0) {
+  } else if (strcmp(canonical_command, "comment") == 0) {
     session_bbs_add_comment(ctx, rest);
-  } else if (strcmp(command, "regen") == 0) {
+  } else if (strcmp(canonical_command, "regen") == 0) {
     if (rest == NULL || rest[0] == '\0') {
-      char usage[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(usage, sizeof(usage), "Usage: %s regen <id>",
-               session_command_alias_preferred_by_canonical(ctx, "/bbs"));
-      session_send_system_line(ctx, usage);
+      session_bbs_send_usage(ctx, "regen", "<id>");
       return;
     }
     uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
     session_bbs_regen_post(ctx, id);
-  } else if (strcmp(command, "delete") == 0) {
+  } else if (strcmp(canonical_command, "delete") == 0) {
     if (rest == NULL || rest[0] == '\0') {
-      char usage[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(usage, sizeof(usage), "Usage: %s delete <id>",
-               session_command_alias_preferred_by_canonical(ctx, "/bbs"));
-      session_send_system_line(ctx, usage);
+      session_bbs_send_usage(ctx, "delete", "<id>");
       return;
     }
     uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
