@@ -66,8 +66,8 @@
 #define SSH_CHATTER_IMAGE_PREVIEW_HEIGHT 48U
 #define SSH_CHATTER_IMAGE_PREVIEW_LINE_LEN 128U
 #define SSH_CHATTER_BBS_DEFAULT_TAG "general"
-#define SSH_CHATTER_BBS_TERMINATOR ">/__BBS_END>"
-#define SSH_CHATTER_ASCIIART_TERMINATOR ">/__ARTWORK_END>"
+#define SSH_CHATTER_ASCIIART_TERMINATOR_EN ">/__ARTWORK_END>"
+#define SSH_CHATTER_BBS_TERMINATOR_EN ">/__BBS_END>"
 #define SSH_CHATTER_BBS_EDITOR_BODY_DIVIDER "----------Body---------------"
 #define SSH_CHATTER_BBS_EDITOR_END_DIVIDER "----------End-----------------"
 #define SSH_CHATTER_RSS_REFRESH_SECONDS 180U
@@ -925,15 +925,1655 @@ static const char *const kSessionCommandNames[] = {
     "color",         "connected",   "date",         "delete-msg",   "elect",
     "eliza",         "eliza-chat",  "exit",         "files",        "game",
     "gemini",        "gemini-unfreeze","getos",      "grant",        "help",
-    "image",         "kick",        "mode",         "motd",         "nick",
-    "os",            "pair",        "palette",     "pardon",       "pm",
+    "help-etc",      "image",       "kick",        "mode",         "motd",
+    "nick",          "os",          "pair",        "palette",     "pardon",
+    "pm",
     "poke",          "poll",        "reply",       "revoke",       "rss",
-    "search",        "set-target-lang","set-trans-lang","showstatus", "soulmate",
-    "status",        "suspend!",    "systemcolor",  "today",        "translate",
+    "search",        "set-target-lang","set-trans-lang","set-ui-lang","showstatus",
+    "soulmate",      "status",      "suspend!",    "systemcolor",  "today",
+    "translate",
     "translate-scope","unblock",    "users",        "video",        "vote",
     "vote-single",   "weather",
 };
 #define SSH_CHATTER_COMMAND_COUNT (sizeof(kSessionCommandNames) / sizeof(kSessionCommandNames[0]))
+
+typedef enum session_help_entry_kind {
+  SESSION_HELP_ENTRY_COMMAND = 0,
+  SESSION_HELP_ENTRY_FORMATTED,
+  SESSION_HELP_ENTRY_TEXT,
+} session_help_entry_kind_t;
+
+#define SESSION_HELP_TEMPLATE_ARG_LIMIT 8U
+
+typedef enum session_help_template_arg_kind {
+  SESSION_HELP_TEMPLATE_ARG_PREFIX = 0,
+  SESSION_HELP_TEMPLATE_ARG_ASCIIART_TERMINATOR,
+  SESSION_HELP_TEMPLATE_ARG_BBS_TERMINATOR,
+  SESSION_HELP_TEMPLATE_ARG_COMMAND_REPLY,
+  SESSION_HELP_TEMPLATE_ARG_COMMAND_GOOD,
+  SESSION_HELP_TEMPLATE_ARG_COMMAND_SAD,
+  SESSION_HELP_TEMPLATE_ARG_COMMAND_WTF,
+  SESSION_HELP_TEMPLATE_ARG_COMMAND_BBS,
+} session_help_template_arg_kind_t;
+
+typedef struct session_help_entry {
+  session_help_entry_kind_t kind;
+  const char *label;
+  const char *description[SESSION_UI_LANGUAGE_COUNT];
+  const char *label_translations[SESSION_UI_LANGUAGE_COUNT];
+  size_t label_arg_count;
+  session_help_template_arg_kind_t label_args[SESSION_HELP_TEMPLATE_ARG_LIMIT];
+  size_t description_arg_count;
+  session_help_template_arg_kind_t description_args[SESSION_HELP_TEMPLATE_ARG_LIMIT];
+} session_help_entry_t;
+
+typedef struct session_command_alias {
+  const char *canonical;
+  const char *localized[SESSION_UI_LANGUAGE_COUNT];
+} session_command_alias_t;
+
+typedef struct session_ui_locale {
+  session_ui_language_t language;
+  const char *code;
+  const char *help_title;
+  const char *help_hint_extra;
+  const char *help_scroll_hint;
+  const char *help_regular_hint;
+  const char *help_extra_title;
+  const char *help_extra_hint;
+  const char *help_operator_title;
+  const char *welcome_help_hint;
+  const char *welcome_motd_hint;
+  const char *chat_spacing_usage;
+  const char *chat_spacing_immediate;
+  const char *chat_spacing_single;
+  const char *chat_spacing_multiple;
+  const char *set_ui_lang_usage;
+  const char *set_ui_lang_success;
+  const char *set_ui_lang_invalid;
+  const char *mode_status_format;
+  const char *mode_label_chat;
+  const char *mode_label_command;
+  const char *mode_explain_chat;
+  const char *mode_explain_command;
+  const char *mode_already_chat;
+  const char *mode_already_command;
+  const char *mode_enabled_chat;
+  const char *mode_enabled_command;
+  const char *mode_usage;
+  const char *unknown_command;
+} session_ui_locale_t;
+
+static const char *const kSessionUiLanguageCodes[SESSION_UI_LANGUAGE_COUNT] = {
+    "en",
+    "ko",
+    "jp",
+    "zh",
+    "ru",
+};
+
+static const char *const kSessionUiLanguageNames[SESSION_UI_LANGUAGE_COUNT][SESSION_UI_LANGUAGE_COUNT] = {
+    [SESSION_UI_LANGUAGE_EN] = {"English", "Korean", "Japanese", "Chinese", "Russian"},
+    [SESSION_UI_LANGUAGE_KO] = {"영어", "한국어", "일본어", "중국어", "러시아어"},
+    [SESSION_UI_LANGUAGE_JP] = {"英語", "韓国語", "日本語", "中国語", "ロシア語"},
+    [SESSION_UI_LANGUAGE_ZH] = {"英语", "韩语", "日语", "中文", "俄语"},
+    [SESSION_UI_LANGUAGE_RU] = {"английский", "корейский", "японский", "китайский", "русский"},
+};
+
+static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT] = {
+    {
+        .language = SESSION_UI_LANGUAGE_EN,
+        .code = "en",
+        .help_title = "Essential commands:",
+        .help_hint_extra = "See %shelp-etc for optional commands.",
+        .help_scroll_hint = "Use Up/Down arrows to scroll chat or command history.",
+        .help_regular_hint = "Regular messages are shared with everyone.",
+        .help_extra_title = "Extended commands:",
+        .help_extra_hint = "Return to %shelp for essentials.",
+        .help_operator_title = "Operator commands:",
+        .welcome_help_hint = "Use %shelp to view the manual.",
+        .welcome_motd_hint = "Use %smotd to read the information.",
+        .chat_spacing_usage = "Usage: %schat-spacing <0-5>",
+        .chat_spacing_immediate =
+            "Translation captions will appear immediately without reserving extra blank lines.",
+        .chat_spacing_single =
+            "Translation captions will reserve 1 blank line before appearing in chat threads.",
+        .chat_spacing_multiple =
+            "Translation captions will reserve %s blank lines before appearing in chat threads.",
+        .set_ui_lang_usage = "Usage: %sset-ui-lang <ko|en|jp|zh|ru>",
+        .set_ui_lang_success = "UI language set to %s. Use %shelp to review commands.",
+        .set_ui_lang_invalid = "Unsupported language. Use one of: ko, en, jp, zh, ru.",
+        .mode_status_format = "Current input mode: %s.",
+        .mode_label_chat = "chat",
+        .mode_label_command = "command",
+        .mode_explain_chat = "Chat mode: send messages normally. Prefix commands with %s.",
+        .mode_explain_command =
+            "Command mode: type commands without a prefix, use UpArrow/DownArrow for history, Tab for completion.",
+        .mode_already_chat = "Already in chat mode. Commands require the %s prefix.",
+        .mode_already_command =
+            "Command mode already active. Enter commands without a prefix, use UpArrow/DownArrow for history, Tab to autocomplete.",
+        .mode_enabled_chat = "Chat mode enabled. Commands once again require the %s prefix.",
+        .mode_enabled_command =
+            "Command mode enabled. Enter commands without a prefix; use UpArrow/DownArrow for history and Tab for completion.",
+        .mode_usage = "Usage: %smode <chat|command|toggle>",
+        .unknown_command = "Unknown command. Type %shelp for help.",
+    },
+    {
+        .language = SESSION_UI_LANGUAGE_KO,
+        .code = "ko",
+        .help_title = "필수 명령:",
+        .help_hint_extra = "%shelp-etc에서 선택 명령을 확인하세요.",
+        .help_scroll_hint = "위/아래 화살표로 채팅이나 명령 기록을 살펴볼 수 있습니다.",
+        .help_regular_hint = "일반 메시지는 모두에게 공유됩니다.",
+        .help_extra_title = "확장 명령:",
+        .help_extra_hint = "핵심 목록은 %shelp에서 다시 볼 수 있습니다.",
+        .help_operator_title = "운영자 명령:",
+        .welcome_help_hint = "%shelp 명령으로 도움말을 확인하세요.",
+        .welcome_motd_hint = "%smotd 명령으로 안내를 읽을 수 있습니다.",
+        .chat_spacing_usage = "사용법: %schat-spacing <0-5>",
+        .chat_spacing_immediate = "번역 자막이 빈 줄을 예약하지 않고 즉시 표시됩니다.",
+        .chat_spacing_single = "번역 자막이 표시되기 전에 빈 줄 1줄을 예약합니다.",
+        .chat_spacing_multiple = "번역 자막이 표시되기 전에 빈 줄 %s줄을 예약합니다.",
+        .set_ui_lang_usage = "사용법: %sset-ui-lang <ko|en|jp|zh|ru>",
+        .set_ui_lang_success = "UI 언어를 %s로 설정했습니다. %shelp 명령으로 목록을 다시 확인하세요.",
+        .set_ui_lang_invalid = "지원하지 않는 언어입니다. ko, en, jp, zh, ru 중에서 선택하세요.",
+        .mode_status_format = "현재 입력 모드: %s.",
+        .mode_label_chat = "채팅",
+        .mode_label_command = "명령",
+        .mode_explain_chat = "채팅 모드: 일반 메시지를 보내고, 명령은 %s 접두사를 붙여 입력하세요.",
+        .mode_explain_command =
+            "명령 모드: 접두사 없이 명령을 입력하고, 위/아래 화살표로 기록을 탐색하며 Tab으로 자동완성하세요.",
+        .mode_already_chat = "이미 채팅 모드입니다. 명령은 %s 접두사가 필요합니다.",
+        .mode_already_command = "이미 명령 모드입니다. 접두사 없이 입력하고, 위/아래 화살표와 Tab을 활용하세요.",
+        .mode_enabled_chat = "채팅 모드가 활성화되었습니다. 명령은 다시 %s 접두사가 필요합니다.",
+        .mode_enabled_command = "명령 모드가 활성화되었습니다. 접두사 없이 입력하고, 위/아래 화살표와 Tab을 사용하세요.",
+        .mode_usage = "사용법: %smode <chat|command|toggle>",
+        .unknown_command = "알 수 없는 명령입니다. 도움말은 %shelp에서 확인하세요.",
+    },
+    {
+        .language = SESSION_UI_LANGUAGE_JP,
+        .code = "jp",
+        .help_title = "基本コマンド:",
+        .help_hint_extra = "追加コマンドは %shelp-etc で確認できます。",
+        .help_scroll_hint = "上下の矢印でチャットやコマンド履歴をたどれます。",
+        .help_regular_hint = "通常のメッセージは全員に共有されます。",
+        .help_extra_title = "拡張コマンド:",
+        .help_extra_hint = "基本一覧に戻るには %shelp を実行してください。",
+        .help_operator_title = "オペレーター用コマンド:",
+        .welcome_help_hint = "%shelp でヘルプを表示できます。",
+        .welcome_motd_hint = "%smotd でお知らせを確認できます。",
+        .chat_spacing_usage = "使い方: %schat-spacing <0-5>",
+        .chat_spacing_immediate = "翻訳字幕は空行を確保せずすぐに表示されます。",
+        .chat_spacing_single = "翻訳字幕は表示前に空行を 1 行確保します。",
+        .chat_spacing_multiple = "翻訳字幕は表示前に空行を %s 行確保します。",
+        .set_ui_lang_usage = "使い方: %sset-ui-lang <ko|en|jp|zh|ru>",
+        .set_ui_lang_success = "UI 言語を %s に設定しました。%shelp でコマンドを再確認してください。",
+        .set_ui_lang_invalid = "対応していない言語です。ko, en, jp, zh, ru から選んでください。",
+        .mode_status_format = "現在の入力モード: %s。",
+        .mode_label_chat = "チャット",
+        .mode_label_command = "コマンド",
+        .mode_explain_chat = "チャットモード: 通常通りメッセージを送り、コマンドは %s を付けて入力します。",
+        .mode_explain_command =
+            "コマンドモード: 接頭辞なしで入力し、上下矢印で履歴を、Tab で補完を利用できます。",
+        .mode_already_chat = "すでにチャットモードです。コマンドには %s を付けてください。",
+        .mode_already_command = "すでにコマンドモードです。接頭辞なしで入力し、上下矢印と Tab を使ってください。",
+        .mode_enabled_chat = "チャットモードを有効にしました。コマンドには再び %s が必要です。",
+        .mode_enabled_command = "コマンドモードを有効にしました。接頭辞なしで入力し、上下矢印と Tab を使ってください。",
+        .mode_usage = "使い方: %smode <chat|command|toggle>",
+        .unknown_command = "不明なコマンドです。%shelp で確認してください。",
+    },
+    {
+        .language = SESSION_UI_LANGUAGE_ZH,
+        .code = "zh",
+        .help_title = "核心命令：",
+        .help_hint_extra = "更多命令请查看 %shelp-etc。",
+        .help_scroll_hint = "使用上下方向键查看聊天或命令历史。",
+        .help_regular_hint = "普通消息会分享给所有人。",
+        .help_extra_title = "扩展命令：",
+        .help_extra_hint = "返回核心列表请使用 %shelp。",
+        .help_operator_title = "管理员命令：",
+        .welcome_help_hint = "使用 %shelp 查看帮助。",
+        .welcome_motd_hint = "使用 %smotd 阅读公告。",
+        .chat_spacing_usage = "用法：%schat-spacing <0-5>",
+        .chat_spacing_immediate = "翻译字幕会立即显示，不再预留空行。",
+        .chat_spacing_single = "翻译字幕在显示前会预留 1 行空白。",
+        .chat_spacing_multiple = "翻译字幕在显示前会预留 %s 行空白。",
+        .set_ui_lang_usage = "用法：%sset-ui-lang <ko|en|jp|zh|ru>",
+        .set_ui_lang_success = "界面语言已切换为 %s。可用 %shelp 重新查看命令。",
+        .set_ui_lang_invalid = "不支持的语言，请选择 ko、en、jp、zh、ru。",
+        .mode_status_format = "当前输入模式：%s。",
+        .mode_label_chat = "聊天",
+        .mode_label_command = "命令",
+        .mode_explain_chat = "聊天模式：正常发送消息，命令需加上 %s 前缀。",
+        .mode_explain_command =
+            "命令模式：直接输入命令，不需要前缀；用上下方向键查看历史，Tab 自动补全。",
+        .mode_already_chat = "已经是聊天模式。命令需要 %s 前缀。",
+        .mode_already_command = "已经是命令模式。无需前缀，使用上下方向键和 Tab。",
+        .mode_enabled_chat = "聊天模式已启用。命令重新需要 %s 前缀。",
+        .mode_enabled_command = "命令模式已启用。无需前缀，可用上下方向键和 Tab。",
+        .mode_usage = "用法：%smode <chat|command|toggle>",
+        .unknown_command = "未知命令。请使用 %shelp 查看帮助。",
+    },
+    {
+        .language = SESSION_UI_LANGUAGE_RU,
+        .code = "ru",
+        .help_title = "Основные команды:",
+        .help_hint_extra = "Дополнительные команды смотрите в %shelp-etc.",
+        .help_scroll_hint = "Стрелки вверх/вниз листают чат или историю команд.",
+        .help_regular_hint = "Обычные сообщения видны всем.",
+        .help_extra_title = "Дополнительные команды:",
+        .help_extra_hint = "К основному списку вернёт %shelp.",
+        .help_operator_title = "Команды оператора:",
+        .welcome_help_hint = "Команду %shelp используйте для справки.",
+        .welcome_motd_hint = "%smotd покажет объявление.",
+        .chat_spacing_usage = "Использование: %schat-spacing <0-5>",
+        .chat_spacing_immediate = "Подписи перевода будут появляться сразу, без запасных пустых строк.",
+        .chat_spacing_single = "Подписи перевода перед выводом резервируют 1 пустую строку.",
+        .chat_spacing_multiple = "Подписи перевода перед выводом резервируют %s пустых строк.",
+        .set_ui_lang_usage = "Использование: %sset-ui-lang <ko|en|jp|zh|ru>",
+        .set_ui_lang_success = "Язык интерфейса переключён на %s. Команды можно пересмотреть через %shelp.",
+        .set_ui_lang_invalid = "Этот язык не поддерживается. Выберите один из: ko, en, jp, zh, ru.",
+        .mode_status_format = "Текущий режим ввода: %s.",
+        .mode_label_chat = "чат",
+        .mode_label_command = "команды",
+        .mode_explain_chat = "Режим чата: отправляйте сообщения, а команды вводите с префиксом %s.",
+        .mode_explain_command =
+            "Режим команд: вводите без префикса, используйте стрелки вверх/вниз для истории и Tab для автодополнения.",
+        .mode_already_chat = "Вы уже в режиме чата. Командам нужен префикс %s.",
+        .mode_already_command = "Режим команд уже активен. Вводите без префикса, пользуйтесь стрелками и Tab.",
+        .mode_enabled_chat = "Включён режим чата. Командам снова требуется префикс %s.",
+        .mode_enabled_command = "Включён режим команд. Вводите без префикса, применяйте стрелки и Tab.",
+        .mode_usage = "Использование: %smode <chat|command|toggle>",
+        .unknown_command = "Неизвестная команда. Подсказка — %shelp.",
+    },
+};
+
+static const char *const kSessionAsciiartTerminators[SESSION_UI_LANGUAGE_COUNT] = {
+    [SESSION_UI_LANGUAGE_EN] = SSH_CHATTER_ASCIIART_TERMINATOR_EN,
+    [SESSION_UI_LANGUAGE_KO] = ">/__그림_끝>",
+    [SESSION_UI_LANGUAGE_JP] = ">/__アート_終了>",
+    [SESSION_UI_LANGUAGE_ZH] = ">/__图像_结束>",
+    [SESSION_UI_LANGUAGE_RU] = ">/__АРТ_КОНЕЦ>",
+};
+
+static const char *const kSessionBbsTerminators[SESSION_UI_LANGUAGE_COUNT] = {
+    [SESSION_UI_LANGUAGE_EN] = SSH_CHATTER_BBS_TERMINATOR_EN,
+    [SESSION_UI_LANGUAGE_KO] = ">/__게시판_끝>",
+    [SESSION_UI_LANGUAGE_JP] = ">/__掲示板_終了>",
+    [SESSION_UI_LANGUAGE_ZH] = ">/__公告板_结束>",
+    [SESSION_UI_LANGUAGE_RU] = ">/__ДОСКА_КОНЕЦ>",
+};
+
+static const session_command_alias_t kSessionCommandAliases[] = {
+    {
+        .canonical = "/reply",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/답장",
+            [SESSION_UI_LANGUAGE_JP] = "/返信",
+            [SESSION_UI_LANGUAGE_ZH] = "/回复",
+            [SESSION_UI_LANGUAGE_RU] = "/ответ",
+        },
+    },
+    {
+        .canonical = "/good",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/좋아요",
+            [SESSION_UI_LANGUAGE_JP] = "/いいね",
+            [SESSION_UI_LANGUAGE_ZH] = "/点赞",
+            [SESSION_UI_LANGUAGE_RU] = "/класс",
+        },
+    },
+    {
+        .canonical = "/sad",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/슬퍼요",
+            [SESSION_UI_LANGUAGE_JP] = "/かなしい",
+            [SESSION_UI_LANGUAGE_ZH] = "/难过",
+            [SESSION_UI_LANGUAGE_RU] = "/грусть",
+        },
+    },
+    {
+        .canonical = "/wtf",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/어쩌라고",
+            [SESSION_UI_LANGUAGE_JP] = "/なんだと",
+            [SESSION_UI_LANGUAGE_ZH] = "/搞什么",
+            [SESSION_UI_LANGUAGE_RU] = "/чтоэто",
+        },
+    },
+    {
+        .canonical = "/bbs",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/게시판",
+            [SESSION_UI_LANGUAGE_JP] = "/掲示板",
+            [SESSION_UI_LANGUAGE_ZH] = "/公告板",
+            [SESSION_UI_LANGUAGE_RU] = "/доска",
+        },
+    },
+};
+
+static const size_t kSessionCommandAliasCount =
+    sizeof(kSessionCommandAliases) / sizeof(kSessionCommandAliases[0]);
+
+static const session_help_entry_t kSessionHelpEssential[] = {
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "help",
+        .description = {
+            "Show essential chat and BBS commands.",
+            "채팅과 게시판에 필요한 핵심 명령을 보여줍니다.",
+            "チャットと掲示板で必要な基本コマンドを表示します。",
+            "显示聊天与公告板所需的核心命令。",
+            "Показать основные команды для чата и доски объявлений.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "help-etc",
+        .description = {
+            "List optional and operator commands.",
+            "선택 및 운영자 명령을 확인합니다.",
+            "補助および運営向けコマンドを一覧表示します。",
+            "列出可选命令和管理员命令。",
+            "Показать дополнительные и операторские команды.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "exit",
+        .description = {
+            "Leave the chat.",
+            "채팅방을 나갑니다.",
+            "チャットを退出します。",
+            "离开聊天。",
+            "Выйти из чата.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "nick <name>",
+        .description = {
+            "Change your display name.",
+            "표시 이름을 변경합니다.",
+            "表示名を変更します。",
+            "更改显示名称。",
+            "Изменить отображаемое имя.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "pm <username> <message>",
+        .description = {
+            "Send a private message.",
+            "개인 메시지를 보냅니다.",
+            "プライベートメッセージを送信します。",
+            "发送私信。",
+            "Отправить личное сообщение.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "motd",
+        .description = {
+            "View the message of the day.",
+            "공지(MOTD)를 확인합니다.",
+            "MOTD（お知らせ）を表示します。",
+            "查看每日公告 (MOTD)。",
+            "Показать сообщение дня.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "status <message|clear>",
+        .description = {
+            "Set your profile status.",
+            "프로필 상태를 설정합니다.",
+            "プロフィールステータスを設定します。",
+            "设置个人状态。",
+            "Установить статус профиля.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "showstatus <username>",
+        .description = {
+            "View someone else's status.",
+            "다른 사용자의 상태를 봅니다.",
+            "他のユーザーのステータスを確認します。",
+            "查看他人的状态。",
+            "Посмотреть статус другого пользователя.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "users",
+        .description = {
+            "Announce the number of connected users.",
+            "현재 접속자 수를 알려줍니다.",
+            "接続中のユーザー数を知らせます。",
+            "公布当前在线人数。",
+            "Сообщить количество подключённых пользователей.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "chat <message-id>",
+        .description = {
+            "Show a past message by ID.",
+            "ID로 이전 메시지를 보여줍니다.",
+            "ID を指定して過去のメッセージを表示します。",
+            "按编号查看历史消息。",
+            "Показать прошлое сообщение по идентификатору.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "reply <message-id|r<reply-id>> <text>",
+        .description = {
+            "Reply to a message or reply.",
+            "메시지 또는 답글에 답장합니다.",
+            "メッセージまたは返信に返信します。",
+            "回复消息或回复链。",
+            "Ответить на сообщение или ответ.",
+        },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "답장 <메시지ID|r<답글ID>> <내용>",
+            [SESSION_UI_LANGUAGE_JP] = "返信 <メッセージID|r<返信ID>> <本文>",
+            [SESSION_UI_LANGUAGE_ZH] = "回复 <消息ID|r<回复ID>> <内容>",
+            [SESSION_UI_LANGUAGE_RU] = "ответ <id сообщения|r<id ответа>> <текст>",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "bbs [list|read|post|comment|regen|delete]",
+        .description = {
+            "Open the bulletin board system (finish %s to post).",
+            "게시판을 엽니다 (%s 로 입력을 마칩니다).",
+            "掲示板を開きます（投稿は %s で終了）。",
+            "打开公告板系统（以 %s 结束提交）。",
+            "Открыть доску объявлений (завершайте ввод строкой %s).",
+        },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "게시판 [list|read|post|comment|regen|delete]",
+            [SESSION_UI_LANGUAGE_JP] = "掲示板 [list|read|post|comment|regen|delete]",
+            [SESSION_UI_LANGUAGE_ZH] = "公告板 [list|read|post|comment|regen|delete]",
+            [SESSION_UI_LANGUAGE_RU] = "доска [list|read|post|comment|regen|delete]",
+        },
+        .description_arg_count = 1,
+        .description_args = {SESSION_HELP_TEMPLATE_ARG_BBS_TERMINATOR},
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "mode <chat|command|toggle>",
+        .description = {
+            "Switch between chat mode and command mode.",
+            "채팅 모드와 명령 모드를 전환합니다.",
+            "チャットモードとコマンドモードを切り替えます。",
+            "在聊天模式和命令模式之间切换。",
+            "Переключить режим чата и режим команд.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "set-ui-lang <ko|en|jp|zh|ru>",
+        .description = {
+            "Change the interface language.",
+            "인터페이스 언어를 변경합니다.",
+            "インターフェース言語を変更します。",
+            "更改界面语言。",
+            "Изменить язык интерфейса.",
+        },
+    },
+};
+
+static const session_help_entry_t kSessionHelpExtended[] = {
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "search <text>",
+        .description = {
+            "Search for users whose name matches the text.",
+            "이름에 텍스트가 포함된 사용자를 찾습니다.",
+            "名前にテキストが含まれるユーザーを検索します。",
+            "按名称中包含的文字搜索用户。",
+            "Найти пользователей, чьи имена содержат указанный текст.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "image <url> [caption]",
+        .description = {
+            "Share an image link.",
+            "이미지 링크를 공유합니다.",
+            "画像リンクを共有します。",
+            "分享图片链接。",
+            "Поделиться ссылкой на изображение.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "video <url> [caption]",
+        .description = {
+            "Share a video link.",
+            "영상 링크를 공유합니다.",
+            "動画リンクを共有します。",
+            "分享视频链接。",
+            "Поделиться ссылкой на видео.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "audio <url> [caption]",
+        .description = {
+            "Share an audio clip link.",
+            "오디오 링크를 공유합니다.",
+            "音声クリップのリンクを共有します。",
+            "分享音频链接。",
+            "Поделиться ссылкой на аудио.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "files <url> [caption]",
+        .description = {
+            "Share a downloadable file.",
+            "다운로드 가능한 파일을 공유합니다.",
+            "ダウンロード可能なファイルを共有します。",
+            "分享可下载的文件。",
+            "Поделиться загружаемым файлом.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "mail [inbox|send <user> <message>|clear]",
+        .description = {
+            "Manage your mailbox.",
+            "사서함을 관리합니다.",
+            "メールボックスを管理します。",
+            "管理你的邮箱。",
+            "Управлять почтовым ящиком.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "profilepic",
+        .description = {
+            "Open the ASCII art profile picture composer.",
+            "ASCII 아트 프로필 편집기를 엽니다.",
+            "ASCII アートのプロフィール作成ツールを開きます。",
+            "打开 ASCII 头像编辑器。",
+            "Открыть редактор ASCII-аватаров.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "asciiart",
+        .description = {
+            "Open the ASCII art composer (max 128 lines, 1/10 min per IP).",
+            "ASCII 아트 작성기를 엽니다 (최대 128줄, IP당 10분에 1회).",
+            "ASCII アート作成ツールを開きます（最大128行、IPごと10分に1回）。",
+            "打开 ASCII 艺术编辑器（最多128行，每个 IP 10 分钟一次）。",
+            "Открыть редактор ASCII-арта (до 128 строк, раз в 10 минут на IP).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "game <tetris|liargame|alpha>",
+        .description = {
+            "Start a minigame in chat (use %ssuspend! or Ctrl+Z to exit).",
+            "채팅에서 미니게임을 시작합니다 (%ssuspend! 또는 Ctrl+Z로 종료).",
+            "チャットでミニゲームを開始します（終了は %ssuspend! か Ctrl+Z）。",
+            "在聊天中启动小游戏（使用 %ssuspend! 或 Ctrl+Z 退出）。",
+            "Запустить мини-игру в чате (выход — %ssuspend! или Ctrl+Z).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "color (text;highlight[;bold])",
+        .description = {
+            "Style your handle.",
+            "사용자 이름 색상을 꾸밉니다.",
+            "ハンドル名の配色を設定します。",
+            "设置昵称的配色。",
+            "Настроить оформление вашего ника.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "systemcolor (fg;background[;highlight][;bold])",
+        .description = {
+            "Customize interface colors (reset with %ssystemcolor reset).",
+            "인터페이스 색상을 조정합니다 (%ssystemcolor reset으로 초기화).",
+            "インターフェースの色を調整します（%ssystemcolor reset で初期化）。",
+            "自定义界面颜色（用 %ssystemcolor reset 重置）。",
+            "Настроить цвета интерфейса (сброс — %ssystemcolor reset).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "set-trans-lang <language|off>",
+        .description = {
+            "Translate terminal output to a language.",
+            "터미널 출력 번역 대상 언어를 지정합니다.",
+            "端末出力の翻訳先を指定します。",
+            "设置终端输出的翻译语言。",
+            "Задать язык для перевода терминальных сообщений.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "set-target-lang <language|off>",
+        .description = {
+            "Translate your outgoing messages.",
+            "내보내는 메시지를 번역합니다.",
+            "自分の送信メッセージを翻訳します。",
+            "翻译你发送的消息。",
+            "Переводить исходящие сообщения.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "weather <region> <city>",
+        .description = {
+            "Show weather for a region and city.",
+            "지역과 도시의 날씨를 보여줍니다.",
+            "地域と都市の天気を表示します。",
+            "显示指定地区和城市的天气。",
+            "Показать погоду для региона и города.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "translate <on|off>",
+        .description = {
+            "Enable or disable translation after configuring languages.",
+            "언어를 설정한 후 번역 기능을 켜거나 끕니다.",
+            "言語設定後に翻訳機能を有効/無効にします。",
+            "在设定语言后开启或关闭翻译。",
+            "Включить или отключить перевод после настройки языков.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "eliza-chat <message>",
+        .description = {
+            "Chat with the shared Eliza persona.",
+            "공유된 엘리자 페르소나와 대화합니다.",
+            "共有のエリザ人格と会話します。",
+            "与共享的 Eliza 人格聊天。",
+            "Пообщаться с общей персоной Элиза.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "chat-spacing <0-5>",
+        .description = {
+            "Reserve blank lines before translated captions in chat.",
+            "번역 자막 앞에 공백 줄을 예약합니다.",
+            "翻訳キャプション前に空行を確保します。",
+            "在聊天翻译字幕前预留空行。",
+            "Резервировать пустые строки перед переводами в чате.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "palette <name>",
+        .description = {
+            "Apply a predefined interface palette (%spalette list).",
+            "미리 정의된 팔레트를 적용합니다 (%spalette list 참고).",
+            "定義済みの配色を適用します（%spalette list を参照）。",
+            "应用预设的界面配色（参见 %spalette list）。",
+            "Применить готовую палитру интерфейса (см. %spalette list).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "today",
+        .description = {
+            "Discover today's function (once per day).",
+            "오늘의 기능을 확인합니다 (하루 1회).",
+            "本日の機能を確認します（1日1回）。",
+            "查看今日功能（每天一次）。",
+            "Узнать сегодняшнюю функцию (раз в день).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "date <timezone>",
+        .description = {
+            "View the server time in another timezone.",
+            "다른 시간대의 서버 시간을 확인합니다.",
+            "別のタイムゾーンでサーバー時刻を表示します。",
+            "查看其他时区的服务器时间。",
+            "Показать серверное время в другом часовом поясе.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "os <name>",
+        .description = {
+            "Record the operating system you use.",
+            "사용 중인 운영체제를 기록합니다.",
+            "使用中のOSを記録します。",
+            "记录你使用的操作系统。",
+            "Сохранить информацию о вашей ОС.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "getos <username>",
+        .description = {
+            "Look up someone else's recorded operating system.",
+            "다른 사용자가 기록한 운영체제를 확인합니다.",
+            "他のユーザーが登録したOSを確認します。",
+            "查看他人记录的操作系统。",
+            "Посмотреть, какую ОС указал другой пользователь.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "birthday YYYY-MM-DD",
+        .description = {
+            "Register your birthday.",
+            "생일을 등록합니다.",
+            "誕生日を登録します。",
+            "登记你的生日。",
+            "Зарегистрировать дату рождения.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "soulmate",
+        .description = {
+            "List users sharing your birthday.",
+            "생일이 같은 사용자를 나열합니다.",
+            "同じ誕生日のユーザーを一覧表示します。",
+            "列出与你同生日的用户。",
+            "Показать пользователей с той же датой рождения.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "pair",
+        .description = {
+            "List users sharing your recorded OS.",
+            "등록한 OS가 같은 사용자를 나열합니다.",
+            "同じOSを登録したユーザーを表示します。",
+            "列出记录的操作系统相同的用户。",
+            "Показать пользователей с той же записанной ОС.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "connected",
+        .description = {
+            "Privately list everyone connected.",
+            "현재 접속 중인 사용자 목록을 비공개로 확인합니다.",
+            "接続中のユーザーを自分だけに一覧表示します。",
+            "私下查看所有在线用户。",
+            "Получить приватный список всех подключённых.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "alpha-centauri-landers",
+        .description = {
+            "View the Immigrants' Flag hall of fame.",
+            "Immigrants' Flag 명예의 전당을 확인합니다.",
+            "Immigrants' Flag 殿堂を表示します。",
+            "查看 Immigrants' Flag 名人堂。",
+            "Открыть зал славы Immigrants' Flag.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "poll <question>|<option...>",
+        .description = {
+            "Start or view a quick poll.",
+            "빠른 투표를 시작하거나 확인합니다.",
+            "簡易投票を開始または表示します。",
+            "发起或查看快速投票。",
+            "Создать или просмотреть быстрый опрос.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "vote <label> <question>|<option...>",
+        .description = {
+            "Start or inspect a named multiple-choice poll (close with %svote @close <label>).",
+            "이름 있는 다중 선택 투표를 시작하거나 확인합니다 (%svote @close <label> 로 종료).",
+            "名前付きの複数選択投票を開始/確認します（終了は %svote @close <label>）。",
+            "发起或查看命名的多选投票（用 %svote @close <label> 结束）。",
+            "Создать или просмотреть именованный многовариантный опрос (закрытие — %svote @close <label>).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "vote-single <label> <question>|<option...>",
+        .description = {
+            "Start or inspect a named single-choice poll.",
+            "이름 있는 단일 선택 투표를 시작하거나 확인합니다.",
+            "名前付き単一選択投票を開始/確認します。",
+            "发起或查看命名的单选投票。",
+            "Создать или просмотреть именованный одно вариантный опрос.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "elect <label> <choice>",
+        .description = {
+            "Vote in a named poll by label.",
+            "라벨로 지정된 투표에 참여합니다.",
+            "ラベルを指定して名前付き投票に投票します。",
+            "按标签在命名投票中投票。",
+            "Проголосовать в именованном опросе по метке.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "poke <username>",
+        .description = {
+            "Send a bell to call a user.",
+            "사용자를 호출하는 종소리를 보냅니다.",
+            "ユーザーを呼び出すベルを送ります。",
+            "向用户发送提醒铃声。",
+            "Отправить звуковой сигнал пользователю.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "block <user|ip>",
+        .description = {
+            "Hide messages from a user or IP locally (%sblock list to review).",
+            "사용자 또는 IP의 메시지를 차단합니다 (%sblock list로 확인).",
+            "ユーザーやIPのメッセージをローカルで非表示にします（確認は %sblock list）。",
+            "本地屏蔽某用户或 IP 的消息（用 %sblock list 查看）。",
+            "Скрыть сообщения пользователя или IP локально (проверка через %sblock list).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "unblock <target|all>",
+        .description = {
+            "Remove a local block entry.",
+            "로컬 차단을 해제합니다.",
+            "ローカルのブロックを解除します。",
+            "解除本地屏蔽。",
+            "Удалить локальную блокировку.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_FORMATTED,
+        .label = "%sgood|%ssad|%scool|%sangry|%schecked|%slove|%swtf <id>",
+        .description = {
+            "React to a message by number.",
+            "번호로 메시지에 반응합니다.",
+            "番号を指定してメッセージにリアクションします。",
+            "按编号为消息添加表情反应。",
+            "Реагировать на сообщение по номеру.",
+        },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "%s좋아요|%s슬퍼요|%scool|%sangry|%schecked|%slove|%s어쩌라고 <id>",
+            [SESSION_UI_LANGUAGE_JP] = "%sいいね|%sかなしい|%scool|%sangry|%schecked|%slove|%sなんだと <id>",
+            [SESSION_UI_LANGUAGE_ZH] = "%s点赞|%s难过|%scool|%sangry|%schecked|%slove|%s搞什么 <id>",
+            [SESSION_UI_LANGUAGE_RU] = "%sкласс|%sгрусть|%scool|%sangry|%schecked|%slove|%sчтоэто <id>",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_FORMATTED,
+        .label = "%s1 .. %s5",
+        .description = {
+            "Vote for an option in the active poll.",
+            "진행 중인 투표에서 항목에 투표합니다.",
+            "実施中の投票で候補に投票します。",
+            "为当前投票的选项投票。",
+            "Проголосовать за вариант в активном опросе.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "rss list",
+        .description = {
+            "List saved RSS feeds.",
+            "저장된 RSS 피드를 나열합니다.",
+            "保存された RSS フィードを一覧表示します。",
+            "列出已保存的 RSS 源。",
+            "Показать сохранённые RSS-ленты.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "rss read <tag>",
+        .description = {
+            "Open a saved feed in the inline reader.",
+            "저장된 피드를 인라인 리더로 엽니다.",
+            "保存されたフィードをインラインリーダーで開きます。",
+            "在内嵌阅读器中打开已保存的源。",
+            "Открыть сохранённую ленту во встроенном ридере.",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "suspend!",
+        .description = {
+            "Suspend the active game (Ctrl+Z while playing).",
+            "진행 중인 게임을 일시 중단합니다 (플레이 중 Ctrl+Z).",
+            "進行中のゲームを一時停止します（プレイ中に Ctrl+Z）。",
+            "暂停正在进行的游戏（游戏中按 Ctrl+Z）。",
+            "Приостановить активную игру (Ctrl+Z во время игры).",
+        },
+    },
+};
+
+static const session_help_entry_t kSessionHelpOperator[] = {
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "translate-scope <chat|chat-nohistory|all>",
+        .description = {
+            "Limit translation scope (operators only).",
+            "번역 범위를 제한합니다 (운영자 전용).",
+            "翻訳対象範囲を制限します（オペレーター専用）。",
+            "限制翻译范围（仅限管理员）。",
+            "Ограничить область перевода (только для операторов).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "gemini <on|off>",
+        .description = {
+            "Toggle Gemini provider (operator only).",
+            "Gemini 제공자를 전환합니다 (운영자 전용).",
+            "Gemini プロバイダーを切り替えます（オペレーター専用）。",
+            "切换 Gemini 提供方（仅限管理员）。",
+            "Включить/выключить провайдер Gemini (оператор).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "gemini-unfreeze",
+        .description = {
+            "Clear automatic Gemini cooldown (operator only).",
+            "Gemini 자동 쿨다운을 해제합니다 (운영자 전용).",
+            "Gemini の自動クールダウンを解除します（オペレーター専用）。",
+            "清除 Gemini 自动冷却（仅限管理员）。",
+            "Снять автоматическую задержку Gemini (оператор).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "captcha <on|off>",
+        .description = {
+            "Toggle captcha requirement (operator only).",
+            "캡차 요구를 전환합니다 (운영자 전용).",
+            "CAPTCHA の必須設定を切り替えます（オペレーター専用）。",
+            "切换验证码要求（仅限管理员）。",
+            "Включить/выключить требование капчи (оператор).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "eliza <on|off>",
+        .description = {
+            "Toggle the Eliza moderator persona (operator only).",
+            "엘리자 모더레이터를 전환합니다 (운영자 전용).",
+            "Eliza モデレーターを切り替えます（オペレーター専用）。",
+            "切换 Eliza 管理员人格（仅限管理员）。",
+            "Включить/выключить модератора Элиза (оператор).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "grant <ip>",
+        .description = {
+            "Grant operator access to an IP (LAN only).",
+            "IP에 운영자 권한을 부여합니다 (LAN 한정).",
+            "IP にオペレーター権限を付与します（LAN 限定）。",
+            "为 IP 授予管理员权限（仅限局域网）。",
+            "Выдать операторские права IP-адресу (только LAN).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "revoke <ip>",
+        .description = {
+            "Revoke an IP's operator access (LAN top admin).",
+            "IP의 운영자 권한을 회수합니다 (LAN 최고 관리자).",
+            "IP のオペレーター権限を剥奪します（LAN トップ管理者）。",
+            "撤销 IP 的管理员权限（局域网最高管理员）。",
+            "Отозвать операторские права IP (только старший LAN-админ).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "kick <username>",
+        .description = {
+            "Disconnect a user (operator only).",
+            "사용자를 강제로 종료합니다 (운영자 전용).",
+            "ユーザーを切断します（オペレーター専用）。",
+            "断开某位用户（仅限管理员）。",
+            "Отключить пользователя (оператор).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "ban <username>",
+        .description = {
+            "Ban a user (operator only).",
+            "사용자를 차단합니다 (운영자 전용).",
+            "ユーザーを追放します（オペレーター専用）。",
+            "封禁用户（仅限管理员）。",
+            "Забанить пользователя (оператор).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "banname <nickname>",
+        .description = {
+            "Block a nickname (operator only).",
+            "닉네임을 차단합니다 (운영자 전용).",
+            "ニックネームを禁止します（オペレーター専用）。",
+            "屏蔽昵称（仅限管理员）。",
+            "Заблокировать ник (оператор).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "banlist",
+        .description = {
+            "List active bans (operator only).",
+            "활성화된 차단 목록을 봅니다 (운영자 전용).",
+            "現在のBANを一覧表示します（オペレーター専用）。",
+            "列出当前生效的封禁（仅限管理员）。",
+            "Показать активные баны (оператор).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "delete-msg <id|start-end>",
+        .description = {
+            "Remove chat history messages (operator only).",
+            "채팅 기록 메시지를 삭제합니다 (운영자 전용).",
+            "チャット履歴のメッセージを削除します（オペレーター専用）。",
+            "删除聊天记录中的消息（仅限管理员）。",
+            "Удалить сообщения из истории чата (оператор).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "pardon <user|ip>",
+        .description = {
+            "Remove a ban (operator only).",
+            "차단을 해제합니다 (운영자 전용).",
+            "BAN を解除します（オペレーター専用）。",
+            "解除封禁（仅限管理员）。",
+            "Снять бан (оператор).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "rss add <url> <tag>",
+        .description = {
+            "Register a feed (operator only).",
+            "피드를 등록합니다 (운영자 전용).",
+            "フィードを登録します（オペレーター専用）。",
+            "注册新的源（仅限管理员）。",
+            "Добавить ленту (оператор).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "rss del <tag>",
+        .description = {
+            "Delete a feed (operator only).",
+            "피드를 삭제합니다 (운영자 전용).",
+            "フィードを削除します（オペレーター専用）。",
+            "删除源（仅限管理员）。",
+            "Удалить ленту (оператор).",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "getaddr <username>",
+        .description = {
+            "Look up a user's last known address (operator only).",
+            "사용자의 마지막 접속 주소를 확인합니다 (운영자 전용).",
+            "ユーザーの最新の接続アドレスを確認します（オペレーター専用）。",
+            "查看用户最近的连接地址（仅限管理员）。",
+            "Посмотреть последний известный адрес пользователя (оператор).",
+        },
+    },
+};
+
+static const int kSessionHelpLabelWidth = 26;
+
+static session_ui_language_t session_ui_language_from_code(const char *code) {
+  if (code == NULL || code[0] == '\0') {
+    return SESSION_UI_LANGUAGE_COUNT;
+  }
+
+  for (size_t idx = 0; idx < SESSION_UI_LANGUAGE_COUNT; ++idx) {
+    if (strcasecmp(code, kSessionUiLanguageCodes[idx]) == 0) {
+      return (session_ui_language_t)idx;
+    }
+  }
+
+  return SESSION_UI_LANGUAGE_COUNT;
+}
+
+static const char *session_ui_language_code(session_ui_language_t language) {
+  if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
+    language = SESSION_UI_LANGUAGE_EN;
+  }
+  return kSessionUiLanguageCodes[language];
+}
+
+static const char *session_ui_language_name(session_ui_language_t language, session_ui_language_t locale) {
+  if (locale < 0 || locale >= SESSION_UI_LANGUAGE_COUNT) {
+    locale = SESSION_UI_LANGUAGE_EN;
+  }
+  if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
+    language = SESSION_UI_LANGUAGE_EN;
+  }
+  return kSessionUiLanguageNames[locale][language];
+}
+
+static const session_ui_locale_t *session_ui_get_locale(const session_ctx_t *ctx) {
+  session_ui_language_t language = SESSION_UI_LANGUAGE_EN;
+  if (ctx != NULL) {
+    language = ctx->ui_language;
+  }
+  if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
+    language = SESSION_UI_LANGUAGE_EN;
+  }
+
+  for (size_t idx = 0; idx < SESSION_UI_LANGUAGE_COUNT; ++idx) {
+    if (kSessionUiLocales[idx].language == language) {
+      return &kSessionUiLocales[idx];
+    }
+  }
+
+  return &kSessionUiLocales[SESSION_UI_LANGUAGE_EN];
+}
+
+static const char *session_command_prefix(const session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return "/";
+  }
+  return ctx->input_mode == SESSION_INPUT_MODE_COMMAND ? "" : "/";
+}
+
+static session_ui_language_t session_ui_language_current(const session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return SESSION_UI_LANGUAGE_EN;
+  }
+  session_ui_language_t language = ctx->ui_language;
+  if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
+    language = SESSION_UI_LANGUAGE_EN;
+  }
+  return language;
+}
+
+static const char *session_asciiart_terminator_for_language(session_ui_language_t language) {
+  if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
+    language = SESSION_UI_LANGUAGE_EN;
+  }
+  const char *terminator = kSessionAsciiartTerminators[language];
+  return (terminator != NULL && terminator[0] != '\0') ? terminator : SSH_CHATTER_ASCIIART_TERMINATOR_EN;
+}
+
+static const char *session_bbs_terminator_for_language(session_ui_language_t language) {
+  if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
+    language = SESSION_UI_LANGUAGE_EN;
+  }
+  const char *terminator = kSessionBbsTerminators[language];
+  return (terminator != NULL && terminator[0] != '\0') ? terminator : SSH_CHATTER_BBS_TERMINATOR_EN;
+}
+
+static const char *session_asciiart_terminator(const session_ctx_t *ctx) {
+  return session_asciiart_terminator_for_language(session_ui_language_current(ctx));
+}
+
+static const char *session_bbs_terminator(const session_ctx_t *ctx) {
+  return session_bbs_terminator_for_language(session_ui_language_current(ctx));
+}
+
+static bool session_asciiart_matches_terminator(const char *line) {
+  if (line == NULL) {
+    return false;
+  }
+  for (size_t idx = 0; idx < SESSION_UI_LANGUAGE_COUNT; ++idx) {
+    const char *terminator = session_asciiart_terminator_for_language((session_ui_language_t)idx);
+    if (terminator != NULL && strcmp(line, terminator) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool session_bbs_matches_terminator(const char *line) {
+  if (line == NULL) {
+    return false;
+  }
+  for (size_t idx = 0; idx < SESSION_UI_LANGUAGE_COUNT; ++idx) {
+    const char *terminator = session_bbs_terminator_for_language((session_ui_language_t)idx);
+    if (terminator != NULL && strcmp(line, terminator) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static const session_command_alias_t *session_command_alias_lookup(const char *canonical) {
+  if (canonical == NULL || canonical[0] == '\0') {
+    return NULL;
+  }
+  for (size_t idx = 0; idx < kSessionCommandAliasCount; ++idx) {
+    if (strcmp(kSessionCommandAliases[idx].canonical, canonical) == 0) {
+      return &kSessionCommandAliases[idx];
+    }
+  }
+  return NULL;
+}
+
+static const char *session_command_alias_for_language(const session_command_alias_t *alias,
+                                                      session_ui_language_t language) {
+  if (alias == NULL) {
+    return NULL;
+  }
+  if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
+    language = SESSION_UI_LANGUAGE_EN;
+  }
+  const char *localized = alias->localized[language];
+  if (localized != NULL && localized[0] != '\0') {
+    return localized;
+  }
+  return alias->canonical;
+}
+
+static const char *session_command_alias_preferred(const session_ctx_t *ctx,
+                                                   const session_command_alias_t *alias) {
+  return session_command_alias_for_language(alias, session_ui_language_current(ctx));
+}
+
+static const char *session_command_alias_preferred_by_canonical(const session_ctx_t *ctx,
+                                                                const char *canonical) {
+  const session_command_alias_t *alias = session_command_alias_lookup(canonical);
+  if (alias == NULL) {
+    return canonical;
+  }
+  return session_command_alias_preferred(ctx, alias);
+}
+
+static bool session_parse_command(const char *line, const char *command, const char **arguments);
+static bool session_parse_localized_command(session_ctx_t *ctx, const session_command_alias_t *alias, const char *line,
+                                            const char **arguments);
+
+static bool session_parse_command_any(session_ctx_t *ctx, const char *canonical, const char *line,
+                                      const char **arguments) {
+  if (canonical == NULL) {
+    return false;
+  }
+  const session_command_alias_t *alias = session_command_alias_lookup(canonical);
+  if (alias != NULL) {
+    return session_parse_localized_command(ctx, alias, line, arguments);
+  }
+  return session_parse_command(line, canonical, arguments);
+}
+
+static void session_command_collect_localized_matches(session_ctx_t *ctx, const char *prefix,
+                                                      const char **matches, size_t *match_count, size_t max_count) {
+  if (ctx == NULL || matches == NULL || match_count == NULL) {
+    return;
+  }
+
+  size_t prefix_len = prefix != NULL ? strlen(prefix) : 0U;
+
+  for (size_t idx = 0; idx < kSessionCommandAliasCount; ++idx) {
+    const session_command_alias_t *alias = &kSessionCommandAliases[idx];
+    const char *localized = session_command_alias_preferred(ctx, alias);
+    if (localized == NULL || localized[0] == '\0') {
+      continue;
+    }
+    if (strcmp(localized, alias->canonical) == 0) {
+      continue;
+    }
+
+    const char *name = localized[0] == '/' ? localized + 1 : localized;
+    if (name[0] == '\0') {
+      continue;
+    }
+
+    if (prefix_len > 0U && strncasecmp(name, prefix, prefix_len) != 0) {
+      continue;
+    }
+
+    bool duplicate = false;
+    for (size_t existing = 0; existing < *match_count; ++existing) {
+      if (strcmp(matches[existing], name) == 0) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) {
+      continue;
+    }
+
+    if (*match_count >= max_count) {
+      break;
+    }
+    matches[(*match_count)++] = name;
+  }
+}
+
+static void session_command_format_usage(session_ctx_t *ctx, const char *canonical, const char *fallback,
+                                         char *buffer, size_t length) {
+  if (buffer == NULL || length == 0U) {
+    return;
+  }
+
+  buffer[0] = '\0';
+  if (fallback == NULL) {
+    return;
+  }
+
+  if (canonical == NULL || canonical[0] == '\0') {
+    snprintf(buffer, length, "%s", fallback);
+    return;
+  }
+
+  const char *alias = session_command_alias_preferred_by_canonical(ctx, canonical);
+  if (alias == NULL || alias[0] == '\0') {
+    alias = canonical;
+  }
+
+  const char *prefix = session_command_prefix(ctx);
+  if (prefix == NULL) {
+    prefix = "";
+  }
+
+  const char *alias_body = alias;
+  if (alias_body != NULL && alias_body[0] == '/') {
+    ++alias_body;
+  }
+
+  const char *canonical_body = canonical;
+  if (canonical_body[0] == '/') {
+    ++canonical_body;
+  }
+
+  if (alias_body == NULL || alias_body[0] == '\0') {
+    alias_body = canonical_body;
+  }
+
+  char replacement[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(replacement, sizeof(replacement), "%s%s", prefix, alias_body != NULL ? alias_body : "");
+
+  const char *source = fallback;
+  size_t canonical_len = strlen(canonical);
+  size_t out_index = 0U;
+  bool replaced = false;
+
+  for (size_t idx = 0U; source[idx] != '\0' && out_index + 1U < length;) {
+    if (canonical_len > 0U && strncmp(source + idx, canonical, canonical_len) == 0) {
+      size_t repl_len = strnlen(replacement, length - out_index - 1U);
+      memcpy(buffer + out_index, replacement, repl_len);
+      out_index += repl_len;
+      idx += canonical_len;
+      replaced = true;
+      continue;
+    }
+    buffer[out_index++] = source[idx++];
+  }
+  buffer[out_index] = '\0';
+
+  if (replaced) {
+    return;
+  }
+
+  size_t body_len = canonical_body != NULL ? strlen(canonical_body) : 0U;
+  if (body_len == 0U) {
+    snprintf(buffer, length, "%s", fallback);
+    return;
+  }
+
+  out_index = 0U;
+  bool body_replaced = false;
+  for (size_t idx = 0U; source[idx] != '\0' && out_index + 1U < length;) {
+    if (strncmp(source + idx, canonical_body, body_len) == 0) {
+      size_t repl_len = strnlen(replacement, length - out_index - 1U);
+      memcpy(buffer + out_index, replacement, repl_len);
+      out_index += repl_len;
+      idx += body_len;
+      body_replaced = true;
+      continue;
+    }
+    buffer[out_index++] = source[idx++];
+  }
+  buffer[out_index] = '\0';
+
+  if (!body_replaced) {
+    snprintf(buffer, length, "%s", fallback);
+  }
+}
+
+static int session_utf8_display_width(const char *text) {
+  if (text == NULL) {
+    return 0;
+  }
+
+  mbstate_t state;
+  memset(&state, 0, sizeof(state));
+
+  int width = 0;
+  const char *cursor = text;
+  size_t remaining = strlen(text);
+  while (remaining > 0U) {
+    wchar_t wc;
+    size_t consumed = mbrtowc(&wc, cursor, remaining, &state);
+    if (consumed == (size_t)-1 || consumed == (size_t)-2) {
+      ++cursor;
+      --remaining;
+      memset(&state, 0, sizeof(state));
+      width += 1;
+      continue;
+    }
+    if (consumed == 0U) {
+      break;
+    }
+
+    int char_width = wcwidth(wc);
+    if (char_width < 0) {
+      char_width = 1;
+    }
+    width += char_width;
+    cursor += consumed;
+    remaining -= consumed;
+  }
+
+  return width;
+}
+
+static void session_send_system_line(session_ctx_t *ctx, const char *message);
+
+static void session_format_template(const char *format, const char *const *args, size_t arg_count, char *buffer,
+                                    size_t length) {
+  if (buffer == NULL || length == 0U) {
+    return;
+  }
+
+  buffer[0] = '\0';
+  if (format == NULL) {
+    return;
+  }
+
+  size_t out_index = 0U;
+  size_t arg_index = 0U;
+  for (size_t idx = 0U; format[idx] != '\0' && out_index + 1U < length; ++idx) {
+    if (format[idx] == '%' && format[idx + 1U] == 's') {
+      const char *replacement = (args != NULL && arg_index < arg_count && args[arg_index] != NULL)
+                                    ? args[arg_index]
+                                    : "";
+      size_t available = length - out_index - 1U;
+      size_t rep_len = strnlen(replacement, available);
+      memcpy(buffer + out_index, replacement, rep_len);
+      out_index += rep_len;
+      ++arg_index;
+      ++idx;
+      continue;
+    }
+    if (format[idx] == '%' && format[idx + 1U] == '%') {
+      buffer[out_index++] = '%';
+      ++idx;
+      continue;
+    }
+
+    buffer[out_index++] = format[idx];
+  }
+
+  buffer[out_index] = '\0';
+}
+
+static size_t session_help_collect_arguments(session_ctx_t *ctx,
+                                             const session_help_template_arg_kind_t *kinds,
+                                             size_t kind_count, const char **output, size_t capacity) {
+  if (output == NULL || capacity == 0U) {
+    return 0U;
+  }
+
+  size_t produced = 0U;
+  const char *prefix = session_command_prefix(ctx);
+
+  if (kind_count == 0U) {
+    size_t repeat = capacity < 8U ? capacity : 8U;
+    for (size_t idx = 0; idx < repeat; ++idx) {
+      output[produced++] = prefix;
+    }
+    return produced;
+  }
+
+  for (size_t idx = 0; idx < kind_count && produced < capacity; ++idx) {
+    const char *value = "";
+    switch (kinds[idx]) {
+    case SESSION_HELP_TEMPLATE_ARG_PREFIX:
+      value = prefix;
+      break;
+    case SESSION_HELP_TEMPLATE_ARG_ASCIIART_TERMINATOR:
+      value = session_asciiart_terminator(ctx);
+      break;
+    case SESSION_HELP_TEMPLATE_ARG_BBS_TERMINATOR:
+      value = session_bbs_terminator(ctx);
+      break;
+    case SESSION_HELP_TEMPLATE_ARG_COMMAND_REPLY:
+      value = session_command_alias_preferred_by_canonical(ctx, "/reply");
+      break;
+    case SESSION_HELP_TEMPLATE_ARG_COMMAND_GOOD:
+      value = session_command_alias_preferred_by_canonical(ctx, "/good");
+      break;
+    case SESSION_HELP_TEMPLATE_ARG_COMMAND_SAD:
+      value = session_command_alias_preferred_by_canonical(ctx, "/sad");
+      break;
+    case SESSION_HELP_TEMPLATE_ARG_COMMAND_WTF:
+      value = session_command_alias_preferred_by_canonical(ctx, "/wtf");
+      break;
+    case SESSION_HELP_TEMPLATE_ARG_COMMAND_BBS:
+      value = session_command_alias_preferred_by_canonical(ctx, "/bbs");
+      break;
+    default:
+      value = prefix;
+      break;
+    }
+    if (value == NULL) {
+      value = "";
+    }
+    output[produced++] = value;
+  }
+
+  return produced;
+}
+
+static void session_format_help_line(session_ctx_t *ctx, const session_help_entry_t *entry, const char *description,
+                                     char *buffer, size_t length) {
+  if (ctx == NULL || entry == NULL || buffer == NULL || length == 0U) {
+    return;
+  }
+
+  const size_t language_index = (size_t)session_ui_language_current(ctx);
+  const char *label_template = entry->label;
+  if (language_index < SESSION_UI_LANGUAGE_COUNT && entry->label_translations[language_index] != NULL &&
+      entry->label_translations[language_index][0] != '\0') {
+    label_template = entry->label_translations[language_index];
+  }
+  if (label_template == NULL) {
+    label_template = "";
+  }
+
+  const char *prefix = session_command_prefix(ctx);
+  char label[128];
+  label[0] = '\0';
+
+  if (entry->kind == SESSION_HELP_ENTRY_COMMAND) {
+    snprintf(label, sizeof(label), "%s%s", prefix, label_template);
+  } else if (entry->kind == SESSION_HELP_ENTRY_FORMATTED) {
+    const char *args[SESSION_HELP_TEMPLATE_ARG_LIMIT];
+    size_t arg_count = session_help_collect_arguments(ctx, entry->label_args, entry->label_arg_count, args,
+                                                      sizeof(args) / sizeof(args[0]));
+    session_format_template(label_template, args, arg_count, label, sizeof(label));
+  }
+
+  if (entry->kind == SESSION_HELP_ENTRY_TEXT) {
+    snprintf(buffer, length, "%s", description != NULL ? description : "");
+    return;
+  }
+
+  int display_width = session_utf8_display_width(label);
+  if (display_width < 0) {
+    display_width = 0;
+  }
+
+  int padding = kSessionHelpLabelWidth - display_width;
+  if (padding < 1) {
+    padding = 1;
+  }
+  if (padding > 32) {
+    padding = 32;
+  }
+
+  char padding_buffer[33];
+  memset(padding_buffer, ' ', (size_t)padding);
+  padding_buffer[padding] = '\0';
+
+  snprintf(buffer, length, "%s%s- %s", label, padding_buffer, description != NULL ? description : "");
+}
+
+static void session_help_send_entries(session_ctx_t *ctx, const session_help_entry_t *entries, size_t count) {
+  if (ctx == NULL || entries == NULL) {
+    return;
+  }
+
+  const size_t language_index = (size_t)session_ui_language_current(ctx);
+
+  for (size_t idx = 0; idx < count; ++idx) {
+    const session_help_entry_t *entry = &entries[idx];
+    const char *format = entry->description[language_index];
+    if (format == NULL || format[0] == '\0') {
+      continue;
+    }
+
+    char description[SSH_CHATTER_MESSAGE_LIMIT];
+    const char *args[SESSION_HELP_TEMPLATE_ARG_LIMIT];
+    size_t arg_count = session_help_collect_arguments(ctx, entry->description_args, entry->description_arg_count, args,
+                                                      sizeof(args) / sizeof(args[0]));
+    session_format_template(format, args, arg_count, description, sizeof(description));
+
+    if (entry->kind == SESSION_HELP_ENTRY_TEXT) {
+      session_send_system_line(ctx, description);
+      continue;
+    }
+
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    session_format_help_line(ctx, entry, description, line, sizeof(line));
+    session_send_system_line(ctx, line);
+  }
+}
 
 #ifndef MSG_DONTWAIT
 #define MSG_DONTWAIT 0
@@ -1793,7 +3433,6 @@ static void session_send_plain_line(session_ctx_t *ctx, const char *message);
 static void session_send_system_line(session_ctx_t *ctx, const char *message);
 static void session_send_raw_text(session_ctx_t *ctx, const char *text);
 static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text);
-static void session_send_system_lines_bulk(session_ctx_t *ctx, const char *const *lines, size_t line_count);
 static bool session_render_external_banner(session_ctx_t *ctx);
 static void session_render_banner_ascii(session_ctx_t *ctx);
 static void session_render_prelogin_banner(session_ctx_t *ctx);
@@ -1957,6 +3596,15 @@ static void session_handle_translation_quota_exhausted(session_ctx_t *ctx, const
 static bool session_argument_is_disable(const char *token);
 static void session_language_normalize(const char *input, char *normalized, size_t length);
 static bool session_language_equals(const char *lhs, const char *rhs);
+static session_ui_language_t session_ui_language_from_code(const char *code);
+static const char *session_ui_language_code(session_ui_language_t language);
+static const char *session_ui_language_name(session_ui_language_t language, session_ui_language_t locale);
+static const session_ui_locale_t *session_ui_get_locale(const session_ctx_t *ctx);
+static const char *session_command_prefix(const session_ctx_t *ctx);
+static int session_utf8_display_width(const char *text);
+static void session_format_help_line(session_ctx_t *ctx, const session_help_entry_t *entry, const char *description,
+                                     char *buffer, size_t length);
+static void session_help_send_entries(session_ctx_t *ctx, const session_help_entry_t *entries, size_t count);
 static bool session_fetch_weather_summary(const char *region, const char *city, char *summary, size_t summary_len);
 static void session_handle_poll(session_ctx_t *ctx, const char *arguments);
 static void session_handle_vote(session_ctx_t *ctx, size_t option_index);
@@ -1964,6 +3612,9 @@ static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, c
 static void session_handle_elect_command(session_ctx_t *ctx, const char *arguments);
 static void session_handle_vote_command(session_ctx_t *ctx, const char *arguments, bool allow_multiple);
 static void session_handle_alpha_centauri_landers(session_ctx_t *ctx);
+static void session_print_help(session_ctx_t *ctx);
+static void session_print_help_extra(session_ctx_t *ctx);
+static void session_handle_set_ui_lang(session_ctx_t *ctx, const char *arguments);
 static bool session_line_is_exit_command(const char *line);
 static void session_handle_username_conflict_input(session_ctx_t *ctx, const char *line);
 static const char *session_consume_token(const char *input, char *token, size_t length);
@@ -1997,6 +3648,7 @@ static void host_store_user_os(host_t *host, const session_ctx_t *ctx);
 static void host_store_birthday(host_t *host, const session_ctx_t *ctx, const char *birthday);
 static void host_store_chat_spacing(host_t *host, const session_ctx_t *ctx);
 static void host_store_translation_preferences(host_t *host, const session_ctx_t *ctx);
+static void host_store_ui_language(host_t *host, const session_ctx_t *ctx);
 static bool host_ip_has_grant_locked(host_t *host, const char *ip);
 static bool host_ip_has_grant(host_t *host, const char *ip);
 static bool host_add_operator_grant_locked(host_t *host, const char *ip);
@@ -2121,6 +3773,8 @@ static bool session_rss_move(session_ctx_t *ctx, int delta);
 static void session_rss_exit(session_ctx_t *ctx, const char *reason);
 static void session_rss_clear(session_ctx_t *ctx);
 static bool session_parse_command(const char *line, const char *command, const char **arguments);
+static bool session_parse_localized_command(session_ctx_t *ctx, const session_command_alias_t *alias, const char *line,
+                                            const char **arguments);
 static void rss_strip_html(char *text);
 static void rss_decode_entities(char *text);
 static void rss_trim_whitespace(char *text);
@@ -2496,7 +4150,7 @@ static const char *const TETROMINO_SHAPES[7][4] = {
 static const char TETROMINO_DISPLAY_CHARS[7] = {'I', 'J', 'L', 'O', 'S', 'T', 'Z'};
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
-static const uint32_t HOST_STATE_VERSION = 8U;
+static const uint32_t HOST_STATE_VERSION = 9U;
 static const uint32_t ELIZA_STATE_MAGIC = 0x454c5354U; /* 'ELST' */
 static const uint32_t ELIZA_STATE_VERSION = 1U;
 
@@ -2651,6 +4305,35 @@ typedef struct host_state_preference_entry_v6 {
   char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
 } host_state_preference_entry_v6_t;
 
+typedef struct host_state_preference_entry_v7 {
+  uint8_t has_user_theme;
+  uint8_t has_system_theme;
+  uint8_t user_is_bold;
+  uint8_t system_is_bold;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  char user_color_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char user_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_fg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_bg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char os_name[SSH_CHATTER_OS_NAME_LEN];
+  int32_t daily_year;
+  int32_t daily_yday;
+  char daily_function[64];
+  uint64_t last_poll_id;
+  int32_t last_poll_choice;
+  uint8_t has_birthday;
+  uint8_t translation_caption_spacing;
+  uint8_t translation_enabled;
+  uint8_t output_translation_enabled;
+  uint8_t input_translation_enabled;
+  uint8_t translation_master_explicit;
+  uint8_t reserved[2];
+  char birthday[16];
+  char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+  char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+} host_state_preference_entry_v7_t;
+
 typedef struct host_state_preference_entry {
   uint8_t has_user_theme;
   uint8_t has_system_theme;
@@ -2678,6 +4361,7 @@ typedef struct host_state_preference_entry {
   char birthday[16];
   char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+  char ui_language[SSH_CHATTER_LANG_NAME_LEN];
 } host_state_preference_entry_t;
 
 static const uint32_t BAN_STATE_MAGIC = 0x5348424eU; /* 'SHBN' */
@@ -4237,6 +5921,21 @@ static void host_store_translation_preferences(host_t *host, const session_ctx_t
              ctx->output_translation_language);
     snprintf(pref->input_translation_language, sizeof(pref->input_translation_language), "%s",
              ctx->input_translation_language);
+  }
+  host_state_save_locked(host);
+  pthread_mutex_unlock(&host->lock);
+}
+
+static void host_store_ui_language(host_t *host, const session_ctx_t *ctx) {
+  if (host == NULL || ctx == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  user_preference_t *pref = host_ensure_preference_locked(host, ctx->user.name);
+  if (pref != NULL) {
+    const char *code = session_ui_language_code(ctx->ui_language);
+    snprintf(pref->ui_language, sizeof(pref->ui_language), "%s", code);
   }
   host_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
@@ -6647,6 +8346,7 @@ static void host_state_save_locked(host_t *host) {
              pref->output_translation_language);
     snprintf(serialized.input_translation_language, sizeof(serialized.input_translation_language), "%s",
              pref->input_translation_language);
+    snprintf(serialized.ui_language, sizeof(serialized.ui_language), "%s", pref->ui_language);
 
     if (fwrite(&serialized, sizeof(serialized), 1U, fp) != 1U) {
       success = false;
@@ -7312,11 +9012,47 @@ static void host_state_load(host_t *host) {
 
   for (uint32_t idx = 0; success && idx < preference_count; ++idx) {
     host_state_preference_entry_t serialized = {0};
-    if (version >= 7U) {
+    if (version >= 9U) {
       if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
         success = false;
         break;
       }
+    } else if (version >= 7U) {
+      host_state_preference_entry_v7_t legacy7 = {0};
+      if (fread(&legacy7, sizeof(legacy7), 1U, fp) != 1U) {
+        success = false;
+        break;
+      }
+      serialized.has_user_theme = legacy7.has_user_theme;
+      serialized.has_system_theme = legacy7.has_system_theme;
+      serialized.user_is_bold = legacy7.user_is_bold;
+      serialized.system_is_bold = legacy7.system_is_bold;
+      snprintf(serialized.username, sizeof(serialized.username), "%s", legacy7.username);
+      snprintf(serialized.user_color_name, sizeof(serialized.user_color_name), "%s", legacy7.user_color_name);
+      snprintf(serialized.user_highlight_name, sizeof(serialized.user_highlight_name), "%s",
+               legacy7.user_highlight_name);
+      snprintf(serialized.system_fg_name, sizeof(serialized.system_fg_name), "%s", legacy7.system_fg_name);
+      snprintf(serialized.system_bg_name, sizeof(serialized.system_bg_name), "%s", legacy7.system_bg_name);
+      snprintf(serialized.system_highlight_name, sizeof(serialized.system_highlight_name), "%s",
+               legacy7.system_highlight_name);
+      snprintf(serialized.os_name, sizeof(serialized.os_name), "%s", legacy7.os_name);
+      serialized.daily_year = legacy7.daily_year;
+      serialized.daily_yday = legacy7.daily_yday;
+      snprintf(serialized.daily_function, sizeof(serialized.daily_function), "%s", legacy7.daily_function);
+      serialized.last_poll_id = legacy7.last_poll_id;
+      serialized.last_poll_choice = legacy7.last_poll_choice;
+      serialized.has_birthday = legacy7.has_birthday;
+      serialized.translation_caption_spacing = legacy7.translation_caption_spacing;
+      serialized.translation_enabled = legacy7.translation_enabled;
+      serialized.output_translation_enabled = legacy7.output_translation_enabled;
+      serialized.input_translation_enabled = legacy7.input_translation_enabled;
+      serialized.translation_master_explicit = legacy7.translation_master_explicit;
+      snprintf(serialized.birthday, sizeof(serialized.birthday), "%s", legacy7.birthday);
+      snprintf(serialized.output_translation_language, sizeof(serialized.output_translation_language), "%s",
+               legacy7.output_translation_language);
+      snprintf(serialized.input_translation_language, sizeof(serialized.input_translation_language), "%s",
+               legacy7.input_translation_language);
+      serialized.ui_language[0] = '\0';
     } else if (version == 6U) {
       host_state_preference_entry_v6_t legacy6 = {0};
       if (fread(&legacy6, sizeof(legacy6), 1U, fp) != 1U) {
@@ -7351,6 +9087,7 @@ static void host_state_load(host_t *host) {
                legacy6.output_translation_language);
       snprintf(serialized.input_translation_language, sizeof(serialized.input_translation_language), "%s",
                legacy6.input_translation_language);
+      serialized.ui_language[0] = '\0';
     } else if (version == 5U) {
       host_state_preference_entry_v5_t legacy5 = {0};
       if (fread(&legacy5, sizeof(legacy5), 1U, fp) != 1U) {
@@ -7383,6 +9120,7 @@ static void host_state_load(host_t *host) {
       snprintf(serialized.birthday, sizeof(serialized.birthday), "%s", legacy5.birthday);
       serialized.output_translation_language[0] = '\0';
       serialized.input_translation_language[0] = '\0';
+      serialized.ui_language[0] = '\0';
     } else if (version == 4U) {
       host_state_preference_entry_v4_t legacy4 = {0};
       if (fread(&legacy4, sizeof(legacy4), 1U, fp) != 1U) {
@@ -7415,6 +9153,7 @@ static void host_state_load(host_t *host) {
       serialized.birthday[0] = '\0';
       serialized.output_translation_language[0] = '\0';
       serialized.input_translation_language[0] = '\0';
+      serialized.ui_language[0] = '\0';
     } else {
       host_state_preference_entry_v3_t legacy = {0};
       if (fread(&legacy, sizeof(legacy), 1U, fp) != 1U) {
@@ -7447,6 +9186,7 @@ static void host_state_load(host_t *host) {
       serialized.birthday[0] = '\0';
       serialized.output_translation_language[0] = '\0';
       serialized.input_translation_language[0] = '\0';
+      serialized.ui_language[0] = '\0';
     }
 
     if (host->preference_count >= SSH_CHATTER_MAX_PREFERENCES) {
@@ -10344,8 +12084,16 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
   ctx->input_translation_enabled = false;
   ctx->input_translation_language[0] = '\0';
   ctx->last_detected_input_language[0] = '\0';
+  ctx->ui_language = SESSION_UI_LANGUAGE_EN;
 
   if (has_snapshot) {
+    if (snapshot.ui_language[0] != '\0') {
+      session_ui_language_t saved_language = session_ui_language_from_code(snapshot.ui_language);
+      if (saved_language != SESSION_UI_LANGUAGE_COUNT) {
+        ctx->ui_language = saved_language;
+      }
+    }
+
     if (snapshot.has_user_theme) {
       const char *color_code = lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]),
                                                  snapshot.user_color_name);
@@ -13487,76 +15235,6 @@ static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text) {
   }
 }
 
-static void session_send_system_lines_bulk(session_ctx_t *ctx, const char *const *lines, size_t line_count) {
-  if (ctx == NULL || lines == NULL || line_count == 0U) {
-    return;
-  }
-
-  const bool scope_allows_translation =
-      (!translator_should_limit_to_chat_bbs() || ctx->translation_manual_scope_override);
-  const bool translation_ready = scope_allows_translation && ctx->translation_enabled &&
-                                 ctx->output_translation_enabled && ctx->output_translation_language[0] != '\0' &&
-                                 !ctx->in_bbs_mode && !ctx->in_rss_mode;
-
-  bool previous_suppress = ctx->translation_suppress_output;
-  if (translation_ready && !ctx->translation_suppress_output) {
-    ctx->translation_suppress_output = true;
-  }
-
-  char payload[SSH_CHATTER_TRANSLATION_WORKING_LEN];
-  payload[0] = '\0';
-  size_t offset = 0U;
-
-  for (size_t idx = 0U; idx < line_count; ++idx) {
-    const char *line = lines[idx] != NULL ? lines[idx] : "";
-    session_send_system_line(ctx, line);
-
-    if (translation_ready && !previous_suppress) {
-      size_t needed = strlen(line);
-      if (idx + 1U < line_count) {
-        ++needed;
-      }
-
-      if (needed >= sizeof(payload)) {
-        if (offset > 0U && payload[0] != '\0') {
-          payload[offset < sizeof(payload) ? offset : sizeof(payload) - 1U] = '\0';
-          session_translation_queue_block(ctx, payload);
-          session_translation_flush_ready(ctx);
-          payload[0] = '\0';
-          offset = 0U;
-        }
-
-        session_translation_queue_block(ctx, line);
-        session_translation_flush_ready(ctx);
-        continue;
-      }
-
-      if (offset > 0U && offset + needed >= sizeof(payload)) {
-        payload[offset < sizeof(payload) ? offset : sizeof(payload) - 1U] = '\0';
-        session_translation_queue_block(ctx, payload);
-        session_translation_flush_ready(ctx);
-        payload[0] = '\0';
-        offset = 0U;
-      }
-
-      offset = session_append_fragment(payload, sizeof(payload), offset, line);
-      if (idx + 1U < line_count) {
-        offset = session_append_fragment(payload, sizeof(payload), offset, "\n");
-      }
-    }
-  }
-
-  ctx->translation_suppress_output = previous_suppress;
-
-  if (translation_ready && !previous_suppress) {
-    if (offset > 0U && payload[0] != '\0') {
-      payload[offset < sizeof(payload) ? offset : sizeof(payload) - 1U] = '\0';
-      session_translation_queue_block(ctx, payload);
-    }
-    session_translation_flush_ready(ctx);
-  }
-}
-
 static void session_format_separator_line(session_ctx_t *ctx, const char *label, char *out, size_t length) {
   if (out == NULL || length == 0U) {
     return;
@@ -13898,11 +15576,14 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
   snprintf(remaining_line, sizeof(remaining_line), "Remaining bytes: %zu", remaining);
   session_send_system_line(ctx, remaining_line);
 
-  session_send_system_line(ctx,
-                           "Ctrl+S inserts " SSH_CHATTER_BBS_TERMINATOR ". Ctrl+A cancels the draft.");
+  const char *bbs_terminator = session_bbs_terminator(ctx);
+  char shortcut_hint[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(shortcut_hint, sizeof(shortcut_hint), "Ctrl+S inserts %s. Ctrl+A cancels the draft.", bbs_terminator);
+  session_send_system_line(ctx, shortcut_hint);
   session_send_system_line(ctx, "Use Up/Down arrows to revisit a saved line and press Enter to store changes.");
-  session_send_system_line(ctx,
-                           "Typing " SSH_CHATTER_BBS_TERMINATOR " on its own line will publish the post.");
+  char publish_hint[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(publish_hint, sizeof(publish_hint), "Typing %s on its own line will publish the post.", bbs_terminator);
+  session_send_system_line(ctx, publish_hint);
 
   if (ctx->bbs_breaking_count > 0U) {
     session_send_system_line(ctx, "");
@@ -14114,8 +15795,26 @@ static void session_render_banner(session_ctx_t *ctx) {
     session_send_system_line(ctx, "\033[1;32m+===================================================================+\033[0m");
   }
 
-  session_send_plain_line(ctx, "\033[37m/help to see the manual\033[0m");
-  session_send_plain_line(ctx, "\033[37m/motd to see the information\033[0m");
+  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
+  const char *prefix = session_command_prefix(ctx);
+
+  if (locale->welcome_help_hint != NULL && locale->welcome_help_hint[0] != '\0') {
+    const char *args[] = {prefix};
+    char hint[SSH_CHATTER_MESSAGE_LIMIT];
+    session_format_template(locale->welcome_help_hint, args, sizeof(args) / sizeof(args[0]), hint, sizeof(hint));
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(line, sizeof(line), "\033[37m%s\033[0m", hint);
+    session_send_plain_line(ctx, line);
+  }
+
+  if (locale->welcome_motd_hint != NULL && locale->welcome_motd_hint[0] != '\0') {
+    const char *args[] = {prefix};
+    char hint[SSH_CHATTER_MESSAGE_LIMIT];
+    session_format_template(locale->welcome_motd_hint, args, sizeof(args) / sizeof(args[0]), hint, sizeof(hint));
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(line, sizeof(line), "\033[37m%s\033[0m", hint);
+    session_send_plain_line(ctx, line);
+  }
   session_render_separator(ctx, "Chatroom");
 }
 
@@ -14353,6 +16052,9 @@ static bool session_try_command_completion(session_ctx_t *ctx) {
       matches[match_count++] = candidate;
     }
   }
+
+  session_command_collect_localized_matches(ctx, prefix, matches, &match_count,
+                                            sizeof(matches) / sizeof(matches[0]));
 
   if (match_count == 0U) {
     if (session_transport_active(ctx)) {
@@ -15608,89 +17310,65 @@ static void session_print_help(session_ctx_t *ctx) {
     return;
   }
 
-  static const char *kHelpCommonLines[] = {
-      "Available commands:",
-      "/help                 - show this message",
-      "/exit                 - leave the chat",
-      "/nick <name>          - change your display name",
-      "/pm <username> <message> - send a private message",
-      "/motd                - view the message of the day",
-      "/status <message|clear> - set your profile status",
-      "/showstatus <username> - view someone else's status",
-      "/users               - announce the number of connected users",
-      "/search <text>       - search for users whose name matches text",
-      "/chat <message-id>   - show a past message by its identifier",
-      "/reply <message-id|r<reply-id>> <text> - reply to a message or reply",
-      "/image <url> [caption] - share an image link",
-      "/video <url> [caption] - share a video link",
-      "/audio <url> [caption] - share an audio clip",
-      "/files <url> [caption] - share a downloadable file",
-      "/mail [inbox|send <user> <message>|clear] - manage your mailbox",
-      "/profilepic            - open the ASCII art profile picture composer",
-      "/asciiart           - open the ASCII art composer (max 128 lines, 1/10 min per IP)",
-      "/game <tetris|liargame|alpha> - start a minigame in the chat (use /suspend! or Ctrl+Z to exit)",
-      "Up/Down arrows           - scroll chat (chat mode) or browse command history (command mode)",
-      "/color (text;highlight[;bold]) - style your handle",
-      "/systemcolor (fg;background[;highlight][;bold]) - style the interface (third value may be highlight or bold; use /systemcolor reset to restore defaults)",
-      "/set-trans-lang <language|off> - translate terminal output to a target language",
-      "/set-target-lang <language|off> - translate your outgoing messages",
-      "/weather <region> <city> - show the weather for a region and city",
-      "/translate <on|off>    - enable or disable translation after configuring languages",
-      "/eliza-chat <message>  - chat with eliza using shared memories",
-      "/chat-spacing <0-5>    - reserve blank lines before translated captions in chat",
-      "/mode <chat|command|toggle> - switch between chat mode and command mode (no '/' needed in command mode)",
-      "/palette <name>        - apply a predefined interface palette (/palette list)",
-      "/today               - discover today's function (once per day)",
-      "/date <timezone>     - view the server time in another timezone",
-      "/os <name>           - record the operating system you use",
-      "/getos <username>    - look up someone else's recorded operating system",
-      "/birthday YYYY-MM-DD - register your birthday",
-      "/soulmate            - list users sharing your birthday",
-      "/pair                - list users sharing your recorded OS",
-      "/connected           - privately list everyone connected",
-      "/alpha-centauri-landers - view the Immigrants' Flag hall of fame",
-      "/poll <question>|<option...> - start or view a poll",
-      "/vote <label> <question>|<option...> - start or inspect a multiple-choice named poll (use /vote @close <label> to end it)",
-      "/vote-single <label> <question>|<option...> - start or inspect a single-choice named poll",
-      "/elect <label> <choice> - vote in a named poll by label",
-      "/poke <username>      - send a bell to call a user",
-      "/block <user|ip>      - hide messages from a user or IP locally (/block list to review)",
-      "/unblock <target|all> - remove a local block entry",
-      "/good|/sad|/cool|/angry|/checked|/love|/wtf <id> - react to a message by number",
-      "/1 .. /5             - vote for an option in the active poll",
-      "/bbs [list|read|post|comment|regen|delete] - open the bulletin board system (see /bbs for details, finish ",
-      SSH_CHATTER_BBS_TERMINATOR " to post)",
-      "/rss list             - list saved RSS feeds",
-      "/rss read <tag>       - open a saved feed in the inline reader",
-      "/suspend!            - suspend the active game (Ctrl+Z while playing)",
-      "Regular messages are shared with everyone."
-  };
+  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
+  const char *prefix = session_command_prefix(ctx);
 
-  static const char *kHelpOperatorLines[] = {
-      "/translate-scope <chat|chat-nohistory|all> - limit translation to chat/BBS, optionally skipping scrollback (operator only)",
-      "/gemini <on|off>       - toggle Gemini provider (operator only)",
-      "/gemini-unfreeze      - clear automatic Gemini cooldown (operator only)",
-      "/captcha <on|off>      - toggle captcha requirement (operator only)",
-      "/eliza <on|off>        - toggle the eliza moderator persona (operator only)",
-      "/grant <ip>          - grant operator access to an IP (LAN only)",
-      "/revoke <ip>         - revoke an IP's operator access (LAN top admin)",
-      "/kick <username>      - disconnect a user (operator only)",
-      "/ban <username>       - ban a user (operator only)",
-      "/banname <nickname>   - block a nickname (operator only)",
-      "/banlist             - list active bans (operator only)",
-      "/delete-msg <id|start-end> - remove chat history messages (operator only)",
-      "/pardon <user|ip>     - remove a ban (operator only)",
-      "/rss add <url> <tag>  - register a feed (operator only)",
-      "/rss del <tag>        - delete a feed (operator only)"
-  };
+  if (locale->help_title != NULL && locale->help_title[0] != '\0') {
+    session_send_system_line(ctx, locale->help_title);
+  }
 
-  session_send_system_lines_bulk(ctx, kHelpCommonLines,
-                                 sizeof(kHelpCommonLines) / sizeof(kHelpCommonLines[0]));
+  session_help_send_entries(ctx, kSessionHelpEssential,
+                            sizeof(kSessionHelpEssential) / sizeof(kSessionHelpEssential[0]));
+
+  session_send_system_line(ctx, "");
+
+  if (locale->help_hint_extra != NULL && locale->help_hint_extra[0] != '\0') {
+    const char *args[] = {prefix};
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    session_format_template(locale->help_hint_extra, args, sizeof(args) / sizeof(args[0]), line, sizeof(line));
+    session_send_system_line(ctx, line);
+  }
+
+  if (locale->help_scroll_hint != NULL && locale->help_scroll_hint[0] != '\0') {
+    session_send_system_line(ctx, locale->help_scroll_hint);
+  }
+
+  if (locale->help_regular_hint != NULL && locale->help_regular_hint[0] != '\0') {
+    session_send_system_line(ctx, locale->help_regular_hint);
+  }
+}
+
+static void session_print_help_extra(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
+  const char *prefix = session_command_prefix(ctx);
+
+  if (locale->help_extra_title != NULL && locale->help_extra_title[0] != '\0') {
+    session_send_system_line(ctx, locale->help_extra_title);
+  }
+
+  session_help_send_entries(ctx, kSessionHelpExtended,
+                            sizeof(kSessionHelpExtended) / sizeof(kSessionHelpExtended[0]));
+
+  session_send_system_line(ctx, "");
+
+  if (locale->help_extra_hint != NULL && locale->help_extra_hint[0] != '\0') {
+    const char *args[] = {prefix};
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    session_format_template(locale->help_extra_hint, args, sizeof(args) / sizeof(args[0]), line, sizeof(line));
+    session_send_system_line(ctx, line);
+  }
 
   if (ctx->user.is_operator || ctx->user.is_lan_operator) {
-    session_send_system_lines_bulk(ctx, kHelpOperatorLines,
-                                   sizeof(kHelpOperatorLines) / sizeof(kHelpOperatorLines[0]));
-    session_send_system_line(ctx, "/getaddr <username>    - look up a user's last known address (operator only)");
+    session_send_system_line(ctx, "");
+    if (locale->help_operator_title != NULL && locale->help_operator_title[0] != '\0') {
+      session_send_system_line(ctx, locale->help_operator_title);
+    }
+    session_help_send_entries(ctx, kSessionHelpOperator,
+                              sizeof(kSessionHelpOperator) / sizeof(kSessionHelpOperator[0]));
   }
 }
 
@@ -16238,8 +17916,11 @@ static void session_handle_block(session_ctx_t *ctx, const char *arguments) {
 
   static const char *kUsage = "Usage: /block <username|ip|list|confirm <username> <only|ip>>";
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/block", kUsage, usage, sizeof(usage));
+
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16248,7 +17929,7 @@ static void session_handle_block(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16265,7 +17946,7 @@ static void session_handle_block(session_ctx_t *ctx, const char *arguments) {
     }
 
     if (*cursor == '\0') {
-      session_send_system_line(ctx, kUsage);
+      session_send_system_line(ctx, usage);
       return;
     }
 
@@ -16281,7 +17962,7 @@ static void session_handle_block(session_ctx_t *ctx, const char *arguments) {
     }
 
     if (*cursor == '\0') {
-      session_send_system_line(ctx, kUsage);
+      session_send_system_line(ctx, usage);
       return;
     }
 
@@ -16310,7 +17991,7 @@ static void session_handle_block(session_ctx_t *ctx, const char *arguments) {
     } else if (strcasecmp(mode, "only") == 0 || strcasecmp(mode, "user") == 0 || strcasecmp(mode, "name") == 0) {
       block_ip = false;
     } else {
-      session_send_system_line(ctx, kUsage);
+      session_send_system_line(ctx, usage);
       return;
     }
 
@@ -16431,8 +18112,11 @@ static void session_handle_unblock(session_ctx_t *ctx, const char *arguments) {
 
   static const char *kUsage = "Usage: /unblock <username|ip|all>";
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/unblock", kUsage, usage, sizeof(usage));
+
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16441,7 +18125,7 @@ static void session_handle_unblock(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16487,13 +18171,16 @@ static void session_handle_pm(session_ctx_t *ctx, const char *arguments) {
 
   static const char *kUsage = "Usage: /pm <username> <message>";
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/pm", kUsage, usage, sizeof(usage));
+
   if (ctx->owner == NULL) {
     session_send_system_line(ctx, "Private messages are unavailable right now.");
     return;
   }
 
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16502,7 +18189,7 @@ static void session_handle_pm(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16512,7 +18199,7 @@ static void session_handle_pm(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (*cursor == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16523,7 +18210,7 @@ static void session_handle_pm(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (*message == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16696,12 +18383,15 @@ static void session_handle_search(session_ctx_t *ctx, const char *arguments) {
 static void session_handle_chat_lookup(session_ctx_t *ctx, const char *arguments) {
   static const char *kUsage = "Usage: /chat <message-id>";
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/chat", kUsage, usage, sizeof(usage));
+
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
 
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16710,14 +18400,14 @@ static void session_handle_chat_lookup(session_ctx_t *ctx, const char *arguments
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
   char *endptr = NULL;
   unsigned long long parsed = strtoull(working, &endptr, 10);
   if (parsed == 0ULL || (endptr != NULL && *endptr != '\0')) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16738,14 +18428,16 @@ static void session_handle_chat_lookup(session_ctx_t *ctx, const char *arguments
 }
 
 static void session_handle_reply(session_ctx_t *ctx, const char *arguments) {
-  static const char *kUsage = "Usage: /reply <message-id|r<reply-id>> <text>";
-
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(usage, sizeof(usage), "Usage: %s <message-id|r<reply-id>> <text>",
+           session_command_alias_preferred_by_canonical(ctx, "/reply"));
+
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16754,14 +18446,14 @@ static void session_handle_reply(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
   char *saveptr = NULL;
   char *target = strtok_r(working, " \t", &saveptr);
   if (target == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16774,7 +18466,7 @@ static void session_handle_reply(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (text == NULL || *text == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16788,14 +18480,14 @@ static void session_handle_reply(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (*target == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
   char *endptr = NULL;
   unsigned long long parsed = strtoull(target, &endptr, 10);
   if (parsed == 0ULL || (endptr != NULL && *endptr != '\0')) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16872,8 +18564,11 @@ static void session_handle_image(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/image", kUsage, usage, sizeof(usage));
+
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16882,14 +18577,14 @@ static void session_handle_image(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
   char *saveptr = NULL;
   char *url = strtok_r(working, " \t", &saveptr);
   if (url == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16935,8 +18630,11 @@ static void session_handle_video(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/video", kUsage, usage, sizeof(usage));
+
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16945,14 +18643,14 @@ static void session_handle_video(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
   char *saveptr = NULL;
   char *url = strtok_r(working, " \t", &saveptr);
   if (url == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -16998,8 +18696,11 @@ static void session_handle_audio(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/audio", kUsage, usage, sizeof(usage));
+
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -17008,14 +18709,14 @@ static void session_handle_audio(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
   char *saveptr = NULL;
   char *url = strtok_r(working, " \t", &saveptr);
   if (url == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -17061,8 +18762,11 @@ static void session_handle_files(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/files", kUsage, usage, sizeof(usage));
+
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -17071,14 +18775,14 @@ static void session_handle_files(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
   char *saveptr = NULL;
   char *url = strtok_r(working, " \t", &saveptr);
   if (url == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -17347,7 +19051,17 @@ static void session_handle_reaction(session_ctx_t *ctx, size_t reaction_index, c
   const reaction_descriptor_t *descriptor = &REACTION_DEFINITIONS[reaction_index];
 
   char usage[64];
-  snprintf(usage, sizeof(usage), "Usage: /%s <message-id>", descriptor->command);
+  char canonical[32];
+  int written = snprintf(canonical, sizeof(canonical), "/%s", descriptor->command);
+  if (written < 0 || (size_t)written >= sizeof(canonical)) {
+    canonical[0] = '\0';
+  }
+  const char *command_label = canonical[0] != '\0' ? session_command_alias_preferred_by_canonical(ctx, canonical) : NULL;
+  if (command_label == NULL || command_label[0] == '\0') {
+    command_label = canonical;
+  }
+
+  snprintf(usage, sizeof(usage), "Usage: %s <message-id>", command_label != NULL ? command_label : "");
 
   if (arguments == NULL) {
     session_send_system_line(ctx, usage);
@@ -17499,8 +19213,11 @@ static void session_handle_date(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/date", kUsage, usage, sizeof(usage));
+
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -17509,7 +19226,7 @@ static void session_handle_date(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -17596,8 +19313,11 @@ static void session_handle_os(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/os", kUsage, usage, sizeof(usage));
+
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -17605,7 +19325,7 @@ static void session_handle_os(session_ctx_t *ctx, const char *arguments) {
   snprintf(working, sizeof(working), "%s", arguments);
   trim_whitespace_inplace(working);
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -17615,7 +19335,7 @@ static void session_handle_os(session_ctx_t *ctx, const char *arguments) {
 
   const os_descriptor_t *descriptor = session_lookup_os_descriptor(working);
   if (descriptor == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -17634,8 +19354,11 @@ static void session_handle_getos(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/getos", kUsage, usage, sizeof(usage));
+
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -17643,7 +19366,7 @@ static void session_handle_getos(session_ctx_t *ctx, const char *arguments) {
   snprintf(target, sizeof(target), "%s", arguments);
   trim_whitespace_inplace(target);
   if (target[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -18061,8 +19784,11 @@ static void session_handle_delete_message(session_ctx_t *ctx, const char *argume
   }
 
   static const char *kUsage = "Usage: /delete-msg <id|start-end>";
+
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/delete-msg", kUsage, usage, sizeof(usage));
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -18070,7 +19796,7 @@ static void session_handle_delete_message(session_ctx_t *ctx, const char *argume
   snprintf(working, sizeof(working), "%s", arguments);
   trim_whitespace_inplace(working);
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -18083,7 +19809,7 @@ static void session_handle_delete_message(session_ctx_t *ctx, const char *argume
     trim_whitespace_inplace(working);
     trim_whitespace_inplace(end_token);
     if (working[0] == '\0' || end_token[0] == '\0') {
-      session_send_system_line(ctx, kUsage);
+      session_send_system_line(ctx, usage);
       return;
     }
 
@@ -18091,14 +19817,14 @@ static void session_handle_delete_message(session_ctx_t *ctx, const char *argume
     errno = 0;
     unsigned long long start_value = strtoull(working, &endptr, 10);
     if (errno != 0 || endptr == NULL || *endptr != '\0' || start_value == 0ULL) {
-      session_send_system_line(ctx, kUsage);
+      session_send_system_line(ctx, usage);
       return;
     }
 
     errno = 0;
     unsigned long long end_value = strtoull(end_token, &endptr, 10);
     if (errno != 0 || endptr == NULL || *endptr != '\0' || end_value == 0ULL) {
-      session_send_system_line(ctx, kUsage);
+      session_send_system_line(ctx, usage);
       return;
     }
 
@@ -18113,7 +19839,7 @@ static void session_handle_delete_message(session_ctx_t *ctx, const char *argume
     errno = 0;
     unsigned long long value = strtoull(working, &endptr, 10);
     if (errno != 0 || endptr == NULL || *endptr != '\0' || value == 0ULL) {
-      session_send_system_line(ctx, kUsage);
+      session_send_system_line(ctx, usage);
       return;
     }
     start_id = (uint64_t)value;
@@ -18162,6 +19888,9 @@ static void session_handle_poll(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/poll", kUsage, usage, sizeof(usage));
+
   if (arguments == NULL) {
     session_send_poll_summary(ctx);
     return;
@@ -18194,7 +19923,7 @@ static void session_handle_poll(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (token_count < 3U) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -18377,10 +20106,13 @@ static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, c
 
 // Allow voting in a named poll by specifying the label and desired choice directly.
 static void session_handle_elect_command(session_ctx_t *ctx, const char *arguments) {
-  const char *usage = "Usage: /elect <label> <choice>";
+  static const char *kUsage = "Usage: /elect <label> <choice>";
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
+
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/elect", kUsage, usage, sizeof(usage));
 
   if (arguments == NULL) {
     session_send_system_line(ctx, usage);
@@ -18465,9 +20197,12 @@ static void session_handle_elect_command(session_ctx_t *ctx, const char *argumen
 
 // Parse the /vote command to manage named polls, including listing, creation, and closure.
 static void session_handle_vote_command(session_ctx_t *ctx, const char *arguments, bool allow_multiple) {
-  const char *usage = allow_multiple
-                          ? "Usage: /vote <label> <question>|<option1>|<option2>[|option3][|option4][|option5]"
-                          : "Usage: /vote-single <label> <question>|<option1>|<option2>[|option3][|option4][|option5]";
+  const char *usage_template = allow_multiple
+                                   ? "Usage: /vote <label> <question>|<option1>|<option2>[|option3][|option4][|option5]"
+                                   : "Usage: /vote-single <label> <question>|<option1>|<option2>[|option3][|option4][|option5]";
+  const char *canonical = allow_multiple ? "/vote" : "/vote-single";
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, canonical, usage_template, usage, sizeof(usage));
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
@@ -19254,9 +20989,11 @@ static void session_bbs_list(session_ctx_t *ctx) {
   pthread_mutex_unlock(&host->lock);
 
   if (count == 0U) {
-    session_send_system_line(ctx,
-                             "The bulletin board is empty. Use /bbs post <title> [tags...] to write something. Finish drafts "
-                             "with " SSH_CHATTER_BBS_TERMINATOR ".");
+    char empty_hint[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(empty_hint, sizeof(empty_hint),
+             "The bulletin board is empty. Use /bbs post <title> [tags...] to write something. Finish drafts with %s.",
+             session_bbs_terminator(ctx));
+    session_send_system_line(ctx, empty_hint);
     session_translation_pop_scope_override(ctx, previous_override);
     return;
   }
@@ -19490,7 +21227,10 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (ctx->bbs_post_pending) {
-    session_send_system_line(ctx, "You are already composing a post. Finish it with " SSH_CHATTER_BBS_TERMINATOR ".");
+    const char *terminator = session_bbs_terminator(ctx);
+    char warning[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(warning, sizeof(warning), "You are already composing a post. Finish it with %s.", terminator);
+    session_send_system_line(ctx, warning);
     return;
   }
 
@@ -19507,7 +21247,10 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
   session_bbs_reset_pending_post(ctx);
 
   if (arguments == NULL) {
-    session_send_system_line(ctx, "Usage: /bbs post <title>[|tags...]");
+    char usage[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(usage, sizeof(usage), "Usage: %s post <title>[|tags...]",
+             session_command_alias_preferred_by_canonical(ctx, "/bbs"));
+    session_send_system_line(ctx, usage);
     session_send_system_line(ctx, "Use | to separate tags when the title has spaces.");
     return;
   }
@@ -19516,7 +21259,10 @@ static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
   snprintf(working, sizeof(working), "%s", arguments);
   trim_whitespace_inplace(working);
   if (working[0] == '\0') {
-    session_send_system_line(ctx, "Usage: /bbs post <title>[|tags...]");
+    char usage[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(usage, sizeof(usage), "Usage: %s post <title>[|tags...]",
+             session_command_alias_preferred_by_canonical(ctx, "/bbs"));
+    session_send_system_line(ctx, usage);
     session_send_system_line(ctx, "Use | to separate tags when the title has spaces.");
     return;
   }
@@ -19662,7 +21408,7 @@ static void session_bbs_capture_body_line(session_ctx_t *ctx, const char *line) 
   char trimmed[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(trimmed, sizeof(trimmed), "%s", line != NULL ? line : "");
   trim_whitespace_inplace(trimmed);
-  if (strcmp(trimmed, SSH_CHATTER_BBS_TERMINATOR) == 0) {
+  if (session_bbs_matches_terminator(trimmed)) {
     session_bbs_commit_pending_post(ctx);
     return;
   }
@@ -19694,7 +21440,10 @@ static void session_bbs_capture_body_line(session_ctx_t *ctx, const char *line) 
 // Append a comment to a post.
 static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL || ctx->owner == NULL || arguments == NULL) {
-    session_send_system_line(ctx, "Usage: /bbs comment <id>|<text>");
+    char usage[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(usage, sizeof(usage), "Usage: %s comment <id>|<text>",
+             session_command_alias_preferred_by_canonical(ctx, "/bbs"));
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -19702,13 +21451,19 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   snprintf(working, sizeof(working), "%s", arguments);
   trim_whitespace_inplace(working);
   if (working[0] == '\0') {
-    session_send_system_line(ctx, "Usage: /bbs comment <id>|<text>");
+    char usage[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(usage, sizeof(usage), "Usage: %s comment <id>|<text>",
+             session_command_alias_preferred_by_canonical(ctx, "/bbs"));
+    session_send_system_line(ctx, usage);
     return;
   }
 
   char *separator = strchr(working, '|');
   if (separator == NULL) {
-    session_send_system_line(ctx, "Usage: /bbs comment <id>|<text>");
+    char usage[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(usage, sizeof(usage), "Usage: %s comment <id>|<text>",
+             session_command_alias_preferred_by_canonical(ctx, "/bbs"));
+    session_send_system_line(ctx, usage);
     return;
   }
   *separator = '\0';
@@ -19718,7 +21473,10 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(comment_text);
 
   if (id_text[0] == '\0' || comment_text[0] == '\0') {
-    session_send_system_line(ctx, "Usage: /bbs comment <id>|<text>");
+    char usage[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(usage, sizeof(usage), "Usage: %s comment <id>|<text>",
+             session_command_alias_preferred_by_canonical(ctx, "/bbs"));
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -20058,6 +21816,9 @@ static void session_handle_rss(session_ctx_t *ctx, const char *arguments) {
 
   static const char *kUsage = "Usage: /rss <add <url> <tag>|del <tag>|read <tag>|list>";
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/rss", kUsage, usage, sizeof(usage));
+
   char working[SSH_CHATTER_MAX_INPUT_LEN];
   if (arguments == NULL) {
     working[0] = '\0';
@@ -20067,14 +21828,14 @@ static void session_handle_rss(session_ctx_t *ctx, const char *arguments) {
   rss_trim_whitespace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
   char *saveptr = NULL;
   char *command = strtok_r(working, " \t", &saveptr);
   if (command == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -20160,7 +21921,7 @@ static void session_handle_rss(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  session_send_system_line(ctx, kUsage);
+  session_send_system_line(ctx, usage);
 }
 
 static bool host_asciiart_cooldown_active(host_t *host, const char *ip, const struct timespec *now,
@@ -20300,7 +22061,10 @@ static void session_asciiart_begin(session_ctx_t *ctx, session_asciiart_target_t
   }
 
   if (ctx->asciiart_pending) {
-    session_send_system_line(ctx, "You are already composing ASCII art. Finish it with " SSH_CHATTER_ASCIIART_TERMINATOR ".");
+    const char *terminator = session_asciiart_terminator(ctx);
+    char notice[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(notice, sizeof(notice), "You are already composing ASCII art. Finish it with %s.", terminator);
+    session_send_system_line(ctx, notice);
     return;
   }
 
@@ -20340,16 +22104,20 @@ static void session_asciiart_begin(session_ctx_t *ctx, session_asciiart_target_t
              "ASCII art composer ready (max %u lines, up to %zu bytes, 10-minute cooldown per IP).",
              SSH_CHATTER_ASCIIART_MAX_LINES, ascii_bytes);
     session_send_system_line(ctx, header);
-    session_send_system_line(ctx,
-                             "Type " SSH_CHATTER_ASCIIART_TERMINATOR " on a line by itself or press Ctrl+S to finish.");
+    const char *terminator = session_asciiart_terminator(ctx);
+    char instruction[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(instruction, sizeof(instruction), "Type %s on a line by itself or press Ctrl+S to finish.", terminator);
+    session_send_system_line(ctx, instruction);
     session_send_system_line(ctx, "Press Ctrl+A to cancel the draft.");
   } else {
     snprintf(header, sizeof(header),
              "Profile picture composer ready (max %u lines, up to %zu bytes, stored privately).",
              SSH_CHATTER_ASCIIART_MAX_LINES, ascii_bytes);
     session_send_system_line(ctx, header);
-    session_send_system_line(ctx,
-                             "Type " SSH_CHATTER_ASCIIART_TERMINATOR " on a line by itself or press Ctrl+S to save.");
+    const char *terminator = session_asciiart_terminator(ctx);
+    char instruction[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(instruction, sizeof(instruction), "Type %s on a line by itself or press Ctrl+S to save.", terminator);
+    session_send_system_line(ctx, instruction);
     session_send_system_line(ctx, "Press Ctrl+A to cancel the draft.");
   }
 }
@@ -20557,7 +22325,7 @@ static void session_asciiart_capture_line(session_ctx_t *ctx, const char *line) 
   char trimmed[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(trimmed, sizeof(trimmed), "%s", line != NULL ? line : "");
   trim_whitespace_inplace(trimmed);
-  if (strcmp(trimmed, SSH_CHATTER_ASCIIART_TERMINATOR) == 0) {
+  if (session_asciiart_matches_terminator(trimmed)) {
     session_asciiart_commit(ctx);
     return;
   }
@@ -20663,7 +22431,10 @@ static void session_handle_bbs(session_ctx_t *ctx, const char *arguments) {
     session_bbs_list(ctx);
   } else if (strcmp(command, "read") == 0) {
     if (rest == NULL || rest[0] == '\0') {
-      session_send_system_line(ctx, "Usage: /bbs read <id>");
+      char usage[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(usage, sizeof(usage), "Usage: %s read <id>",
+               session_command_alias_preferred_by_canonical(ctx, "/bbs"));
+      session_send_system_line(ctx, usage);
       return;
     }
     uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
@@ -20674,14 +22445,20 @@ static void session_handle_bbs(session_ctx_t *ctx, const char *arguments) {
     session_bbs_add_comment(ctx, rest);
   } else if (strcmp(command, "regen") == 0) {
     if (rest == NULL || rest[0] == '\0') {
-      session_send_system_line(ctx, "Usage: /bbs regen <id>");
+      char usage[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(usage, sizeof(usage), "Usage: %s regen <id>",
+               session_command_alias_preferred_by_canonical(ctx, "/bbs"));
+      session_send_system_line(ctx, usage);
       return;
     }
     uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
     session_bbs_regen_post(ctx, id);
   } else if (strcmp(command, "delete") == 0) {
     if (rest == NULL || rest[0] == '\0') {
-      session_send_system_line(ctx, "Usage: /bbs delete <id>");
+      char usage[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(usage, sizeof(usage), "Usage: %s delete <id>",
+               session_command_alias_preferred_by_canonical(ctx, "/bbs"));
+      session_send_system_line(ctx, usage);
       return;
     }
     uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
@@ -23401,8 +25178,11 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
       "Usage: /systemcolor (fg;background[;highlight][;bold]) or /systemcolor reset - third value may be highlight or "
       "bold.";
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/systemcolor", kUsage, usage, sizeof(usage));
+
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -23411,7 +25191,7 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -23425,7 +25205,7 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   if (had_parentheses) {
     size_t len = strlen(working);
     if (len == 0U || working[len - 1U] != ')') {
-      session_send_system_line(ctx, kUsage);
+      session_send_system_line(ctx, usage);
       return;
     }
     working[len - 1U] = '\0';
@@ -23433,7 +25213,7 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   }
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -23451,7 +25231,7 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   char *tokens[4] = {0};
   size_t token_count = 0U;
   if (!session_parse_color_arguments(working, tokens, 4U, &token_count) || token_count < 2U) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -23480,7 +25260,7 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
     bool bool_value = false;
     if (parse_bool_token(tokens[2], &bool_value)) {
       if (token_count > 3U) {
-        session_send_system_line(ctx, kUsage);
+        session_send_system_line(ctx, usage);
         return;
       }
       is_bold = bool_value;
@@ -23713,7 +25493,12 @@ static void session_handle_chat_spacing(session_ctx_t *ctx, const char *argument
     return;
   }
 
-  static const char *kUsage = "Usage: /chat-spacing <0-5>";
+  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
+  const char *prefix = session_command_prefix(ctx);
+  const char *usage_format = (locale->chat_spacing_usage != NULL && locale->chat_spacing_usage[0] != '\0')
+                                 ? locale->chat_spacing_usage
+                                 : "Usage: %schat-spacing <0-5>";
+
   char working[16];
   if (arguments == NULL) {
     working[0] = '\0';
@@ -23722,15 +25507,22 @@ static void session_handle_chat_spacing(session_ctx_t *ctx, const char *argument
   }
   trim_whitespace_inplace(working);
 
+  char usage_message[SSH_CHATTER_MESSAGE_LIMIT];
+  const char *usage_args[] = {prefix};
+
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_format_template(usage_format, usage_args, sizeof(usage_args) / sizeof(usage_args[0]), usage_message,
+                            sizeof(usage_message));
+    session_send_system_line(ctx, usage_message);
     return;
   }
 
   char *endptr = NULL;
   long value = strtol(working, &endptr, 10);
   if (endptr == working || (endptr != NULL && *endptr != '\0') || value < 0L || value > 5L) {
-    session_send_system_line(ctx, kUsage);
+    session_format_template(usage_format, usage_args, sizeof(usage_args) / sizeof(usage_args[0]), usage_message,
+                            sizeof(usage_message));
+    session_send_system_line(ctx, usage_message);
     return;
   }
 
@@ -23738,14 +25530,23 @@ static void session_handle_chat_spacing(session_ctx_t *ctx, const char *argument
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
   if (value == 0L) {
-    snprintf(message, sizeof(message),
-             "Translation captions will appear immediately without reserving extra blank lines.");
+    const char *format = (locale->chat_spacing_immediate != NULL && locale->chat_spacing_immediate[0] != '\0')
+                             ? locale->chat_spacing_immediate
+                             : "Translation captions will appear immediately without reserving extra blank lines.";
+    session_format_template(format, NULL, 0U, message, sizeof(message));
   } else if (value == 1L) {
-    snprintf(message, sizeof(message),
-             "Translation captions will reserve 1 blank line before appearing in chat threads.");
+    const char *format = (locale->chat_spacing_single != NULL && locale->chat_spacing_single[0] != '\0')
+                             ? locale->chat_spacing_single
+                             : "Translation captions will reserve 1 blank line before appearing in chat threads.";
+    session_format_template(format, NULL, 0U, message, sizeof(message));
   } else {
-    snprintf(message, sizeof(message),
-             "Translation captions will reserve %ld blank lines before appearing in chat threads.", value);
+    const char *format = (locale->chat_spacing_multiple != NULL && locale->chat_spacing_multiple[0] != '\0')
+                             ? locale->chat_spacing_multiple
+                             : "Translation captions will reserve %s blank lines before appearing in chat threads.";
+    char count[16];
+    snprintf(count, sizeof(count), "%ld", value);
+    const char *args[] = {count};
+    session_format_template(format, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
   }
   session_send_system_line(ctx, message);
 
@@ -23754,12 +25555,72 @@ static void session_handle_chat_spacing(session_ctx_t *ctx, const char *argument
   }
 }
 
+static void session_handle_set_ui_lang(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
+  const char *prefix = session_command_prefix(ctx);
+
+  char token[SSH_CHATTER_LANG_NAME_LEN];
+  const char *cursor = session_consume_token(arguments, token, sizeof(token));
+
+  bool extra_tokens = cursor != NULL && *cursor != '\0';
+  if (token[0] == '\0' || extra_tokens) {
+    const char *format = (locale->set_ui_lang_usage != NULL && locale->set_ui_lang_usage[0] != '\0')
+                             ? locale->set_ui_lang_usage
+                             : "Usage: %sset-ui-lang <ko|en|jp|zh|ru>";
+    const char *args[] = {prefix};
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    session_format_template(format, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  session_ui_language_t language = session_ui_language_from_code(token);
+  if (language == SESSION_UI_LANGUAGE_COUNT) {
+    const char *format = (locale->set_ui_lang_invalid != NULL && locale->set_ui_lang_invalid[0] != '\0')
+                             ? locale->set_ui_lang_invalid
+                             : "Unsupported language. Use one of: ko, en, jp, zh, ru.";
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    session_format_template(format, NULL, 0U, message, sizeof(message));
+    session_send_system_line(ctx, message);
+    return;
+  }
+
+  ctx->ui_language = language;
+  const session_ui_locale_t *updated_locale = session_ui_get_locale(ctx);
+  const char *language_name = session_ui_language_name(language, ctx->ui_language);
+  const char *format = (updated_locale->set_ui_lang_success != NULL &&
+                        updated_locale->set_ui_lang_success[0] != '\0')
+                           ? updated_locale->set_ui_lang_success
+                           : "UI language set to %s. Use %shelp to review commands.";
+  const char *updated_prefix = session_command_prefix(ctx);
+
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  const char *args[] = {language_name != NULL ? language_name : "-", updated_prefix};
+  session_format_template(format, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
+  session_send_system_line(ctx, message);
+
+  if (ctx->owner != NULL) {
+    host_store_ui_language(ctx->owner, ctx);
+  }
+}
+
 static void session_handle_mode(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL) {
     return;
   }
 
-  const char *current_label = ctx->input_mode == SESSION_INPUT_MODE_COMMAND ? "command" : "chat";
+  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
+  const char *prefix = session_command_prefix(ctx);
+  const char *chat_label = (locale->mode_label_chat != NULL && locale->mode_label_chat[0] != '\0')
+                               ? locale->mode_label_chat
+                               : "chat";
+  const char *command_label = (locale->mode_label_command != NULL && locale->mode_label_command[0] != '\0')
+                                   ? locale->mode_label_command
+                                   : "command";
 
   char working[32];
   if (arguments == NULL) {
@@ -23769,41 +25630,80 @@ static void session_handle_mode(session_ctx_t *ctx, const char *arguments) {
   }
   trim_whitespace_inplace(working);
 
+  const char *status_format = (locale->mode_status_format != NULL && locale->mode_status_format[0] != '\0')
+                                  ? locale->mode_status_format
+                                  : "Current input mode: %s.";
+  const char *explain_chat = (locale->mode_explain_chat != NULL && locale->mode_explain_chat[0] != '\0')
+                                 ? locale->mode_explain_chat
+                                 : "Chat mode: send messages normally. Prefix commands with %s.";
+  const char *explain_command = (locale->mode_explain_command != NULL && locale->mode_explain_command[0] != '\0')
+                                    ? locale->mode_explain_command
+                                    : "Command mode: enter commands without %s, use UpArrow/DownArrow for history and Tab for completion.";
+  const char *already_chat = (locale->mode_already_chat != NULL && locale->mode_already_chat[0] != '\0')
+                                 ? locale->mode_already_chat
+                                 : "Already in chat mode. Commands require the %s prefix.";
+  const char *already_command = (locale->mode_already_command != NULL && locale->mode_already_command[0] != '\0')
+                                    ? locale->mode_already_command
+                                    : "Command mode already active. Enter commands without %s.";
+  const char *enabled_chat = (locale->mode_enabled_chat != NULL && locale->mode_enabled_chat[0] != '\0')
+                                 ? locale->mode_enabled_chat
+                                 : "Chat mode enabled. Commands once again require the %s prefix.";
+  const char *enabled_command = (locale->mode_enabled_command != NULL && locale->mode_enabled_command[0] != '\0')
+                                    ? locale->mode_enabled_command
+                                    : "Command mode enabled. Enter commands without %s; use UpArrow/DownArrow for history and Tab for completion.";
+  const char *usage_format = (locale->mode_usage != NULL && locale->mode_usage[0] != '\0')
+                                 ? locale->mode_usage
+                                 : "Usage: %smode <chat|command|toggle>";
+
   if (working[0] == '\0') {
+    const char *current_label =
+        (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) ? command_label : chat_label;
     char status_line[128];
-    snprintf(status_line, sizeof(status_line), "Current input mode: %s.", current_label);
+    const char *status_args[] = {current_label};
+    session_format_template(status_format, status_args, sizeof(status_args) / sizeof(status_args[0]), status_line,
+                            sizeof(status_line));
     session_send_system_line(ctx, status_line);
-    if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
-      session_send_system_line(ctx,
-                               "Command mode: type commands without '/', use UpArrow/DownArrow for history, Tab for completion.");
-    } else {
-      session_send_system_line(ctx,
-                               "Chat mode: send messages normally. Prefix commands with '/'. Switch with /mode command.");
-    }
+
+    const char *explain = (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) ? explain_command : explain_chat;
+    char explain_line[SSH_CHATTER_MESSAGE_LIMIT];
+    const char *explain_args[] = {prefix};
+    session_format_template(explain, explain_args, sizeof(explain_args) / sizeof(explain_args[0]), explain_line,
+                            sizeof(explain_line));
+    session_send_system_line(ctx, explain_line);
     return;
   }
 
   if (strcasecmp(working, "chat") == 0) {
     if (ctx->input_mode == SESSION_INPUT_MODE_CHAT) {
-      session_send_system_line(ctx, "Already in chat mode. Commands require the '/' prefix.");
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      const char *args[] = {prefix};
+      session_format_template(already_chat, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
+      session_send_system_line(ctx, message);
       return;
     }
     ctx->input_mode = SESSION_INPUT_MODE_CHAT;
     session_refresh_input_line(ctx);
-    session_send_system_line(ctx, "Chat mode enabled. Commands once again require the '/' prefix.");
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    const char *args[] = {prefix};
+    session_format_template(enabled_chat, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
+    session_send_system_line(ctx, message);
     return;
   }
 
   if (strcasecmp(working, "command") == 0) {
     if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
-      session_send_system_line(ctx,
-                               "Command mode already active. Enter commands without '/', use /DownArrow for history, Tab to autocomplete.");
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      const char *args[] = {prefix};
+      session_format_template(already_command, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
+      session_send_system_line(ctx, message);
       return;
     }
     ctx->input_mode = SESSION_INPUT_MODE_COMMAND;
     session_refresh_input_line(ctx);
-    session_send_system_line(ctx,
-                             "Command mode enabled. Enter commands without '/', use UpArrow/DownArrow for history and Tab for completion.");
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    const char *args[] = {prefix};
+    session_format_template(enabled_command, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
+    session_send_system_line(ctx, message);
     return;
   }
 
@@ -23811,16 +25711,18 @@ static void session_handle_mode(session_ctx_t *ctx, const char *arguments) {
     ctx->input_mode =
         (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) ? SESSION_INPUT_MODE_CHAT : SESSION_INPUT_MODE_COMMAND;
     session_refresh_input_line(ctx);
-    if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
-      session_send_system_line(ctx,
-                               "Command mode enabled. Enter commands without '/', use UpArrow/DownArrow for history and Tab for completion.");
-    } else {
-      session_send_system_line(ctx, "Chat mode enabled. Commands once again require the '/' prefix.");
-    }
+    const char *format = (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) ? enabled_command : enabled_chat;
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    const char *args[] = {prefix};
+    session_format_template(format, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
+    session_send_system_line(ctx, message);
     return;
   }
 
-  session_send_system_line(ctx, "Usage: /mode <chat|command|toggle>");
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  const char *args[] = {prefix};
+  session_format_template(usage_format, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
+  session_send_system_line(ctx, message);
 }
 
 typedef struct session_weather_buffer {
@@ -23921,8 +25823,10 @@ static void session_handle_status(session_ctx_t *ctx, const char *arguments) {
   }
 
   static const char *kUsage = "Usage: /status <message|clear>";
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/status", kUsage, usage, sizeof(usage));
   if (arguments == NULL || *arguments == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -23931,7 +25835,7 @@ static void session_handle_status(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -23951,8 +25855,10 @@ static void session_handle_showstatus(session_ctx_t *ctx, const char *arguments)
   }
 
   static const char *kUsage = "Usage: /showstatus <username>";
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/showstatus", kUsage, usage, sizeof(usage));
   if (arguments == NULL || *arguments == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -23961,7 +25867,7 @@ static void session_handle_showstatus(session_ctx_t *ctx, const char *arguments)
   trim_whitespace_inplace(target_name);
 
   if (target_name[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -23991,8 +25897,10 @@ static void session_handle_weather(session_ctx_t *ctx, const char *arguments) {
   }
 
   static const char *kUsage = "Usage: /weather <region> <city>";
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/weather", kUsage, usage, sizeof(usage));
   if (arguments == NULL || *arguments == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -24002,7 +25910,7 @@ static void session_handle_weather(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (*cursor == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -24021,7 +25929,7 @@ static void session_handle_weather(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (*cursor == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -24030,7 +25938,7 @@ static void session_handle_weather(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(city);
 
   if (region[0] == '\0' || city[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -24442,8 +26350,11 @@ static void session_handle_eliza_chat(session_ctx_t *ctx, const char *arguments)
 
   static const char *kUsage = "Usage: /eliza-chat <message>";
 
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/eliza-chat", kUsage, usage, sizeof(usage));
+
   if (arguments == NULL) {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -24452,7 +26363,7 @@ static void session_handle_eliza_chat(session_ctx_t *ctx, const char *arguments)
   trim_whitespace_inplace(prompt);
 
   if (prompt[0] == '\0') {
-    session_send_system_line(ctx, kUsage);
+    session_send_system_line(ctx, usage);
     return;
   }
 
@@ -25168,7 +27079,41 @@ static bool host_remove_ban_entry(host_t *host, const char *token) {
   return removed;
 }
 
+static bool session_parse_localized_command(session_ctx_t *ctx, const session_command_alias_t *alias, const char *line,
+                                            const char **arguments) {
+  if (alias == NULL) {
+    return false;
+  }
+
+  if (session_parse_command(line, alias->canonical, arguments)) {
+    return true;
+  }
+
+  session_ui_language_t language = session_ui_language_current(ctx);
+  const char *preferred = session_command_alias_for_language(alias, language);
+  if (preferred != NULL && strcmp(preferred, alias->canonical) != 0) {
+    if (session_parse_command(line, preferred, arguments)) {
+      return true;
+    }
+  }
+
+  for (size_t idx = 0; idx < SESSION_UI_LANGUAGE_COUNT; ++idx) {
+    const char *localized = alias->localized[idx];
+    if (localized == NULL || localized[0] == '\0' || strcmp(localized, alias->canonical) == 0) {
+      continue;
+    }
+    if (session_parse_command(line, localized, arguments)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 static bool session_parse_command(const char *line, const char *command, const char **arguments) {
+  if (line == NULL || command == NULL) {
+    return false;
+  }
   size_t command_len = strlen(command);
 
   if (strncmp(line, command, command_len) == 0) {
@@ -25194,6 +27139,11 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
 
   if (strncmp(line, "/help", 5) == 0) {
     session_print_help(ctx);
+    return;
+  }
+
+  else if (session_parse_command(line, "/help-etc", &args)) {
+    session_print_help_extra(ctx);
     return;
   }
 
@@ -25259,7 +27209,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  else if (session_parse_command(line, "/reply", &args)) {
+  else if (session_parse_command_any(ctx, "/reply", line, &args)) {
     session_handle_reply(ctx, args);
     return;
   }
@@ -25351,6 +27301,10 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   }
   else if (session_parse_command(line, "/set-target-lang", &args)) {
     session_handle_set_target_lang(ctx, args);
+    return;
+  }
+  else if (session_parse_command(line, "/set-ui-lang", &args)) {
+    session_handle_set_ui_lang(ctx, args);
     return;
   }
   else if (session_parse_command(line, "/weather", &args)) {
@@ -25569,12 +27523,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_rss(ctx, args);
     return;
   }
-  else if (strncmp(line, "/bbs", 4) == 0) {
-    const char *arguments = line + 4;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
-    session_handle_bbs(ctx, *arguments == '\0' ? NULL : arguments);
+  else if (session_parse_command_any(ctx, "/bbs", line, &args)) {
+    session_handle_bbs(ctx, (args != NULL && args[0] != '\0') ? args : NULL);
     return;
   }
 
@@ -25620,25 +27570,31 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     for (size_t idx = 0U; idx < SSH_CHATTER_REACTION_KIND_COUNT; ++idx) {
       const reaction_descriptor_t *descriptor = &REACTION_DEFINITIONS[idx];
-      size_t command_len = strlen(descriptor->command);
-      if (strncmp(line + 1, descriptor->command, command_len) != 0) {
-        continue;
-      }
-      const char trailing = line[1 + command_len];
-      if (!(trailing == '\0' || isspace((unsigned char)trailing))) {
+      char canonical[32];
+      int written = snprintf(canonical, sizeof(canonical), "/%s", descriptor->command);
+      if (written < 0 || (size_t)written >= sizeof(canonical)) {
         continue;
       }
 
-      const char *arguments = line + 1 + command_len;
-      while (*arguments == ' ' || *arguments == '\t') {
-        ++arguments;
+      const char *arguments = NULL;
+      if (!session_parse_command_any(ctx, canonical, line, &arguments)) {
+        continue;
       }
+
       session_handle_reaction(ctx, idx, arguments);
       return;
     }
   }
 
-  session_send_system_line(ctx, "Unknown command. Type /help for help.");
+  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
+  const char *format = (locale->unknown_command != NULL && locale->unknown_command[0] != '\0')
+                           ? locale->unknown_command
+                           : "Unknown command. Type %shelp for help.";
+  const char *prefix = session_command_prefix(ctx);
+  const char *prefix_args[] = {prefix};
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  session_format_template(format, prefix_args, sizeof(prefix_args) / sizeof(prefix_args[0]), message, sizeof(message));
+  session_send_system_line(ctx, message);
 }
 
 static void trim_whitespace_inplace(char *text) {
@@ -26809,6 +28765,7 @@ static void *host_telnet_thread(void *arg) {
     ctx->auth = (auth_profile_t){0};
     snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
     ctx->input_mode = SESSION_INPUT_MODE_CHAT;
+    ctx->ui_language = SESSION_UI_LANGUAGE_EN;
 
     pthread_mutex_lock(&host->lock);
     ++host->connection_count;
@@ -27145,9 +29102,39 @@ static void *session_thread(void *arg) {
     if (ctx->owner->motd[0] != '\0') {
       session_send_system_line(ctx, ctx->owner->motd);
     }
-    session_send_system_line(ctx, "Type /help to explore available commands.");
-    session_send_system_line(ctx,
-                             "Tip: /mode command lets you run commands without '/' and unlocks history (UpArrow/DownArrow) and Tab completion.");
+    const session_ui_locale_t *locale = session_ui_get_locale(ctx);
+    const char *prefix = session_command_prefix(ctx);
+
+    if (locale->welcome_help_hint != NULL && locale->welcome_help_hint[0] != '\0') {
+      const char *args[] = {prefix};
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      session_format_template(locale->welcome_help_hint, args, sizeof(args) / sizeof(args[0]), message,
+                              sizeof(message));
+      session_send_system_line(ctx, message);
+    }
+
+    if (locale->help_hint_extra != NULL && locale->help_hint_extra[0] != '\0') {
+      const char *args[] = {prefix};
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      session_format_template(locale->help_hint_extra, args, sizeof(args) / sizeof(args[0]), message,
+                              sizeof(message));
+      session_send_system_line(ctx, message);
+    }
+
+    if (locale->mode_usage != NULL && locale->mode_usage[0] != '\0') {
+      const char *args[] = {prefix};
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      session_format_template(locale->mode_usage, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
+      session_send_system_line(ctx, message);
+    }
+
+    if (locale->mode_explain_command != NULL && locale->mode_explain_command[0] != '\0') {
+      const char *args[] = {prefix};
+      char message[SSH_CHATTER_MESSAGE_LIMIT];
+      session_format_template(locale->mode_explain_command, args, sizeof(args) / sizeof(args[0]), message,
+                              sizeof(message));
+      session_send_system_line(ctx, message);
+    }
 
     char join_message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(join_message, sizeof(join_message), "* [%s] has joined the chat", ctx->user.name);
@@ -27372,7 +29359,7 @@ static void *session_thread(void *arg) {
             session_local_echo_char(ctx, '\n');
           }
 
-          const char *terminator = ctx->bbs_post_pending ? SSH_CHATTER_BBS_TERMINATOR : SSH_CHATTER_ASCIIART_TERMINATOR;
+          const char *terminator = ctx->bbs_post_pending ? session_bbs_terminator(ctx) : session_asciiart_terminator(ctx);
           for (const char *cursor = terminator; *cursor != '\0'; ++cursor) {
             session_local_echo_char(ctx, *cursor);
           }
@@ -28464,6 +30451,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       ctx->auth = (auth_profile_t){0};
       snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
       ctx->input_mode = SESSION_INPUT_MODE_CHAT;
+      ctx->ui_language = SESSION_UI_LANGUAGE_EN;
       if (client_banner != NULL && client_banner[0] != '\0') {
         snprintf(ctx->client_banner, sizeof(ctx->client_banner), "%s", client_banner);
       }

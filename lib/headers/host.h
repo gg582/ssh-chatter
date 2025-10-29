@@ -348,6 +348,15 @@ typedef enum session_input_mode {
   SESSION_INPUT_MODE_COMMAND,
 } session_input_mode_t;
 
+typedef enum session_ui_language {
+  SESSION_UI_LANGUAGE_EN = 0,
+  SESSION_UI_LANGUAGE_KO,
+  SESSION_UI_LANGUAGE_JP,
+  SESSION_UI_LANGUAGE_ZH,
+  SESSION_UI_LANGUAGE_RU,
+  SESSION_UI_LANGUAGE_COUNT
+} session_ui_language_t;
+
 typedef enum session_asciiart_target {
   SESSION_ASCIIART_TARGET_NONE = 0,
   SESSION_ASCIIART_TARGET_CHAT,
@@ -467,6 +476,7 @@ typedef struct session_ctx {
   bool translation_suppress_output;
   bool translation_manual_scope_override;
   bool translation_quota_notified;
+  session_ui_language_t ui_language;
   pthread_mutex_t translation_mutex;
   pthread_cond_t translation_cond;
   bool translation_mutex_initialized;
@@ -523,6 +533,7 @@ typedef struct user_preference {
   bool input_translation_enabled;
   char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+  char ui_language[SSH_CHATTER_LANG_NAME_LEN];
   struct {
     char label[SSH_CHATTER_POLL_LABEL_LEN];
     uint64_t poll_id;
