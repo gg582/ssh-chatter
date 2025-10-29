@@ -15778,7 +15778,7 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
 
   const char *bbs_terminator = session_bbs_terminator(ctx);
   char shortcut_hint[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(shortcut_hint, sizeof(shortcut_hint), "Ctrl+S inserts %s. Ctrl+A cancels the draft.", bbs_terminator);
+  snprintf(shortcut_hint, sizeof(shortcut_hint), "Ctrl+S(or Save) inserts %s. Ctrl+A(or Abort) cancels the draft.", bbs_terminator);
   session_send_system_line(ctx, shortcut_hint);
   session_send_system_line(ctx, "Use Up/Down arrows to revisit a saved line and press Enter to store changes.");
   char publish_hint[SSH_CHATTER_MESSAGE_LIMIT];
@@ -17951,7 +17951,7 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
         session_rss_exit(ctx, NULL);
         session_handle_rss(ctx, rss_args);
       } else {
-        session_send_system_line(ctx, "RSS reader active. Use /exit or Ctrl+Z to return to chat.");
+        session_send_system_line(ctx, "RSS reader active. Use /rss exit Ctrl+Z, or Terminate to return to chat.");
       }
     }
     return;
