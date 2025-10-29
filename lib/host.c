@@ -970,26 +970,63 @@ static void session_fill_digit_sum_prompt(captcha_prompt_t *prompt, unsigned *st
 
   unsigned digits_count = 3U;
   if (state != NULL) {
-    digits_count = 2U + (session_prng_next(state) % 3U);
+    digits_count = 2U + (session_prng_next(state) % 2U);
   }
   if (digits_count < 2U) {
     digits_count = 2U;
   }
-  if (digits_count > 4U) {
-    digits_count = 4U;
+  if (digits_count > 3U) {
+    digits_count = 3U;
   }
 
-  unsigned digits[4];
+  unsigned digits[4] = {0U, 0U, 0U, 0U};
   unsigned sum = 0U;
-  for (unsigned idx = 0U; idx < digits_count; ++idx) {
-    unsigned raw = (unsigned)(idx + 1U);
-    if (state != NULL) {
-      raw = (session_prng_next(state) % 9U) + 1U;
-    } else {
-      raw = (raw % 9U) + 1U;
+
+  if (digits_count == 3U) {
+    bool valid = false;
+    for (unsigned attempt = 0U; attempt < 16U && !valid; ++attempt) {
+      sum = 0U;
+      for (unsigned idx = 0U; idx < digits_count; ++idx) {
+        unsigned raw = (unsigned)((idx + 1U) % 10U);
+        if (state != NULL) {
+          raw = session_prng_next(state) % 10U;
+        }
+        digits[idx] = raw;
+        sum += raw;
+      }
+      if (sum < 10U) {
+        valid = true;
+      }
     }
-    digits[idx] = raw;
-    sum += raw;
+
+    if (!valid && sum >= 10U) {
+      unsigned overflow = sum - 9U;
+      for (int idx = (int)digits_count - 1; idx >= 0 && overflow > 0U; --idx) {
+        unsigned current = digits[(size_t)idx];
+        unsigned reduction = current > overflow ? overflow : current;
+        digits[(size_t)idx] = current - reduction;
+        sum -= reduction;
+        overflow -= reduction;
+      }
+      if (sum >= 10U) {
+        digits[0] = 3U;
+        digits[1] = 3U;
+        digits[2] = 3U;
+        sum = 9U;
+      }
+    }
+  } else {
+    sum = 0U;
+    for (unsigned idx = 0U; idx < digits_count; ++idx) {
+      unsigned raw = (unsigned)(idx + 1U);
+      if (state != NULL) {
+        raw = (session_prng_next(state) % 9U) + 1U;
+      } else {
+        raw = (raw % 9U) + 1U;
+      }
+      digits[idx] = raw;
+      sum += raw;
+    }
   }
 
   char expression[64];
