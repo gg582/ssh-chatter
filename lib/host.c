@@ -925,7 +925,7 @@ static const char *const kSessionCommandNames[] = {
     "color",         "connected",   "date",         "delete-msg",   "elect",
     "eliza",         "eliza-chat",  "exit",         "files",        "game",
     "gemini",        "gemini-unfreeze","getos",      "grant",        "help",
-    "help-etc",      "image",       "kick",        "mode",         "motd",
+    "advanced",      "image",       "kick",        "mode",         "motd",
     "nick",          "os",          "pair",        "palette",     "pardon",
     "pm",
     "poke",          "poll",        "reply",       "revoke",       "rss",
@@ -1025,7 +1025,7 @@ static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT] = 
         .language = SESSION_UI_LANGUAGE_EN,
         .code = "en",
         .help_title = "Essential commands:",
-        .help_hint_extra = "See %shelp-etc for optional commands.",
+        .help_hint_extra = "See %sadvanced for optional commands.",
         .help_scroll_hint = "Use Up/Down arrows to scroll chat or command history.",
         .help_regular_hint = "Regular messages are shared with everyone.",
         .help_extra_title = "Extended commands:",
@@ -1062,7 +1062,7 @@ static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT] = 
         .language = SESSION_UI_LANGUAGE_KO,
         .code = "ko",
         .help_title = "필수 명령:",
-        .help_hint_extra = "%shelp-etc에서 선택 명령을 확인하세요.",
+        .help_hint_extra = "%sadvanced에서 선택 명령을 확인하세요.",
         .help_scroll_hint = "위/아래 화살표로 채팅이나 명령 기록을 살펴볼 수 있습니다.",
         .help_regular_hint = "일반 메시지는 모두에게 공유됩니다.",
         .help_extra_title = "확장 명령:",
@@ -1094,7 +1094,7 @@ static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT] = 
         .language = SESSION_UI_LANGUAGE_JP,
         .code = "jp",
         .help_title = "基本コマンド:",
-        .help_hint_extra = "追加コマンドは %shelp-etc で確認できます。",
+        .help_hint_extra = "追加コマンドは %sadvanced で確認できます。",
         .help_scroll_hint = "上下の矢印でチャットやコマンド履歴をたどれます。",
         .help_regular_hint = "通常のメッセージは全員に共有されます。",
         .help_extra_title = "拡張コマンド:",
@@ -1126,7 +1126,7 @@ static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT] = 
         .language = SESSION_UI_LANGUAGE_ZH,
         .code = "zh",
         .help_title = "核心命令：",
-        .help_hint_extra = "更多命令请查看 %shelp-etc。",
+        .help_hint_extra = "更多命令请查看 %sadvanced。",
         .help_scroll_hint = "使用上下方向键查看聊天或命令历史。",
         .help_regular_hint = "普通消息会分享给所有人。",
         .help_extra_title = "扩展命令：",
@@ -1158,7 +1158,7 @@ static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT] = 
         .language = SESSION_UI_LANGUAGE_RU,
         .code = "ru",
         .help_title = "Основные команды:",
-        .help_hint_extra = "Дополнительные команды смотрите в %shelp-etc.",
+        .help_hint_extra = "Дополнительные команды смотрите в %sadvanced.",
         .help_scroll_hint = "Стрелки вверх/вниз листают чат или историю команд.",
         .help_regular_hint = "Обычные сообщения видны всем.",
         .help_extra_title = "Дополнительные команды:",
@@ -1340,7 +1340,7 @@ static const session_help_entry_t kSessionHelpEssential[] = {
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
-        .label = "help-etc",
+        .label = "advanced",
         .description = {
             "List optional and operator commands.",
             "선택 및 운영자 명령을 확인합니다.",
@@ -3492,7 +3492,7 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
   {"dharma-ochre", "Ochre robes of enlightenment and vitality", "yellow", "black", true, "red", "black", "yellow", true},
   {"yin-yang", "Balance of Black and White with Jade accent", "white", "black", false, "green", "black", "white", false},
 
-  {"soviet-cold", "Cold blue/white terminal for scientific systems", "white", "blue", false, "white", "blue", "cyan", false},
+  {"soviet-cold", "Cold blue/white terminal for scientific systems", "white", "blue", false, "white", "cyan", "blue", true},
   {"hi-tel", "1990s Korean BBS blue background and text style", "bright-white", "blue", true, "bright-white", "blue", "magenta", true},
   {"amiga-cli", "AmigaOS style with cyan/blue", "cyan", "blue", true, "cyan", "blue", "blue", true},
   {"jpn-pc98", "NEC PC-9801 subtle, earthy low-res tones", "yellow", "black", false, "red", "black", "yellow", false},
@@ -27602,7 +27602,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  else if (session_parse_command(line, "/help-etc", &args)) {
+  else if (session_parse_command(line, "/advanced", &args)) {
     session_print_help_extra(ctx);
     return;
   }
