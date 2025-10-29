@@ -2061,28 +2061,28 @@ static session_ui_language_t session_ui_language_from_code(const char *code) {
 
 static const char *session_ui_language_code(session_ui_language_t language) {
   if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
-    language = SESSION_UI_LANGUAGE_EN;
+    language = SESSION_UI_LANGUAGE_KO;
   }
   return kSessionUiLanguageCodes[language];
 }
 
 static const char *session_ui_language_name(session_ui_language_t language, session_ui_language_t locale) {
   if (locale < 0 || locale >= SESSION_UI_LANGUAGE_COUNT) {
-    locale = SESSION_UI_LANGUAGE_EN;
+    locale = SESSION_UI_LANGUAGE_KO;
   }
   if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
-    language = SESSION_UI_LANGUAGE_EN;
+    language = SESSION_UI_LANGUAGE_KO;
   }
   return kSessionUiLanguageNames[locale][language];
 }
 
 static const session_ui_locale_t *session_ui_get_locale(const session_ctx_t *ctx) {
-  session_ui_language_t language = SESSION_UI_LANGUAGE_EN;
+  session_ui_language_t language = SESSION_UI_LANGUAGE_KO;
   if (ctx != NULL) {
     language = ctx->ui_language;
   }
   if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
-    language = SESSION_UI_LANGUAGE_EN;
+    language = SESSION_UI_LANGUAGE_KO;
   }
 
   for (size_t idx = 0; idx < SESSION_UI_LANGUAGE_COUNT; ++idx) {
@@ -2091,7 +2091,7 @@ static const session_ui_locale_t *session_ui_get_locale(const session_ctx_t *ctx
     }
   }
 
-  return &kSessionUiLocales[SESSION_UI_LANGUAGE_EN];
+  return &kSessionUiLocales[SESSION_UI_LANGUAGE_KO];
 }
 
 static const char *session_command_prefix(const session_ctx_t *ctx) {
@@ -2103,29 +2103,37 @@ static const char *session_command_prefix(const session_ctx_t *ctx) {
 
 static session_ui_language_t session_ui_language_current(const session_ctx_t *ctx) {
   if (ctx == NULL) {
-    return SESSION_UI_LANGUAGE_EN;
+    return SESSION_UI_LANGUAGE_KO;
   }
   session_ui_language_t language = ctx->ui_language;
   if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
-    language = SESSION_UI_LANGUAGE_EN;
+    language = SESSION_UI_LANGUAGE_KO;
   }
   return language;
 }
 
 static const char *session_asciiart_terminator_for_language(session_ui_language_t language) {
   if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
-    language = SESSION_UI_LANGUAGE_EN;
+    language = SESSION_UI_LANGUAGE_KO;
   }
   const char *terminator = kSessionAsciiartTerminators[language];
-  return (terminator != NULL && terminator[0] != '\0') ? terminator : SSH_CHATTER_ASCIIART_TERMINATOR_EN;
+  if (terminator != NULL && terminator[0] != '\0') {
+    return terminator;
+  }
+  const char *fallback = kSessionAsciiartTerminators[SESSION_UI_LANGUAGE_KO];
+  return (fallback != NULL && fallback[0] != '\0') ? fallback : SSH_CHATTER_ASCIIART_TERMINATOR_EN;
 }
 
 static const char *session_bbs_terminator_for_language(session_ui_language_t language) {
   if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
-    language = SESSION_UI_LANGUAGE_EN;
+    language = SESSION_UI_LANGUAGE_KO;
   }
   const char *terminator = kSessionBbsTerminators[language];
-  return (terminator != NULL && terminator[0] != '\0') ? terminator : SSH_CHATTER_BBS_TERMINATOR_EN;
+  if (terminator != NULL && terminator[0] != '\0') {
+    return terminator;
+  }
+  const char *fallback = kSessionBbsTerminators[SESSION_UI_LANGUAGE_KO];
+  return (fallback != NULL && fallback[0] != '\0') ? fallback : SSH_CHATTER_BBS_TERMINATOR_EN;
 }
 
 static const char *session_asciiart_terminator(const session_ctx_t *ctx) {
@@ -2180,7 +2188,7 @@ static const char *session_command_alias_for_language(const session_command_alia
     return NULL;
   }
   if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
-    language = SESSION_UI_LANGUAGE_EN;
+    language = SESSION_UI_LANGUAGE_KO;
   }
   const char *localized = alias->localized[language];
   if (localized != NULL && localized[0] != '\0') {
@@ -3436,6 +3444,8 @@ static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text);
 static bool session_render_external_banner(session_ctx_t *ctx);
 static void session_render_banner_ascii(session_ctx_t *ctx);
 static void session_render_prelogin_banner(session_ctx_t *ctx);
+static bool session_client_geo_is_korean(const session_ctx_t *ctx);
+static void session_render_prelogin_language_prompt(session_ctx_t *ctx);
 static void session_render_banner(session_ctx_t *ctx);
 static void session_format_separator_line(session_ctx_t *ctx, const char *label, char *out, size_t length);
 static void session_render_separator(session_ctx_t *ctx, const char *label);
@@ -12084,7 +12094,7 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
   ctx->input_translation_enabled = false;
   ctx->input_translation_language[0] = '\0';
   ctx->last_detected_input_language[0] = '\0';
-  ctx->ui_language = SESSION_UI_LANGUAGE_EN;
+  ctx->ui_language = SESSION_UI_LANGUAGE_KO;
 
   if (has_snapshot) {
     if (snapshot.ui_language[0] != '\0') {
@@ -14462,6 +14472,13 @@ static bool session_telnet_prompt_initial_nickname(session_ctx_t *ctx) {
     }
 
     trim_whitespace_inplace(nickname);
+
+    const char *lang_args = NULL;
+    if (session_parse_command(nickname, "/set-ui-lang", &lang_args) ||
+        session_parse_command(nickname, "set-ui-lang", &lang_args)) {
+      session_handle_set_ui_lang(ctx, lang_args);
+      continue;
+    }
     if (nickname[0] == '\0') {
       session_send_system_line(ctx, "Nickname cannot be empty.");
       continue;
@@ -15736,6 +15753,55 @@ static void session_render_banner_ascii(session_ctx_t *ctx) {
   }
 }
 
+static bool session_client_geo_is_korean(const session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  if (session_is_lan_client(ctx->client_ip)) {
+    return true;
+  }
+
+  char label[64];
+  if (session_detect_provider_ip(ctx->client_ip, label, sizeof(label))) {
+    if (label[0] != '\0' && strcasecmp(label, "Korean ISP") == 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void session_render_prelogin_language_prompt(session_ctx_t *ctx) {
+  if (ctx == NULL || session_client_geo_is_korean(ctx)) {
+    return;
+  }
+
+  session_send_system_line(ctx, "기본 UI 언어는 한국어입니다. 로그인 전에 원하는 언어를 선택하세요.");
+  session_send_system_line(ctx, "Default UI language is Korean. Choose one before logging in:");
+
+  const char *prefix = session_command_prefix(ctx);
+  static const struct {
+    const char *code;
+    const char *label;
+  } kLanguagePrompts[] = {
+      {"en", "English"},
+      {"jp", "日本語 / Japanese"},
+      {"zh", "中文 / Chinese"},
+      {"ru", "Русский / Russian"},
+  };
+
+  for (size_t idx = 0; idx < sizeof(kLanguagePrompts) / sizeof(kLanguagePrompts[0]); ++idx) {
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(line, sizeof(line), "  %sset-ui-lang %s  → %s", prefix, kLanguagePrompts[idx].code,
+             kLanguagePrompts[idx].label);
+    session_send_system_line(ctx, line);
+  }
+
+  session_send_system_line(ctx, "명령을 입력하면 해당 언어로 전환되고, Enter를 누르면 한국어가 유지됩니다.");
+  session_send_system_line(ctx, "Run one of the commands above to switch, or press Enter to keep Korean.");
+}
+
 static void session_render_prelogin_banner(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->prelogin_banner_rendered) {
     return;
@@ -15750,6 +15816,8 @@ static void session_render_prelogin_banner(session_ctx_t *ctx) {
 
   session_send_plain_line(ctx, "\033[37mConnection established.\033[0m");
   session_send_plain_line(ctx, "\033[37mAuthenticate or choose a nickname to continue.\033[0m");
+
+  session_render_prelogin_language_prompt(ctx);
 
   ctx->prelogin_banner_rendered = true;
 }
@@ -28765,7 +28833,7 @@ static void *host_telnet_thread(void *arg) {
     ctx->auth = (auth_profile_t){0};
     snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
     ctx->input_mode = SESSION_INPUT_MODE_CHAT;
-    ctx->ui_language = SESSION_UI_LANGUAGE_EN;
+    ctx->ui_language = SESSION_UI_LANGUAGE_KO;
 
     pthread_mutex_lock(&host->lock);
     ++host->connection_count;
@@ -30451,7 +30519,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       ctx->auth = (auth_profile_t){0};
       snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
       ctx->input_mode = SESSION_INPUT_MODE_CHAT;
-      ctx->ui_language = SESSION_UI_LANGUAGE_EN;
+      ctx->ui_language = SESSION_UI_LANGUAGE_KO;
       if (client_banner != NULL && client_banner[0] != '\0') {
         snprintf(ctx->client_banner, sizeof(ctx->client_banner), "%s", client_banner);
       }
