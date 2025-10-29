@@ -15608,7 +15608,7 @@ static void session_print_help(session_ctx_t *ctx) {
     return;
   }
 
-  static const char *kHelpLines[] = {
+  static const char *kHelpCommonLines[] = {
       "Available commands:",
       "/help                 - show this message",
       "/exit                 - leave the chat",
@@ -15636,11 +15636,6 @@ static void session_print_help(session_ctx_t *ctx) {
       "/set-target-lang <language|off> - translate your outgoing messages",
       "/weather <region> <city> - show the weather for a region and city",
       "/translate <on|off>    - enable or disable translation after configuring languages",
-      "/translate-scope <chat|chat-nohistory|all> - limit translation to chat/BBS, optionally skipping scrollback (operator only)",
-      "/gemini <on|off>       - toggle Gemini provider (operator only)",
-      "/gemini-unfreeze      - clear automatic Gemini cooldown (operator only)",
-      "/captcha <on|off>      - toggle captcha requirement (operator only)",
-      "/eliza <on|off>        - toggle the eliza moderator persona (operator only)",
       "/eliza-chat <message>  - chat with eliza using shared memories",
       "/chat-spacing <0-5>    - reserve blank lines before translated captions in chat",
       "/mode <chat|command|toggle> - switch between chat mode and command mode (no '/' needed in command mode)",
@@ -15654,36 +15649,47 @@ static void session_print_help(session_ctx_t *ctx) {
       "/pair                - list users sharing your recorded OS",
       "/connected           - privately list everyone connected",
       "/alpha-centauri-landers - view the Immigrants' Flag hall of fame",
-      "/grant <ip>          - grant operator access to an IP (LAN only)",
-      "/revoke <ip>         - revoke an IP's operator access (LAN top admin)",
       "/poll <question>|<option...> - start or view a poll",
       "/vote <label> <question>|<option...> - start or inspect a multiple-choice named poll (use /vote @close <label> to end it)",
       "/vote-single <label> <question>|<option...> - start or inspect a single-choice named poll",
       "/elect <label> <choice> - vote in a named poll by label",
       "/poke <username>      - send a bell to call a user",
+      "/block <user|ip>      - hide messages from a user or IP locally (/block list to review)",
+      "/unblock <target|all> - remove a local block entry",
+      "/good|/sad|/cool|/angry|/checked|/love|/wtf <id> - react to a message by number",
+      "/1 .. /5             - vote for an option in the active poll",
+      "/bbs [list|read|post|comment|regen|delete] - open the bulletin board system (see /bbs for details, finish ",
+      SSH_CHATTER_BBS_TERMINATOR " to post)",
+      "/rss list             - list saved RSS feeds",
+      "/rss read <tag>       - open a saved feed in the inline reader",
+      "/suspend!            - suspend the active game (Ctrl+Z while playing)",
+      "Regular messages are shared with everyone."
+  };
+
+  static const char *kHelpOperatorLines[] = {
+      "/translate-scope <chat|chat-nohistory|all> - limit translation to chat/BBS, optionally skipping scrollback (operator only)",
+      "/gemini <on|off>       - toggle Gemini provider (operator only)",
+      "/gemini-unfreeze      - clear automatic Gemini cooldown (operator only)",
+      "/captcha <on|off>      - toggle captcha requirement (operator only)",
+      "/eliza <on|off>        - toggle the eliza moderator persona (operator only)",
+      "/grant <ip>          - grant operator access to an IP (LAN only)",
+      "/revoke <ip>         - revoke an IP's operator access (LAN top admin)",
       "/kick <username>      - disconnect a user (operator only)",
       "/ban <username>       - ban a user (operator only)",
       "/banname <nickname>   - block a nickname (operator only)",
       "/banlist             - list active bans (operator only)",
       "/delete-msg <id|start-end> - remove chat history messages (operator only)",
-      "/block <user|ip>      - hide messages from a user or IP locally (/block list to review)",
-      "/unblock <target|all> - remove a local block entry",
       "/pardon <user|ip>     - remove a ban (operator only)",
-      "/good|/sad|/cool|/angry|/checked|/love|/wtf <id> - react to a message by number",
-      "/1 .. /5             - vote for an option in the active poll",
-      "/bbs [list|read|post|comment|regen|delete] - open the bulletin board system (see /bbs for details, finish "
-      SSH_CHATTER_BBS_TERMINATOR " to post)",
-      "/rss list             - list saved RSS feeds",
-      "/rss read <tag>       - open a saved feed in the inline reader",
       "/rss add <url> <tag>  - register a feed (operator only)",
-      "/rss del <tag>        - delete a feed (operator only)",
-      "/suspend!            - suspend the active game (Ctrl+Z while playing)",
-      "Regular messages are shared with everyone.",
+      "/rss del <tag>        - delete a feed (operator only)"
   };
 
-  session_send_system_lines_bulk(ctx, kHelpLines, sizeof(kHelpLines) / sizeof(kHelpLines[0]));
+  session_send_system_lines_bulk(ctx, kHelpCommonLines,
+                                 sizeof(kHelpCommonLines) / sizeof(kHelpCommonLines[0]));
 
   if (ctx->user.is_operator || ctx->user.is_lan_operator) {
+    session_send_system_lines_bulk(ctx, kHelpOperatorLines,
+                                   sizeof(kHelpOperatorLines) / sizeof(kHelpOperatorLines[0]));
     session_send_system_line(ctx, "/getaddr <username>    - look up a user's last known address (operator only)");
   }
 }
