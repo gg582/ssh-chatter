@@ -2770,6 +2770,14 @@ typedef struct {
 } captcha_prompt_t;
 
 typedef enum {
+  CAPTCHA_LANGUAGE_KO = 0,
+  CAPTCHA_LANGUAGE_EN,
+  CAPTCHA_LANGUAGE_ZH,
+  CAPTCHA_LANGUAGE_RU,
+  CAPTCHA_LANGUAGE_COUNT,
+} captcha_language_t;
+
+typedef enum {
   HOST_SECURITY_SCAN_CLEAN = 0,
   HOST_SECURITY_SCAN_BLOCKED,
   HOST_SECURITY_SCAN_ERROR,
@@ -4180,7 +4188,8 @@ static void session_game_alpha_execute_retro(session_ctx_t *ctx);
 static void session_game_alpha_execute_eva(session_ctx_t *ctx);
 static void session_game_alpha_manual_lock(session_ctx_t *ctx);
 static void session_game_alpha_manual_save(session_ctx_t *ctx);
-static void host_update_last_captcha_prompt(host_t *host, const captcha_prompt_t *prompt);
+static void host_update_last_captcha_prompt(host_t *host, const captcha_prompt_t *prompt,
+                                            const captcha_language_t *order, size_t count);
 
 typedef struct liar_prompt {
   const char *statements[3];
@@ -17423,17 +17432,238 @@ static int session_prepare_shell(session_ctx_t *ctx) {
   return shell_ready ? 0 : -1;
 }
 
-static void host_update_last_captcha_prompt(host_t *host, const captcha_prompt_t *prompt) {
+static const char *session_captcha_question_for_language(const captcha_prompt_t *prompt, captcha_language_t language) {
+  if (prompt == NULL) {
+    return NULL;
+  }
+
+  switch (language) {
+    case CAPTCHA_LANGUAGE_EN:
+      return prompt->question_en;
+    case CAPTCHA_LANGUAGE_ZH:
+      return prompt->question_zh;
+    case CAPTCHA_LANGUAGE_RU:
+      return prompt->question_ru;
+    case CAPTCHA_LANGUAGE_KO:
+    default:
+      return prompt->question_ko;
+  }
+}
+
+static const char *session_captcha_label_for_language(captcha_language_t language) {
+  switch (language) {
+    case CAPTCHA_LANGUAGE_EN:
+      return "Captcha: ";
+    case CAPTCHA_LANGUAGE_ZH:
+      return "驗證碼: ";
+    case CAPTCHA_LANGUAGE_RU:
+      return "Капча: ";
+    case CAPTCHA_LANGUAGE_KO:
+    default:
+      return "캡챠: ";
+  }
+}
+
+static captcha_language_t session_captcha_language_from_ui(session_ui_language_t language) {
+  switch (language) {
+    case SESSION_UI_LANGUAGE_EN:
+      return CAPTCHA_LANGUAGE_EN;
+    case SESSION_UI_LANGUAGE_ZH:
+      return CAPTCHA_LANGUAGE_ZH;
+    case SESSION_UI_LANGUAGE_RU:
+      return CAPTCHA_LANGUAGE_RU;
+    case SESSION_UI_LANGUAGE_JP:
+      return CAPTCHA_LANGUAGE_EN;
+    case SESSION_UI_LANGUAGE_KO:
+    default:
+      return CAPTCHA_LANGUAGE_KO;
+  }
+}
+
+static captcha_language_t session_captcha_primary_language(const session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return CAPTCHA_LANGUAGE_KO;
+  }
+
+  session_ui_language_t preferred = session_ui_language_current(ctx);
+  captcha_language_t preferred_language = session_captcha_language_from_ui(preferred);
+  if (preferred != SESSION_UI_LANGUAGE_KO || preferred_language != CAPTCHA_LANGUAGE_KO) {
+    return preferred_language;
+  }
+
+  if (session_client_geo_is_korean(ctx)) {
+    return CAPTCHA_LANGUAGE_KO;
+  }
+
+  char label[64];
+  if (session_detect_provider_ip(ctx->client_ip, label, sizeof(label))) {
+    if (string_contains_case_insensitive(label, "Chinese")) {
+      return CAPTCHA_LANGUAGE_ZH;
+    }
+    if (string_contains_case_insensitive(label, "Russian")) {
+      return CAPTCHA_LANGUAGE_RU;
+    }
+    if (string_contains_case_insensitive(label, "Korean")) {
+      return CAPTCHA_LANGUAGE_KO;
+    }
+  }
+
+  return CAPTCHA_LANGUAGE_EN;
+}
+
+static bool session_captcha_add_language(captcha_language_t *order, size_t capacity, size_t *count, bool used[],
+                                         captcha_language_t language) {
+  if (order == NULL || count == NULL || used == NULL) {
+    return false;
+  }
+
+  size_t index = (size_t)language;
+  if (index >= CAPTCHA_LANGUAGE_COUNT) {
+    return false;
+  }
+
+  if (used[index] || *count >= capacity) {
+    return false;
+  }
+
+  order[*count] = language;
+  used[index] = true;
+  ++(*count);
+  return true;
+}
+
+static size_t session_collect_captcha_languages(const session_ctx_t *ctx, captcha_language_t *order, size_t capacity) {
+  if (order == NULL || capacity == 0U) {
+    return 0U;
+  }
+
+  bool used[CAPTCHA_LANGUAGE_COUNT] = {false};
+  size_t count = 0U;
+
+  captcha_language_t primary = session_captcha_primary_language(ctx);
+  session_captcha_add_language(order, capacity, &count, used, primary);
+
+  if (ctx != NULL) {
+    captcha_language_t user_pref = session_captcha_language_from_ui(session_ui_language_current(ctx));
+    session_captcha_add_language(order, capacity, &count, used, user_pref);
+
+    char label[64];
+    if (session_detect_provider_ip(ctx->client_ip, label, sizeof(label))) {
+      if (string_contains_case_insensitive(label, "Chinese")) {
+        session_captcha_add_language(order, capacity, &count, used, CAPTCHA_LANGUAGE_ZH);
+      }
+      if (string_contains_case_insensitive(label, "Russian")) {
+        session_captcha_add_language(order, capacity, &count, used, CAPTCHA_LANGUAGE_RU);
+      }
+      if (string_contains_case_insensitive(label, "Korean")) {
+        session_captcha_add_language(order, capacity, &count, used, CAPTCHA_LANGUAGE_KO);
+      }
+    }
+  }
+
+  session_captcha_add_language(order, capacity, &count, used, CAPTCHA_LANGUAGE_EN);
+  session_captcha_add_language(order, capacity, &count, used, CAPTCHA_LANGUAGE_KO);
+
+  static const captcha_language_t kFallbackOrder[] = {
+      CAPTCHA_LANGUAGE_ZH,
+      CAPTCHA_LANGUAGE_RU,
+      CAPTCHA_LANGUAGE_EN,
+      CAPTCHA_LANGUAGE_KO,
+  };
+
+  for (size_t idx = 0U; idx < sizeof(kFallbackOrder) / sizeof(kFallbackOrder[0]); ++idx) {
+    session_captcha_add_language(order, capacity, &count, used, kFallbackOrder[idx]);
+  }
+
+  return count;
+}
+
+static void session_send_captcha_prompt(session_ctx_t *ctx, const captcha_prompt_t *prompt,
+                                        const captcha_language_t *order, size_t count) {
+  if (ctx == NULL || prompt == NULL || order == NULL || count == 0U) {
+    return;
+  }
+
+  for (size_t idx = 0U; idx < count; ++idx) {
+    captcha_language_t language = order[idx];
+    const char *label = session_captcha_label_for_language(language);
+    const char *question = session_captcha_question_for_language(prompt, language);
+    if (label == NULL || question == NULL || question[0] == '\0') {
+      continue;
+    }
+
+    char line[sizeof(prompt->question_en) + 32];
+    int written = snprintf(line, sizeof(line), "%s%s", label, question);
+    if (written <= 0) {
+      continue;
+    }
+
+    session_send_system_line(ctx, line);
+  }
+}
+
+static void host_update_last_captcha_prompt(host_t *host, const captcha_prompt_t *prompt,
+                                            const captcha_language_t *order, size_t count) {
   if (host == NULL || prompt == NULL) {
     return;
   }
 
-  pthread_mutex_lock(&host->lock);
+  static const captcha_language_t kDefaultOrder[] = {
+      CAPTCHA_LANGUAGE_KO,
+      CAPTCHA_LANGUAGE_EN,
+      CAPTCHA_LANGUAGE_ZH,
+      CAPTCHA_LANGUAGE_RU,
+  };
+
+  const captcha_language_t *languages = order;
+  size_t language_count = count;
+  if (languages == NULL || language_count == 0U) {
+    languages = kDefaultOrder;
+    language_count = sizeof(kDefaultOrder) / sizeof(kDefaultOrder[0]);
+  }
+
   char combined_question[sizeof(prompt->question_en) + sizeof(prompt->question_ko) + sizeof(prompt->question_ru) +
-                         sizeof(prompt->question_zh) + 48];
-  snprintf(combined_question, sizeof(combined_question),
-           "캡챠: %s\nCaptcha: %s\n驗證碼: %s\nКапча: %s", prompt->question_ko, prompt->question_en, prompt->question_zh,
-           prompt->question_ru);
+                         sizeof(prompt->question_zh) + 64];
+  combined_question[0] = '\0';
+  size_t combined_length = 0U;
+
+  for (size_t idx = 0U; idx < language_count; ++idx) {
+    const char *label = session_captcha_label_for_language(languages[idx]);
+    const char *question = session_captcha_question_for_language(prompt, languages[idx]);
+    if (label == NULL || question == NULL || question[0] == '\0') {
+      continue;
+    }
+
+    char line[sizeof(prompt->question_en) + 32];
+    int written = snprintf(line, sizeof(line), "%s%s", label, question);
+    if (written <= 0) {
+      continue;
+    }
+
+    size_t line_length = (size_t)written;
+    if (combined_length > 0U && combined_length + 1U < sizeof(combined_question)) {
+      combined_question[combined_length++] = '\n';
+    }
+
+    if (combined_length >= sizeof(combined_question)) {
+      break;
+    }
+
+    size_t available = sizeof(combined_question) - combined_length;
+    if (available == 0U) {
+      break;
+    }
+
+    if (line_length >= available) {
+      line_length = available - 1U;
+    }
+
+    memcpy(combined_question + combined_length, line, line_length);
+    combined_length += line_length;
+    combined_question[combined_length] = '\0';
+  }
+
+  pthread_mutex_lock(&host->lock);
   snprintf(host->last_captcha_question, sizeof(host->last_captcha_question), "%s", combined_question);
   snprintf(host->last_captcha_answer, sizeof(host->last_captcha_answer), "%s", prompt->answer);
   host->has_last_captcha = host->last_captcha_question[0] != '\0' && host->last_captcha_answer[0] != '\0';
@@ -17456,22 +17686,31 @@ static bool session_run_captcha(session_ctx_t *ctx) {
 
   captcha_prompt_t prompt;
   session_build_captcha_prompt(ctx, &prompt);
-  host_update_last_captcha_prompt(ctx->owner, &prompt);
+  captcha_language_t languages[CAPTCHA_LANGUAGE_COUNT];
+  size_t language_count = session_collect_captcha_languages(ctx, languages,
+                                                            sizeof(languages) / sizeof(languages[0]));
+  if (language_count == 0U) {
+    languages[0] = CAPTCHA_LANGUAGE_KO;
+    language_count = 1U;
+  }
+
+  host_update_last_captcha_prompt(ctx->owner, &prompt, languages, language_count);
+
+  bool include_chinese = false;
+  for (size_t idx = 0U; idx < language_count; ++idx) {
+    if (languages[idx] == CAPTCHA_LANGUAGE_ZH) {
+      include_chinese = true;
+      break;
+    }
+  }
+
   session_send_system_line(ctx, "For Windows users: CHANGE TERMINAL ENCODING TO UTF-8");
-  session_send_system_line(ctx, "INFO: Chinese question is in Traditional one to cover regions those are NOT Mainland China.");
+  if (include_chinese) {
+    session_send_system_line(ctx,
+                             "INFO: Chinese question is in Traditional one to cover regions those are NOT Mainland China.");
+  }
   session_send_system_line(ctx, "Before entering the room, solve this small puzzle.");
-  char korean_prompt_line[sizeof(prompt.question_ko) + 16];
-  snprintf(korean_prompt_line, sizeof(korean_prompt_line), "캡챠: %s", prompt.question_ko);
-  session_send_system_line(ctx, korean_prompt_line);
-  char english_prompt_line[sizeof(prompt.question_en) + 16];
-  snprintf(english_prompt_line, sizeof(english_prompt_line), "Captcha: %s", prompt.question_en);
-  session_send_system_line(ctx, english_prompt_line);
-  char chinese_prompt_line[sizeof(prompt.question_zh) + 16];
-  snprintf(chinese_prompt_line, sizeof(chinese_prompt_line), "驗證碼: %s", prompt.question_zh);
-  session_send_system_line(ctx, chinese_prompt_line);
-  char russian_prompt_line[sizeof(prompt.question_ru) + 16];
-  snprintf(russian_prompt_line, sizeof(russian_prompt_line), "Капча: %s", prompt.question_ru);
-  session_send_system_line(ctx, russian_prompt_line);
+  session_send_captcha_prompt(ctx, &prompt, languages, language_count);
   session_send_system_line(ctx, "Type your answer and press Enter:");
 
   char answer[sizeof(prompt.answer)];
