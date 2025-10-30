@@ -872,7 +872,6 @@ static void host_version_ip_rules_load_env(host_t *host) {
     }
   }
 
-  GC_free(copy);
 }
 
 static bool host_version_ip_should_ban(host_t *host, const char *version, const char *ip,
@@ -5228,11 +5227,9 @@ static hostkey_probe_result_t session_probe_client_hostkey_algorithms(
       }
     }
 
-    GC_free(buffer);
     return result;
   }
 
-  GC_free(buffer);
   return result;
 }
 
@@ -5417,7 +5414,6 @@ static void chat_room_broadcast(chat_room_t *room, const char *message, const se
     printf("[broadcast] %s\n", message);
   }
 
-  GC_free(targets);
 }
 
 static void chat_room_broadcast_caption(chat_room_t *room, const char *message) {
@@ -5460,7 +5456,6 @@ static void chat_room_broadcast_caption(chat_room_t *room, const char *message) 
 
   printf("[broadcast caption] %s\n", message);
 
-  GC_free(targets);
 }
 
 static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entry_t *entry, const session_ctx_t *from) {
@@ -5522,7 +5517,6 @@ static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entr
     }
   }
 
-  GC_free(targets);
 }
 
 static void chat_room_broadcast_reaction_update(host_t *host, const chat_history_entry_t *entry) {
@@ -6298,7 +6292,6 @@ static void host_apply_grant_to_ip(host_t *host, const char *ip) {
     session_ctx_t *member = matches[idx];
     session_send_system_line(member, "Operator privileges granted for your IP address.");
   }
-  GC_free(matches);
 }
 
 static bool host_remove_operator_grant_locked(host_t *host, const char *ip) {
@@ -6372,7 +6365,6 @@ static void host_revoke_grant_from_ip(host_t *host, const char *ip) {
     session_send_system_line(member, "Operator privileges revoked for your IP address.");
   }
 
-  GC_free(matches);
 }
 
 static bool host_lookup_user_os(host_t *host, const char *username, char *buffer, size_t length) {
@@ -7254,7 +7246,6 @@ static void host_moderation_worker_loop(int request_fd, int response_fd) {
 static void host_moderation_apply_result(host_t *host, host_moderation_task_t *task,
                                         const host_moderation_ipc_response_t *response, const char *message) {
   if (host == NULL || task == NULL || response == NULL) {
-    GC_free(task);
     return;
   }
 
@@ -7279,12 +7270,10 @@ static void host_moderation_apply_result(host_t *host, host_moderation_task_t *t
       break;
   }
 
-  GC_free(task);
 }
 
 static void host_moderation_handle_failure(host_t *host, host_moderation_task_t *task, const char *diagnostic) {
   if (host == NULL || task == NULL) {
-    GC_free(task);
     return;
   }
 
@@ -7294,7 +7283,6 @@ static void host_moderation_handle_failure(host_t *host, host_moderation_task_t 
   session_ctx_t *session = chat_room_find_user(&host->room, task->username);
   host_security_process_error(host, task->category, message, task->username, task->client_ip, session,
                               task->post_send);
-  GC_free(task);
 }
 
 static void host_moderation_flush_pending(host_t *host, const char *diagnostic) {
@@ -7319,7 +7307,6 @@ static void host_moderation_flush_pending(host_t *host, const char *diagnostic) 
     session_ctx_t *session = chat_room_find_user(&host->room, task->username);
     host_security_process_error(host, task->category, message, task->username, task->client_ip, session,
                                 task->post_send);
-    GC_free(task);
     task = next;
   }
 }
@@ -7404,7 +7391,6 @@ static void *host_moderation_thread(void *arg) {
         char *discard = (char *)malloc(message_length);
         if (discard != NULL) {
           (void)host_moderation_read_all(host->moderation.response_fd, discard, message_length);
-          GC_free(discard);
         }
         failure_reason = "moderation worker unavailable";
         host_moderation_handle_failure(host, task, failure_reason);
@@ -7417,7 +7403,6 @@ static void *host_moderation_thread(void *arg) {
       }
 
       if (!host_moderation_read_all(host->moderation.response_fd, message, message_length)) {
-        GC_free(message);
         failure_reason = "moderation worker unavailable";
         host_moderation_handle_failure(host, task, failure_reason);
         pthread_mutex_lock(&host->moderation.mutex);
@@ -7432,7 +7417,6 @@ static void *host_moderation_thread(void *arg) {
 
     const char *message_text = (message != NULL) ? message : "";
     host_moderation_apply_result(host, task, &response, message_text);
-    GC_free(message);
   }
 
   host_moderation_flush_pending(host, failure_reason);
@@ -7647,7 +7631,6 @@ static bool host_moderation_queue_chat(session_ctx_t *ctx, const char *message, 
   pthread_mutex_lock(&host->moderation.mutex);
   if (!host->moderation.active || host->moderation.stop) {
     pthread_mutex_unlock(&host->moderation.mutex);
-    GC_free(task);
     return false;
   }
 
@@ -7899,7 +7882,6 @@ static void host_eliza_task_free(host_eliza_intervene_task_t *task) {
   }
 
   if (task->allocated_with_gc) {
-    GC_free(task);
   } else {
     free(task);
   }
@@ -10147,7 +10129,6 @@ static bool host_rss_download(const char *url, char **payload, size_t *length) {
   }
 
   if (!success) {
-    GC_free(buffer.data);
   }
 
   curl_easy_cleanup(curl);
@@ -10337,7 +10318,6 @@ static size_t host_rss_parse_items(const char *payload, rss_session_item_t *item
     }
 
     ++count;
-    GC_free(block);
     cursor = end;
   }
 
@@ -10364,7 +10344,6 @@ static bool host_rss_fetch_items(const rss_feed_t *feed, rss_session_item_t *ite
     *out_count = count;
   }
 
-  GC_free(payload);
   return true;
 }
 
@@ -10744,7 +10723,6 @@ static void host_ban_state_load(host_t *host) {
 
   if (!success) {
     humanized_log_error("host", "failed to read ban state file", read_error != 0 ? read_error : EIO);
-    GC_free(entries);
     return;
   }
 
@@ -10762,7 +10740,6 @@ static void host_ban_state_load(host_t *host) {
   }
   pthread_mutex_unlock(&host->lock);
 
-  GC_free(entries);
 }
 
 static void host_reply_state_load(host_t *host) {
@@ -10817,7 +10794,6 @@ static void host_reply_state_load(host_t *host) {
 
   if (!success) {
     humanized_log_error("host", "failed to read reply state file", read_error != 0 ? read_error : EIO);
-    GC_free(entries);
     return;
   }
 
@@ -10864,7 +10840,6 @@ static void host_reply_state_load(host_t *host) {
 
   pthread_mutex_unlock(&host->lock);
 
-  GC_free(entries);
 }
 
 static void host_eliza_memory_resolve_path(host_t *host) {
@@ -11037,7 +11012,6 @@ static void host_eliza_memory_load(host_t *host) {
 
   if (!success) {
     humanized_log_error("host", "failed to read eliza memory file", read_error != 0 ? read_error : EIO);
-    GC_free(entries);
     return;
   }
 
@@ -11069,7 +11043,6 @@ static void host_eliza_memory_load(host_t *host) {
   }
 
   pthread_mutex_unlock(&host->lock);
-  GC_free(entries);
 }
 
 static void host_eliza_memory_store(host_t *host, const char *prompt, const char *reply) {
@@ -12133,7 +12106,6 @@ static void host_bbs_watchdog_scan(host_t *host) {
   pthread_mutex_unlock(&host->lock);
 
   if (snapshot_count == 0U) {
-    GC_free(snapshot);
     return;
   }
 
@@ -12142,7 +12114,6 @@ static void host_bbs_watchdog_scan(host_t *host) {
   char *content = (char *)GC_MALLOC(content_capacity);
   if (content == NULL) {
     humanized_log_error("bbs", "failed to allocate watchdog buffer", ENOMEM);
-    GC_free(snapshot);
     return;
   }
 
@@ -12263,8 +12234,6 @@ static void host_bbs_watchdog_scan(host_t *host) {
     chat_room_broadcast(&host->room, notice, NULL);
   }
 
-  GC_free(content);
-  GC_free(snapshot);
 }
 
 static void *host_bbs_watchdog_thread(void *arg) {
@@ -12727,24 +12696,12 @@ static translation_job_t *session_translation_job_alloc(void) {
   return job;
 }
 
-static void session_translation_job_free(translation_job_t *job) {
-  if (job != NULL) {
-    GC_FREE(job);
-  }
-}
-
 static translation_result_t *session_translation_result_alloc(void) {
   translation_result_t *result = (translation_result_t *)GC_MALLOC(sizeof(*result));
   if (result != NULL) {
     memset(result, 0, sizeof(*result));
   }
   return result;
-}
-
-static void session_translation_result_free(translation_result_t *result) {
-  if (result != NULL) {
-    GC_FREE(result);
-  }
 }
 
 static bool session_translation_worker_ensure(session_ctx_t *ctx) {
@@ -12802,13 +12759,11 @@ static void session_translation_clear_queue(session_ctx_t *ctx) {
 
   while (pending != NULL) {
     translation_job_t *next = pending->next;
-    session_translation_job_free(pending);
     pending = next;
   }
 
   while (ready != NULL) {
     translation_result_t *next = ready->next;
-    session_translation_result_free(ready);
     ready = next;
   }
 
@@ -12842,12 +12797,10 @@ static bool session_translation_queue_caption(session_ctx_t *ctx, const char *me
   size_t placeholder_count = 0U;
   if (!translation_prepare_text(message, job->data.caption.sanitized, sizeof(job->data.caption.sanitized),
                                 job->data.caption.placeholders, &placeholder_count)) {
-    session_translation_job_free(job);
     return false;
   }
 
   if (job->data.caption.sanitized[0] == '\0') {
-    session_translation_job_free(job);
     return false;
   }
 
@@ -13233,7 +13186,6 @@ static void session_translation_flush_ready(session_ctx_t *ctx) {
         session_deliver_outgoing_message(ctx, ready->original, false);
       }
       refreshed = true;
-      session_translation_result_free(ready);
       ready = next;
       continue;
     }
@@ -13271,7 +13223,6 @@ static void session_translation_flush_ready(session_ctx_t *ctx) {
       }
 
       refreshed = true;
-      session_translation_result_free(ready);
       ready = next;
       continue;
     }
@@ -13324,7 +13275,6 @@ static void session_translation_flush_ready(session_ctx_t *ctx) {
       }
     }
 
-    session_translation_result_free(ready);
     ready = next;
   }
 
@@ -13450,7 +13400,6 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
   }
 
   if (ctx->translation_thread_stop) {
-    session_translation_job_free(job);
     return;
   }
 
@@ -13469,7 +13418,6 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
     if (translator_translate_with_cancel(source_text, job->target_language, translated_body, sizeof(translated_body),
                                          detected_target, detected_length, &ctx->translation_thread_stop)) {
       if (ctx->translation_thread_stop) {
-        session_translation_job_free(job);
         return;
       }
       session_translation_publish_result(ctx, job, translated_body,
@@ -13479,7 +13427,6 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
       char message[128];
       const bool quota_failure = translator_last_error_was_quota();
       if (ctx->translation_thread_stop) {
-        session_translation_job_free(job);
         return;
       }
       if (quota_failure) {
@@ -13497,12 +13444,10 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
         snprintf(message, sizeof(message), "Translation failed; sending your original message.");
       }
       if (ctx->translation_thread_stop) {
-        session_translation_job_free(job);
         return;
       }
       session_translation_publish_result(ctx, job, NULL, NULL, message, false);
     }
-    session_translation_job_free(job);
     return;
   }
 
@@ -13519,7 +13464,6 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
     translated_body[0] = '\0';
 
     if (ctx->translation_thread_stop) {
-      session_translation_job_free(job);
       return;
     }
 
@@ -13528,7 +13472,6 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
       const char *error = translator_last_error();
       const bool quota_failure = translator_last_error_was_quota();
       if (ctx->translation_thread_stop) {
-        session_translation_job_free(job);
         return;
       }
       if (quota_failure) {
@@ -13570,7 +13513,6 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
   }
 
   if (ctx->translation_thread_stop) {
-    session_translation_job_free(job);
     return;
   }
 
@@ -13580,7 +13522,6 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
     session_translation_publish_result(ctx, job, failure_message, NULL, NULL, false);
   }
 
-  session_translation_job_free(job);
 }
 
 static bool session_translation_process_batch(session_ctx_t *ctx, translation_job_t **jobs, size_t job_count) {
@@ -13595,7 +13536,6 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
   if (ctx->translation_thread_stop) {
     for (size_t idx = 0U; idx < job_count; ++idx) {
       if (jobs[idx] != NULL) {
-        session_translation_job_free(jobs[idx]);
         jobs[idx] = NULL;
       }
     }
@@ -13605,8 +13545,6 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
   char *combined = GC_CALLOC(SSH_CHATTER_TRANSLATION_BATCH_BUFFER, sizeof(char));
   char *translated = GC_CALLOC(SSH_CHATTER_TRANSLATION_BATCH_BUFFER, sizeof(char));
   if (combined == NULL || translated == NULL) {
-    GC_free(combined);
-    GC_free(translated);
     return false;
   }
 
@@ -13615,33 +13553,24 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
     if (ctx->translation_thread_stop) {
       for (size_t release = idx; release < job_count; ++release) {
         if (jobs[release] != NULL) {
-          session_translation_job_free(jobs[release]);
           jobs[release] = NULL;
         }
       }
-      GC_free(combined);
-      GC_free(translated);
       return true;
     }
     if (jobs[idx] == NULL || jobs[idx]->type != TRANSLATION_JOB_CAPTION) {
-      GC_free(combined);
-      GC_free(translated);
       return false;
     }
 
     char marker[32];
     int marker_len = snprintf(marker, sizeof(marker), "[[SEG%02zu]]\n", idx);
     if (marker_len < 0) {
-      GC_free(combined);
-      GC_free(translated);
       return false;
     }
 
     size_t marker_size = (size_t)marker_len;
     size_t text_len = strlen(jobs[idx]->data.caption.sanitized);
     if (offset + marker_size + text_len + 1U > SSH_CHATTER_TRANSLATION_BATCH_BUFFER) {
-      GC_free(combined);
-      GC_free(translated);
       return false;
     }
 
@@ -13659,28 +13588,20 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
     if (ctx->translation_thread_stop) {
       for (size_t idx = 0U; idx < job_count; ++idx) {
         if (jobs[idx] != NULL) {
-          session_translation_job_free(jobs[idx]);
           jobs[idx] = NULL;
         }
       }
-      GC_free(combined);
-      GC_free(translated);
       return true;
     }
-    GC_free(combined);
-    GC_free(translated);
     return false;
   }
 
   if (ctx->translation_thread_stop) {
     for (size_t idx = 0U; idx < job_count; ++idx) {
       if (jobs[idx] != NULL) {
-        session_translation_job_free(jobs[idx]);
         jobs[idx] = NULL;
       }
     }
-    GC_free(combined);
-    GC_free(translated);
     return true;
   }
 
@@ -13692,15 +13613,11 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
     char marker[32];
     int marker_len = snprintf(marker, sizeof(marker), "[[SEG%02zu]]", idx);
     if (marker_len < 0) {
-      GC_free(combined);
-      GC_free(translated);
       return false;
     }
 
     char *marker_pos = strstr(search_cursor, marker);
     if (marker_pos == NULL) {
-      GC_free(combined);
-      GC_free(translated);
       return false;
     }
 
@@ -13717,15 +13634,11 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
     char marker[32];
     int marker_len = snprintf(marker, sizeof(marker), "[[SEG%02zu]]", idx + 1U);
     if (marker_len < 0) {
-      GC_free(combined);
-      GC_free(translated);
       return false;
     }
 
     char *next_pos = strstr(segment_starts[idx], marker);
     if (next_pos == NULL) {
-      GC_free(combined);
-      GC_free(translated);
       return false;
     }
 
@@ -13745,15 +13658,11 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
   char restored_segments[SSH_CHATTER_TRANSLATION_BATCH_MAX][SSH_CHATTER_TRANSLATION_WORKING_LEN];
   for (size_t idx = 0U; idx < job_count; ++idx) {
     if (segment_starts[idx] == NULL || segment_ends[idx] == NULL || segment_ends[idx] < segment_starts[idx]) {
-      GC_free(combined);
-      GC_free(translated);
       return false;
     }
 
     size_t segment_len = (size_t)(segment_ends[idx] - segment_starts[idx]);
     if (segment_len + 1U > SSH_CHATTER_TRANSLATION_WORKING_LEN) {
-      GC_free(combined);
-      GC_free(translated);
       return false;
     }
 
@@ -13763,8 +13672,6 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
 
     if (!translation_restore_text(segment_buffer, restored_segments[idx], sizeof(restored_segments[idx]),
                                   jobs[idx]->data.caption.placeholders, jobs[idx]->data.caption.placeholder_count)) {
-      GC_free(combined);
-      GC_free(translated);
       return false;
     }
   }
@@ -13772,22 +13679,16 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
   if (ctx->translation_thread_stop) {
     for (size_t idx = 0U; idx < job_count; ++idx) {
       if (jobs[idx] != NULL) {
-        session_translation_job_free(jobs[idx]);
         jobs[idx] = NULL;
       }
     }
-    GC_free(combined);
-    GC_free(translated);
     return true;
   }
 
   for (size_t idx = 0U; idx < job_count; ++idx) {
     session_translation_publish_result(ctx, jobs[idx], restored_segments[idx], NULL, NULL, true);
-    session_translation_job_free(jobs[idx]);
   }
 
-  GC_free(combined);
-  GC_free(translated);
   return true;
 }
 
@@ -14168,7 +14069,6 @@ cleanup:
     size_t produced = capacity - output_remaining;
     success = session_channel_write_all(ctx, buffer, produced);
   }
-  GC_free(buffer);
   return success;
 }
 
@@ -14292,7 +14192,6 @@ static bool session_channel_write_utf16_segment(session_ctx_t *ctx, const char *
   }
 
   if (!use_stack) {
-    GC_free(buffer);
   }
 
   return result;
@@ -15246,7 +15145,6 @@ static void session_send_reply_tree(session_ctx_t *ctx, uint64_t parent_message_
     session_send_reply_tree(ctx, parent_message_id, reply->reply_id, depth + 1U);
   }
 
-  GC_free(snapshot);
 }
 
 static bool host_lookup_member_ip(host_t *host, const char *username, char *ip, size_t length) {
@@ -26932,7 +26830,6 @@ static bool session_fetch_weather_summary(const char *region, const char *city, 
   success = true;
 
 cleanup:
-  GC_free(buffer.data);
   curl_easy_cleanup(curl);
   return success;
 }
@@ -30054,7 +29951,6 @@ static void session_cleanup(session_ctx_t *ctx) {
     ctx->session = NULL;
   }
 
-  GC_free(ctx);
 }
 
 static void *session_thread(void *arg) {
@@ -31229,17 +31125,14 @@ void host_shutdown(host_t *host) {
     host->clients = NULL;
   }
   pthread_mutex_lock(&host->lock);
-  GC_free(host->history);
   host->history = NULL;
   host->history_capacity = 0U;
   host->history_count = 0U;
   pthread_mutex_unlock(&host->lock);
-  GC_free(host->join_activity);
   host->join_activity = NULL;
   host->join_activity_capacity = 0U;
   host->join_activity_count = 0U;
   pthread_mutex_lock(&host->room.lock);
-  GC_free(host->room.members);
   host->room.members = NULL;
   host->room.member_capacity = 0U;
   host->room.member_count = 0U;

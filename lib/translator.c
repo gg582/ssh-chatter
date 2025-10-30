@@ -992,7 +992,6 @@ static char *translator_extract_first_text_generic(const char *response) {
 
     const char *after_string = NULL;
     if (!translator_decode_json_string(value_start, candidate, capacity, &after_string)) {
-      GC_FREE(candidate);
       return NULL;
     }
 
@@ -1000,7 +999,6 @@ static char *translator_extract_first_text_generic(const char *response) {
       return candidate;
     }
 
-    GC_FREE(candidate);
     if (after_string == NULL) {
       break;
     }
@@ -1040,22 +1038,17 @@ static char *translator_extract_payload_text(const char *response) {
     size_t capacity = strlen(value_start) + 1U;
     char *candidate =GC_MALLOC(capacity);
     if (candidate == NULL) {
-      GC_FREE(latest_payload);
       return NULL;
     }
 
     const char *after_string = NULL;
     if (!translator_decode_json_string(value_start, candidate, capacity, &after_string)) {
-      GC_FREE(candidate);
-      GC_FREE(latest_payload);
       return NULL;
     }
 
     if (candidate[0] == '{' && strstr(candidate, "\"translation\"") != NULL) {
-      GC_FREE(latest_payload);
       latest_payload = candidate;
     } else {
-      GC_FREE(candidate);
     }
 
     if (after_string == NULL) {
@@ -1089,7 +1082,6 @@ static bool translator_extract_plaintext_response(const char *response, char *de
   }
 
   snprintf(dest, dest_len, "%s", payload);
-  GC_FREE(payload);
   return dest[0] != '\0';
 }
 
@@ -1153,18 +1145,14 @@ static char *translator_extract_last_text_block(const char *response) {
     size_t capacity = strlen(value_start) + 1U;
     char *candidate =GC_MALLOC(capacity);
     if (candidate == NULL) {
-      GC_FREE(latest_payload);
       return NULL;
     }
 
     const char *after_string = NULL;
     if (!translator_decode_json_string(value_start, candidate, capacity, &after_string)) {
-      GC_FREE(candidate);
-      GC_FREE(latest_payload);
       return NULL;
     }
 
-    GC_FREE(latest_payload);
     latest_payload = candidate;
 
     if (after_string == NULL) {
@@ -1332,7 +1320,6 @@ static CURLcode translator_issue_gemini_request(CURL *curl, const char *url, con
     if (header_value != NULL) {
       snprintf(header_value, header_len, "x-goog-api-key: %s", api_key);
       headers = curl_slist_append(headers, header_value);
-      GC_FREE(header_value);
     }
   }
 
@@ -1383,7 +1370,6 @@ static bool translator_handle_payload(const char *response, char *translation, s
 
   (void)translator_extract_json_value(payload, "\"detected_language\"", detected, sizeof(detected));
   if (!translator_extract_json_value(payload, "\"translation\"", translated, sizeof(translated))) {
-    GC_FREE(payload);
     translator_set_error("Gemini response did not contain a translation field.");
     return false;
   }
@@ -1394,7 +1380,6 @@ static bool translator_handle_payload(const char *response, char *translation, s
 
   snprintf(translation, translation_len, "%s", translated);
   translator_set_error(NULL);
-  GC_FREE(payload);
   return true;
 }
 
@@ -1419,7 +1404,6 @@ static CURLcode translator_issue_json_post(CURL *curl, const char *url, const ch
     if (header_value != NULL) {
       snprintf(header_value, header_len, "%s: %s", auth_header_name, auth_header_value);
       headers = curl_slist_append(headers, header_value);
-      GC_FREE(header_value);
     }
   }
 
@@ -1562,8 +1546,6 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
   char *escaped_target = translator_escape_string(target_language);
   if (escaped_text == NULL || escaped_target == NULL) {
     translator_set_error("Failed to prepare translation request payload.");
-    GC_FREE(escaped_text);
-    GC_FREE(escaped_target);
     if (retryable != NULL) {
       *retryable = false;
     }
@@ -1574,8 +1556,6 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
   char *stream_url = translator_build_gemini_url(base, model_name, api_key, true);
   if (api_url == NULL && stream_url == NULL) {
     translator_set_error("Failed to build Gemini API URL.");
-    GC_FREE(escaped_text);
-    GC_FREE(escaped_target);
     if (retryable != NULL) {
       *retryable = false;
     }
@@ -1600,10 +1580,6 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
 
   int computed = snprintf(NULL, 0, body_format, escaped_target, escaped_text);
   if (computed < 0) {
-    GC_FREE(escaped_text);
-    GC_FREE(escaped_target);
-    GC_FREE(api_url);
-    GC_FREE(stream_url);
     translator_set_error("Failed to prepare translation request payload.");
     if (retryable != NULL) {
       *retryable = false;
@@ -1614,10 +1590,6 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
   size_t body_len = (size_t)computed + 1U;
   char *body =GC_MALLOC(body_len);
   if (body == NULL) {
-    GC_FREE(escaped_text);
-    GC_FREE(escaped_target);
-    GC_FREE(api_url);
-    GC_FREE(stream_url);
     translator_set_error("Failed to prepare translation request payload.");
     if (retryable != NULL) {
       *retryable = false;
@@ -1626,12 +1598,7 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
   }
 
   int written = snprintf(body, body_len, body_format, escaped_target, escaped_text);
-  GC_FREE(escaped_text);
-  GC_FREE(escaped_target);
   if (written < 0 || (size_t)written >= body_len) {
-    GC_FREE(body);
-    GC_FREE(api_url);
-    GC_FREE(stream_url);
     translator_set_error("Failed to prepare translation request payload.");
     if (retryable != NULL) {
       *retryable = false;
@@ -1641,9 +1608,6 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
 
   CURL *curl = curl_easy_init();
   if (curl == NULL) {
-    GC_FREE(body);
-    GC_FREE(api_url);
-    GC_FREE(stream_url);
     translator_set_error("Failed to initialise CURL.");
     if (retryable != NULL) {
       *retryable = false;
@@ -1739,11 +1703,6 @@ static bool translator_try_gemini(const translator_candidate_t *candidate, const
     }
   }
 
-  GC_FREE(stream_buffer.data);
-  GC_FREE(buffer.data);
-  GC_FREE(body);
-  GC_FREE(api_url);
-  GC_FREE(stream_url);
   curl_easy_cleanup(curl);
 
   return success;
@@ -1801,16 +1760,12 @@ static bool translator_try_gemini_eliza(const translator_candidate_t *candidate,
   char *escaped_prompt = translator_escape_string(prompt);
   char *escaped_system = translator_escape_string(system_prompt);
   if (escaped_prompt == NULL || escaped_system == NULL) {
-    GC_FREE(escaped_prompt);
-    GC_FREE(escaped_system);
     translator_set_error("Failed to prepare eliza request payload.");
     return false;
   }
 
   char *api_url = translator_build_gemini_url(base, model_name, api_key, false);
   if (api_url == NULL) {
-    GC_FREE(escaped_prompt);
-    GC_FREE(escaped_system);
     translator_set_error("Failed to build Gemini API URL.");
     return false;
   }
@@ -1831,9 +1786,6 @@ static bool translator_try_gemini_eliza(const translator_candidate_t *candidate,
 
   int computed = snprintf(NULL, 0, body_format, escaped_system, escaped_prompt);
   if (computed < 0) {
-    GC_FREE(api_url);
-    GC_FREE(escaped_prompt);
-    GC_FREE(escaped_system);
     translator_set_error("Failed to prepare eliza request payload.");
     return false;
   }
@@ -1841,27 +1793,18 @@ static bool translator_try_gemini_eliza(const translator_candidate_t *candidate,
   size_t body_len = (size_t)computed + 1U;
   char *body =GC_MALLOC(body_len);
   if (body == NULL) {
-    GC_FREE(api_url);
-    GC_FREE(escaped_prompt);
-    GC_FREE(escaped_system);
     translator_set_error("Failed to prepare eliza request payload.");
     return false;
   }
 
   int written = snprintf(body, body_len, body_format, escaped_system, escaped_prompt);
-  GC_FREE(escaped_prompt);
-  GC_FREE(escaped_system);
   if (written < 0 || (size_t)written >= body_len) {
-    GC_FREE(api_url);
-    GC_FREE(body);
     translator_set_error("Failed to prepare eliza request payload.");
     return false;
   }
 
   CURL *curl = curl_easy_init();
   if (curl == NULL) {
-    GC_FREE(api_url);
-    GC_FREE(body);
     translator_set_error("Failed to initialise HTTP client.");
     return false;
   }
@@ -1931,9 +1874,6 @@ static bool translator_try_gemini_eliza(const translator_candidate_t *candidate,
     }
   }
 
-  GC_FREE(buffer.data);
-  GC_FREE(body);
-  GC_FREE(api_url);
   curl_easy_cleanup(curl);
 
   return success;
@@ -1975,16 +1915,12 @@ static bool translator_try_gemini_moderation(const translator_candidate_t *candi
   char *escaped_content = translator_escape_string(content != NULL ? content : "");
   if (escaped_category == NULL || escaped_content == NULL) {
     translator_set_error("Failed to prepare moderation request payload.");
-    GC_FREE(escaped_category);
-    GC_FREE(escaped_content);
     return false;
   }
 
   char *api_url = translator_build_gemini_url(base, model_name, api_key, false);
   if (api_url == NULL) {
     translator_set_error("Failed to build Gemini API URL.");
-    GC_FREE(escaped_category);
-    GC_FREE(escaped_content);
     return false;
   }
 
@@ -2008,9 +1944,6 @@ static bool translator_try_gemini_moderation(const translator_candidate_t *candi
 
   int body_length = snprintf(NULL, 0, body_format, escaped_category, escaped_content);
   if (body_length < 0) {
-    GC_FREE(escaped_category);
-    GC_FREE(escaped_content);
-    GC_FREE(api_url);
     translator_set_error("Failed to prepare moderation request payload.");
     return false;
   }
@@ -2018,27 +1951,18 @@ static bool translator_try_gemini_moderation(const translator_candidate_t *candi
   size_t body_size = (size_t)body_length + 1U;
   char *body =GC_MALLOC(body_size);
   if (body == NULL) {
-    GC_FREE(escaped_category);
-    GC_FREE(escaped_content);
-    GC_FREE(api_url);
     translator_set_error("Failed to prepare moderation request payload.");
     return false;
   }
 
   int written = snprintf(body, body_size, body_format, escaped_category, escaped_content);
-  GC_FREE(escaped_category);
-  GC_FREE(escaped_content);
   if (written < 0 || (size_t)written >= body_size) {
-    GC_FREE(body);
-    GC_FREE(api_url);
     translator_set_error("Failed to prepare moderation request payload.");
     return false;
   }
 
   CURL *curl = curl_easy_init();
   if (curl == NULL) {
-    GC_FREE(body);
-    GC_FREE(api_url);
     translator_set_error("Failed to initialise CURL.");
     return false;
   }
@@ -2084,13 +2008,9 @@ static bool translator_try_gemini_moderation(const translator_candidate_t *candi
       translator_parse_moderation_decision(payload, blocked, reason, reason_len);
       translator_set_error(NULL);
       success = true;
-      GC_FREE(payload);
     }
   }
 
-  GC_FREE(buffer.data);
-  GC_FREE(body);
-  GC_FREE(api_url);
   curl_easy_cleanup(curl);
 
   return success;
@@ -2137,7 +2057,6 @@ static bool translator_try_ollama(const translator_candidate_t *candidate, const
 
   int prompt_length = snprintf(NULL, 0, prompt_format, target_language, text);
   if (prompt_length < 0) {
-    GC_FREE(url);
     translator_set_error("Failed to prepare translation prompt.");
     return false;
   }
@@ -2145,7 +2064,6 @@ static bool translator_try_ollama(const translator_candidate_t *candidate, const
   size_t prompt_size = (size_t)prompt_length + 1U;
   char *prompt_buffer =GC_MALLOC(prompt_size);
   if (prompt_buffer == NULL) {
-    GC_FREE(url);
     translator_set_error("Failed to allocate translation prompt.");
     return false;
   }
@@ -2153,12 +2071,8 @@ static bool translator_try_ollama(const translator_candidate_t *candidate, const
 
   char *escaped_prompt = translator_escape_string(prompt_buffer);
   char *escaped_system = translator_escape_string(system_prompt);
-  GC_FREE(prompt_buffer);
 
   if (escaped_prompt == NULL || escaped_system == NULL) {
-    GC_FREE(url);
-    GC_FREE(escaped_prompt);
-    GC_FREE(escaped_system);
     translator_set_error("Failed to prepare translation payload.");
     return false;
   }
@@ -2173,9 +2087,6 @@ static bool translator_try_ollama(const translator_candidate_t *candidate, const
 
   int body_length = snprintf(NULL, 0, body_format, model_name, escaped_prompt, escaped_system);
   if (body_length < 0) {
-    GC_FREE(url);
-    GC_FREE(escaped_prompt);
-    GC_FREE(escaped_system);
     translator_set_error("Failed to prepare translation request.");
     return false;
   }
@@ -2183,21 +2094,14 @@ static bool translator_try_ollama(const translator_candidate_t *candidate, const
   size_t body_size = (size_t)body_length + 1U;
   char *body =GC_MALLOC(body_size);
   if (body == NULL) {
-    GC_FREE(url);
-    GC_FREE(escaped_prompt);
-    GC_FREE(escaped_system);
     translator_set_error("Failed to prepare translation request.");
     return false;
   }
 
   snprintf(body, body_size, body_format, model_name, escaped_prompt, escaped_system);
-  GC_FREE(escaped_prompt);
-  GC_FREE(escaped_system);
 
   CURL *curl = curl_easy_init();
   if (curl == NULL) {
-    GC_FREE(url);
-    GC_FREE(body);
     translator_set_error("Failed to initialise HTTP client.");
     return false;
   }
@@ -2205,7 +2109,6 @@ static bool translator_try_ollama(const translator_candidate_t *candidate, const
   translator_buffer_t buffer = {0};
   long status = 0L;
   CURLcode result = translator_issue_json_post(curl, url, body, NULL, NULL, NULL, cancel_flag, &buffer, &status);
-  GC_FREE(url);
 
   bool success = false;
   if (result == CURLE_ABORTED_BY_CALLBACK || translator_cancel_requested(cancel_flag)) {
@@ -2261,8 +2164,6 @@ static bool translator_try_ollama(const translator_candidate_t *candidate, const
     }
   }
 
-  GC_FREE(buffer.data);
-  GC_FREE(body);
   curl_easy_cleanup(curl);
 
   return success;
@@ -2300,9 +2201,6 @@ static bool translator_try_ollama_eliza(const translator_candidate_t *candidate,
   char *escaped_prompt = translator_escape_string(prompt);
   char *escaped_system = translator_escape_string(system_prompt);
   if (escaped_prompt == NULL || escaped_system == NULL) {
-    GC_FREE(url);
-    GC_FREE(escaped_prompt);
-    GC_FREE(escaped_system);
     translator_set_error("Failed to prepare eliza request.");
     return false;
   }
@@ -2317,9 +2215,6 @@ static bool translator_try_ollama_eliza(const translator_candidate_t *candidate,
 
   int computed = snprintf(NULL, 0, body_format, model_name, escaped_prompt, escaped_system);
   if (computed < 0) {
-    GC_FREE(url);
-    GC_FREE(escaped_prompt);
-    GC_FREE(escaped_system);
     translator_set_error("Failed to prepare eliza request.");
     return false;
   }
@@ -2327,21 +2222,14 @@ static bool translator_try_ollama_eliza(const translator_candidate_t *candidate,
   size_t body_len = (size_t)computed + 1U;
   char *body =GC_MALLOC(body_len);
   if (body == NULL) {
-    GC_FREE(url);
-    GC_FREE(escaped_prompt);
-    GC_FREE(escaped_system);
     translator_set_error("Failed to prepare eliza request.");
     return false;
   }
 
   snprintf(body, body_len, body_format, model_name, escaped_prompt, escaped_system);
-  GC_FREE(escaped_prompt);
-  GC_FREE(escaped_system);
 
   CURL *curl = curl_easy_init();
   if (curl == NULL) {
-    GC_FREE(url);
-    GC_FREE(body);
     translator_set_error("Failed to initialise HTTP client.");
     return false;
   }
@@ -2349,7 +2237,6 @@ static bool translator_try_ollama_eliza(const translator_candidate_t *candidate,
   translator_buffer_t buffer = {0};
   long status = 0L;
   CURLcode result = translator_issue_json_post(curl, url, body, NULL, NULL, NULL, NULL, &buffer, &status);
-  GC_FREE(url);
 
   bool success = false;
   if (result != CURLE_OK) {
@@ -2390,8 +2277,6 @@ static bool translator_try_ollama_eliza(const translator_candidate_t *candidate,
     }
   }
 
-  GC_FREE(buffer.data);
-  GC_FREE(body);
   curl_easy_cleanup(curl);
 
   return success;
@@ -2427,7 +2312,6 @@ static bool translator_try_ollama_moderation(const translator_candidate_t *candi
 
   int prompt_length = snprintf(NULL, 0, prompt_format, label, content != NULL ? content : "");
   if (prompt_length < 0) {
-    GC_FREE(url);
     translator_set_error("Failed to prepare moderation prompt.");
     return false;
   }
@@ -2435,7 +2319,6 @@ static bool translator_try_ollama_moderation(const translator_candidate_t *candi
   size_t prompt_size = (size_t)prompt_length + 1U;
   char *prompt_buffer =GC_MALLOC(prompt_size);
   if (prompt_buffer == NULL) {
-    GC_FREE(url);
     translator_set_error("Failed to allocate moderation prompt.");
     return false;
   }
@@ -2443,12 +2326,8 @@ static bool translator_try_ollama_moderation(const translator_candidate_t *candi
 
   char *escaped_prompt = translator_escape_string(prompt_buffer);
   char *escaped_system = translator_escape_string(system_prompt);
-  GC_FREE(prompt_buffer);
 
   if (escaped_prompt == NULL || escaped_system == NULL) {
-    GC_FREE(url);
-    GC_FREE(escaped_prompt);
-    GC_FREE(escaped_system);
     translator_set_error("Failed to prepare moderation payload.");
     return false;
   }
@@ -2463,9 +2342,6 @@ static bool translator_try_ollama_moderation(const translator_candidate_t *candi
 
   int body_length = snprintf(NULL, 0, body_format, model_name, escaped_prompt, escaped_system);
   if (body_length < 0) {
-    GC_FREE(url);
-    GC_FREE(escaped_prompt);
-    GC_FREE(escaped_system);
     translator_set_error("Failed to prepare moderation request.");
     return false;
   }
@@ -2473,21 +2349,14 @@ static bool translator_try_ollama_moderation(const translator_candidate_t *candi
   size_t body_size = (size_t)body_length + 1U;
   char *body =GC_MALLOC(body_size);
   if (body == NULL) {
-    GC_FREE(url);
-    GC_FREE(escaped_prompt);
-    GC_FREE(escaped_system);
     translator_set_error("Failed to prepare moderation request.");
     return false;
   }
 
   snprintf(body, body_size, body_format, model_name, escaped_prompt, escaped_system);
-  GC_FREE(escaped_prompt);
-  GC_FREE(escaped_system);
 
   CURL *curl = curl_easy_init();
   if (curl == NULL) {
-    GC_FREE(url);
-    GC_FREE(body);
     translator_set_error("Failed to initialise HTTP client.");
     return false;
   }
@@ -2495,7 +2364,6 @@ static bool translator_try_ollama_moderation(const translator_candidate_t *candi
   translator_buffer_t buffer = {0};
   long status = 0L;
   CURLcode result = translator_issue_json_post(curl, url, body, NULL, NULL, NULL, NULL, &buffer, &status);
-  GC_FREE(url);
 
   bool success = false;
   if (result != CURLE_OK) {
@@ -2539,8 +2407,6 @@ static bool translator_try_ollama_moderation(const translator_candidate_t *candi
     }
   }
 
-  GC_FREE(buffer.data);
-  GC_FREE(body);
   curl_easy_cleanup(curl);
 
   return success;
