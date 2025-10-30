@@ -95,8 +95,23 @@ typedef struct alpha_lander_entry {
 } alpha_lander_entry_t;
 
 void * GC_CALLOC(size_t len, size_t t_len) {
-  void *calloc_mem = GC_MALLOC(len * t_len);
-  memset(calloc_mem, 0, len * t_len);
+  if (len == 0U || t_len == 0U) {
+    return GC_MALLOC(0U);
+  }
+
+  if (len > SIZE_MAX / t_len) {
+    errno = ENOMEM;
+    return NULL;
+  }
+
+  size_t total = len * t_len;
+  void *calloc_mem = GC_MALLOC(total);
+  if (calloc_mem == NULL) {
+    errno = ENOMEM;
+    return NULL;
+  }
+
+  memset(calloc_mem, 0, total);
   return calloc_mem;
 }
 
