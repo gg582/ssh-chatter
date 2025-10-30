@@ -22,6 +22,7 @@
 #include <libssh/server.h>
 
 #include "theme.h"
+#include "security_layer.h"
 
 #define HOST_GRANTS_CLEAR_SIZE 4512
 
@@ -96,6 +97,7 @@ struct host;
 struct session_ctx;
 struct client_manager;
 struct webssh_client;
+struct matrix_client;
 struct translation_job;
 struct translation_result;
 
@@ -702,6 +704,9 @@ typedef struct host {
   bool random_seeded;
   client_manager_t *clients;
   webssh_client_t *web_client;
+  struct matrix_client *matrix_client;
+  security_layer_t security_layer;
+  bool security_layer_initialized;
   _Atomic bool eliza_enabled;
   _Atomic bool eliza_announced;
   struct timespec eliza_last_action;
