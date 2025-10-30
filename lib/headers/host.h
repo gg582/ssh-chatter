@@ -743,6 +743,7 @@ typedef struct host {
   _Atomic bool rss_thread_running;
   _Atomic bool rss_thread_stop;
   struct timespec rss_last_run;
+  unsigned int session_idle_timeout_seconds;
 } host_t;
 
 void host_init(host_t *host, auth_profile_t *auth);
@@ -754,6 +755,13 @@ bool host_post_client_message(host_t *host, const char *username, const char *me
 void host_shutdown(host_t *host);
 bool host_snapshot_last_captcha(host_t *host, char *question, size_t question_length, char *answer,
                                size_t answer_length, struct timespec *timestamp);
+bool host_bbs_focus_next_post(host_t *host, session_ctx_t *session, const char *topic, bool wrap);
+bool host_bbs_focus_previous_post(host_t *host, session_ctx_t *session, const char *topic, bool wrap);
+void host_bbs_reset_view(session_ctx_t *session);
+void host_set_session_idle_timeout(host_t *host, unsigned int seconds);
+unsigned int host_get_session_idle_timeout(const host_t *host);
+bool host_session_idle_expired(const host_t *host, const session_ctx_t *session, const struct timespec *now);
+void host_note_session_activity(host_t *host, session_ctx_t *session, const struct timespec *now);
 #undef GC_CALLOC
 void * GC_CALLOC(size_t len, size_t t_len);
 #endif
