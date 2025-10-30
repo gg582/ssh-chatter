@@ -7,9 +7,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include <stdatomic.h>
 #include <time.h>
 #include <sys/types.h>
+
+#include <gc/gc.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -720,5 +723,6 @@ bool host_post_client_message(host_t *host, const char *username, const char *me
 void host_shutdown(host_t *host);
 bool host_snapshot_last_captcha(host_t *host, char *question, size_t question_length, char *answer,
                                size_t answer_length, struct timespec *timestamp);
-
+#undef GC_CALLOC
+void * GC_CALLOC(size_t len, size_t t_len);
 #endif

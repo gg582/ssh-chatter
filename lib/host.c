@@ -6,6 +6,7 @@
 #define _XOPEN_SOURCE 700
 #endif
 
+// change with your IP
 #define  HOST_IP "59.23.169.247"
 #include "host.h"
 #include <libssh/libssh.h>
@@ -92,6 +93,12 @@ typedef struct alpha_lander_entry {
   uint32_t flag_count;
   uint64_t last_flag_timestamp;
 } alpha_lander_entry_t;
+
+void * GC_CALLOC(size_t len, size_t t_len) {
+  void *calloc_mem = GC_MALLOC(len * t_len);
+  memset(calloc_mem, 0, len * t_len);
+  return calloc_mem;
+}
 
 static int alpha_lander_entry_compare(const void *lhs, const void *rhs) {
   const alpha_lander_entry_t *left = (const alpha_lander_entry_t *)lhs;
@@ -865,7 +872,7 @@ static void host_version_ip_rules_load_env(host_t *host) {
     }
   }
 
-  free(copy);
+  GC_free(copy);
 }
 
 static bool host_version_ip_should_ban(host_t *host, const char *version, const char *ip,
@@ -4932,7 +4939,7 @@ static hostkey_probe_result_t session_probe_client_hostkey_algorithms(
 
   const size_t max_buffer_size = 65536U;
   size_t buffer_size = 16384U;
-  unsigned char *buffer = malloc(buffer_size);
+  unsigned char *buffer = (unsigned char *)GC_MALLOC(buffer_size);
   if (buffer == NULL) {
     return result;
   }
@@ -5117,11 +5124,11 @@ static hostkey_probe_result_t session_probe_client_hostkey_algorithms(
       }
     }
 
-    free(buffer);
+    GC_free(buffer);
     return result;
   }
 
-  free(buffer);
+  GC_free(buffer);
   return result;
 }
 
@@ -5294,7 +5301,7 @@ static void chat_room_broadcast(chat_room_t *room, const char *message, const se
   pthread_mutex_lock(&room->lock);
   expected_targets = room->member_count;
   if (expected_targets > 0U) {
-    targets = calloc(expected_targets, sizeof(*targets));
+    targets = GC_CALLOC(expected_targets, sizeof(*targets));
     if (targets != NULL) {
       for (size_t idx = 0; idx < room->member_count; ++idx) {
         session_ctx_t *member = room->members[idx];
@@ -5334,7 +5341,7 @@ static void chat_room_broadcast(chat_room_t *room, const char *message, const se
     printf("[broadcast] %s\n", message);
   }
 
-  free(targets);
+  GC_free(targets);
 }
 
 static void chat_room_broadcast_caption(chat_room_t *room, const char *message) {
@@ -5349,7 +5356,7 @@ static void chat_room_broadcast_caption(chat_room_t *room, const char *message) 
   pthread_mutex_lock(&room->lock);
   expected_targets = room->member_count;
   if (expected_targets > 0U) {
-    targets = calloc(expected_targets, sizeof(*targets));
+    targets = GC_CALLOC(expected_targets, sizeof(*targets));
     if (targets != NULL) {
       for (size_t idx = 0; idx < room->member_count; ++idx) {
         session_ctx_t *member = room->members[idx];
@@ -5377,7 +5384,7 @@ static void chat_room_broadcast_caption(chat_room_t *room, const char *message) 
 
   printf("[broadcast caption] %s\n", message);
 
-  free(targets);
+  GC_free(targets);
 }
 
 static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entry_t *entry, const session_ctx_t *from) {
@@ -5392,7 +5399,7 @@ static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entr
   pthread_mutex_lock(&room->lock);
   expected_targets = room->member_count;
   if (expected_targets > 0U) {
-    targets = calloc(expected_targets, sizeof(*targets));
+    targets = GC_CALLOC(expected_targets, sizeof(*targets));
     if (targets != NULL) {
       for (size_t idx = 0; idx < room->member_count; ++idx) {
         session_ctx_t *member = room->members[idx];
@@ -5439,7 +5446,7 @@ static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entr
     }
   }
 
-  free(targets);
+  GC_free(targets);
 }
 
 static void chat_room_broadcast_reaction_update(host_t *host, const chat_history_entry_t *entry) {
@@ -6189,7 +6196,7 @@ static void host_apply_grant_to_ip(host_t *host, const char *ip) {
 
   pthread_mutex_lock(&host->room.lock);
   if (host->room.member_count > 0U) {
-    matches = calloc(host->room.member_count, sizeof(*matches));
+    matches = GC_CALLOC(host->room.member_count, sizeof(*matches));
     if (matches != NULL) {
       for (size_t idx = 0U; idx < host->room.member_count; ++idx) {
         session_ctx_t *member = host->room.members[idx];
@@ -6215,7 +6222,7 @@ static void host_apply_grant_to_ip(host_t *host, const char *ip) {
     session_ctx_t *member = matches[idx];
     session_send_system_line(member, "Operator privileges granted for your IP address.");
   }
-  free(matches);
+  GC_free(matches);
 }
 
 static bool host_remove_operator_grant_locked(host_t *host, const char *ip) {
@@ -6250,7 +6257,7 @@ static void host_revoke_grant_from_ip(host_t *host, const char *ip) {
 
   pthread_mutex_lock(&host->room.lock);
   if (host->room.member_count > 0U) {
-    session_ctx_t **allocated = calloc(host->room.member_count, sizeof(*allocated));
+    session_ctx_t **allocated = GC_CALLOC(host->room.member_count, sizeof(*allocated));
     if (allocated != NULL) {
       matches = allocated;
     }
@@ -6289,7 +6296,7 @@ static void host_revoke_grant_from_ip(host_t *host, const char *ip) {
     session_send_system_line(member, "Operator privileges revoked for your IP address.");
   }
 
-  free(matches);
+  GC_free(matches);
 }
 
 static bool host_lookup_user_os(host_t *host, const char *username, char *buffer, size_t length) {
@@ -7171,7 +7178,7 @@ static void host_moderation_worker_loop(int request_fd, int response_fd) {
 static void host_moderation_apply_result(host_t *host, host_moderation_task_t *task,
                                         const host_moderation_ipc_response_t *response, const char *message) {
   if (host == NULL || task == NULL || response == NULL) {
-    free(task);
+    GC_free(task);
     return;
   }
 
@@ -7196,12 +7203,12 @@ static void host_moderation_apply_result(host_t *host, host_moderation_task_t *t
       break;
   }
 
-  free(task);
+  GC_free(task);
 }
 
 static void host_moderation_handle_failure(host_t *host, host_moderation_task_t *task, const char *diagnostic) {
   if (host == NULL || task == NULL) {
-    free(task);
+    GC_free(task);
     return;
   }
 
@@ -7211,7 +7218,7 @@ static void host_moderation_handle_failure(host_t *host, host_moderation_task_t 
   session_ctx_t *session = chat_room_find_user(&host->room, task->username);
   host_security_process_error(host, task->category, message, task->username, task->client_ip, session,
                               task->post_send);
-  free(task);
+  GC_free(task);
 }
 
 static void host_moderation_flush_pending(host_t *host, const char *diagnostic) {
@@ -7236,7 +7243,7 @@ static void host_moderation_flush_pending(host_t *host, const char *diagnostic) 
     session_ctx_t *session = chat_room_find_user(&host->room, task->username);
     host_security_process_error(host, task->category, message, task->username, task->client_ip, session,
                                 task->post_send);
-    free(task);
+    GC_free(task);
     task = next;
   }
 }
@@ -7321,7 +7328,7 @@ static void *host_moderation_thread(void *arg) {
         char *discard = (char *)malloc(message_length);
         if (discard != NULL) {
           (void)host_moderation_read_all(host->moderation.response_fd, discard, message_length);
-          free(discard);
+          GC_free(discard);
         }
         failure_reason = "moderation worker unavailable";
         host_moderation_handle_failure(host, task, failure_reason);
@@ -7334,7 +7341,7 @@ static void *host_moderation_thread(void *arg) {
       }
 
       if (!host_moderation_read_all(host->moderation.response_fd, message, message_length)) {
-        free(message);
+        GC_free(message);
         failure_reason = "moderation worker unavailable";
         host_moderation_handle_failure(host, task, failure_reason);
         pthread_mutex_lock(&host->moderation.mutex);
@@ -7349,7 +7356,7 @@ static void *host_moderation_thread(void *arg) {
 
     const char *message_text = (message != NULL) ? message : "";
     host_moderation_apply_result(host, task, &response, message_text);
-    free(message);
+    GC_free(message);
   }
 
   host_moderation_flush_pending(host, failure_reason);
@@ -7564,7 +7571,7 @@ static bool host_moderation_queue_chat(session_ctx_t *ctx, const char *message, 
   pthread_mutex_lock(&host->moderation.mutex);
   if (!host->moderation.active || host->moderation.stop) {
     pthread_mutex_unlock(&host->moderation.mutex);
-    free(task);
+    GC_free(task);
     return false;
   }
 
@@ -7770,9 +7777,9 @@ static bool host_eliza_content_is_severe(const char *text) {
     "You are a modbot of this mesage. If you think that this message is containing"
     "detailed crime plan that must happen, or illegally made child abuse video so"
     "sysops must take heavy legal responsibility from this,"
-    "You should say \"My favorite fruit is Melon.\""
+    "You should say \"Melon.\""
     "If you think that this is okay(or you are unsure)"
-    "You should say \"My favorate fruit is Pear.\""
+    "You should say \"Pear.\""
     "Here's the message: %s",
     text);
   if (!translator_eliza_respond(formatted_prompt, reply, sizeof(reply))) {
@@ -7831,7 +7838,8 @@ static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const 
     return false;
   }
 
-  host_eliza_intervene_task_t *task = malloc(sizeof(*task));
+  host_eliza_intervene_task_t *task = (host_eliza_intervene_task_t *)
+                                      GC_MALLOC(sizeof(*task));
   if (task == NULL) {
     host_eliza_intervene_execute(ctx, reason, from_filter);
     return true;
@@ -7848,7 +7856,7 @@ static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const 
   pthread_t thread;
   int create_result = pthread_create(&thread, NULL, host_eliza_intervene_thread, task);
   if (create_result != 0) {
-    free(task);
+    GC_free(task);
     host_eliza_intervene_execute(ctx, reason, from_filter);
     return true;
   }
@@ -7910,7 +7918,7 @@ static void *host_eliza_intervene_thread(void *arg) {
 
   const char *reason = (task->reason[0] != '\0') ? task->reason : NULL;
   host_eliza_intervene_execute(task->ctx, reason, task->from_filter);
-  free(task);
+  GC_free(task);
   return NULL;
 }
 
@@ -9895,7 +9903,7 @@ static bool host_rss_download(const char *url, char **payload, size_t *length) {
   }
 
   if (!success) {
-    free(buffer.data);
+    GC_free(buffer.data);
   }
 
   curl_easy_cleanup(curl);
@@ -10024,7 +10032,7 @@ static size_t host_rss_parse_items(const char *payload, rss_session_item_t *item
     end += strlen(close_tag);
 
     size_t block_len = (size_t)(end - start);
-    char *block = malloc(block_len + 1U);
+    char *block = (char *)GC_MALLOC(block_len + 1U);
     if (block == NULL) {
       break;
     }
@@ -10085,7 +10093,7 @@ static size_t host_rss_parse_items(const char *payload, rss_session_item_t *item
     }
 
     ++count;
-    free(block);
+    GC_free(block);
     cursor = end;
   }
 
@@ -10112,7 +10120,7 @@ static bool host_rss_fetch_items(const rss_feed_t *feed, rss_session_item_t *ite
     *out_count = count;
   }
 
-  free(payload);
+  GC_free(payload);
   return true;
 }
 
@@ -10468,7 +10476,7 @@ static void host_ban_state_load(host_t *host) {
   uint32_t entry_count = header.entry_count;
   ban_state_entry_t *entries = NULL;
   if (entry_count > 0U) {
-    entries = calloc(entry_count, sizeof(*entries));
+    entries = GC_CALLOC(entry_count, sizeof(*entries));
     if (entries == NULL) {
       fclose(fp);
       humanized_log_error("host", "failed to allocate ban state buffer", ENOMEM);
@@ -10492,7 +10500,7 @@ static void host_ban_state_load(host_t *host) {
 
   if (!success) {
     humanized_log_error("host", "failed to read ban state file", read_error != 0 ? read_error : EIO);
-    free(entries);
+    GC_free(entries);
     return;
   }
 
@@ -10510,7 +10518,7 @@ static void host_ban_state_load(host_t *host) {
   }
   pthread_mutex_unlock(&host->lock);
 
-  free(entries);
+  GC_free(entries);
 }
 
 static void host_reply_state_load(host_t *host) {
@@ -10541,7 +10549,7 @@ static void host_reply_state_load(host_t *host) {
   uint32_t entry_count = header.entry_count;
   reply_state_entry_t *entries = NULL;
   if (entry_count > 0U) {
-    entries = calloc(entry_count, sizeof(*entries));
+    entries = GC_CALLOC(entry_count, sizeof(*entries));
     if (entries == NULL) {
       fclose(fp);
       humanized_log_error("host", "failed to allocate reply state buffer", ENOMEM);
@@ -10565,7 +10573,7 @@ static void host_reply_state_load(host_t *host) {
 
   if (!success) {
     humanized_log_error("host", "failed to read reply state file", read_error != 0 ? read_error : EIO);
-    free(entries);
+    GC_free(entries);
     return;
   }
 
@@ -10612,7 +10620,7 @@ static void host_reply_state_load(host_t *host) {
 
   pthread_mutex_unlock(&host->lock);
 
-  free(entries);
+  GC_free(entries);
 }
 
 static void host_eliza_memory_resolve_path(host_t *host) {
@@ -10761,7 +10769,7 @@ static void host_eliza_memory_load(host_t *host) {
   uint32_t entry_count = header.entry_count;
   eliza_memory_entry_serialized_t *entries = NULL;
   if (entry_count > 0U) {
-    entries = calloc(entry_count, sizeof(*entries));
+    entries = GC_CALLOC(entry_count, sizeof(*entries));
     if (entries == NULL) {
       fclose(fp);
       humanized_log_error("host", "failed to allocate eliza memory buffer", ENOMEM);
@@ -10785,7 +10793,7 @@ static void host_eliza_memory_load(host_t *host) {
 
   if (!success) {
     humanized_log_error("host", "failed to read eliza memory file", read_error != 0 ? read_error : EIO);
-    free(entries);
+    GC_free(entries);
     return;
   }
 
@@ -10817,7 +10825,7 @@ static void host_eliza_memory_load(host_t *host) {
   }
 
   pthread_mutex_unlock(&host->lock);
-  free(entries);
+  GC_free(entries);
 }
 
 static void host_eliza_memory_store(host_t *host, const char *prompt, const char *reply) {
@@ -11860,7 +11868,7 @@ static void host_bbs_watchdog_scan(host_t *host) {
     return;
   }
 
-  bbs_post_t *snapshot = calloc(SSH_CHATTER_BBS_MAX_POSTS, sizeof(*snapshot));
+  bbs_post_t *snapshot = GC_CALLOC(SSH_CHATTER_BBS_MAX_POSTS, sizeof(*snapshot));
   if (snapshot == NULL) {
     humanized_log_error("bbs", "failed to allocate watchdog snapshot", ENOMEM);
     return;
@@ -11881,16 +11889,16 @@ static void host_bbs_watchdog_scan(host_t *host) {
   pthread_mutex_unlock(&host->lock);
 
   if (snapshot_count == 0U) {
-    free(snapshot);
+    GC_free(snapshot);
     return;
   }
 
   const size_t content_capacity =
       SSH_CHATTER_BBS_BODY_LEN + (SSH_CHATTER_BBS_COMMENT_LEN * SSH_CHATTER_BBS_MAX_COMMENTS) + 1024U;
-  char *content = malloc(content_capacity);
+  char *content = (char *)GC_MALLOC(content_capacity);
   if (content == NULL) {
     humanized_log_error("bbs", "failed to allocate watchdog buffer", ENOMEM);
-    free(snapshot);
+    GC_free(snapshot);
     return;
   }
 
@@ -12011,8 +12019,8 @@ static void host_bbs_watchdog_scan(host_t *host) {
     chat_room_broadcast(&host->room, notice, NULL);
   }
 
-  free(content);
-  free(snapshot);
+  GC_free(content);
+  GC_free(snapshot);
 }
 
 static void *host_bbs_watchdog_thread(void *arg) {
@@ -13350,11 +13358,11 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
     return true;
   }
 
-  char *combined = calloc(SSH_CHATTER_TRANSLATION_BATCH_BUFFER, sizeof(char));
-  char *translated = calloc(SSH_CHATTER_TRANSLATION_BATCH_BUFFER, sizeof(char));
+  char *combined = GC_CALLOC(SSH_CHATTER_TRANSLATION_BATCH_BUFFER, sizeof(char));
+  char *translated = GC_CALLOC(SSH_CHATTER_TRANSLATION_BATCH_BUFFER, sizeof(char));
   if (combined == NULL || translated == NULL) {
-    free(combined);
-    free(translated);
+    GC_free(combined);
+    GC_free(translated);
     return false;
   }
 
@@ -13367,29 +13375,29 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
           jobs[release] = NULL;
         }
       }
-      free(combined);
-      free(translated);
+      GC_free(combined);
+      GC_free(translated);
       return true;
     }
     if (jobs[idx] == NULL || jobs[idx]->type != TRANSLATION_JOB_CAPTION) {
-      free(combined);
-      free(translated);
+      GC_free(combined);
+      GC_free(translated);
       return false;
     }
 
     char marker[32];
     int marker_len = snprintf(marker, sizeof(marker), "[[SEG%02zu]]\n", idx);
     if (marker_len < 0) {
-      free(combined);
-      free(translated);
+      GC_free(combined);
+      GC_free(translated);
       return false;
     }
 
     size_t marker_size = (size_t)marker_len;
     size_t text_len = strlen(jobs[idx]->data.caption.sanitized);
     if (offset + marker_size + text_len + 1U > SSH_CHATTER_TRANSLATION_BATCH_BUFFER) {
-      free(combined);
-      free(translated);
+      GC_free(combined);
+      GC_free(translated);
       return false;
     }
 
@@ -13411,12 +13419,12 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
           jobs[idx] = NULL;
         }
       }
-      free(combined);
-      free(translated);
+      GC_free(combined);
+      GC_free(translated);
       return true;
     }
-    free(combined);
-    free(translated);
+    GC_free(combined);
+    GC_free(translated);
     return false;
   }
 
@@ -13427,8 +13435,8 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
         jobs[idx] = NULL;
       }
     }
-    free(combined);
-    free(translated);
+    GC_free(combined);
+    GC_free(translated);
     return true;
   }
 
@@ -13440,15 +13448,15 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
     char marker[32];
     int marker_len = snprintf(marker, sizeof(marker), "[[SEG%02zu]]", idx);
     if (marker_len < 0) {
-      free(combined);
-      free(translated);
+      GC_free(combined);
+      GC_free(translated);
       return false;
     }
 
     char *marker_pos = strstr(search_cursor, marker);
     if (marker_pos == NULL) {
-      free(combined);
-      free(translated);
+      GC_free(combined);
+      GC_free(translated);
       return false;
     }
 
@@ -13465,15 +13473,15 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
     char marker[32];
     int marker_len = snprintf(marker, sizeof(marker), "[[SEG%02zu]]", idx + 1U);
     if (marker_len < 0) {
-      free(combined);
-      free(translated);
+      GC_free(combined);
+      GC_free(translated);
       return false;
     }
 
     char *next_pos = strstr(segment_starts[idx], marker);
     if (next_pos == NULL) {
-      free(combined);
-      free(translated);
+      GC_free(combined);
+      GC_free(translated);
       return false;
     }
 
@@ -13493,15 +13501,15 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
   char restored_segments[SSH_CHATTER_TRANSLATION_BATCH_MAX][SSH_CHATTER_TRANSLATION_WORKING_LEN];
   for (size_t idx = 0U; idx < job_count; ++idx) {
     if (segment_starts[idx] == NULL || segment_ends[idx] == NULL || segment_ends[idx] < segment_starts[idx]) {
-      free(combined);
-      free(translated);
+      GC_free(combined);
+      GC_free(translated);
       return false;
     }
 
     size_t segment_len = (size_t)(segment_ends[idx] - segment_starts[idx]);
     if (segment_len + 1U > SSH_CHATTER_TRANSLATION_WORKING_LEN) {
-      free(combined);
-      free(translated);
+      GC_free(combined);
+      GC_free(translated);
       return false;
     }
 
@@ -13511,8 +13519,8 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
 
     if (!translation_restore_text(segment_buffer, restored_segments[idx], sizeof(restored_segments[idx]),
                                   jobs[idx]->data.caption.placeholders, jobs[idx]->data.caption.placeholder_count)) {
-      free(combined);
-      free(translated);
+      GC_free(combined);
+      GC_free(translated);
       return false;
     }
   }
@@ -13524,8 +13532,8 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
         jobs[idx] = NULL;
       }
     }
-    free(combined);
-    free(translated);
+    GC_free(combined);
+    GC_free(translated);
     return true;
   }
 
@@ -13534,8 +13542,8 @@ static bool session_translation_process_batch(session_ctx_t *ctx, translation_jo
     session_translation_job_free(jobs[idx]);
   }
 
-  free(combined);
-  free(translated);
+  GC_free(combined);
+  GC_free(translated);
   return true;
 }
 
@@ -13916,7 +13924,7 @@ cleanup:
     size_t produced = capacity - output_remaining;
     success = session_channel_write_all(ctx, buffer, produced);
   }
-  free(buffer);
+  GC_free(buffer);
   return success;
 }
 
@@ -14040,7 +14048,7 @@ static bool session_channel_write_utf16_segment(session_ctx_t *ctx, const char *
   }
 
   if (!use_stack) {
-    free(buffer);
+    GC_free(buffer);
   }
 
   return result;
@@ -14902,7 +14910,7 @@ static void session_send_reply_tree(session_ctx_t *ctx, uint64_t parent_message_
     return;
   }
 
-  chat_reply_entry_t *snapshot = calloc(match_count, sizeof(*snapshot));
+  chat_reply_entry_t *snapshot = GC_CALLOC(match_count, sizeof(*snapshot));
   if (snapshot == NULL) {
     pthread_mutex_unlock(&host->lock);
     return;
@@ -14942,7 +14950,7 @@ static void session_send_reply_tree(session_ctx_t *ctx, uint64_t parent_message_
     session_send_reply_tree(ctx, parent_message_id, reply->reply_id, depth + 1U);
   }
 
-  free(snapshot);
+  GC_free(snapshot);
 }
 
 static bool host_lookup_member_ip(host_t *host, const char *username, char *ip, size_t length) {
@@ -15472,7 +15480,7 @@ static void session_format_separator_line(session_ctx_t *ctx, const char *label,
     memcpy(body + offset, label_block, label_len);
     offset += label_len;
   }
-  for (size_t idx = 0U; idx < right && offset + 1U < sizeof(body); ++idx) {
+  for (size_t idx = 0U; idx < right && offset < sizeof(body); ++idx) {
     body[offset++] = '-';
   }
   body[offset] = '\0';
@@ -26272,7 +26280,7 @@ static bool session_fetch_weather_summary(const char *region, const char *city, 
   success = true;
 
 cleanup:
-  free(buffer.data);
+  GC_free(buffer.data);
   curl_easy_cleanup(curl);
   return success;
 }
@@ -29209,7 +29217,7 @@ static void *host_telnet_thread(void *arg) {
 
     printf("[telnet] accepted client from %s\n", peer_address);
 
-    session_ctx_t *ctx = calloc(1U, sizeof(session_ctx_t));
+    session_ctx_t *ctx = GC_CALLOC(1U, sizeof(session_ctx_t));
     if (ctx == NULL) {
       humanized_log_error("telnet", "failed to allocate session context", ENOMEM);
       close(client_fd);
@@ -29388,7 +29396,7 @@ static void session_cleanup(session_ctx_t *ctx) {
     ctx->session = NULL;
   }
 
-  free(ctx);
+  GC_free(ctx);
 }
 
 static void *session_thread(void *arg) {
@@ -30557,17 +30565,17 @@ void host_shutdown(host_t *host) {
     host->clients = NULL;
   }
   pthread_mutex_lock(&host->lock);
-  free(host->history);
+  GC_free(host->history);
   host->history = NULL;
   host->history_capacity = 0U;
   host->history_count = 0U;
   pthread_mutex_unlock(&host->lock);
-  free(host->join_activity);
+  GC_free(host->join_activity);
   host->join_activity = NULL;
   host->join_activity_capacity = 0U;
   host->join_activity_count = 0U;
   pthread_mutex_lock(&host->room.lock);
-  free(host->room.members);
+  GC_free(host->room.members);
   host->room.members = NULL;
   host->room.member_capacity = 0U;
   host->room.member_count = 0U;
@@ -30893,7 +30901,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         continue;
       }
 
-      session_ctx_t *ctx = calloc(1U, sizeof(session_ctx_t));
+      session_ctx_t *ctx = GC_CALLOC(1U, sizeof(session_ctx_t));
       if (ctx == NULL) {
         humanized_log_error("host", "failed to allocate session context", ENOMEM);
         ssh_disconnect(session);
