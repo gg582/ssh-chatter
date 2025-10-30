@@ -999,6 +999,16 @@ matrix_client_t *matrix_client_create(host_t *host, client_manager_t *manager, s
     return NULL;
   }
 
+  const char *homeserver_value = homeserver;
+  char normalized_homeserver[sizeof(((matrix_client_t *)0)->homeserver)];
+  if (strstr(homeserver, "://") == NULL) {
+    int written = snprintf(normalized_homeserver, sizeof(normalized_homeserver), "https://%s", homeserver);
+    if (written < 0 || (size_t)written >= sizeof(normalized_homeserver)) {
+      return NULL;
+    }
+    homeserver_value = normalized_homeserver;
+  }
+
   matrix_client_t *client = (matrix_client_t *)calloc(1U, sizeof(matrix_client_t));
   if (client == NULL) {
     return NULL;
@@ -1007,7 +1017,7 @@ matrix_client_t *matrix_client_create(host_t *host, client_manager_t *manager, s
   client->host = host;
   client->manager = manager;
   client->security = security;
-  snprintf(client->homeserver, sizeof(client->homeserver), "%s", homeserver);
+  snprintf(client->homeserver, sizeof(client->homeserver), "%s", homeserver_value);
   size_t base_len = strlen(client->homeserver);
   if (base_len > 0U && client->homeserver[base_len - 1U] == '/') {
     client->homeserver[base_len - 1U] = '\0';
