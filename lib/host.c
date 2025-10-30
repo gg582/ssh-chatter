@@ -3918,9 +3918,12 @@ static void host_eliza_say(host_t *host, const char *message);
 static void host_eliza_handle_private_message(session_ctx_t *ctx, const char *message);
 static void host_eliza_prepare_private_reply(const char *message, char *reply, size_t reply_length);
 static bool host_eliza_content_is_severe(const char *text);
+static bool host_eliza_worker_init(host_t *host);
+static void host_eliza_worker_shutdown(host_t *host);
+static bool host_eliza_worker_enqueue(host_t *host, host_eliza_intervene_task_t *task);
+static void *host_eliza_worker_thread(void *arg);
 static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const char *reason, bool from_filter);
 static void host_eliza_intervene_execute(session_ctx_t *ctx, const char *reason, bool from_filter);
-static void *host_eliza_intervene_thread(void *arg);
 static host_security_scan_result_t session_security_check_text(session_ctx_t *ctx, const char *category,
                                                                const char *content, size_t length, bool post_send);
 static void host_vote_resolve_path(host_t *host);
@@ -7809,11 +7812,184 @@ static bool host_eliza_content_is_severe(const char *text) {
   return false;
 }
 
-typedef struct {
+typedef struct host_eliza_intervene_task {
+  struct host_eliza_intervene_task *next;
   session_ctx_t *ctx;
   bool from_filter;
+  bool allocated_with_gc;
   char reason[SSH_CHATTER_MESSAGE_LIMIT];
 } host_eliza_intervene_task_t;
+
+static void host_eliza_task_free(host_eliza_intervene_task_t *task) {
+  if (task == NULL) {
+    return;
+  }
+
+  if (task->allocated_with_gc) {
+    GC_free(task);
+  } else {
+    free(task);
+  }
+}
+
+static bool host_eliza_worker_init(host_t *host) {
+  if (host == NULL) {
+    return false;
+  }
+
+  host_eliza_worker_state_t *worker = &host->eliza_worker;
+  if (worker->thread_started) {
+    return true;
+  }
+
+  worker->head = NULL;
+  worker->tail = NULL;
+  worker->mutex_initialized = false;
+  worker->cond_initialized = false;
+  worker->thread_started = false;
+  atomic_store(&worker->stop, false);
+  atomic_store(&worker->active, false);
+
+  if (pthread_mutex_init(&worker->mutex, NULL) != 0) {
+    return false;
+  }
+  worker->mutex_initialized = true;
+
+  if (pthread_cond_init(&worker->cond, NULL) != 0) {
+    pthread_mutex_destroy(&worker->mutex);
+    worker->mutex_initialized = false;
+    return false;
+  }
+  worker->cond_initialized = true;
+
+  if (pthread_create(&worker->thread, NULL, host_eliza_worker_thread, host) != 0) {
+    pthread_cond_destroy(&worker->cond);
+    worker->cond_initialized = false;
+    pthread_mutex_destroy(&worker->mutex);
+    worker->mutex_initialized = false;
+    return false;
+  }
+
+  worker->thread_started = true;
+  return true;
+}
+
+static void host_eliza_worker_shutdown(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  host_eliza_worker_state_t *worker = &host->eliza_worker;
+
+  if (worker->mutex_initialized) {
+    pthread_mutex_lock(&worker->mutex);
+    atomic_store(&worker->stop, true);
+    pthread_cond_broadcast(&worker->cond);
+    pthread_mutex_unlock(&worker->mutex);
+  } else {
+    atomic_store(&worker->stop, true);
+  }
+
+  if (worker->thread_started) {
+    pthread_join(worker->thread, NULL);
+    worker->thread_started = false;
+  }
+
+  if (worker->mutex_initialized) {
+    pthread_mutex_destroy(&worker->mutex);
+    worker->mutex_initialized = false;
+  }
+
+  if (worker->cond_initialized) {
+    pthread_cond_destroy(&worker->cond);
+    worker->cond_initialized = false;
+  }
+
+  host_eliza_intervene_task_t *task = worker->head;
+  while (task != NULL) {
+    host_eliza_intervene_task_t *next = task->next;
+    host_eliza_task_free(task);
+    task = next;
+  }
+
+  worker->head = NULL;
+  worker->tail = NULL;
+  atomic_store(&worker->active, false);
+  atomic_store(&worker->stop, false);
+}
+
+static bool host_eliza_worker_enqueue(host_t *host, host_eliza_intervene_task_t *task) {
+  if (host == NULL || task == NULL) {
+    return false;
+  }
+
+  host_eliza_worker_state_t *worker = &host->eliza_worker;
+  if (!worker->mutex_initialized || !worker->cond_initialized || !worker->thread_started) {
+    return false;
+  }
+
+  task->next = NULL;
+
+  pthread_mutex_lock(&worker->mutex);
+  if (atomic_load(&worker->stop)) {
+    pthread_mutex_unlock(&worker->mutex);
+    return false;
+  }
+
+  if (worker->tail == NULL) {
+    worker->head = task;
+    worker->tail = task;
+  } else {
+    worker->tail->next = task;
+    worker->tail = task;
+  }
+
+  pthread_cond_signal(&worker->cond);
+  pthread_mutex_unlock(&worker->mutex);
+  return true;
+}
+
+static void *host_eliza_worker_thread(void *arg) {
+  host_t *host = (host_t *)arg;
+  if (host == NULL) {
+    return NULL;
+  }
+
+  host_eliza_worker_state_t *worker = &host->eliza_worker;
+  atomic_store(&worker->active, true);
+
+  while (true) {
+    pthread_mutex_lock(&worker->mutex);
+    while (!atomic_load(&worker->stop) && worker->head == NULL) {
+      pthread_cond_wait(&worker->cond, &worker->mutex);
+    }
+
+    if (worker->head == NULL && atomic_load(&worker->stop)) {
+      pthread_mutex_unlock(&worker->mutex);
+      break;
+    }
+
+    host_eliza_intervene_task_t *task = worker->head;
+    if (task != NULL) {
+      worker->head = task->next;
+      if (worker->head == NULL) {
+        worker->tail = NULL;
+      }
+    }
+    pthread_mutex_unlock(&worker->mutex);
+
+    if (task == NULL) {
+      continue;
+    }
+
+    const char *reason = (task->reason[0] != '\0') ? task->reason : NULL;
+    host_eliza_intervene_execute(task->ctx, reason, task->from_filter);
+    host_eliza_task_free(task);
+  }
+
+  atomic_store(&worker->active, false);
+  return NULL;
+}
 
 static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const char *reason, bool from_filter) {
   if (ctx == NULL || ctx->owner == NULL) {
@@ -7838,11 +8014,22 @@ static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const 
     return false;
   }
 
-  host_eliza_intervene_task_t *task = (host_eliza_intervene_task_t *)
-                                      GC_MALLOC(sizeof(*task));
-  if (task == NULL) {
-    host_eliza_intervene_execute(ctx, reason, from_filter);
-    return true;
+  host_eliza_worker_state_t *worker = &host->eliza_worker;
+  if (!worker->thread_started) {
+    if (!host_eliza_worker_init(host)) {
+      return false;
+    }
+  }
+
+  host_eliza_intervene_task_t *task = (host_eliza_intervene_task_t *)GC_MALLOC(sizeof(*task));
+  if (task != NULL) {
+    task->allocated_with_gc = true;
+  } else {
+    task = (host_eliza_intervene_task_t *)malloc(sizeof(*task));
+    if (task == NULL) {
+      return false;
+    }
+    task->allocated_with_gc = false;
   }
 
   task->ctx = ctx;
@@ -7853,15 +8040,11 @@ static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const 
     task->reason[0] = '\0';
   }
 
-  pthread_t thread;
-  int create_result = pthread_create(&thread, NULL, host_eliza_intervene_thread, task);
-  if (create_result != 0) {
-    GC_free(task);
-    host_eliza_intervene_execute(ctx, reason, from_filter);
-    return true;
+  if (!host_eliza_worker_enqueue(host, task)) {
+    host_eliza_task_free(task);
+    return false;
   }
 
-  pthread_detach(thread);
   return true;
 }
 
@@ -7908,18 +8091,6 @@ static void host_eliza_intervene_execute(session_ctx_t *ctx, const char *reason,
   }
 
   session_force_disconnect(ctx, "You have been removed by eliza for severe content.");
-}
-
-static void *host_eliza_intervene_thread(void *arg) {
-  host_eliza_intervene_task_t *task = (host_eliza_intervene_task_t *)arg;
-  if (task == NULL) {
-    return NULL;
-  }
-
-  const char *reason = (task->reason[0] != '\0') ? task->reason : NULL;
-  host_eliza_intervene_execute(task->ctx, reason, task->from_filter);
-  GC_free(task);
-  return NULL;
 }
 
 static host_security_scan_result_t session_security_check_text(session_ctx_t *ctx, const char *category,
@@ -29947,6 +30118,11 @@ void host_init(host_t *host, auth_profile_t *auth) {
 
   translator_global_init();
 
+  memset(&host->eliza_worker, 0, sizeof(host->eliza_worker));
+  if (!host_eliza_worker_init(host)) {
+    printf("[eliza] asynchronous intervention worker unavailable; interventions disabled.\n");
+  }
+
   if (!host_moderation_init(host)) {
     printf("[security] moderation worker unavailable; using synchronous checks\n");
   }
@@ -30531,6 +30707,7 @@ void host_shutdown(host_t *host) {
     return;
   }
 
+  host_eliza_worker_shutdown(host);
   host_moderation_shutdown(host);
 
   host_telnet_listener_stop(host);

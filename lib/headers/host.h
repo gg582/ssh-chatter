@@ -154,6 +154,21 @@ typedef struct host_moderation_state {
   pid_t worker_pid;
 } host_moderation_state_t;
 
+typedef struct host_eliza_intervene_task host_eliza_intervene_task_t;
+
+typedef struct host_eliza_worker_state {
+  pthread_mutex_t mutex;
+  pthread_cond_t cond;
+  bool mutex_initialized;
+  bool cond_initialized;
+  bool thread_started;
+  _Atomic bool stop;
+  _Atomic bool active;
+  pthread_t thread;
+  host_eliza_intervene_task_t *head;
+  host_eliza_intervene_task_t *tail;
+} host_eliza_worker_state_t;
+
 typedef enum chat_attachment_type {
   CHAT_ATTACHMENT_NONE = 0,
   CHAT_ATTACHMENT_IMAGE,
@@ -660,6 +675,7 @@ typedef struct host {
   _Atomic bool security_clamav_thread_stop;
   struct timespec security_clamav_last_run;
   host_moderation_state_t moderation;
+  host_eliza_worker_state_t eliza_worker;
   pthread_t bbs_watchdog_thread;
   bool bbs_watchdog_thread_initialized;
   _Atomic bool bbs_watchdog_thread_running;
