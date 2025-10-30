@@ -47,7 +47,7 @@ CFLAGS = -std=c2x -Ofast \
         -MMD -MP \
 
     COMMON_LDFLAGS = \
-        -lpthread -ldl -lcurl -lm -lgc \
+        -lpthread -ldl -lcurl -lm -lgc -lcrypto \
         -flto=$(shell nproc) -fuse-linker-plugin \
         -Wl,-Ofast \
         -Wl,--sort-common \
@@ -68,7 +68,8 @@ LDFLAGS = $(COMMON_LDFLAGS) -lssh
 TARGET := ssh-chatter
 SHARED_TARGET := libssh_chatter_backend.so
 SRC := main.c lib/host.c lib/client.c lib/webssh_client.c lib/translator.c \
-       lib/translation_helpers.c lib/ssh_chatter_backend.c lib/user_data.c
+       lib/translation_helpers.c lib/ssh_chatter_backend.c lib/user_data.c \
+       lib/matrix_client.c lib/security_layer.c
 OBJ := $(SRC:.c=.o)
 SHARED_SRC := lib/translator.c lib/translation_helpers.c lib/ssh_chatter_backend.c
 SHARED_OBJ := $(SHARED_SRC:.c=.o)
