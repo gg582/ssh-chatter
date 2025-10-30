@@ -13,6 +13,7 @@
 #include <libssh/server.h>
 #include "client.h"
 #include "webssh_client.h"
+#include "matrix_client.h"
 #include "translator.h"
 #include "translation_helpers.h"
 
@@ -83,6 +84,9 @@
   "curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,"       \
   "ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256,"      \
   "diffie-hellman-group14-sha1"
+#define SSH_CHATTER_STRONG_CIPHERS "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes256-ctr"
+#define SSH_CHATTER_STRONG_MACS "hmac-sha2-512,hmac-sha2-256"
+#define SSH_CHATTER_SECURE_COMPRESSION "none"
 #define SSH_CHATTER_BIRTHDAY_WINDOW_SECONDS (7 * 24 * 60 * 60)
 
 #define ALPHA_LANDERS_MAX_RECORDS 256U
@@ -30855,6 +30859,11 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host->auth = auth;
   host->clients = NULL;
   host->web_client = NULL;
+  host->matrix_client = NULL;
+  host->security_layer_initialized = security_layer_init(&host->security_layer);
+  if (!host->security_layer_initialized) {
+    humanized_log_error("security", "failed to initialise layered message encryption", errno != 0 ? errno : EIO);
+  }
   host_load_lan_operator_credentials(host);
   const palette_descriptor_t *default_palette = palette_find_descriptor("clean");
   if (default_palette != NULL) {
@@ -31030,6 +31039,13 @@ void host_init(host_t *host, auth_profile_t *auth) {
     host->web_client = webssh_client_create(host, host->clients);
     if (host->web_client == NULL) {
       humanized_log_error("host", "failed to initialise webssh client", ENOMEM);
+    }
+
+    if (host->security_layer_initialized) {
+      host->matrix_client = matrix_client_create(host, host->clients, &host->security_layer);
+      if (host->matrix_client == NULL) {
+        humanized_log_error("matrix", "matrix backend inactive; check CHATTER_MATRIX_* configuration", EINVAL);
+      }
     }
 
   }
@@ -31442,6 +31458,10 @@ void host_shutdown(host_t *host) {
     atomic_store(&host->bbs_watchdog_thread_running, false);
   }
 
+  if (host->matrix_client != NULL) {
+    matrix_client_destroy(host->matrix_client);
+    host->matrix_client = NULL;
+  }
   if (host->web_client != NULL) {
     webssh_client_destroy(host->web_client);
     host->web_client = NULL;
@@ -31470,6 +31490,10 @@ void host_shutdown(host_t *host) {
   if (host->alpha_landers_lock_initialized) {
     pthread_mutex_destroy(&host->alpha_landers_lock);
     host->alpha_landers_lock_initialized = false;
+  }
+  if (host->security_layer_initialized) {
+    security_layer_free(&host->security_layer);
+    host->security_layer_initialized = false;
   }
 }
 
@@ -31602,6 +31626,22 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
     }
     host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_KEY_EXCHANGE, SSH_CHATTER_SUPPORTED_KEX_ALGORITHMS,
                                   "failed to configure key exchange algorithms");
+    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_CIPHERS_C_S, SSH_CHATTER_STRONG_CIPHERS,
+                                  "failed to configure forward cipher suite");
+    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_CIPHERS_S_C, SSH_CHATTER_STRONG_CIPHERS,
+                                  "failed to configure reverse cipher suite");
+    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_HMAC_C_S, SSH_CHATTER_STRONG_MACS,
+                                  "failed to configure forward MAC list");
+    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_HMAC_S_C, SSH_CHATTER_STRONG_MACS,
+                                  "failed to configure reverse MAC list");
+#ifdef SSH_BIND_OPTIONS_COMPRESSION_C_S
+    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_COMPRESSION_C_S, SSH_CHATTER_SECURE_COMPRESSION,
+                                  "failed to restrict forward compression mode");
+#endif
+#ifdef SSH_BIND_OPTIONS_COMPRESSION_S_C
+    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_COMPRESSION_S_C, SSH_CHATTER_SECURE_COMPRESSION,
+                                  "failed to restrict reverse compression mode");
+#endif
 
     if (ssh_bind_listen(bind_handle) < 0) {
       humanized_log_error("host", ssh_get_error(bind_handle), EIO);
