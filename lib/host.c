@@ -110,3 +110,53 @@ static bool session_bbs_navigate_adjacent(session_ctx_t *ctx, int direction) {
   return true;
 }
 
+            "Browse advanced chat tools: media sharing, customization, translation, polls, RSS, operator controls, and more.",
+            "고급 채팅 도구를 살펴봅니다: 미디어 공유, 꾸미기, 번역, 투표, RSS, 운영자 제어 등.",
+            "高度なチャット機能（メディア共有、カスタマイズ、翻訳、投票、RSS、運営向けコントロールなど）を表示します。",
+            "浏览高级聊天工具：媒体分享、个性化、翻译、投票、RSS 以及管理员控制等。",
+            "Показать расширенные инструменты чата: обмен медиа, оформление, перевод, опросы, RSS и операторские панели.",
+static bool session_help_entry_is_excluded(const session_help_entry_t *entry,
+                                           const session_help_entry_t *exclusions,
+                                           size_t exclusion_count) {
+  if (entry == NULL || exclusions == NULL || exclusion_count == 0U) {
+    return false;
+  }
+
+  const char *label = entry->label;
+  if (label == NULL || label[0] == '\0') {
+    return false;
+  }
+
+  for (size_t idx = 0; idx < exclusion_count; ++idx) {
+    const session_help_entry_t *other = &exclusions[idx];
+    if (other == NULL) {
+      continue;
+    }
+    const char *other_label = other->label;
+    if (other_label == NULL || other_label[0] == '\0') {
+      continue;
+    }
+    if (strcmp(label, other_label) == 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void session_help_send_entries_filtered(session_ctx_t *ctx, const session_help_entry_t *entries, size_t count,
+                                               const session_help_entry_t *exclusions, size_t exclusion_count) {
+    if (session_help_entry_is_excluded(entry, exclusions, exclusion_count)) {
+      continue;
+    }
+
+static void session_help_send_entries(session_ctx_t *ctx, const session_help_entry_t *entries, size_t count) {
+  session_help_send_entries_filtered(ctx, entries, count, NULL, 0U);
+}
+
+static void session_help_send_entries_filtered(session_ctx_t *ctx, const session_help_entry_t *entries, size_t count,
+                                               const session_help_entry_t *exclusions, size_t exclusion_count);
+  session_help_send_entries_filtered(ctx, kSessionHelpExtended,
+                                     sizeof(kSessionHelpExtended) / sizeof(kSessionHelpExtended[0]),
+                                     kSessionHelpEssential,
+                                     sizeof(kSessionHelpEssential) / sizeof(kSessionHelpEssential[0]));
