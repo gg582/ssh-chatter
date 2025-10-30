@@ -9,6 +9,7 @@ SSH-Chatter has started from a C reimplementation of the Go [`ssh-chat`](https:/
 > - `/eliza-chat` now keeps shared memories in `eliza_memory.dat`, letting everyone continue a persistent conversation with the resident Eliza persona.
 > - `/banname <nickname>` lets operators block suspicious login names up front, forcing clients to pick something else before joining.
 > - Follow communities from inside the terminal with the `/rss` reader (`/rss list`, `/rss read <tag>`, operators manage feeds with `/rss add <url> <tag>` and `/rss del <tag>`).
+> - Matrix rooms can now mirror the chat through a triple-layer AES-256-GCM bridge (`CHATTER_MATRIX_*` toggles encrypt every hop in a Tor-style onion before messages leave the server).
 
 ## Recent enhancements
 
@@ -68,7 +69,19 @@ confirm the build still succeeds before pushing the result.
 - `scripts/safe_permission.sh` tightens the ownership and mode on runtime data files (BBS state, vote state, cooldown snapshots, and general chatter state). Run it after deployment to confine the data directory to `ssh-chatter` and to ensure each file is set to `0600`. Override the targets by passing explicit paths or by exporting `STATE_ROOT` or the corresponding `CHATTER_*_FILE` environment variables before execution.
 - A background BBS watchdog periodically feeds posts and comments through the AI moderation pipeline (Gemini primary with Ollama fallback). Flagged posts are removed automatically and a notice is broadcast to the room.
 - Chat messages, ASCII art, and BBS posts/comments flow through a layered security filter. ClamAV scans the payload first (defaulting to `clamscan --no-summary --stdout -`, overridable with `CHATTER_CLAMAV_COMMAND` or disabled with `CHATTER_CLAMAV=off`). AI-based moderation is now opt-in—enable it with `CHATTER_SECURITY_AI=on` to query Gemini (`GEMINI_API_KEY`) with an automatic Ollama fallback (`http://127.0.0.1:11434` by default). Disable the entire feature with `CHATTER_SECURITY_FILTER=off`. If every provider fails, the filter automatically disables itself to avoid blocking conversations while misconfigured.
+- SSH transport is pinned to modern key exchanges, ciphers, and MACs, and every bridge payload is wrapped in a triple AES-256-GCM onion so relays only see ciphertext.
 - Suspicious submissions that trip the layered filter are now tracked per-IP; repeated hits trigger an automatic kick and ban, while the rapid reconnect detector allows longer recovery windows so unstable network sessions can rejoin without being penalized.
+
+## Matrix bridge
+
+Set these environment variables (either inside `chatter.env` or the systemd unit) to synchronise the room with Matrix while preserving onion-style secrecy:
+
+- `CHATTER_MATRIX_HOMESERVER` – base URL of your homeserver (for example `https://matrix.example.com`).
+- `CHATTER_MATRIX_ACCESS_TOKEN` – bot access token with permission to post to the target room.
+- `CHATTER_MATRIX_ROOM_ID` – canonical room identifier (such as `!room:example.com`).
+- `CHATTER_MATRIX_DEVICE_NAME` – optional device label shown to the homeserver; defaults to `ssh-chatter`.
+
+Outbound messages are serialised into `TorOnion/v1` envelopes produced by three layers of AES-256-GCM encryption; inbound Matrix events must decrypt with the same key schedule before they are replayed back into the terminal room.
 
 ## Prerequisites
 
