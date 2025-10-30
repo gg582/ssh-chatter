@@ -83,6 +83,30 @@ Set these environment variables (either inside `chatter.env` or the systemd unit
 
 Outbound messages are serialised into `TorOnion/v1` envelopes produced by three layers of AES-256-GCM encryption; inbound Matrix events must decrypt with the same key schedule before they are replayed back into the terminal room.
 
+### Connecting from Matrix clients
+
+Once the bridge variables are configured and the daemon is running, you can access the shared room with any Matrix client:
+
+1. Sign in to the same homeserver that the bridge uses. For self-hosted servers this means the URL defined in `CHATTER_MATRIX_HOMESERVER`.
+2. Join the room by its canonical ID (`CHATTER_MATRIX_ROOM_ID`) or any published alias that points to that ID.
+3. Start chatting—messages will be mirrored between SSH-Chatter and Matrix as soon as the bot is online.
+
+For terminal users, clients such as [`gomuks`](https://github.com/tulir/gomuks) or [`matrix-commander`](https://github.com/8go/matrix-commander) work well: authenticate against your homeserver, run the room join command, and the bridge bot will relay messages automatically. GUI users can follow the same steps with Element, FluffyChat, or another desktop/mobile client—search for the room ID or alias, join it, and the bridge keeps both sides in sync.
+
+If the room is invite-only, ensure the bridge bot has been invited first so it can forward events. Client-side encryption (E2EE) is not supported through the bridge, so disable it for the bridged room to avoid missing messages.
+
+### Setting up the bridge on your server
+
+Server operators who want to expose their SSH-Chatter room to Matrix can prepare the bridge with the following workflow:
+
+1. **Create a Matrix service account.** Either register a dedicated bot user on your homeserver or create a new user on a managed homeserver that you control. Give it a strong password and avoid reusing an existing personal account.
+2. **Create or pick the target room.** From the Matrix client of your choice, create a new room (or reuse an existing community room) and note its canonical room ID (the form `!room:example.com`). Invite the bot user if the room is restricted.
+3. **Generate an access token.** Log in to the bot account with a client that exposes the developer tools (Element: _Settings → Help & About → Advanced → Access Token_). Copy the token and store it safely; the bridge uses it instead of the password.
+4. **Configure SSH-Chatter.** Set `CHATTER_MATRIX_HOMESERVER`, `CHATTER_MATRIX_ACCESS_TOKEN`, `CHATTER_MATRIX_ROOM_ID`, and optionally `CHATTER_MATRIX_DEVICE_NAME` in the environment. For systemd installations, add the variables to `/etc/ssh-chatter/chatter.env` or the `[Service]` section of the unit file and run `systemctl daemon-reload`.
+5. **Restart the service.** Bounce the daemon (`systemctl restart chatter.service` or restart the container) so the new settings take effect. Watch the logs for lines beginning with `matrix_bridge` to confirm that the bot joined successfully.
+
+If you ever rotate the access token or move the room, repeat steps 3–5. When decommissioning the bridge, clear the `CHATTER_MATRIX_*` variables and restart to return to a standalone SSH/TELNET deployment.
+
 ## Prerequisites
 
 Building the project requires a POSIX environment with:
