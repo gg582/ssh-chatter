@@ -653,6 +653,7 @@ typedef struct host {
   struct timespec motd_last_modified;
   bool translation_quota_exhausted;
   size_t connection_count;
+  unsigned int session_idle_timeout_seconds;
   chat_history_entry_t *history;
   size_t history_count;
   size_t history_capacity;
@@ -745,6 +746,13 @@ typedef struct host {
   struct timespec rss_last_run;
 } host_t;
 
+void host_bbs_reset_view(session_ctx_t *session);
+bool host_bbs_focus_next_post(host_t *host, session_ctx_t *session, const char *topic, bool wrap);
+bool host_bbs_focus_previous_post(host_t *host, session_ctx_t *session, const char *topic, bool wrap);
+void host_set_session_idle_timeout(host_t *host, unsigned int seconds);
+unsigned int host_get_session_idle_timeout(const host_t *host);
+bool host_session_idle_expired(const host_t *host, const session_ctx_t *session, const struct timespec *now);
+void host_note_session_activity(host_t *host, session_ctx_t *session, const struct timespec *now);
 void host_init(host_t *host, auth_profile_t *auth);
 void host_set_motd(host_t *host, const char *motd);
 int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory,

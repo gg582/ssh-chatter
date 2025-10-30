@@ -22210,6 +22210,159 @@ static void session_bbs_read(session_ctx_t *ctx, uint64_t id) {
   session_bbs_render_post(ctx, &snapshot, NULL, true, false);
 }
 
+
+static time_t host_bbs_effective_activity_time(const bbs_post_t *post) {
+  if (post == NULL) {
+    return 0;
+  }
+  return (post->bumped_at != 0) ? post->bumped_at : post->created_at;
+}
+
+static bool host_bbs_post_matches_topic(const bbs_post_t *post, const char *topic) {
+  if (post == NULL || !post->in_use) {
+    return false;
+  }
+  if (topic == NULL || topic[0] == '\0') {
+    return true;
+  }
+  if (post->tag_count == 0U) {
+    return strcasecmp(topic, SSH_CHATTER_BBS_DEFAULT_TAG) == 0;
+  }
+  for (size_t idx = 0U; idx < post->tag_count && idx < SSH_CHATTER_BBS_MAX_TAGS; ++idx) {
+    if (strcasecmp(post->tags[idx], topic) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void host_bbs_sort_indexes_by_activity(const host_t *host, size_t *indexes, size_t count) {
+  if (host == NULL || indexes == NULL) {
+    return;
+  }
+  for (size_t outer = 1U; outer < count; ++outer) {
+    size_t current_index = indexes[outer];
+    const bbs_post_t *current_post = &host->bbs_posts[current_index];
+    time_t current_time = host_bbs_effective_activity_time(current_post);
+    uint64_t current_id = current_post->id;
+    size_t position = outer;
+    while (position > 0U) {
+      size_t previous_index = indexes[position - 1U];
+      const bbs_post_t *previous_post = &host->bbs_posts[previous_index];
+      time_t previous_time = host_bbs_effective_activity_time(previous_post);
+      if (previous_time > current_time) {
+        break;
+      }
+      if (previous_time == current_time && previous_post->id >= current_id) {
+        break;
+      }
+      indexes[position] = indexes[position - 1U];
+      --position;
+    }
+    indexes[position] = current_index;
+  }
+}
+
+static size_t host_bbs_collect_indexes_locked(const host_t *host, const char *topic, size_t *indexes, size_t capacity) {
+  if (host == NULL || indexes == NULL || capacity == 0U) {
+    return 0U;
+  }
+  size_t count = 0U;
+  for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_POSTS && count < capacity; ++idx) {
+    const bbs_post_t *post = &host->bbs_posts[idx];
+    if (!host_bbs_post_matches_topic(post, topic)) {
+      continue;
+    }
+    indexes[count++] = idx;
+  }
+  host_bbs_sort_indexes_by_activity(host, indexes, count);
+  return count;
+}
+
+static bool host_bbs_focus_adjacent(host_t *host, session_ctx_t *session, const char *topic, bool forward, bool wrap) {
+  if (host == NULL || session == NULL) {
+    return false;
+  }
+
+  size_t indexes[SSH_CHATTER_BBS_MAX_POSTS];
+  pthread_mutex_lock(&host->lock);
+  size_t count = host_bbs_collect_indexes_locked(host, topic, indexes, SSH_CHATTER_BBS_MAX_POSTS);
+  if (count == 0U) {
+    pthread_mutex_unlock(&host->lock);
+    host_bbs_reset_view(session);
+    if (topic != NULL && topic[0] != '\0') {
+      char notice[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(notice, sizeof(notice), "No posts exist for topic '%s'.", topic);
+      session_send_system_line(session, notice);
+    } else {
+      session_send_system_line(session, "No posts are available yet.");
+    }
+    return false;
+  }
+
+  size_t current_pos = count;
+  if (session->bbs_view_active && session->bbs_view_post_id != 0U) {
+    for (size_t idx = 0U; idx < count; ++idx) {
+      const bbs_post_t *candidate = &host->bbs_posts[indexes[idx]];
+      if (candidate->id == session->bbs_view_post_id) {
+        current_pos = idx;
+        break;
+      }
+    }
+  }
+
+  size_t target_pos = 0U;
+  if (current_pos >= count) {
+    target_pos = forward ? 0U : (count - 1U);
+  } else if (forward) {
+    if (current_pos + 1U < count) {
+      target_pos = current_pos + 1U;
+    } else if (wrap) {
+      target_pos = 0U;
+    } else {
+      pthread_mutex_unlock(&host->lock);
+      session_send_system_line(session, "Already viewing the newest post.");
+      return false;
+    }
+  } else {
+    if (current_pos > 0U) {
+      target_pos = current_pos - 1U;
+    } else if (wrap) {
+      target_pos = count - 1U;
+    } else {
+      pthread_mutex_unlock(&host->lock);
+      session_send_system_line(session, "Already viewing the oldest post.");
+      return false;
+    }
+  }
+
+  uint64_t target_id = host->bbs_posts[indexes[target_pos]].id;
+  pthread_mutex_unlock(&host->lock);
+
+  session_bbs_read(session, target_id);
+  return true;
+}
+
+void host_bbs_reset_view(session_ctx_t *session) {
+  if (session == NULL) {
+    return;
+  }
+  session->bbs_view_active = false;
+  session->bbs_view_post_id = 0U;
+  session->bbs_view_scroll_offset = 0U;
+  session->bbs_view_total_lines = 0U;
+  session->bbs_view_notice_pending = false;
+  session->bbs_rendering_editor = false;
+}
+
+bool host_bbs_focus_next_post(host_t *host, session_ctx_t *session, const char *topic, bool wrap) {
+  return host_bbs_focus_adjacent(host, session, topic, true, wrap);
+}
+
+bool host_bbs_focus_previous_post(host_t *host, session_ctx_t *session, const char *topic, bool wrap) {
+  return host_bbs_focus_adjacent(host, session, topic, false, wrap);
+}
+
 // Create a new post using the provided argument format.
 static bool session_bbs_is_admin_only_tag(const char *tag) {
   if (tag == NULL || tag[0] == '\0') {
@@ -30912,6 +31065,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
 
   host->translation_quota_exhausted = false;
   host->connection_count = 0U;
+  host->session_idle_timeout_seconds = 0U;
   host->history = NULL;
   host->history_count = 0U;
   host->history_capacity = 0U;
@@ -31383,6 +31537,89 @@ bool host_post_client_message(host_t *host, const char *username, const char *me
   chat_room_broadcast_entry(&host->room, &stored, NULL);
   host_notify_external_clients(host, &stored);
   return true;
+}
+
+
+static double host_elapsed_seconds(const struct timespec *start, const struct timespec *end) {
+  if (start == NULL || end == NULL) {
+    return 0.0;
+  }
+
+  time_t sec = end->tv_sec - start->tv_sec;
+  long nsec = end->tv_nsec - start->tv_nsec;
+  if (nsec < 0L) {
+    --sec;
+    nsec += 1000000000L;
+  }
+  if (sec < 0) {
+    sec = 0;
+    nsec = 0L;
+  }
+
+  return (double)sec + (double)nsec / 1000000000.0;
+}
+
+static bool host_pick_reference_time(const struct timespec *hint, struct timespec *out_time) {
+  if (out_time == NULL) {
+    return false;
+  }
+  if (hint != NULL) {
+    *out_time = *hint;
+    return true;
+  }
+  if (clock_gettime(CLOCK_MONOTONIC, out_time) != 0) {
+    return false;
+  }
+  return true;
+}
+
+void host_set_session_idle_timeout(host_t *host, unsigned int seconds) {
+  if (host == NULL) {
+    return;
+  }
+  host->session_idle_timeout_seconds = seconds;
+}
+
+unsigned int host_get_session_idle_timeout(const host_t *host) {
+  if (host == NULL) {
+    return 0U;
+  }
+  return host->session_idle_timeout_seconds;
+}
+
+bool host_session_idle_expired(const host_t *host, const session_ctx_t *session, const struct timespec *now) {
+  if (host == NULL || session == NULL) {
+    return false;
+  }
+  if (host->session_idle_timeout_seconds == 0U) {
+    return false;
+  }
+  if (!session->has_last_message_time) {
+    return false;
+  }
+
+  struct timespec reference_now = {0, 0};
+  if (!host_pick_reference_time(now, &reference_now)) {
+    return false;
+  }
+
+  double elapsed = host_elapsed_seconds(&session->last_message_time, &reference_now);
+  return elapsed >= (double)host->session_idle_timeout_seconds;
+}
+
+void host_note_session_activity(host_t *host, session_ctx_t *session, const struct timespec *now) {
+  (void)host;
+  if (session == NULL) {
+    return;
+  }
+
+  struct timespec reference_now = {0, 0};
+  if (!host_pick_reference_time(now, &reference_now)) {
+    return;
+  }
+
+  session->last_message_time = reference_now;
+  session->has_last_message_time = true;
 }
 
 bool host_snapshot_last_captcha(host_t *host, char *question, size_t question_length, char *answer,
