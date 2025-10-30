@@ -154,6 +154,8 @@ typedef struct host_moderation_state {
   int request_fd;
   int response_fd;
   pid_t worker_pid;
+  unsigned int restart_attempts;
+  struct timespec worker_start_time;
 } host_moderation_state_t;
 
 typedef struct host_eliza_intervene_task host_eliza_intervene_task_t;
