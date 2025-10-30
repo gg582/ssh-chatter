@@ -104,6 +104,86 @@ static const char *matrix_getenv(const char *name) {
   return value;
 }
 
+static bool matrix_copy_trimmed(char *dest, size_t dest_len, const char *src) {
+  if (dest == NULL || dest_len == 0U) {
+    return false;
+  }
+  dest[0] = '\0';
+  if (src == NULL) {
+    return false;
+  }
+
+  const unsigned char *start = (const unsigned char *)src;
+  while (*start != '\0' && isspace(*start)) {
+    ++start;
+  }
+
+  const unsigned char *end = start;
+  while (*end != '\0') {
+    ++end;
+  }
+  while (end > start && isspace(*(end - 1))) {
+    --end;
+  }
+
+  size_t length = (size_t)(end - start);
+  if (length >= dest_len) {
+    return false;
+  }
+
+  if (length > 0U) {
+    memcpy(dest, start, length);
+  }
+  dest[length] = '\0';
+  return true;
+}
+
+static bool matrix_probe_homeserver(const char *homeserver) {
+  if (homeserver == NULL || homeserver[0] == '\0') {
+    return false;
+  }
+
+  CURL *curl = curl_easy_init();
+  if (curl == NULL) {
+    errno = ENOMEM;
+    return false;
+  }
+
+  char url[512];
+  int written = snprintf(url, sizeof(url), "%s/_matrix/client/versions", homeserver);
+  if (written < 0 || (size_t)written >= sizeof(url)) {
+    curl_easy_cleanup(curl);
+    errno = ENAMETOOLONG;
+    return false;
+  }
+
+  matrix_buffer_t response = {0};
+  curl_easy_setopt(curl, CURLOPT_URL, url);
+  curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, MATRIX_USER_AGENT);
+  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, matrix_curl_write);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+  CURLcode result = curl_easy_perform(curl);
+  long status = 0;
+  if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status) != CURLE_OK) {
+    status = 0;
+  }
+
+  curl_easy_cleanup(curl);
+  matrix_buffer_free(&response);
+
+  if (result != CURLE_OK || status < 200 || status >= 300) {
+    return false;
+  }
+
+  return true;
+}
+
 static bool matrix_json_escape(const char *input, char *output, size_t output_len) {
   if (output == NULL || output_len == 0U) {
     return false;
@@ -999,6 +1079,26 @@ matrix_client_t *matrix_client_create(host_t *host, client_manager_t *manager, s
     return NULL;
   }
 
+  char trimmed_homeserver[sizeof(((matrix_client_t *)0)->homeserver)];
+  if (!matrix_copy_trimmed(trimmed_homeserver, sizeof(trimmed_homeserver), homeserver) ||
+      trimmed_homeserver[0] == '\0') {
+    return NULL;
+  }
+
+  const char *homeserver_value = trimmed_homeserver;
+  char normalized_homeserver[sizeof(((matrix_client_t *)0)->homeserver)];
+  if (strstr(trimmed_homeserver, "://") == NULL) {
+    int written = snprintf(normalized_homeserver, sizeof(normalized_homeserver), "https://%s", trimmed_homeserver);
+    if (written < 0 || (size_t)written >= sizeof(normalized_homeserver)) {
+      return NULL;
+    }
+    homeserver_value = normalized_homeserver;
+  }
+
+  if (!matrix_probe_homeserver(homeserver_value)) {
+    return NULL;
+  }
+
   matrix_client_t *client = (matrix_client_t *)calloc(1U, sizeof(matrix_client_t));
   if (client == NULL) {
     return NULL;
@@ -1007,15 +1107,29 @@ matrix_client_t *matrix_client_create(host_t *host, client_manager_t *manager, s
   client->host = host;
   client->manager = manager;
   client->security = security;
-  snprintf(client->homeserver, sizeof(client->homeserver), "%s", homeserver);
+  snprintf(client->homeserver, sizeof(client->homeserver), "%s", homeserver_value);
   size_t base_len = strlen(client->homeserver);
   if (base_len > 0U && client->homeserver[base_len - 1U] == '/') {
     client->homeserver[base_len - 1U] = '\0';
   }
-  snprintf(client->access_token, sizeof(client->access_token), "%s", access_token);
-  snprintf(client->room_id, sizeof(client->room_id), "%s", room_id);
+  if (!matrix_copy_trimmed(client->access_token, sizeof(client->access_token), access_token) ||
+      client->access_token[0] == '\0') {
+    OPENSSL_cleanse(client->access_token, sizeof(client->access_token));
+    free(client);
+    return NULL;
+  }
+  if (!matrix_copy_trimmed(client->room_id, sizeof(client->room_id), room_id) || client->room_id[0] == '\0') {
+    OPENSSL_cleanse(client->access_token, sizeof(client->access_token));
+    free(client);
+    return NULL;
+  }
   const char *device = matrix_getenv("CHATTER_MATRIX_DEVICE_NAME");
-  snprintf(client->device_name, sizeof(client->device_name), "%s", device != NULL ? device : "ssh-chatter");
+  if (device != NULL) {
+    matrix_copy_trimmed(client->device_name, sizeof(client->device_name), device);
+  }
+  if (client->device_name[0] == '\0') {
+    snprintf(client->device_name, sizeof(client->device_name), "%s", "ssh-chatter");
+  }
   client->since_token[0] = '\0';
   client->next_txn_id = (uint64_t)time(NULL);
   client->pending_skip_username[0] = '\0';
