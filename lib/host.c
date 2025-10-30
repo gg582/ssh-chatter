@@ -6644,6 +6644,16 @@ static void host_security_compact_whitespace(char *text) {
   text[write_index] = '\0';
 }
 
+
+static double host_elapsed_seconds(const struct timespec *start,
+                                 const struct timespec *end) {
+  double sec = (double)end->tv_sec - (double)start->tv_sec;
+  double nsec_to_sec = ((double)end->tv_nsec - (double)start->tv_nsec) / 1000000000.0;
+
+  return sec + nsec_to_sec;
+}
+
+
 static bool host_security_execute_clamav_backend(host_t *host, char *notice, size_t notice_length) {
   if (notice != NULL && notice_length > 0U) {
     notice[0] = '\0';
