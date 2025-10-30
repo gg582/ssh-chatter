@@ -138,6 +138,52 @@ static bool matrix_copy_trimmed(char *dest, size_t dest_len, const char *src) {
   return true;
 }
 
+static bool matrix_probe_homeserver(const char *homeserver) {
+  if (homeserver == NULL || homeserver[0] == '\0') {
+    return false;
+  }
+
+  CURL *curl = curl_easy_init();
+  if (curl == NULL) {
+    errno = ENOMEM;
+    return false;
+  }
+
+  char url[512];
+  int written = snprintf(url, sizeof(url), "%s/_matrix/client/versions", homeserver);
+  if (written < 0 || (size_t)written >= sizeof(url)) {
+    curl_easy_cleanup(curl);
+    errno = ENAMETOOLONG;
+    return false;
+  }
+
+  matrix_buffer_t response = {0};
+  curl_easy_setopt(curl, CURLOPT_URL, url);
+  curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, MATRIX_USER_AGENT);
+  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, matrix_curl_write);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+
+  CURLcode result = curl_easy_perform(curl);
+  long status = 0;
+  if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status) != CURLE_OK) {
+    status = 0;
+  }
+
+  curl_easy_cleanup(curl);
+  matrix_buffer_free(&response);
+
+  if (result != CURLE_OK || status < 200 || status >= 300) {
+    return false;
+  }
+
+  return true;
+}
+
 static bool matrix_json_escape(const char *input, char *output, size_t output_len) {
   if (output == NULL || output_len == 0U) {
     return false;
@@ -1047,6 +1093,10 @@ matrix_client_t *matrix_client_create(host_t *host, client_manager_t *manager, s
       return NULL;
     }
     homeserver_value = normalized_homeserver;
+  }
+
+  if (!matrix_probe_homeserver(homeserver_value)) {
+    return NULL;
   }
 
   matrix_client_t *client = (matrix_client_t *)calloc(1U, sizeof(matrix_client_t));
