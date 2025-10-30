@@ -154,6 +154,21 @@ typedef struct host_moderation_state {
   pid_t worker_pid;
 } host_moderation_state_t;
 
+typedef struct host_eliza_intervene_task host_eliza_intervene_task_t;
+
+typedef struct host_eliza_worker_state {
+  pthread_mutex_t mutex;
+  pthread_cond_t cond;
+  bool mutex_initialized;
+  bool cond_initialized;
+  bool thread_started;
+  _Atomic bool stop;
+  _Atomic bool active;
+  pthread_t thread;
+  host_eliza_intervene_task_t *head;
+  host_eliza_intervene_task_t *tail;
+} host_eliza_worker_state_t;
+
 typedef enum chat_attachment_type {
   CHAT_ATTACHMENT_NONE = 0,
   CHAT_ATTACHMENT_IMAGE,
@@ -366,6 +381,13 @@ typedef enum session_asciiart_target {
   SESSION_ASCIIART_TARGET_PROFILE_PICTURE,
 } session_asciiart_target_t;
 
+typedef enum session_editor_mode {
+  SESSION_EDITOR_MODE_NONE = 0,
+  SESSION_EDITOR_MODE_BBS_CREATE,
+  SESSION_EDITOR_MODE_BBS_EDIT,
+  SESSION_EDITOR_MODE_ASCIIART,
+} session_editor_mode_t;
+
 typedef struct rss_feed {
   bool in_use;
   char tag[SSH_CHATTER_RSS_TAG_LEN];
@@ -408,6 +430,7 @@ typedef struct session_ctx {
   char input_buffer[SSH_CHATTER_MAX_INPUT_LEN];
   size_t input_length;
   char input_history[SSH_CHATTER_INPUT_HISTORY_LIMIT][SSH_CHATTER_MAX_INPUT_LEN];
+  bool input_history_is_command[SSH_CHATTER_INPUT_HISTORY_LIMIT];
   size_t input_history_count;
   int input_history_position;
   session_input_mode_t input_mode;
@@ -449,6 +472,8 @@ typedef struct session_ctx {
   bool has_birthday;
   char birthday[16];
   bool bbs_post_pending;
+  session_editor_mode_t editor_mode;
+  uint64_t pending_bbs_edit_id;
   char pending_bbs_title[SSH_CHATTER_BBS_TITLE_LEN];
   char pending_bbs_tags[SSH_CHATTER_BBS_MAX_TAGS][SSH_CHATTER_BBS_TAG_LEN];
   size_t pending_bbs_tag_count;
@@ -660,6 +685,7 @@ typedef struct host {
   _Atomic bool security_clamav_thread_stop;
   struct timespec security_clamav_last_run;
   host_moderation_state_t moderation;
+  host_eliza_worker_state_t eliza_worker;
   pthread_t bbs_watchdog_thread;
   bool bbs_watchdog_thread_initialized;
   _Atomic bool bbs_watchdog_thread_running;
