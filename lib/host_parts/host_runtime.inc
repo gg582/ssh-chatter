@@ -902,12 +902,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_getos(ctx, args);
     return;
   }
-  else if (strncmp(effective_line, "/getaddr", 8) == 0) {
-    const char *arguments = effective_line + 8;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
-    session_handle_getaddr(ctx, arguments);
+  else if (session_parse_command_any(ctx, "/getaddr", effective_line, &args)) {
+    session_handle_getaddr(ctx, args);
     return;
   }
   else if (session_parse_command_any(ctx, "/birthday", effective_line, &args)) {
@@ -991,7 +987,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  else if (session_parse_command(effective_line, "/kick", &args)) {
+  else if (session_parse_command_any(ctx, "/kick", effective_line, &args)) {
     session_handle_kick(ctx, args);
     return;
   }

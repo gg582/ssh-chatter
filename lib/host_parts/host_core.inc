@@ -1624,9 +1624,27 @@ static const session_command_alias_t kSessionCommandAliases[] = {
         },
     },
     {
+        .canonical = "/ban",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/밴",
+            [SESSION_UI_LANGUAGE_JP] = "/バン",
+            [SESSION_UI_LANGUAGE_ZH] = "/封禁",
+            [SESSION_UI_LANGUAGE_RU] = "/бан",
+        },
+    },
+    {
+        .canonical = "/banlist",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/밴목록",
+            [SESSION_UI_LANGUAGE_JP] = "/バンリスト",
+            [SESSION_UI_LANGUAGE_ZH] = "/封禁列表",
+            [SESSION_UI_LANGUAGE_RU] = "/список-банов",
+        },
+    },
+    {
         .canonical = "/banname",
         .localized = {
-            [SESSION_UI_LANGUAGE_KO] = "/이름차단",
+            [SESSION_UI_LANGUAGE_KO] = "/닉네임차단",
         },
     },
     {
@@ -1717,12 +1735,39 @@ static const session_command_alias_t kSessionCommandAliases[] = {
         },
     },
     {
+        .canonical = "/gemini",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/제미니",
+            [SESSION_UI_LANGUAGE_JP] = "/ジェミニ",
+            [SESSION_UI_LANGUAGE_ZH] = "/Gemini",
+            [SESSION_UI_LANGUAGE_RU] = "/джемини",
+        },
+    },
+    {
+        .canonical = "/gemini-unfreeze",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/제미니-해제",
+            [SESSION_UI_LANGUAGE_JP] = "/ジェミニ-解除",
+            [SESSION_UI_LANGUAGE_ZH] = "/Gemini-解冻",
+            [SESSION_UI_LANGUAGE_RU] = "/джемини-разморозить",
+        },
+    },
+    {
         .canonical = "/color",
         .localized = {
             [SESSION_UI_LANGUAGE_KO] = "/색상",
             [SESSION_UI_LANGUAGE_JP] = "/色",
             [SESSION_UI_LANGUAGE_ZH] = "/颜色",
             [SESSION_UI_LANGUAGE_RU] = "/цвет",
+        },
+    },
+    {
+        .canonical = "/captcha",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/캡차",
+            [SESSION_UI_LANGUAGE_JP] = "/キャプチャ",
+            [SESSION_UI_LANGUAGE_ZH] = "/验证码",
+            [SESSION_UI_LANGUAGE_RU] = "/капча",
         },
     },
     {
@@ -1771,6 +1816,15 @@ static const session_command_alias_t kSessionCommandAliases[] = {
         .canonical = "/revoke",
         .localized = {
             [SESSION_UI_LANGUAGE_KO] = "/권한해제",
+        },
+    },
+    {
+        .canonical = "/kick",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/강퇴",
+            [SESSION_UI_LANGUAGE_JP] = "/キック",
+            [SESSION_UI_LANGUAGE_ZH] = "/踢出",
+            [SESSION_UI_LANGUAGE_RU] = "/кик",
         },
     },
     {
@@ -1903,6 +1957,33 @@ static const session_command_alias_t kSessionCommandAliases[] = {
         .canonical = "/users",
         .localized = {
             [SESSION_UI_LANGUAGE_KO] = "/접속자수",
+        },
+    },
+    {
+        .canonical = "/pardon",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/사면",
+            [SESSION_UI_LANGUAGE_JP] = "/許し",
+            [SESSION_UI_LANGUAGE_ZH] = "/赦免",
+            [SESSION_UI_LANGUAGE_RU] = "/помиловать",
+        },
+    },
+    {
+        .canonical = "/eliza",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/엘리자",
+            [SESSION_UI_LANGUAGE_JP] = "/エリザ",
+            [SESSION_UI_LANGUAGE_ZH] = "/伊丽莎",
+            [SESSION_UI_LANGUAGE_RU] = "/элиза",
+        },
+    },
+    {
+        .canonical = "/getaddr",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/주소확인",
+            [SESSION_UI_LANGUAGE_JP] = "/アドレス取得",
+            [SESSION_UI_LANGUAGE_ZH] = "/获取地址",
+            [SESSION_UI_LANGUAGE_RU] = "/получить-адрес",
         },
     },
     {
@@ -3067,10 +3148,10 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "Включить/выключить модератора Элиза (оператор).",
         },
         .label_translations = {
-            [SESSION_UI_LANGUAGE_KO] = "/엘리자 <켜기|끄기>",
-            [SESSION_UI_LANGUAGE_JP] = "/エリザ <オン|オフ>",
-            [SESSION_UI_LANGUAGE_ZH] = "/伊丽莎 <开|关>",
-            [SESSION_UI_LANGUAGE_RU] = "/элиза <вкл|выкл>",
+            [SESSION_UI_LANGUAGE_KO] = "엘리자 <켜기|끄기>",
+            [SESSION_UI_LANGUAGE_JP] = "エリザ <オン|オフ>",
+            [SESSION_UI_LANGUAGE_ZH] = "伊丽莎 <开|关>",
+            [SESSION_UI_LANGUAGE_RU] = "элиза <вкл|выкл>",
         },
         .label_arg_count = 0U,
         .label_args = {},
