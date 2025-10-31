@@ -1116,7 +1116,7 @@ static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT] = 
         .language = SESSION_UI_LANGUAGE_KO,
         .code = "ko",
         .help_title = "필수 명령:",
-        .help_hint_extra = "%sadvanced에서 선택 명령을 확인하세요.",
+        .help_hint_extra = "%sadvanced에서 선택 및 운영자 명령을 확인합니다.",
         .help_scroll_hint = "위/아래 화살표로 채팅이나 명령 기록을 살펴볼 수 있습니다.",
         .help_regular_hint = "일반 메시지는 모두에게 공유됩니다.",
         .help_extra_title = "확장 명령:",
@@ -1540,6 +1540,9 @@ static const session_help_entry_t kSessionHelpEssential[] = {
             "更改显示名称。",
             "Изменить отображаемое имя.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "닉네임 <이름>",
+        },
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1605,6 +1608,9 @@ static const session_help_entry_t kSessionHelpEssential[] = {
             "接続中のユーザー数を知らせます。",
             "公布当前在线人数。",
             "Сообщить количество подключённых пользователей.",
+        },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "접속자",
         },
     },
     {
