@@ -8547,7 +8547,6 @@ static void host_moderation_flush_pending(host_t *host, const char *diagnostic) 
     session_ctx_t *session = chat_room_find_user(&host->room, task->username);
     host_security_process_error(host, task->category, message, task->username, task->client_ip, session,
                                 task->post_send);
-    GC_FREE(task);
     task = next;
   }
 }
@@ -8604,7 +8603,6 @@ static void *host_moderation_thread(void *arg) {
       failure_reason = "moderation worker unavailable";
       host_moderation_handle_failure(host, task, failure_reason);
       bool recovered = host_moderation_recover_worker(host, failure_reason);
-      GC_FREE(task);
       if (!recovered) {
         break;
       }
@@ -8617,7 +8615,6 @@ static void *host_moderation_thread(void *arg) {
       failure_reason = "moderation worker unavailable";
       host_moderation_handle_failure(host, task, failure_reason);
       bool recovered = host_moderation_recover_worker(host, failure_reason);
-      GC_FREE(task);
       if (!recovered) {
         break;
       }
@@ -8634,12 +8631,10 @@ static void *host_moderation_thread(void *arg) {
         char *discard = (char *)GC_MALLOC(message_length);
         if (discard != NULL) {
           (void)host_moderation_read_all(host->moderation.response_fd, discard, message_length);
-          GC_FREE(discard);
         }
         failure_reason = "moderation worker unavailable";
         host_moderation_handle_failure(host, task, failure_reason);
         bool recovered = host_moderation_recover_worker(host, failure_reason);
-        GC_FREE(task);
         if (!recovered) {
           break;
         }
@@ -8651,8 +8646,6 @@ static void *host_moderation_thread(void *arg) {
         failure_reason = "moderation worker unavailable";
         host_moderation_handle_failure(host, task, failure_reason);
         bool recovered = host_moderation_recover_worker(host, failure_reason);
-        GC_FREE(message);
-        GC_FREE(task);
         if (!recovered) {
           break;
         }
@@ -8665,9 +8658,7 @@ static void *host_moderation_thread(void *arg) {
     const char *message_text = (message != NULL) ? message : "";
     host_moderation_apply_result(host, task, &response, message_text);
     if (message != NULL) {
-      GC_FREE(message);
     }
-    GC_FREE(task);
     failure_reason = NULL;
   }
 
