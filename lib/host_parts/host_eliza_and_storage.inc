@@ -1,0 +1,4177 @@
+// Eliza memory management, BBS persistence, and rendering helpers.
+
+static void host_eliza_memory_store(host_t *host, const char *prompt, const char *reply) {
+  if (host == NULL || prompt == NULL || reply == NULL) {
+    return;
+  }
+
+  char clean_prompt[SSH_CHATTER_MESSAGE_LIMIT];
+  char clean_reply[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(clean_prompt, sizeof(clean_prompt), "%s", prompt);
+  snprintf(clean_reply, sizeof(clean_reply), "%s", reply);
+  trim_whitespace_inplace(clean_prompt);
+  trim_whitespace_inplace(clean_reply);
+
+  pthread_mutex_lock(&host->lock);
+  if (host->eliza_memory_count >= SSH_CHATTER_ELIZA_MEMORY_MAX) {
+    memmove(host->eliza_memory, host->eliza_memory + 1,
+            (SSH_CHATTER_ELIZA_MEMORY_MAX - 1U) * sizeof(host->eliza_memory[0]));
+    host->eliza_memory_count = SSH_CHATTER_ELIZA_MEMORY_MAX - 1U;
+  }
+
+  eliza_memory_entry_t *entry = &host->eliza_memory[host->eliza_memory_count++];
+  if (host->eliza_memory_next_id == 0U) {
+    host->eliza_memory_next_id = 1U;
+  }
+  entry->id = host->eliza_memory_next_id;
+  if (host->eliza_memory_next_id < UINT64_MAX) {
+    host->eliza_memory_next_id += 1U;
+  }
+  entry->stored_at = time(NULL);
+  snprintf(entry->prompt, sizeof(entry->prompt), "%s", clean_prompt);
+  snprintf(entry->reply, sizeof(entry->reply), "%s", clean_reply);
+
+  host_eliza_memory_save_locked(host);
+  pthread_mutex_unlock(&host->lock);
+}
+
+static size_t host_eliza_memory_collect_tokens(const char *prompt, char tokens[][32], size_t max_tokens) {
+  if (tokens == NULL || max_tokens == 0U || prompt == NULL) {
+    return 0U;
+  }
+
+  size_t count = 0U;
+  size_t length = strlen(prompt);
+  size_t idx = 0U;
+  while (idx < length && count < max_tokens) {
+    while (idx < length && isspace((unsigned char)prompt[idx])) {
+      ++idx;
+    }
+    if (idx >= length) {
+      break;
+    }
+
+    size_t token_idx = 0U;
+    char buffer[32];
+    while (idx < length && !isspace((unsigned char)prompt[idx])) {
+      unsigned char ch = (unsigned char)prompt[idx];
+      if (token_idx + 1U < sizeof(buffer)) {
+        buffer[token_idx++] = (ch < 0x80U) ? (char)tolower(ch) : (char)ch;
+      }
+      ++idx;
+    }
+    buffer[token_idx] = '\0';
+
+    if (token_idx == 0U) {
+      continue;
+    }
+    if (token_idx < 3U && (unsigned char)buffer[0] < 0x80U) {
+      continue;
+    }
+
+    bool duplicate = false;
+    for (size_t existing = 0U; existing < count; ++existing) {
+      if (strcmp(tokens[existing], buffer) == 0) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) {
+      continue;
+    }
+
+    snprintf(tokens[count], 32U, "%s", buffer);
+    ++count;
+  }
+
+  return count;
+}
+
+static size_t host_eliza_memory_collect_context(host_t *host, const char *prompt, char *context,
+                                                size_t context_length) {
+  if (context == NULL || context_length == 0U) {
+    return 0U;
+  }
+
+  context[0] = '\0';
+  if (host == NULL || prompt == NULL) {
+    return 0U;
+  }
+
+  eliza_memory_entry_t snapshot[SSH_CHATTER_ELIZA_MEMORY_MAX];
+  size_t snapshot_count = 0U;
+
+  pthread_mutex_lock(&host->lock);
+  snapshot_count = host->eliza_memory_count;
+  if (snapshot_count > SSH_CHATTER_ELIZA_MEMORY_MAX) {
+    snapshot_count = SSH_CHATTER_ELIZA_MEMORY_MAX;
+  }
+  if (snapshot_count > 0U) {
+    memcpy(snapshot, host->eliza_memory, snapshot_count * sizeof(snapshot[0]));
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (snapshot_count == 0U) {
+    return 0U;
+  }
+
+  char tokens[SSH_CHATTER_ELIZA_TOKEN_LIMIT][32];
+  size_t token_count = host_eliza_memory_collect_tokens(prompt, tokens, SSH_CHATTER_ELIZA_TOKEN_LIMIT);
+
+  size_t best_indices[SSH_CHATTER_ELIZA_CONTEXT_LIMIT] = {0U};
+  size_t best_scores[SSH_CHATTER_ELIZA_CONTEXT_LIMIT] = {0U};
+  size_t best_count = 0U;
+
+  for (size_t idx = 0U; idx < snapshot_count; ++idx) {
+    const eliza_memory_entry_t *entry = &snapshot[idx];
+    size_t score = 0U;
+
+    if (token_count > 0U) {
+      for (size_t token_idx = 0U; token_idx < token_count; ++token_idx) {
+        if (tokens[token_idx][0] == '\0') {
+          continue;
+        }
+        if (string_contains_case_insensitive(entry->prompt, tokens[token_idx]) ||
+            string_contains_case_insensitive(entry->reply, tokens[token_idx])) {
+          ++score;
+        }
+      }
+
+      if (score == 0U) {
+        continue;
+      }
+    }
+
+    size_t recency_bonus = snapshot_count - idx;
+    if (recency_bonus > 4U) {
+      recency_bonus = 4U;
+    }
+    score += recency_bonus;
+
+    size_t insert_pos = best_count;
+    if (best_count < SSH_CHATTER_ELIZA_CONTEXT_LIMIT) {
+      ++best_count;
+    } else if (score <= best_scores[SSH_CHATTER_ELIZA_CONTEXT_LIMIT - 1U]) {
+      continue;
+    } else {
+      insert_pos = SSH_CHATTER_ELIZA_CONTEXT_LIMIT - 1U;
+    }
+
+    while (insert_pos > 0U && score > best_scores[insert_pos - 1U]) {
+      if (insert_pos < SSH_CHATTER_ELIZA_CONTEXT_LIMIT) {
+        best_scores[insert_pos] = best_scores[insert_pos - 1U];
+        best_indices[insert_pos] = best_indices[insert_pos - 1U];
+      }
+      --insert_pos;
+    }
+
+    best_scores[insert_pos] = score;
+    best_indices[insert_pos] = idx;
+  }
+
+  if (best_count == 0U && token_count == 0U) {
+    size_t fallback = snapshot_count < SSH_CHATTER_ELIZA_CONTEXT_LIMIT ? snapshot_count : SSH_CHATTER_ELIZA_CONTEXT_LIMIT;
+    for (size_t idx = 0U; idx < fallback; ++idx) {
+      best_indices[idx] = snapshot_count - idx - 1U;
+    }
+    best_count = fallback;
+  }
+
+  if (best_count == 0U) {
+    return 0U;
+  }
+
+  size_t offset = 0U;
+  for (size_t idx = 0U; idx < best_count; ++idx) {
+    const eliza_memory_entry_t *entry = &snapshot[best_indices[idx]];
+    char time_buffer[32];
+    time_buffer[0] = '\0';
+    if (entry->stored_at != 0) {
+      struct tm tm_value;
+      if (localtime_r(&entry->stored_at, &tm_value) != NULL) {
+        strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M", &tm_value);
+      }
+    }
+    if (time_buffer[0] == '\0') {
+      snprintf(time_buffer, sizeof(time_buffer), "-");
+    }
+
+    char block[SSH_CHATTER_MESSAGE_LIMIT * 2];
+    int written = snprintf(block, sizeof(block), "%s- [%s] user: %s\n  eliza: %s", idx == 0U ? "" : "\n",
+                           time_buffer,
+                           entry->prompt[0] != '\0' ? entry->prompt : "(empty)",
+                           entry->reply[0] != '\0' ? entry->reply : "(empty)");
+    if (written < 0) {
+      continue;
+    }
+
+    size_t block_len = (size_t)written;
+    if (block_len >= sizeof(block)) {
+      block_len = sizeof(block) - 1U;
+      block[block_len] = '\0';
+    }
+
+    if (offset + block_len >= context_length) {
+      size_t available = (offset < context_length) ? context_length - offset - 1U : 0U;
+      if (available > 0U) {
+        memcpy(context + offset, block, available);
+        offset += available;
+        context[offset] = '\0';
+      }
+      break;
+    }
+
+    memcpy(context + offset, block, block_len);
+    offset += block_len;
+    context[offset] = '\0';
+  }
+
+  return best_count;
+}
+
+static void host_eliza_history_normalize_line(char *text) {
+  if (text == NULL) {
+    return;
+  }
+
+  size_t read_index = 0U;
+  size_t write_index = 0U;
+  bool last_was_space = true;
+
+  while (text[read_index] != '\0') {
+    unsigned char ch = (unsigned char)text[read_index++];
+    if (ch < 0x20U || ch == 0x7FU) {
+      ch = ' ';
+    }
+
+    if (ch == ' ') {
+      if (last_was_space) {
+        continue;
+      }
+      text[write_index++] = ' ';
+      last_was_space = true;
+      continue;
+    }
+
+    text[write_index++] = (char)ch;
+    last_was_space = false;
+  }
+
+  if (write_index > 0U && text[write_index - 1U] == ' ') {
+    --write_index;
+  }
+
+  text[write_index] = '\0';
+}
+
+static size_t host_eliza_history_collect_context(host_t *host, char *context, size_t context_length) {
+  if (context == NULL || context_length == 0U) {
+    return 0U;
+  }
+
+  context[0] = '\0';
+  if (host == NULL) {
+    return 0U;
+  }
+
+  size_t total = host_history_total(host);
+  if (total == 0U) {
+    return 0U;
+  }
+
+  size_t start_index = 0U;
+  if (total > SSH_CHATTER_ELIZA_HISTORY_WINDOW) {
+    start_index = total - SSH_CHATTER_ELIZA_HISTORY_WINDOW;
+  }
+
+  chat_history_entry_t snapshot[SSH_CHATTER_ELIZA_HISTORY_WINDOW];
+  size_t retrieved = host_history_copy_range(host, start_index, snapshot, SSH_CHATTER_ELIZA_HISTORY_WINDOW);
+  if (retrieved == 0U) {
+    return 0U;
+  }
+
+  char messages[SSH_CHATTER_ELIZA_HISTORY_LIMIT][SSH_CHATTER_MESSAGE_LIMIT];
+  char names[SSH_CHATTER_ELIZA_HISTORY_LIMIT][SSH_CHATTER_USERNAME_LEN];
+  size_t collected = 0U;
+
+  for (size_t idx = 0U; idx < retrieved && collected < SSH_CHATTER_ELIZA_HISTORY_LIMIT; ++idx) {
+    size_t current = retrieved - idx - 1U;
+    const chat_history_entry_t *entry = &snapshot[current];
+    if (!entry->is_user_message) {
+      continue;
+    }
+
+    char working[SSH_CHATTER_MESSAGE_LIMIT * 2U];
+    working[0] = '\0';
+    if (entry->message[0] != '\0') {
+      snprintf(working, sizeof(working), "%s", entry->message);
+    } else if (entry->attachment_type != CHAT_ATTACHMENT_NONE) {
+      const char *label = chat_attachment_type_label(entry->attachment_type);
+      snprintf(working, sizeof(working), "shared a %s", label != NULL ? label : "attachment");
+    }
+
+    if (entry->attachment_caption[0] != '\0') {
+      size_t existing = strnlen(working, sizeof(working));
+      if (existing < sizeof(working) - 1U) {
+        int appended = snprintf(working + existing, sizeof(working) - existing, "%s(caption: %s)",
+                                existing > 0U ? " " : "", entry->attachment_caption);
+        if (appended < 0) {
+          working[existing] = '\0';
+        }
+      }
+    } else if (entry->attachment_type != CHAT_ATTACHMENT_NONE && entry->attachment_target[0] != '\0') {
+      size_t existing = strnlen(working, sizeof(working));
+      if (existing < sizeof(working) - 1U) {
+        int appended = snprintf(working + existing, sizeof(working) - existing, "%s(link shared)",
+                                existing > 0U ? " " : "");
+        if (appended < 0) {
+          working[existing] = '\0';
+        }
+      }
+    }
+
+    host_eliza_history_normalize_line(working);
+    trim_whitespace_inplace(working);
+
+    if (working[0] == '\0') {
+      continue;
+    }
+
+    snprintf(messages[collected], sizeof(messages[collected]), "%s", working);
+    if (entry->username[0] != '\0') {
+      snprintf(names[collected], sizeof(names[collected]), "%s", entry->username);
+    } else {
+      snprintf(names[collected], sizeof(names[collected]), "%s", "unknown");
+    }
+    ++collected;
+  }
+
+  if (collected == 0U) {
+    return 0U;
+  }
+
+  size_t offset = 0U;
+  for (size_t idx = 0U; idx < collected; ++idx) {
+    size_t source = collected - idx - 1U;
+    const char *name = names[source][0] != '\0' ? names[source] : "unknown";
+    const char *message = messages[source];
+
+    char line[SSH_CHATTER_MESSAGE_LIMIT * 2U];
+    int written = snprintf(line, sizeof(line), "%s- [%s] %s", offset == 0U ? "" : "\n", name, message);
+    if (written < 0) {
+      continue;
+    }
+
+    size_t line_length = (size_t)written;
+    if (line_length >= sizeof(line)) {
+      line_length = sizeof(line) - 1U;
+      line[line_length] = '\0';
+    }
+
+    size_t remaining = (offset < context_length) ? context_length - offset : 0U;
+    if (remaining <= 1U) {
+      context[context_length - 1U] = '\0';
+      break;
+    }
+
+    size_t max_append = remaining - 1U;
+    if (line_length > max_append) {
+      memcpy(context + offset, line, max_append);
+      offset += max_append;
+      context[offset] = '\0';
+      break;
+    }
+
+    memcpy(context + offset, line, line_length);
+    offset += line_length;
+    context[offset] = '\0';
+  }
+
+  return collected;
+}
+
+static void host_eliza_prepare_preview(const char *source, char *dest, size_t dest_length) {
+  if (dest == NULL || dest_length == 0U) {
+    return;
+  }
+
+  dest[0] = '\0';
+  if (source == NULL || source[0] == '\0') {
+    return;
+  }
+
+  size_t copy_length = strnlen(source, dest_length);
+  bool truncated = false;
+  if (copy_length >= dest_length) {
+    copy_length = dest_length - 1U;
+    truncated = true;
+  }
+
+  memcpy(dest, source, copy_length);
+  dest[copy_length] = '\0';
+
+  host_eliza_history_normalize_line(dest);
+  trim_whitespace_inplace(dest);
+
+  if (truncated && dest_length > 4U) {
+    size_t length = strnlen(dest, dest_length);
+    if (length + 3U < dest_length) {
+      dest[length++] = '.';
+      dest[length++] = '.';
+      dest[length++] = '.';
+      dest[length] = '\0';
+    }
+  }
+}
+
+static size_t host_eliza_bbs_collect_context(host_t *host, char *context, size_t context_length) {
+  if (context == NULL || context_length == 0U) {
+    return 0U;
+  }
+
+  context[0] = '\0';
+  if (host == NULL) {
+    return 0U;
+  }
+
+  bbs_post_t snapshot[SSH_CHATTER_BBS_MAX_POSTS];
+  size_t snapshot_count = 0U;
+
+  pthread_mutex_lock(&host->lock);
+  for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+    if (!host->bbs_posts[idx].in_use) {
+      continue;
+    }
+
+    if (snapshot_count < SSH_CHATTER_BBS_MAX_POSTS) {
+      snapshot[snapshot_count++] = host->bbs_posts[idx];
+    }
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (snapshot_count == 0U) {
+    return 0U;
+  }
+
+  for (size_t idx = 0U; idx + 1U < snapshot_count; ++idx) {
+    size_t best = idx;
+    time_t best_time = snapshot[idx].bumped_at != 0 ? snapshot[idx].bumped_at : snapshot[idx].created_at;
+    for (size_t scan = idx + 1U; scan < snapshot_count; ++scan) {
+      time_t candidate = snapshot[scan].bumped_at != 0 ? snapshot[scan].bumped_at : snapshot[scan].created_at;
+      if (candidate > best_time) {
+        best = scan;
+        best_time = candidate;
+      }
+    }
+    if (best != idx) {
+      bbs_post_t temp = snapshot[idx];
+      snapshot[idx] = snapshot[best];
+      snapshot[best] = temp;
+    }
+  }
+
+  size_t limit = snapshot_count;
+  if (limit > SSH_CHATTER_ELIZA_BBS_CONTEXT_LIMIT) {
+    limit = SSH_CHATTER_ELIZA_BBS_CONTEXT_LIMIT;
+  }
+
+  size_t offset = 0U;
+  size_t appended_count = 0U;
+  for (size_t idx = 0U; idx < limit; ++idx) {
+    const bbs_post_t *post = &snapshot[idx];
+
+    char title[SSH_CHATTER_BBS_TITLE_LEN];
+    snprintf(title, sizeof(title), "%s", post->title[0] != '\0' ? post->title : "(untitled)");
+    host_eliza_history_normalize_line(title);
+    trim_whitespace_inplace(title);
+
+    char tags_buffer[SSH_CHATTER_BBS_MAX_TAGS * (SSH_CHATTER_BBS_TAG_LEN + 2U)];
+    size_t tags_offset = 0U;
+    tags_buffer[0] = '\0';
+    for (size_t tag = 0U; tag < post->tag_count && tag < SSH_CHATTER_BBS_MAX_TAGS; ++tag) {
+      if (post->tags[tag][0] == '\0') {
+        continue;
+      }
+      if (tags_offset + 1U < sizeof(tags_buffer)) {
+        if (tags_offset > 0U) {
+          tags_buffer[tags_offset++] = ',';
+        }
+        size_t remaining = sizeof(tags_buffer) - tags_offset;
+        size_t tag_length = strnlen(post->tags[tag], remaining);
+        if (tag_length >= remaining) {
+          tag_length = remaining - 1U;
+        }
+        memcpy(tags_buffer + tags_offset, post->tags[tag], tag_length);
+        tags_offset += tag_length;
+        tags_buffer[tags_offset] = '\0';
+      }
+    }
+
+    char body_preview[SSH_CHATTER_ELIZA_BBS_PREVIEW_LEN];
+    host_eliza_prepare_preview(post->body, body_preview, sizeof(body_preview));
+
+    char comment_preview[SSH_CHATTER_ELIZA_BBS_PREVIEW_LEN];
+    comment_preview[0] = '\0';
+    char comment_author[SSH_CHATTER_USERNAME_LEN];
+    comment_author[0] = '\0';
+    if (post->comment_count > 0U) {
+      const bbs_comment_t *comment = &post->comments[post->comment_count - 1U];
+      host_eliza_prepare_preview(comment->text, comment_preview, sizeof(comment_preview));
+      snprintf(comment_author, sizeof(comment_author), "%s", comment->author[0] != '\0' ? comment->author : "(anonymous)");
+      host_eliza_history_normalize_line(comment_author);
+      trim_whitespace_inplace(comment_author);
+    }
+
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    size_t line_offset = 0U;
+    int written = snprintf(line, sizeof(line), "%s- [#%" PRIu64 " %s] %s",
+                           idx == 0U ? "" : "\n",
+                           post->id,
+                           post->author[0] != '\0' ? post->author : "(unknown)",
+                           title[0] != '\0' ? title : "(untitled)");
+    if (written < 0) {
+      continue;
+    }
+
+    line_offset = (size_t)written;
+    if (line_offset >= sizeof(line)) {
+      line_offset = sizeof(line) - 1U;
+      line[line_offset] = '\0';
+    }
+
+    if (tags_buffer[0] != '\0' && line_offset + 1U < sizeof(line)) {
+      int appended = snprintf(line + line_offset, sizeof(line) - line_offset, " | tags: %s", tags_buffer);
+      if (appended > 0) {
+        size_t used = (size_t)appended;
+        if (used >= sizeof(line) - line_offset) {
+          line_offset = sizeof(line) - 1U;
+          line[line_offset] = '\0';
+        } else {
+          line_offset += used;
+        }
+      }
+    }
+
+    if (body_preview[0] != '\0' && line_offset + 1U < sizeof(line)) {
+      int appended = snprintf(line + line_offset, sizeof(line) - line_offset, " | body: %s", body_preview);
+      if (appended > 0) {
+        size_t used = (size_t)appended;
+        if (used >= sizeof(line) - line_offset) {
+          line_offset = sizeof(line) - 1U;
+          line[line_offset] = '\0';
+        } else {
+          line_offset += used;
+        }
+      }
+    }
+
+    if (comment_preview[0] != '\0' && line_offset + 1U < sizeof(line)) {
+      const char *author_label = comment_author[0] != '\0' ? comment_author : "(anonymous)";
+      int appended = snprintf(line + line_offset, sizeof(line) - line_offset, " | last comment by %s: %s", author_label,
+                               comment_preview);
+      if (appended > 0) {
+        size_t used = (size_t)appended;
+        if (used >= sizeof(line) - line_offset) {
+          line_offset = sizeof(line) - 1U;
+          line[line_offset] = '\0';
+        } else {
+          line_offset += used;
+        }
+      }
+    }
+
+    size_t remaining = (offset < context_length) ? context_length - offset : 0U;
+    if (remaining <= 1U) {
+      context[context_length - 1U] = '\0';
+      break;
+    }
+
+    size_t max_copy = remaining - 1U;
+    size_t copy_len = strnlen(line, sizeof(line));
+    if (copy_len > max_copy) {
+      memcpy(context + offset, line, max_copy);
+      offset += max_copy;
+      context[offset] = '\0';
+      ++appended_count;
+      break;
+    }
+
+    memcpy(context + offset, line, copy_len);
+    offset += copy_len;
+    context[offset] = '\0';
+    ++appended_count;
+  }
+
+  if (context[0] == '\0') {
+    return 0U;
+  }
+
+  if (appended_count == 0U) {
+    return 0U;
+  }
+
+  return appended_count;
+}
+
+static void host_bbs_resolve_path(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  const char *bbs_path = getenv("CHATTER_BBS_FILE");
+  if (bbs_path == NULL || bbs_path[0] == '\0') {
+    bbs_path = "bbs_state.dat";
+  }
+
+  int written = snprintf(host->bbs_state_file_path, sizeof(host->bbs_state_file_path), "%s", bbs_path);
+  if (written < 0 || (size_t)written >= sizeof(host->bbs_state_file_path)) {
+    humanized_log_error("host", "bbs state file path is too long", ENAMETOOLONG);
+    host->bbs_state_file_path[0] = '\0';
+  }
+}
+
+static size_t host_column_reset_sequence_length(const char *text) {
+  if (text == NULL) {
+    return 0U;
+  }
+
+  if (text[0] == '\033' && text[1] == '[' && text[2] == '1' && text[3] == 'G') {
+    return 4U;
+  }
+
+  if (text[0] == '[' && text[1] == '1' && text[2] == 'G') {
+    return 3U;
+  }
+
+  return 0U;
+}
+
+static bool host_contains_column_reset(const char *text) {
+  if (text == NULL) {
+    return false;
+  }
+
+  while (*text != '\0') {
+    if (host_column_reset_sequence_length(text) > 0U) {
+      return true;
+    }
+    ++text;
+  }
+
+  return false;
+}
+
+static void host_strip_column_reset(char *text) {
+  if (text == NULL || text[0] == '\0') {
+    return;
+  }
+
+  char *dst = text;
+  const char *src = text;
+  while (*src != '\0') {
+    size_t skip = host_column_reset_sequence_length(src);
+    if (skip > 0U) {
+      src += skip;
+      continue;
+    }
+
+    *dst++ = *src++;
+  }
+
+  *dst = '\0';
+}
+
+static void host_bbs_state_save_locked(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->bbs_state_file_path[0] == '\0') {
+    return;
+  }
+
+  if (!host_ensure_private_data_path(host, host->bbs_state_file_path, true)) {
+    return;
+  }
+
+  char temp_path[PATH_MAX];
+  int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp", host->bbs_state_file_path);
+  if (written < 0 || (size_t)written >= sizeof(temp_path)) {
+    humanized_log_error("host", "bbs state file path is too long", ENAMETOOLONG);
+    return;
+  }
+
+  int temp_fd = open(temp_path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, S_IRUSR | S_IWUSR);
+  if (temp_fd < 0) {
+    humanized_log_error("host", "failed to open bbs state file", errno != 0 ? errno : EIO);
+    return;
+  }
+
+  FILE *fp = fdopen(temp_fd, "wb");
+  if (fp == NULL) {
+    int saved_errno = errno;
+    close(temp_fd);
+    unlink(temp_path);
+    humanized_log_error("host", "failed to wrap bbs state descriptor", saved_errno != 0 ? saved_errno : EIO);
+    return;
+  }
+
+  uint32_t post_count = 0U;
+  for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+    if (host->bbs_posts[idx].in_use) {
+      ++post_count;
+    }
+  }
+
+  bbs_state_header_t header = {0};
+  header.magic = BBS_STATE_MAGIC;
+  header.version = BBS_STATE_VERSION;
+  header.post_count = post_count;
+  header.next_id = host->next_bbs_id;
+
+  bool success = fwrite(&header, sizeof(header), 1U, fp) == 1U;
+
+  for (size_t idx = 0U; success && idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+    const bbs_post_t *post = &host->bbs_posts[idx];
+    if (!post->in_use) {
+      continue;
+    }
+
+    bbs_state_post_entry_t serialized = {0};
+    serialized.id = post->id;
+    serialized.created_at = (int64_t)post->created_at;
+    serialized.bumped_at = (int64_t)post->bumped_at;
+    serialized.tag_count = (uint32_t)post->tag_count;
+    if (serialized.tag_count > SSH_CHATTER_BBS_MAX_TAGS) {
+      serialized.tag_count = SSH_CHATTER_BBS_MAX_TAGS;
+    }
+    serialized.comment_count = (uint32_t)post->comment_count;
+    if (serialized.comment_count > SSH_CHATTER_BBS_MAX_COMMENTS) {
+      serialized.comment_count = SSH_CHATTER_BBS_MAX_COMMENTS;
+    }
+
+    snprintf(serialized.author, sizeof(serialized.author), "%s", post->author);
+    snprintf(serialized.title, sizeof(serialized.title), "%s", post->title);
+    snprintf(serialized.body, sizeof(serialized.body), "%s", post->body);
+
+    for (size_t tag = 0U; tag < serialized.tag_count; ++tag) {
+      snprintf(serialized.tags[tag], sizeof(serialized.tags[tag]), "%s", post->tags[tag]);
+    }
+
+    for (size_t comment = 0U; comment < serialized.comment_count; ++comment) {
+      snprintf(serialized.comments[comment].author, sizeof(serialized.comments[comment].author), "%s",
+               post->comments[comment].author);
+      snprintf(serialized.comments[comment].text, sizeof(serialized.comments[comment].text), "%s",
+               post->comments[comment].text);
+      serialized.comments[comment].created_at = (int64_t)post->comments[comment].created_at;
+    }
+
+    if (fwrite(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+      success = false;
+      break;
+    }
+  }
+
+  if (success && fflush(fp) != 0) {
+    success = false;
+  }
+
+  if (success) {
+    int file_descriptor = fileno(fp);
+    if (file_descriptor >= 0 && fsync(file_descriptor) != 0) {
+      success = false;
+    }
+  }
+
+  if (fclose(fp) != 0) {
+    success = false;
+  }
+
+  if (!success) {
+    humanized_log_error("host", "failed to write bbs state file", errno);
+    unlink(temp_path);
+    return;
+  }
+
+  if (chmod(temp_path, S_IRUSR | S_IWUSR) != 0) {
+    humanized_log_error("host", "failed to tighten temporary bbs state permissions", errno != 0 ? errno : EACCES);
+    unlink(temp_path);
+    return;
+  }
+
+  if (rename(temp_path, host->bbs_state_file_path) != 0) {
+    humanized_log_error("host", "failed to update bbs state file", errno);
+    unlink(temp_path);
+  } else if (chmod(host->bbs_state_file_path, S_IRUSR | S_IWUSR) != 0) {
+    humanized_log_error("host", "failed to tighten bbs state permissions", errno != 0 ? errno : EACCES);
+  }
+}
+
+static void host_bbs_state_load(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->bbs_state_file_path[0] == '\0') {
+    return;
+  }
+
+  if (!host_ensure_private_data_path(host, host->bbs_state_file_path, false)) {
+    return;
+  }
+
+  FILE *fp = fopen(host->bbs_state_file_path, "rb");
+  if (fp == NULL) {
+    return;
+  }
+
+  bbs_state_header_t header = {0};
+  if (fread(&header, sizeof(header), 1U, fp) != 1U) {
+    fclose(fp);
+    return;
+  }
+
+  if (header.magic != BBS_STATE_MAGIC) {
+    fclose(fp);
+    return;
+  }
+
+  if (header.version == 0U || header.version > BBS_STATE_VERSION) {
+    fclose(fp);
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+
+  for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+    host->bbs_posts[idx].in_use = false;
+    host->bbs_posts[idx].id = 0U;
+    host->bbs_posts[idx].author[0] = '\0';
+    host->bbs_posts[idx].title[0] = '\0';
+    host->bbs_posts[idx].body[0] = '\0';
+    host->bbs_posts[idx].tag_count = 0U;
+    host->bbs_posts[idx].created_at = 0;
+    host->bbs_posts[idx].bumped_at = 0;
+    host->bbs_posts[idx].comment_count = 0U;
+    for (size_t comment = 0U; comment < SSH_CHATTER_BBS_MAX_COMMENTS; ++comment) {
+      host->bbs_posts[idx].comments[comment].author[0] = '\0';
+      host->bbs_posts[idx].comments[comment].text[0] = '\0';
+      host->bbs_posts[idx].comments[comment].created_at = 0;
+    }
+  }
+  host->bbs_post_count = 0U;
+
+  uint64_t max_id = 0U;
+  bool success = true;
+
+  for (uint32_t idx = 0U; idx < header.post_count; ++idx) {
+    bbs_state_post_entry_t serialized = {0};
+    if (header.version == 1U) {
+      bbs_state_post_entry_v1_t legacy = {0};
+      if (fread(&legacy, sizeof(legacy), 1U, fp) != 1U) {
+        success = false;
+        break;
+      }
+
+      serialized.id = legacy.id;
+      serialized.created_at = legacy.created_at;
+      serialized.bumped_at = legacy.bumped_at;
+      serialized.tag_count = legacy.tag_count;
+      serialized.comment_count = legacy.comment_count;
+      snprintf(serialized.author, sizeof(serialized.author), "%s", legacy.author);
+      snprintf(serialized.title, sizeof(serialized.title), "%s", legacy.title);
+      snprintf(serialized.body, sizeof(serialized.body), "%s", legacy.body);
+      for (size_t tag = 0U; tag < SSH_CHATTER_BBS_MAX_TAGS; ++tag) {
+        snprintf(serialized.tags[tag], sizeof(serialized.tags[tag]), "%s", legacy.tags[tag]);
+      }
+      for (size_t comment = 0U; comment < SSH_CHATTER_BBS_MAX_COMMENTS; ++comment) {
+        snprintf(serialized.comments[comment].author, sizeof(serialized.comments[comment].author), "%s",
+                 legacy.comments[comment].author);
+        snprintf(serialized.comments[comment].text, sizeof(serialized.comments[comment].text), "%s",
+                 legacy.comments[comment].text);
+        serialized.comments[comment].created_at = legacy.comments[comment].created_at;
+      }
+    } else if (header.version == 2U) {
+      bbs_state_post_entry_v2_t legacy = {0};
+      if (fread(&legacy, sizeof(legacy), 1U, fp) != 1U) {
+        success = false;
+        break;
+      }
+
+      serialized.id = legacy.id;
+      serialized.created_at = legacy.created_at;
+      serialized.bumped_at = legacy.bumped_at;
+      serialized.tag_count = legacy.tag_count;
+      serialized.comment_count = legacy.comment_count;
+      snprintf(serialized.author, sizeof(serialized.author), "%s", legacy.author);
+      snprintf(serialized.title, sizeof(serialized.title), "%s", legacy.title);
+      snprintf(serialized.body, sizeof(serialized.body), "%s", legacy.body);
+      for (size_t tag = 0U; tag < SSH_CHATTER_BBS_MAX_TAGS; ++tag) {
+        snprintf(serialized.tags[tag], sizeof(serialized.tags[tag]), "%s", legacy.tags[tag]);
+      }
+      for (size_t comment = 0U; comment < SSH_CHATTER_BBS_MAX_COMMENTS; ++comment) {
+        snprintf(serialized.comments[comment].author, sizeof(serialized.comments[comment].author), "%s",
+                 legacy.comments[comment].author);
+        snprintf(serialized.comments[comment].text, sizeof(serialized.comments[comment].text), "%s",
+                 legacy.comments[comment].text);
+        serialized.comments[comment].created_at = legacy.comments[comment].created_at;
+      }
+    } else if (header.version == 3U) {
+      bbs_state_post_entry_v3_t legacy = {0};
+      if (fread(&legacy, sizeof(legacy), 1U, fp) != 1U) {
+        success = false;
+        break;
+      }
+
+      serialized.id = legacy.id;
+      serialized.created_at = legacy.created_at;
+      serialized.bumped_at = legacy.bumped_at;
+      serialized.tag_count = legacy.tag_count;
+      serialized.comment_count = legacy.comment_count;
+      snprintf(serialized.author, sizeof(serialized.author), "%s", legacy.author);
+      snprintf(serialized.title, sizeof(serialized.title), "%s", legacy.title);
+      snprintf(serialized.body, sizeof(serialized.body), "%s", legacy.body);
+      for (size_t tag = 0U; tag < SSH_CHATTER_BBS_MAX_TAGS; ++tag) {
+        snprintf(serialized.tags[tag], sizeof(serialized.tags[tag]), "%s", legacy.tags[tag]);
+      }
+      for (size_t comment = 0U; comment < SSH_CHATTER_BBS_MAX_COMMENTS; ++comment) {
+        snprintf(serialized.comments[comment].author, sizeof(serialized.comments[comment].author), "%s",
+                 legacy.comments[comment].author);
+        snprintf(serialized.comments[comment].text, sizeof(serialized.comments[comment].text), "%s",
+                 legacy.comments[comment].text);
+        serialized.comments[comment].created_at = legacy.comments[comment].created_at;
+      }
+    } else {
+      if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+        success = false;
+        break;
+      }
+    }
+
+    if (serialized.id > max_id) {
+      max_id = serialized.id;
+    }
+
+    if (idx >= SSH_CHATTER_BBS_MAX_POSTS) {
+      continue;
+    }
+
+    bbs_post_t *post = &host->bbs_posts[host->bbs_post_count];
+    memset(post, 0, sizeof(*post));
+    post->in_use = true;
+    post->id = serialized.id;
+    post->created_at = (time_t)serialized.created_at;
+    post->bumped_at = (time_t)serialized.bumped_at;
+    snprintf(post->author, sizeof(post->author), "%s", serialized.author);
+    snprintf(post->title, sizeof(post->title), "%s", serialized.title);
+    snprintf(post->body, sizeof(post->body), "%s", serialized.body);
+    host_strip_column_reset(post->author);
+    host_strip_column_reset(post->title);
+    host_strip_column_reset(post->body);
+
+    size_t tag_limit = serialized.tag_count;
+    if (tag_limit > SSH_CHATTER_BBS_MAX_TAGS) {
+      tag_limit = SSH_CHATTER_BBS_MAX_TAGS;
+    }
+    post->tag_count = tag_limit;
+    for (size_t tag = 0U; tag < tag_limit; ++tag) {
+      snprintf(post->tags[tag], sizeof(post->tags[tag]), "%s", serialized.tags[tag]);
+      host_strip_column_reset(post->tags[tag]);
+    }
+
+    size_t comment_limit = serialized.comment_count;
+    if (comment_limit > SSH_CHATTER_BBS_MAX_COMMENTS) {
+      comment_limit = SSH_CHATTER_BBS_MAX_COMMENTS;
+    }
+    post->comment_count = comment_limit;
+    for (size_t comment = 0U; comment < comment_limit; ++comment) {
+      snprintf(post->comments[comment].author, sizeof(post->comments[comment].author), "%s",
+               serialized.comments[comment].author);
+      snprintf(post->comments[comment].text, sizeof(post->comments[comment].text), "%s",
+               serialized.comments[comment].text);
+      post->comments[comment].created_at = (time_t)serialized.comments[comment].created_at;
+      host_strip_column_reset(post->comments[comment].author);
+      host_strip_column_reset(post->comments[comment].text);
+    }
+
+    ++host->bbs_post_count;
+  }
+
+  if (success) {
+    host->next_bbs_id = header.next_id;
+    if (host->next_bbs_id == 0U || host->next_bbs_id <= max_id) {
+      host->next_bbs_id = max_id + 1U;
+    }
+  } else {
+    for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+      host->bbs_posts[idx].in_use = false;
+      host->bbs_posts[idx].id = 0U;
+      host->bbs_posts[idx].author[0] = '\0';
+      host->bbs_posts[idx].title[0] = '\0';
+      host->bbs_posts[idx].body[0] = '\0';
+      host->bbs_posts[idx].tag_count = 0U;
+      host->bbs_posts[idx].created_at = 0;
+      host->bbs_posts[idx].bumped_at = 0;
+      host->bbs_posts[idx].comment_count = 0U;
+      for (size_t comment = 0U; comment < SSH_CHATTER_BBS_MAX_COMMENTS; ++comment) {
+        host->bbs_posts[idx].comments[comment].author[0] = '\0';
+        host->bbs_posts[idx].comments[comment].text[0] = '\0';
+        host->bbs_posts[idx].comments[comment].created_at = 0;
+      }
+    }
+    host->bbs_post_count = 0U;
+    host->next_bbs_id = 1U;
+  }
+
+  pthread_mutex_unlock(&host->lock);
+  fclose(fp);
+}
+
+static void host_bbs_watchdog_scan(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (!atomic_load(&host->eliza_enabled)) {
+    return;
+  }
+
+  if (!atomic_load(&host->security_ai_enabled)) {
+    return;
+  }
+
+  bbs_post_t *snapshot = GC_CALLOC(SSH_CHATTER_BBS_MAX_POSTS, sizeof(*snapshot));
+  if (snapshot == NULL) {
+    humanized_log_error("bbs", "failed to allocate watchdog snapshot", ENOMEM);
+    return;
+  }
+
+  size_t snapshot_count = 0U;
+
+  pthread_mutex_lock(&host->lock);
+  for (size_t idx = 0U; idx < SSH_CHATTER_BBS_MAX_POSTS; ++idx) {
+    if (!host->bbs_posts[idx].in_use) {
+      continue;
+    }
+
+    if (snapshot_count < SSH_CHATTER_BBS_MAX_POSTS) {
+      snapshot[snapshot_count++] = host->bbs_posts[idx];
+    }
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (snapshot_count == 0U) {
+    return;
+  }
+
+  const size_t content_capacity =
+      SSH_CHATTER_BBS_BODY_LEN + (SSH_CHATTER_BBS_COMMENT_LEN * SSH_CHATTER_BBS_MAX_COMMENTS) + 1024U;
+  char *content = (char *)GC_MALLOC(content_capacity);
+  if (content == NULL) {
+    humanized_log_error("bbs", "failed to allocate watchdog buffer", ENOMEM);
+    return;
+  }
+
+  for (size_t idx = 0U; idx < snapshot_count; ++idx) {
+    const bbs_post_t *post = &snapshot[idx];
+
+    int written = snprintf(content, content_capacity,
+                          "Title: %s\nTags: ",
+                          post->title[0] != '\0' ? post->title : "(untitled)");
+    if (written < 0) {
+      continue;
+    }
+
+    size_t offset = (size_t)written;
+    if (offset >= content_capacity) {
+      offset = content_capacity - 1U;
+    }
+
+    for (size_t tag = 0U; tag < post->tag_count; ++tag) {
+      const char *prefix = (tag == 0U) ? "" : ",";
+      int tag_written = snprintf(content + offset, content_capacity - offset, "%s%s", prefix,
+                                 post->tags[tag]);
+      if (tag_written < 0) {
+        break;
+      }
+      offset += (size_t)tag_written;
+      if (offset >= content_capacity) {
+        offset = content_capacity - 1U;
+        break;
+      }
+    }
+
+    if (offset + 2U < content_capacity) {
+      content[offset++] = '\n';
+      content[offset++] = '\n';
+      content[offset] = '\0';
+    } else {
+      content[content_capacity - 1U] = '\0';
+      offset = content_capacity - 1U;
+    }
+
+    int body_written = snprintf(content + offset, content_capacity - offset,
+                                "Body:\n%s",
+                                post->body[0] != '\0' ? post->body : "(empty)");
+    if (body_written < 0) {
+      continue;
+    }
+    offset += (size_t)body_written;
+    if (offset >= content_capacity) {
+      offset = content_capacity - 1U;
+    }
+
+    for (size_t comment = 0U; comment < post->comment_count; ++comment) {
+      if (offset + 2U >= content_capacity) {
+        break;
+      }
+      content[offset++] = '\n';
+      content[offset++] = '\n';
+      content[offset] = '\0';
+
+      const bbs_comment_t *entry = &post->comments[comment];
+      int comment_written = snprintf(content + offset, content_capacity - offset,
+                                     "Comment by %s:\n%s",
+                                     entry->author[0] != '\0' ? entry->author : "(anonymous)",
+                                     entry->text[0] != '\0' ? entry->text : "(empty)");
+      if (comment_written < 0) {
+        break;
+      }
+      offset += (size_t)comment_written;
+      if (offset >= content_capacity) {
+        offset = content_capacity - 1U;
+        break;
+      }
+    }
+
+    bool blocked = false;
+    char reason[256];
+    reason[0] = '\0';
+    if (!translator_moderate_text("bbs_post", content, &blocked, reason, sizeof(reason))) {
+      const char *error = translator_last_error();
+      if (error != NULL && error[0] != '\0') {
+        printf("[bbs] moderation unavailable for post #%" PRIu64 ": %s\n", post->id, error);
+      } else {
+        printf("[bbs] moderation unavailable for post #%" PRIu64 "\n", post->id);
+      }
+      break;
+    }
+
+    if (!blocked) {
+      continue;
+    }
+
+    trim_whitespace_inplace(reason);
+    const char *diagnostic = (reason[0] != '\0') ? reason : "policy violation";
+
+    pthread_mutex_lock(&host->lock);
+    bbs_post_t *live = host_find_bbs_post_locked(host, post->id);
+    if (live != NULL) {
+      host_clear_bbs_post_locked(host, live);
+      host_bbs_state_save_locked(host);
+    }
+    pthread_mutex_unlock(&host->lock);
+
+    if (live == NULL) {
+      continue;
+    }
+
+    printf("[bbs] removed post #%" PRIu64 " by %s (%s)\n", post->id,
+           post->author[0] != '\0' ? post->author : "unknown", diagnostic);
+
+    char notice[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(notice, sizeof(notice),
+             "* [eliza] removed BBS post #%" PRIu64 " by %s (%s).",
+             post->id,
+             post->author[0] != '\0' ? post->author : "unknown",
+             diagnostic);
+    host_history_record_system(host, notice);
+    chat_room_broadcast(&host->room, notice, NULL);
+  }
+
+}
+
+static void *host_bbs_watchdog_thread(void *arg) {
+  host_t *host = (host_t *)arg;
+  if (host == NULL) {
+    return NULL;
+  }
+
+  atomic_store(&host->bbs_watchdog_thread_running, true);
+  printf("[bbs] watchdog thread started\n");
+
+  while (!atomic_load(&host->bbs_watchdog_thread_stop)) {
+    host_bbs_watchdog_scan(host);
+
+    clock_gettime(CLOCK_MONOTONIC, &host->bbs_watchdog_last_run);
+
+    unsigned int remaining = SSH_CHATTER_BBS_REVIEW_INTERVAL_SECONDS;
+    while (remaining > 0U && !atomic_load(&host->bbs_watchdog_thread_stop)) {
+      unsigned int chunk = remaining > SSH_CHATTER_BBS_WATCHDOG_SLEEP_SECONDS
+                               ? SSH_CHATTER_BBS_WATCHDOG_SLEEP_SECONDS
+                               : remaining;
+      struct timespec pause = {
+          .tv_sec = (time_t)chunk,
+          .tv_nsec = 0L,
+      };
+      nanosleep(&pause, NULL);
+      if (remaining <= chunk) {
+        remaining = 0U;
+      } else {
+        remaining -= chunk;
+      }
+    }
+  }
+
+  atomic_store(&host->bbs_watchdog_thread_running, false);
+  printf("[bbs] watchdog thread stopped\n");
+  return NULL;
+}
+
+static void host_bbs_start_watchdog(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  if (host->bbs_watchdog_thread_initialized) {
+    return;
+  }
+
+  atomic_store(&host->bbs_watchdog_thread_stop, false);
+  atomic_store(&host->bbs_watchdog_thread_running, false);
+
+  int error = pthread_create(&host->bbs_watchdog_thread, NULL, host_bbs_watchdog_thread, host);
+  if (error != 0) {
+    printf("[bbs] failed to start watchdog thread: %s\n", strerror(error));
+    return;
+  }
+
+  host->bbs_watchdog_thread_initialized = true;
+}
+
+static void session_refresh_output_encoding(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  bool use_utf16 = false;
+  if (ctx->os_name[0] != '\0') {
+    const os_descriptor_t *descriptor = session_lookup_os_descriptor(ctx->os_name);
+    if (descriptor != NULL && strcasecmp(descriptor->name, "windows") == 0) {
+      use_utf16 = true;
+    }
+  }
+
+  const bool previous_cp437 = ctx->prefer_cp437_output;
+  const bool use_cp437 = session_detect_retro_client(ctx);
+  ctx->prefer_cp437_output = use_cp437;
+
+  if (use_cp437 != previous_cp437) {
+    const char *subject = ctx->user.name[0] != '\0' ? ctx->user.name : ctx->client_ip;
+    if (subject == NULL || subject[0] == '\0') {
+      subject = "unknown";
+    }
+
+    if (use_cp437) {
+      const char *marker = ctx->retro_client_marker[0] != '\0' ? ctx->retro_client_marker : "retro client";
+      if (ctx->telnet_identity[0] != '\0') {
+        printf("[retro] enabling CP437 output for %s via %s (%s)\n", subject, marker, ctx->telnet_identity);
+      } else {
+        printf("[retro] enabling CP437 output for %s via %s\n", subject, marker);
+      }
+    } else {
+      printf("[retro] CP437 output disabled for %s\n", subject);
+    }
+  }
+
+  if (use_cp437) {
+    ctx->prefer_utf16_output = false;
+    return;
+  }
+
+  ctx->prefer_utf16_output = use_utf16;
+}
+
+static bool session_detect_retro_client(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  ctx->retro_client_marker[0] = '\0';
+
+  typedef struct retro_marker {
+    const char *marker;
+    const char *label;
+  } retro_marker_t;
+
+  static const retro_marker_t kRetroMarkers[] = {
+      {"ftelnet", "fTelnet"},       {"htmlterm", "HTMLTerm"},       {"syncterm", "SyncTERM"},
+      {"netrunner", "NetRunner"},   {"netfury", "NetFury"},         {"qodem", "Qodem"},
+      {"mtelnet", "MTelnet"},       {"etherterm", "EtherTerm"},     {"mysticbbs", "Mystic BBS"},
+      {"ansi-bbs", "ANSI-BBS"},     {"pc-ansi", "PC-ANSI"},         {"cp-437", "CP437 terminal"},
+      {"cp437", "CP437 terminal"},   {"avatar", "AVATAR terminal"},  {"ripterm", "RIPTerm"},
+      {"ansiart", "ANSI art terminal"}, {"ansi", "ANSI terminal"},
+  };
+
+  const char *sources[] = {
+      ctx->terminal_type,
+      ctx->client_banner,
+  };
+
+  const char *label = NULL;
+  const char *identity_label = NULL;
+  bool detected = false;
+
+  for (size_t source_idx = 0U; source_idx < sizeof(sources) / sizeof(sources[0]) && !detected; ++source_idx) {
+    const char *candidate = sources[source_idx];
+    if (candidate == NULL || candidate[0] == '\0') {
+      continue;
+    }
+    for (size_t marker_idx = 0U; marker_idx < sizeof(kRetroMarkers) / sizeof(kRetroMarkers[0]); ++marker_idx) {
+      if (string_contains_case_insensitive(candidate, kRetroMarkers[marker_idx].marker)) {
+        label = kRetroMarkers[marker_idx].label;
+        identity_label = label;
+        detected = true;
+        break;
+      }
+    }
+  }
+
+  if (!detected && ctx->terminal_type[0] != '\0') {
+    const char *type = ctx->terminal_type;
+    if (string_contains_token_case_insensitive(type, "ANSI-BBS")) {
+      label = "ANSI-BBS terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "PC-ANSI")) {
+      label = "PC-ANSI terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "CP-437") ||
+               string_contains_token_case_insensitive(type, "CP437")) {
+      label = "CP437 terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "IBMGRAPHICS") ||
+               string_contains_token_case_insensitive(type, "IBM-ASCII") ||
+               string_contains_token_case_insensitive(type, "IBMPC")) {
+      label = "IBM PC terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "AVATAR")) {
+      label = "AVATAR terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "RIPTERM")) {
+      label = "RIPTerm terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "PETSCII") ||
+               string_contains_token_case_insensitive(type, "ATASCII")) {
+      label = "8-bit art terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "DOS")) {
+      label = "DOS ANSI terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "BBS")) {
+      label = "BBS terminal";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(type, "ANSI")) {
+      label = "ANSI terminal";
+      identity_label = label;
+      detected = true;
+    }
+  }
+
+  if (!detected && ctx->client_banner[0] != '\0') {
+    const char *banner = ctx->client_banner;
+    if (string_contains_token_case_insensitive(banner, "ANSI-BBS") ||
+        string_contains_token_case_insensitive(banner, "PC-ANSI")) {
+      label = "ANSI-BBS banner";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(banner, "BBS")) {
+      label = "BBS banner";
+      identity_label = label;
+      detected = true;
+    } else if (string_contains_token_case_insensitive(banner, "ANSI")) {
+      label = "ANSI banner";
+      identity_label = label;
+      detected = true;
+    }
+  }
+
+  if (!detected && ctx->os_name[0] != '\0') {
+    static const char *const kDosFamilies[] = {"msdos", "drdos", "pcdos", "kdos"};
+    for (size_t idx = 0U; idx < sizeof(kDosFamilies) / sizeof(kDosFamilies[0]); ++idx) {
+      if (strcasecmp(ctx->os_name, kDosFamilies[idx]) == 0) {
+        label = "DOS OS";
+        identity_label = NULL;
+        detected = true;
+        break;
+      }
+    }
+  }
+
+  if (detected) {
+    const char *display = (label != NULL && label[0] != '\0') ? label : "Retro terminal";
+    snprintf(ctx->retro_client_marker, sizeof(ctx->retro_client_marker), "%s", display);
+  }
+
+  session_format_telnet_identity(ctx, detected ? identity_label : NULL);
+
+  return detected;
+}
+
+static void session_apply_saved_preferences(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  host_t *host = ctx->owner;
+  user_preference_t snapshot = (user_preference_t){0};
+  bool has_snapshot = false;
+
+  pthread_mutex_lock(&host->lock);
+  user_preference_t *pref = host_find_preference_locked(host, ctx->user.name);
+  if (pref != NULL) {
+    snapshot = *pref;
+    has_snapshot = true;
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  ctx->prefer_utf16_output = false;
+  ctx->prefer_cp437_output = false;
+
+  ctx->translation_caption_spacing = 0U;
+  ctx->translation_enabled = false;
+  ctx->output_translation_enabled = false;
+  ctx->output_translation_language[0] = '\0';
+  ctx->input_translation_enabled = false;
+  ctx->input_translation_language[0] = '\0';
+  ctx->last_detected_input_language[0] = '\0';
+  ctx->ui_language = SESSION_UI_LANGUAGE_KO;
+
+  if (has_snapshot) {
+    if (snapshot.ui_language[0] != '\0') {
+      session_ui_language_t saved_language = session_ui_language_from_code(snapshot.ui_language);
+      if (saved_language != SESSION_UI_LANGUAGE_COUNT) {
+        ctx->ui_language = saved_language;
+      }
+    }
+
+    if (snapshot.has_user_theme) {
+      const char *color_code = lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]),
+                                                 snapshot.user_color_name);
+      const char *highlight_code = lookup_color_code(
+          HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), snapshot.user_highlight_name);
+      if (color_code != NULL && highlight_code != NULL) {
+        ctx->user_color_code = color_code;
+        ctx->user_highlight_code = highlight_code;
+        ctx->user_is_bold = snapshot.user_is_bold;
+        snprintf(ctx->user_color_name, sizeof(ctx->user_color_name), "%s", snapshot.user_color_name);
+        snprintf(ctx->user_highlight_name, sizeof(ctx->user_highlight_name), "%s", snapshot.user_highlight_name);
+      }
+    }
+
+    if (snapshot.has_system_theme) {
+      const char *fg_code = lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]),
+                                              snapshot.system_fg_name);
+      const char *bg_code = lookup_color_code(
+          HIGHLIGHT_COLOR_MAP, sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), snapshot.system_bg_name);
+      if (fg_code != NULL && bg_code != NULL) {
+        const char *highlight_code = ctx->system_highlight_code;
+        if (snapshot.system_highlight_name[0] != '\0') {
+          const char *candidate = lookup_color_code(HIGHLIGHT_COLOR_MAP,
+                                                   sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]),
+                                                   snapshot.system_highlight_name);
+          if (candidate != NULL) {
+            highlight_code = candidate;
+          }
+        }
+
+        ctx->system_fg_code = fg_code;
+        ctx->system_bg_code = bg_code;
+        ctx->system_highlight_code = highlight_code;
+        ctx->system_is_bold = snapshot.system_is_bold;
+        snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", snapshot.system_fg_name);
+        snprintf(ctx->system_bg_name, sizeof(ctx->system_bg_name), "%s", snapshot.system_bg_name);
+        if (snapshot.system_highlight_name[0] != '\0') {
+          snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s",
+                   snapshot.system_highlight_name);
+        }
+      }
+    }
+
+    if (snapshot.os_name[0] != '\0') {
+      snprintf(ctx->os_name, sizeof(ctx->os_name), "%s", snapshot.os_name);
+    }
+    ctx->daily_year = snapshot.daily_year;
+    ctx->daily_yday = snapshot.daily_yday;
+    if (snapshot.daily_function[0] != '\0') {
+      snprintf(ctx->daily_function, sizeof(ctx->daily_function), "%s", snapshot.daily_function);
+    }
+    ctx->has_birthday = snapshot.has_birthday;
+    if (ctx->has_birthday) {
+      snprintf(ctx->birthday, sizeof(ctx->birthday), "%s", snapshot.birthday);
+    } else {
+      ctx->birthday[0] = '\0';
+    }
+
+    ctx->translation_caption_spacing = snapshot.translation_caption_spacing;
+    if (ctx->translation_caption_spacing > 8U) {
+      ctx->translation_caption_spacing = 8U;
+    }
+
+    if (snapshot.translation_master_explicit) {
+      ctx->translation_enabled = snapshot.translation_master_enabled;
+    }
+
+    ctx->output_translation_enabled = snapshot.output_translation_enabled;
+    snprintf(ctx->output_translation_language, sizeof(ctx->output_translation_language), "%s",
+             snapshot.output_translation_language);
+    ctx->input_translation_enabled = snapshot.input_translation_enabled;
+    snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s",
+             snapshot.input_translation_language);
+  }
+
+  (void)session_user_data_load(ctx);
+  session_force_dark_mode_foreground(ctx);
+}
+
+static bool session_argument_is_disable(const char *token) {
+  if (token == NULL) {
+    return false;
+  }
+
+  if (strcasecmp(token, "off") == 0 || strcasecmp(token, "none") == 0 || strcasecmp(token, "disable") == 0 ||
+      strcasecmp(token, "stop") == 0) {
+    return true;
+  }
+
+  return strcmp(token, "끄기") == 0 || strcmp(token, "オフ") == 0 || strcmp(token, "关") == 0 || strcmp(token, "выкл") == 0;
+}
+
+static void session_language_normalize(const char *input, char *normalized, size_t length) {
+  if (normalized == NULL || length == 0U) {
+    return;
+  }
+
+  normalized[0] = '\0';
+  if (input == NULL) {
+    return;
+  }
+
+  size_t out_idx = 0U;
+  for (size_t idx = 0U; input[idx] != '\0'; ++idx) {
+    unsigned char ch = (unsigned char)input[idx];
+    if (isspace(ch)) {
+      continue;
+    }
+
+    char lowered = (char)tolower(ch);
+    if (lowered == '_') {
+      lowered = '-';
+    }
+
+    if (out_idx + 1U >= length) {
+      break;
+    }
+
+    normalized[out_idx++] = lowered;
+  }
+
+  if (out_idx < length) {
+    normalized[out_idx] = '\0';
+  } else {
+    normalized[length - 1U] = '\0';
+  }
+}
+
+static bool session_language_equals(const char *lhs, const char *rhs) {
+  if (lhs == NULL || rhs == NULL) {
+    return false;
+  }
+
+  char normalized_lhs[SSH_CHATTER_LANG_NAME_LEN];
+  char normalized_rhs[SSH_CHATTER_LANG_NAME_LEN];
+  session_language_normalize(lhs, normalized_lhs, sizeof(normalized_lhs));
+  session_language_normalize(rhs, normalized_rhs, sizeof(normalized_rhs));
+
+  return strcmp(normalized_lhs, normalized_rhs) == 0;
+}
+
+typedef enum translation_job_type {
+  TRANSLATION_JOB_CAPTION = 0,
+  TRANSLATION_JOB_INPUT,
+  TRANSLATION_JOB_PRIVATE_MESSAGE,
+  TRANSLATION_JOB_ELIZA_CHAT,
+} translation_job_type_t;
+
+typedef struct translation_job {
+  translation_job_type_t type;
+  char target_language[SSH_CHATTER_LANG_NAME_LEN];
+  size_t placeholder_lines;
+  struct translation_job *next;
+  union {
+    struct {
+      char sanitized[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+      translation_placeholder_t placeholders[SSH_CHATTER_MAX_TRANSLATION_PLACEHOLDERS];
+      size_t placeholder_count;
+    } caption;
+    struct {
+      char original[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+    } input;
+    struct {
+      char original[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+      char target_name[SSH_CHATTER_USERNAME_LEN];
+      char to_target_label[SSH_CHATTER_MESSAGE_LIMIT];
+      char to_sender_label[SSH_CHATTER_MESSAGE_LIMIT];
+    } pm;
+    struct {
+      char prompt[SSH_CHATTER_MESSAGE_LIMIT];
+      char formatted_prompt[SSH_CHATTER_ELIZA_PROMPT_BUFFER];
+    } eliza;
+  } data;
+} translation_job_t;
+
+typedef struct translation_result {
+  translation_job_type_t type;
+  bool success;
+  size_t placeholder_lines;
+  char translated[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  char detected_language[SSH_CHATTER_LANG_NAME_LEN];
+  char original[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  char error_message[128];
+  char pm_target_name[SSH_CHATTER_USERNAME_LEN];
+  char pm_to_target_label[SSH_CHATTER_MESSAGE_LIMIT];
+  char pm_to_sender_label[SSH_CHATTER_MESSAGE_LIMIT];
+  struct translation_result *next;
+} translation_result_t;
+
+static translation_job_t *session_translation_job_alloc(void) {
+  translation_job_t *job = (translation_job_t *)GC_MALLOC(sizeof(*job));
+  if (job != NULL) {
+    memset(job, 0, sizeof(*job));
+  }
+  return job;
+}
+
+static translation_result_t *session_translation_result_alloc(void) {
+  translation_result_t *result = (translation_result_t *)GC_MALLOC(sizeof(*result));
+  if (result != NULL) {
+    memset(result, 0, sizeof(*result));
+  }
+  return result;
+}
+
+static bool session_translation_worker_ensure(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  if (!ctx->translation_mutex_initialized) {
+    if (pthread_mutex_init(&ctx->translation_mutex, NULL) != 0) {
+      return false;
+    }
+    ctx->translation_mutex_initialized = true;
+  }
+
+  if (!ctx->translation_cond_initialized) {
+    if (pthread_cond_init(&ctx->translation_cond, NULL) != 0) {
+      pthread_mutex_destroy(&ctx->translation_mutex);
+      ctx->translation_mutex_initialized = false;
+      return false;
+    }
+    ctx->translation_cond_initialized = true;
+  }
+
+  if (!ctx->translation_thread_started) {
+    ctx->translation_thread_stop = false;
+    if (pthread_create(&ctx->translation_thread, NULL, session_translation_worker, ctx) != 0) {
+      pthread_cond_destroy(&ctx->translation_cond);
+      ctx->translation_cond_initialized = false;
+      pthread_mutex_destroy(&ctx->translation_mutex);
+      ctx->translation_mutex_initialized = false;
+      return false;
+    }
+    ctx->translation_thread_started = true;
+  }
+
+  return true;
+}
+
+static void session_translation_clear_queue(session_ctx_t *ctx) {
+  if (ctx == NULL || !ctx->translation_mutex_initialized) {
+    return;
+  }
+
+  translation_job_t *pending = NULL;
+  translation_result_t *ready = NULL;
+
+  pthread_mutex_lock(&ctx->translation_mutex);
+  pending = ctx->translation_pending_head;
+  ctx->translation_pending_head = NULL;
+  ctx->translation_pending_tail = NULL;
+  ready = ctx->translation_ready_head;
+  ctx->translation_ready_head = NULL;
+  ctx->translation_ready_tail = NULL;
+  pthread_mutex_unlock(&ctx->translation_mutex);
+
+  while (pending != NULL) {
+    translation_job_t *next = pending->next;
+    pending = next;
+  }
+
+  while (ready != NULL) {
+    translation_result_t *next = ready->next;
+    ready = next;
+  }
+
+  ctx->translation_placeholder_active_lines = 0U;
+}
+
+static bool session_translation_queue_caption(session_ctx_t *ctx, const char *message, size_t placeholder_lines) {
+  if (ctx == NULL || message == NULL) {
+    return false;
+  }
+
+  char stripped[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  if (translation_strip_no_translate_prefix(message, stripped, sizeof(stripped))) {
+    return false;
+  }
+
+  if (!ctx->translation_enabled || !ctx->output_translation_enabled ||
+      ctx->output_translation_language[0] == '\0' || message[0] == '\0') {
+    return false;
+  }
+
+  if (!session_translation_worker_ensure(ctx)) {
+    return false;
+  }
+
+  translation_job_t *job = session_translation_job_alloc();
+  if (job == NULL) {
+    return false;
+  }
+
+  size_t placeholder_count = 0U;
+  if (!translation_prepare_text(message, job->data.caption.sanitized, sizeof(job->data.caption.sanitized),
+                                job->data.caption.placeholders, &placeholder_count)) {
+    return false;
+  }
+
+  if (job->data.caption.sanitized[0] == '\0') {
+    return false;
+  }
+
+  job->type = TRANSLATION_JOB_CAPTION;
+  job->data.caption.placeholder_count = placeholder_count;
+  job->placeholder_lines = placeholder_lines;
+  snprintf(job->target_language, sizeof(job->target_language), "%s", ctx->output_translation_language);
+
+  pthread_mutex_lock(&ctx->translation_mutex);
+  job->next = NULL;
+  if (ctx->translation_pending_tail != NULL) {
+    ctx->translation_pending_tail->next = job;
+  } else {
+    ctx->translation_pending_head = job;
+  }
+  ctx->translation_pending_tail = job;
+  pthread_cond_signal(&ctx->translation_cond);
+  pthread_mutex_unlock(&ctx->translation_mutex);
+
+  return true;
+}
+
+static void session_translation_reserve_placeholders(session_ctx_t *ctx, size_t placeholder_lines) {
+  if (ctx == NULL || !session_transport_active(ctx) || placeholder_lines == 0U) {
+    return;
+  }
+
+  for (size_t idx = 0U; idx < placeholder_lines; ++idx) {
+    session_write_rendered_line(ctx, "");
+  }
+
+  if (SIZE_MAX - ctx->translation_placeholder_active_lines < placeholder_lines) {
+    ctx->translation_placeholder_active_lines = SIZE_MAX;
+  } else {
+    ctx->translation_placeholder_active_lines += placeholder_lines;
+  }
+
+  if (ctx->history_scroll_position == 0U) {
+    session_refresh_input_line(ctx);
+  }
+}
+
+static bool session_translation_push_scope_override(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  bool previous = ctx->translation_manual_scope_override;
+  ctx->translation_manual_scope_override = true;
+  return previous;
+}
+
+static void session_translation_pop_scope_override(session_ctx_t *ctx, bool previous) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  ctx->translation_manual_scope_override = previous;
+}
+
+static void session_translation_queue_block(session_ctx_t *ctx, const char *text) {
+  if (ctx == NULL || text == NULL || text[0] == '\0') {
+    return;
+  }
+
+  if (translator_should_limit_to_chat_bbs() && !ctx->translation_manual_scope_override) {
+    return;
+  }
+
+  (void)session_translation_queue_caption(ctx, text, 0U);
+}
+
+static bool session_translation_queue_private_message(session_ctx_t *ctx, session_ctx_t *target, const char *message) {
+  if (ctx == NULL || target == NULL || message == NULL) {
+    return false;
+  }
+
+  if (!ctx->translation_enabled || !ctx->input_translation_enabled || ctx->input_translation_language[0] == '\0' ||
+      message[0] == '\0') {
+    return false;
+  }
+
+  if (!session_translation_worker_ensure(ctx)) {
+    return false;
+  }
+
+  translation_job_t *job = session_translation_job_alloc();
+  if (job == NULL) {
+    return false;
+  }
+
+  job->type = TRANSLATION_JOB_PRIVATE_MESSAGE;
+  job->placeholder_lines = 0U;
+  snprintf(job->target_language, sizeof(job->target_language), "%s", ctx->input_translation_language);
+  snprintf(job->data.pm.original, sizeof(job->data.pm.original), "%s", message);
+  snprintf(job->data.pm.target_name, sizeof(job->data.pm.target_name), "%s", target->user.name);
+  snprintf(job->data.pm.to_target_label, sizeof(job->data.pm.to_target_label), "%s -> you", ctx->user.name);
+  snprintf(job->data.pm.to_sender_label, sizeof(job->data.pm.to_sender_label), "you -> %s", target->user.name);
+
+  pthread_mutex_lock(&ctx->translation_mutex);
+  job->next = NULL;
+  if (ctx->translation_pending_tail != NULL) {
+    ctx->translation_pending_tail->next = job;
+  } else {
+    ctx->translation_pending_head = job;
+  }
+  ctx->translation_pending_tail = job;
+  pthread_cond_signal(&ctx->translation_cond);
+  pthread_mutex_unlock(&ctx->translation_mutex);
+
+  return true;
+}
+
+static bool session_translation_queue_input(session_ctx_t *ctx, const char *text) {
+  if (ctx == NULL || text == NULL || text[0] == '\0') {
+    return false;
+  }
+
+  if (!ctx->translation_enabled || !ctx->input_translation_enabled || ctx->input_translation_language[0] == '\0') {
+    return false;
+  }
+
+  if (!session_translation_worker_ensure(ctx)) {
+    return false;
+  }
+
+  translation_job_t *job = session_translation_job_alloc();
+  if (job == NULL) {
+    return false;
+  }
+
+  job->type = TRANSLATION_JOB_INPUT;
+  job->placeholder_lines = 0U;
+  snprintf(job->target_language, sizeof(job->target_language), "%s", ctx->input_translation_language);
+  snprintf(job->data.input.original, sizeof(job->data.input.original), "%s", text);
+
+  pthread_mutex_lock(&ctx->translation_mutex);
+  job->next = NULL;
+  if (ctx->translation_pending_tail != NULL) {
+    ctx->translation_pending_tail->next = job;
+  } else {
+    ctx->translation_pending_head = job;
+  }
+  ctx->translation_pending_tail = job;
+  pthread_cond_signal(&ctx->translation_cond);
+  pthread_mutex_unlock(&ctx->translation_mutex);
+
+  return true;
+}
+
+static void session_translation_normalize_output(char *text) {
+  if (text == NULL) {
+    return;
+  }
+
+  size_t length = strlen(text);
+  size_t idx = 0U;
+  while (idx < length) {
+    char ch = text[idx];
+    if ((ch == 'u' || ch == 'U') && idx + 4U < length && text[idx + 1U] == '0' && text[idx + 2U] == '0' &&
+        text[idx + 3U] == '3' && (text[idx + 4U] == 'c' || text[idx + 4U] == 'C' || text[idx + 4U] == 'e' ||
+                                   text[idx + 4U] == 'E')) {
+      char replacement = (text[idx + 4U] == 'c' || text[idx + 4U] == 'C') ? '<' : '>';
+      size_t remove_start = idx;
+      if (remove_start > 0U && text[remove_start - 1U] == '\\') {
+        --remove_start;
+      }
+
+      size_t remove_end = idx + 5U;
+      size_t removed = remove_end - remove_start;
+      text[remove_start] = replacement;
+      memmove(text + remove_start + 1U, text + remove_end, length - remove_end + 1U);
+      length -= (removed - 1U);
+      idx = remove_start + 1U;
+      continue;
+    }
+
+    ++idx;
+  }
+}
+
+static bool host_motd_contains_translation_notice(const char *motd_text) {
+  if (motd_text == NULL) {
+    return false;
+  }
+
+  const size_t notice_length = strlen(kTranslationQuotaNotice);
+  const char *cursor = motd_text;
+  while (*cursor != '\0') {
+    size_t skip = host_column_reset_sequence_length(cursor);
+    if (skip > 0U) {
+      cursor += skip;
+      continue;
+    }
+    if (*cursor == '\r' || *cursor == '\n') {
+      ++cursor;
+      continue;
+    }
+    if (strncmp(cursor, kTranslationQuotaNotice, notice_length) == 0) {
+      return true;
+    }
+    while (*cursor != '\0' && *cursor != '\n') {
+      ++cursor;
+    }
+  }
+
+  return false;
+}
+
+static void host_prepend_translation_notice_in_memory(host_t *host, const char *existing_motd) {
+  if (host == NULL) {
+    return;
+  }
+
+  char updated[sizeof(host->motd)];
+  if (existing_motd != NULL && existing_motd[0] != '\0') {
+    snprintf(updated, sizeof(updated), "%s\n\n%s", kTranslationQuotaNotice, existing_motd);
+  } else {
+    snprintf(updated, sizeof(updated), "%s\n", kTranslationQuotaNotice);
+  }
+
+  pthread_mutex_lock(&host->lock);
+  snprintf(host->motd_base, sizeof(host->motd_base), "%s", updated);
+  host_refresh_motd_locked(host);
+  pthread_mutex_unlock(&host->lock);
+}
+
+static void host_handle_translation_quota_exhausted(host_t *host) {
+  if (host == NULL) {
+    return;
+  }
+
+  bool already_marked = false;
+  char motd_path[PATH_MAX];
+  motd_path[0] = '\0';
+  char motd_snapshot[sizeof(host->motd_base)];
+  motd_snapshot[0] = '\0';
+
+  pthread_mutex_lock(&host->lock);
+  if (host->translation_quota_exhausted) {
+    already_marked = true;
+  } else {
+    host->translation_quota_exhausted = true;
+    if (host->motd_has_file && host->motd_path[0] != '\0') {
+      snprintf(motd_path, sizeof(motd_path), "%s", host->motd_path);
+    }
+    snprintf(motd_snapshot, sizeof(motd_snapshot), "%s", host->motd_base);
+  }
+  pthread_mutex_unlock(&host->lock);
+
+  if (already_marked) {
+    return;
+  }
+
+  if (motd_path[0] == '\0') {
+    if (host_motd_contains_translation_notice(motd_snapshot)) {
+      host_refresh_motd(host);
+      return;
+    }
+    host_prepend_translation_notice_in_memory(host, motd_snapshot);
+    return;
+  }
+
+  char existing[8192];
+  existing[0] = '\0';
+  size_t existing_len = 0U;
+
+  FILE *motd_file = fopen(motd_path, "rb");
+  if (motd_file != NULL) {
+    existing_len = fread(existing, 1U, sizeof(existing) - 1U, motd_file);
+    if (ferror(motd_file)) {
+      const int read_error = errno;
+      humanized_log_error("host", "failed to read motd file", read_error);
+      existing_len = 0U;
+      existing[0] = '\0';
+    }
+    existing[existing_len] = '\0';
+    if (fclose(motd_file) != 0) {
+      const int close_error = errno;
+      humanized_log_error("host", "failed to close motd file", close_error);
+    }
+  } else {
+    host_prepend_translation_notice_in_memory(host, motd_snapshot);
+    return;
+  }
+
+  const char *existing_start = existing;
+  while (*existing_start == '\n' || *existing_start == '\r') {
+    ++existing_start;
+  }
+
+  if (strncmp(existing_start, kTranslationQuotaNotice, strlen(kTranslationQuotaNotice)) == 0) {
+    (void)host_try_load_motd_from_path(host, motd_path);
+    return;
+  }
+
+  FILE *out = fopen(motd_path, "wb");
+  if (out == NULL) {
+    const int write_error = errno != 0 ? errno : EIO;
+    humanized_log_error("host", "failed to update motd file", write_error);
+    host_prepend_translation_notice_in_memory(host, motd_snapshot);
+    return;
+  }
+
+  (void)fprintf(out, "%s\n", kTranslationQuotaNotice);
+  if (existing[0] != '\0') {
+    fputc('\n', out);
+    (void)fwrite(existing, 1U, existing_len, out);
+  }
+
+  if (fclose(out) != 0) {
+    const int close_error = errno;
+    humanized_log_error("host", "failed to close motd file", close_error);
+  }
+
+  (void)host_try_load_motd_from_path(host, motd_path);
+}
+
+static void session_handle_translation_quota_exhausted(session_ctx_t *ctx, const char *error_detail) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  host_handle_translation_quota_exhausted(ctx->owner);
+
+  const bool was_enabled = ctx->translation_enabled || ctx->output_translation_enabled ||
+                           ctx->input_translation_enabled;
+  ctx->translation_enabled = false;
+  ctx->output_translation_enabled = false;
+  ctx->input_translation_enabled = false;
+
+  if (was_enabled) {
+    host_store_translation_preferences(ctx->owner, ctx);
+  }
+
+  if (!ctx->translation_quota_notified) {
+    char message[256];
+    if (error_detail != NULL && error_detail[0] != '\0') {
+      (void)snprintf(message, sizeof(message), "%s (%s)", kTranslationQuotaSystemMessage, error_detail);
+    } else {
+      (void)snprintf(message, sizeof(message), "%s", kTranslationQuotaSystemMessage);
+    }
+    session_send_system_line(ctx, message);
+    ctx->translation_quota_notified = true;
+  }
+}
+
+static void session_translation_flush_ready(session_ctx_t *ctx) {
+  if (ctx == NULL || !ctx->translation_mutex_initialized) {
+    return;
+  }
+
+  translation_result_t *ready = NULL;
+
+  pthread_mutex_lock(&ctx->translation_mutex);
+  ready = ctx->translation_ready_head;
+  ctx->translation_ready_head = NULL;
+  ctx->translation_ready_tail = NULL;
+  pthread_mutex_unlock(&ctx->translation_mutex);
+
+  if (ready == NULL) {
+    return;
+  }
+
+  const bool translation_active = ctx->translation_enabled && ctx->output_translation_enabled &&
+                                  ctx->output_translation_language[0] != '\0';
+
+  bool refreshed = false;
+  while (ready != NULL) {
+    translation_result_t *next = ready->next;
+    if (ready->type == TRANSLATION_JOB_INPUT) {
+      if (ready->success) {
+        if (ready->detected_language[0] != '\0') {
+          snprintf(ctx->last_detected_input_language, sizeof(ctx->last_detected_input_language), "%s",
+                   ready->detected_language);
+        }
+        session_deliver_outgoing_message(ctx, ready->translated, false);
+      } else {
+        const char *error_message = ready->error_message[0] != '\0'
+                                        ? ready->error_message
+                                        : "Translation failed; sending your original message.";
+        session_send_system_line(ctx, error_message);
+        session_deliver_outgoing_message(ctx, ready->original, false);
+      }
+      refreshed = true;
+      ready = next;
+      continue;
+    }
+
+    if (ready->type == TRANSLATION_JOB_PRIVATE_MESSAGE) {
+      session_ctx_t *target = NULL;
+      if (ctx->owner != NULL && ready->pm_target_name[0] != '\0') {
+        target = chat_room_find_user(&ctx->owner->room, ready->pm_target_name);
+      }
+
+      if (ready->success) {
+        if (target != NULL) {
+          session_send_private_message_line(target, ctx, ready->pm_to_target_label, ready->translated);
+        } else if (ready->pm_target_name[0] != '\0') {
+          char notice[SSH_CHATTER_MESSAGE_LIMIT];
+          snprintf(notice, sizeof(notice), "User '%s' disconnected before your private message was delivered.",
+                   ready->pm_target_name);
+          session_send_system_line(ctx, notice);
+        }
+        session_send_private_message_line(ctx, ctx, ready->pm_to_sender_label, ready->translated);
+      } else {
+        const char *error_message = ready->error_message[0] != '\0'
+                                        ? ready->error_message
+                                        : "Translation failed; sending your original message.";
+        session_send_system_line(ctx, error_message);
+        if (target != NULL) {
+          session_send_private_message_line(target, ctx, ready->pm_to_target_label, ready->original);
+        } else if (ready->pm_target_name[0] != '\0') {
+          char notice[SSH_CHATTER_MESSAGE_LIMIT];
+          snprintf(notice, sizeof(notice), "User '%s' disconnected before your private message was delivered.",
+                   ready->pm_target_name);
+          session_send_system_line(ctx, notice);
+        }
+        session_send_private_message_line(ctx, ctx, ready->pm_to_sender_label, ready->original);
+      }
+
+      refreshed = true;
+      ready = next;
+      continue;
+    }
+
+    if (ready->type == TRANSLATION_JOB_ELIZA_CHAT) {
+      if (ready->success) {
+        if (ctx->owner != NULL) {
+          host_eliza_memory_store(ctx->owner, ready->original, ready->translated);
+          clock_gettime(CLOCK_MONOTONIC, &ctx->owner->eliza_last_action);
+        }
+
+        session_ctx_t palette = {0};
+        if (ctx->owner != NULL) {
+          palette.user_color_code = ctx->owner->user_theme.userColor;
+          palette.user_highlight_code = ctx->owner->user_theme.highlight;
+          palette.user_is_bold = ctx->owner->user_theme.isBold;
+        }
+
+        session_send_private_message_line(ctx, &palette, "eliza -> you", ready->translated);
+
+        if (ctx->owner != NULL) {
+          ctx->last_message_time = ctx->owner->eliza_last_action;
+          ctx->has_last_message_time = true;
+        }
+
+        printf("[eliza-chat] %s -> eliza: %s\n", ctx->user.name, ready->original);
+        printf("[eliza-chat] eliza -> %s: %s\n", ctx->user.name, ready->translated);
+      } else {
+        const char *error_message =
+            ready->error_message[0] != '\0' ? ready->error_message : "eliza can't reply right now. Try again in a moment.";
+        session_send_system_line(ctx, error_message);
+      }
+
+      refreshed = true;
+      ready = next;
+      continue;
+    }
+
+    size_t placeholder_lines = ready->placeholder_lines;
+    size_t move_up = 0U;
+    if (placeholder_lines > 0U && ctx->translation_placeholder_active_lines >= placeholder_lines) {
+      size_t remaining_after = ctx->translation_placeholder_active_lines - placeholder_lines;
+      move_up = remaining_after + 1U;
+    }
+
+    if (translation_active) {
+      const char *body = ready->translated;
+      if (body[0] == '\0') {
+        body = "translation unavailable.";
+      }
+
+      const char *line_cursor = body;
+      size_t line_index = 0U;
+      while (line_cursor != NULL) {
+        const char *line_end = strchr(line_cursor, '\n');
+        size_t line_length = (line_end != NULL) ? (size_t)(line_end - line_cursor) : strlen(line_cursor);
+        if (line_length >= SSH_CHATTER_TRANSLATION_WORKING_LEN) {
+          line_length = SSH_CHATTER_TRANSLATION_WORKING_LEN - 1U;
+        }
+
+        char line_fragment[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+        memcpy(line_fragment, line_cursor, line_length);
+        line_fragment[line_length] = '\0';
+
+        char annotated[SSH_CHATTER_TRANSLATION_WORKING_LEN + 64U];
+        snprintf(annotated, sizeof(annotated), "    \342\206\263 %s", line_fragment);
+        session_render_caption_with_offset(ctx, annotated, line_index == 0U ? move_up : 0U);
+        refreshed = true;
+
+        if (line_end == NULL) {
+          break;
+        }
+
+        line_cursor = line_end + 1;
+        ++line_index;
+      }
+    }
+
+    if (placeholder_lines > 0U) {
+      if (ctx->translation_placeholder_active_lines >= placeholder_lines) {
+        ctx->translation_placeholder_active_lines -= placeholder_lines;
+      } else {
+        ctx->translation_placeholder_active_lines = 0U;
+      }
+    }
+
+    ready = next;
+  }
+
+  if (refreshed && ctx->history_scroll_position == 0U) {
+    session_refresh_input_line(ctx);
+  }
+}
+
+static void session_translation_worker_shutdown(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (ctx->translation_mutex_initialized) {
+    pthread_mutex_lock(&ctx->translation_mutex);
+    if (ctx->translation_thread_started) {
+      ctx->translation_thread_stop = true;
+      pthread_cond_broadcast(&ctx->translation_cond);
+      pthread_mutex_unlock(&ctx->translation_mutex);
+      pthread_join(ctx->translation_thread, NULL);
+      ctx->translation_thread_started = false;
+    } else {
+      pthread_mutex_unlock(&ctx->translation_mutex);
+    }
+  }
+
+  session_translation_clear_queue(ctx);
+
+  if (ctx->translation_cond_initialized) {
+    pthread_cond_destroy(&ctx->translation_cond);
+    ctx->translation_cond_initialized = false;
+  }
+  if (ctx->translation_mutex_initialized) {
+    pthread_mutex_destroy(&ctx->translation_mutex);
+    ctx->translation_mutex_initialized = false;
+  }
+
+  ctx->translation_thread_stop = false;
+}
+
+static void session_translation_publish_result(session_ctx_t *ctx, const translation_job_t *job,
+                                               const char *payload, const char *detected_language,
+                                               const char *error_message, bool success) {
+  if (ctx == NULL || job == NULL) {
+    return;
+  }
+
+  translation_result_t *result = session_translation_result_alloc();
+  if (result == NULL) {
+    return;
+  }
+
+  result->type = job->type;
+  result->success = success;
+  result->placeholder_lines = job->placeholder_lines;
+
+  if (job->type == TRANSLATION_JOB_INPUT) {
+    snprintf(result->original, sizeof(result->original), "%s", job->data.input.original);
+    if (payload != NULL) {
+      snprintf(result->translated, sizeof(result->translated), "%s", payload);
+    } else {
+      result->translated[0] = '\0';
+    }
+    if (detected_language != NULL) {
+      snprintf(result->detected_language, sizeof(result->detected_language), "%s", detected_language);
+    } else {
+      result->detected_language[0] = '\0';
+    }
+    if (error_message != NULL) {
+      snprintf(result->error_message, sizeof(result->error_message), "%s", error_message);
+    } else {
+      result->error_message[0] = '\0';
+    }
+    session_translation_normalize_output(result->translated);
+  } else if (job->type == TRANSLATION_JOB_PRIVATE_MESSAGE) {
+    snprintf(result->original, sizeof(result->original), "%s", job->data.pm.original);
+    if (payload != NULL) {
+      snprintf(result->translated, sizeof(result->translated), "%s", payload);
+    } else {
+      result->translated[0] = '\0';
+    }
+    if (error_message != NULL) {
+      snprintf(result->error_message, sizeof(result->error_message), "%s", error_message);
+    } else {
+      result->error_message[0] = '\0';
+    }
+    result->detected_language[0] = '\0';
+    snprintf(result->pm_target_name, sizeof(result->pm_target_name), "%s", job->data.pm.target_name);
+    snprintf(result->pm_to_target_label, sizeof(result->pm_to_target_label), "%s", job->data.pm.to_target_label);
+    snprintf(result->pm_to_sender_label, sizeof(result->pm_to_sender_label), "%s", job->data.pm.to_sender_label);
+    session_translation_normalize_output(result->translated);
+  } else if (job->type == TRANSLATION_JOB_ELIZA_CHAT) {
+    snprintf(result->original, sizeof(result->original), "%s", job->data.eliza.prompt);
+    if (payload != NULL) {
+      snprintf(result->translated, sizeof(result->translated), "%s", payload);
+    } else {
+      result->translated[0] = '\0';
+    }
+    if (error_message != NULL) {
+      snprintf(result->error_message, sizeof(result->error_message), "%s", error_message);
+    } else {
+      result->error_message[0] = '\0';
+    }
+    result->detected_language[0] = '\0';
+    session_translation_normalize_output(result->translated);
+  } else {
+    const char *message = payload;
+    if (message == NULL || message[0] == '\0') {
+      if (success) {
+        message = "";
+      } else {
+        message = "⚠️ translation unavailable.";
+      }
+    }
+
+    snprintf(result->translated, sizeof(result->translated), "%s", message);
+    session_translation_normalize_output(result->translated);
+    result->detected_language[0] = '\0';
+    result->error_message[0] = '\0';
+    result->original[0] = '\0';
+  }
+
+  pthread_mutex_lock(&ctx->translation_mutex);
+  result->next = NULL;
+  if (ctx->translation_ready_tail != NULL) {
+    ctx->translation_ready_tail->next = result;
+  } else {
+    ctx->translation_ready_head = result;
+  }
+  ctx->translation_ready_tail = result;
+  pthread_mutex_unlock(&ctx->translation_mutex);
+}
+
+static void session_translation_process_single_job(session_ctx_t *ctx, translation_job_t *job) {
+  if (ctx == NULL || job == NULL) {
+    return;
+  }
+
+  if (ctx->translation_thread_stop) {
+    return;
+  }
+
+  if (job->type == TRANSLATION_JOB_INPUT || job->type == TRANSLATION_JOB_PRIVATE_MESSAGE) {
+    char translated_body[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+    char detected_language[SSH_CHATTER_LANG_NAME_LEN];
+    translated_body[0] = '\0';
+    detected_language[0] = '\0';
+
+    const bool is_private_message = (job->type == TRANSLATION_JOB_PRIVATE_MESSAGE);
+    const char *source_text =
+        is_private_message ? job->data.pm.original : job->data.input.original;
+    char *detected_target = is_private_message ? NULL : detected_language;
+    size_t detected_length = is_private_message ? 0U : sizeof(detected_language);
+
+    if (translator_translate_with_cancel(source_text, job->target_language, translated_body, sizeof(translated_body),
+                                         detected_target, detected_length, &ctx->translation_thread_stop)) {
+      if (ctx->translation_thread_stop) {
+        return;
+      }
+      session_translation_publish_result(ctx, job, translated_body,
+                                         is_private_message ? NULL : detected_language, NULL, true);
+    } else {
+      const char *error = translator_last_error();
+      char message[128];
+      const bool quota_failure = translator_last_error_was_quota();
+      if (ctx->translation_thread_stop) {
+        return;
+      }
+      if (quota_failure) {
+        if (error != NULL && error[0] != '\0') {
+          snprintf(message, sizeof(message),
+                   "⚠️ translation unavailable (quota exhausted: %s); sending your original message.", error);
+        } else {
+          snprintf(message, sizeof(message),
+                   "⚠️ translation unavailable (quota exhausted); sending your original message.");
+        }
+        session_handle_translation_quota_exhausted(ctx, error);
+      } else if (error != NULL && error[0] != '\0') {
+        snprintf(message, sizeof(message), "Translation failed (%s); sending your original message.", error);
+      } else {
+        snprintf(message, sizeof(message), "Translation failed; sending your original message.");
+      }
+      if (ctx->translation_thread_stop) {
+        return;
+      }
+      session_translation_publish_result(ctx, job, NULL, NULL, message, false);
+    }
+    return;
+  }
+
+  if (job->type == TRANSLATION_JOB_ELIZA_CHAT) {
+    if (ctx->translation_thread_stop) {
+      return;
+    }
+
+    char reply[SSH_CHATTER_MESSAGE_LIMIT];
+    reply[0] = '\0';
+    if (translator_eliza_respond(job->data.eliza.formatted_prompt, reply, sizeof(reply))) {
+      trim_whitespace_inplace(reply);
+      if (ctx->translation_thread_stop) {
+        return;
+      }
+      session_translation_publish_result(ctx, job, reply, NULL, NULL, true);
+    } else {
+      const char *error = translator_last_error();
+      char message[128];
+      if (error != NULL && error[0] != '\0') {
+        snprintf(message, sizeof(message), "eliza can't reply right now (%s).", error);
+      } else {
+        snprintf(message, sizeof(message), "eliza can't reply right now. Try again in a moment.");
+      }
+      if (ctx->translation_thread_stop) {
+        return;
+      }
+      session_translation_publish_result(ctx, job, NULL, NULL, message, false);
+    }
+    return;
+  }
+
+  char translated_body[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  char restored[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  translated_body[0] = '\0';
+  restored[0] = '\0';
+
+  bool success = false;
+  char failure_message[128];
+  failure_message[0] = '\0';
+  const int max_attempts = 3;
+  for (int attempt = 0; attempt < max_attempts && !success; ++attempt) {
+    translated_body[0] = '\0';
+
+    if (ctx->translation_thread_stop) {
+      return;
+    }
+
+    if (!translator_translate_with_cancel(job->data.caption.sanitized, job->target_language, translated_body,
+                                          sizeof(translated_body), NULL, 0U, &ctx->translation_thread_stop)) {
+      const char *error = translator_last_error();
+      const bool quota_failure = translator_last_error_was_quota();
+      if (ctx->translation_thread_stop) {
+        return;
+      }
+      if (quota_failure) {
+        if (error != NULL && error[0] != '\0') {
+          snprintf(failure_message, sizeof(failure_message),
+                   "⚠️ translation unavailable (quota exhausted: %s)", error);
+        } else {
+          snprintf(failure_message, sizeof(failure_message), "⚠️ translation unavailable (quota exhausted).");
+        }
+        session_handle_translation_quota_exhausted(ctx, error);
+        break;
+      }
+
+      if (error != NULL && error[0] != '\0') {
+        snprintf(failure_message, sizeof(failure_message), "⚠️ translation failed: %s", error);
+      } else {
+        snprintf(failure_message, sizeof(failure_message), "⚠️ translation failed.");
+      }
+
+      if (attempt + 1 < max_attempts) {
+        struct timespec retry_delay = {.tv_sec = 1, .tv_nsec = 0L};
+        nanosleep(&retry_delay, NULL);
+      }
+      continue;
+    }
+
+    if (!translation_restore_text(translated_body, restored, sizeof(restored), job->data.caption.placeholders,
+                                  job->data.caption.placeholder_count)) {
+      snprintf(failure_message, sizeof(failure_message), "⚠️ translation post-processing failed.");
+      break;
+    }
+
+    success = true;
+    failure_message[0] = '\0';
+  }
+
+  if (!success && failure_message[0] == '\0') {
+    snprintf(failure_message, sizeof(failure_message), "⚠️ translation unavailable.");
+  }
+
+  if (ctx->translation_thread_stop) {
+    return;
+  }
+
+  if (success) {
+    session_translation_publish_result(ctx, job, restored, NULL, NULL, true);
+  } else {
+    session_translation_publish_result(ctx, job, failure_message, NULL, NULL, false);
+  }
+
+}
+
+static bool session_translation_process_batch(session_ctx_t *ctx, translation_job_t **jobs, size_t job_count) {
+  if (ctx == NULL || jobs == NULL || job_count == 0U) {
+    return false;
+  }
+
+  if (jobs[0] == NULL || jobs[0]->type != TRANSLATION_JOB_CAPTION) {
+    return false;
+  }
+
+  if (ctx->translation_thread_stop) {
+    for (size_t idx = 0U; idx < job_count; ++idx) {
+      if (jobs[idx] != NULL) {
+        jobs[idx] = NULL;
+      }
+    }
+    return true;
+  }
+
+  char *combined = GC_CALLOC(SSH_CHATTER_TRANSLATION_BATCH_BUFFER, sizeof(char));
+  char *translated = GC_CALLOC(SSH_CHATTER_TRANSLATION_BATCH_BUFFER, sizeof(char));
+  if (combined == NULL || translated == NULL) {
+    return false;
+  }
+
+  size_t offset = 0U;
+  for (size_t idx = 0U; idx < job_count; ++idx) {
+    if (ctx->translation_thread_stop) {
+      for (size_t release = idx; release < job_count; ++release) {
+        if (jobs[release] != NULL) {
+          jobs[release] = NULL;
+        }
+      }
+      return true;
+    }
+    if (jobs[idx] == NULL || jobs[idx]->type != TRANSLATION_JOB_CAPTION) {
+      return false;
+    }
+
+    char marker[32];
+    int marker_len = snprintf(marker, sizeof(marker), "[[SEG%02zu]]\n", idx);
+    if (marker_len < 0) {
+      return false;
+    }
+
+    size_t marker_size = (size_t)marker_len;
+    size_t text_len = strlen(jobs[idx]->data.caption.sanitized);
+    if (offset + marker_size + text_len + 1U > SSH_CHATTER_TRANSLATION_BATCH_BUFFER) {
+      return false;
+    }
+
+    memcpy(combined + offset, marker, marker_size);
+    offset += marker_size;
+    memcpy(combined + offset, jobs[idx]->data.caption.sanitized, text_len);
+    offset += text_len;
+    combined[offset++] = '\n';
+  }
+  combined[offset] = '\0';
+
+  if (!translator_translate_with_cancel(combined, jobs[0]->target_language, translated,
+                                        SSH_CHATTER_TRANSLATION_BATCH_BUFFER, NULL, 0U,
+                                        &ctx->translation_thread_stop)) {
+    if (ctx->translation_thread_stop) {
+      for (size_t idx = 0U; idx < job_count; ++idx) {
+        if (jobs[idx] != NULL) {
+          jobs[idx] = NULL;
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
+  if (ctx->translation_thread_stop) {
+    for (size_t idx = 0U; idx < job_count; ++idx) {
+      if (jobs[idx] != NULL) {
+        jobs[idx] = NULL;
+      }
+    }
+    return true;
+  }
+
+  char *segment_starts[SSH_CHATTER_TRANSLATION_BATCH_MAX] = {0};
+  char *segment_ends[SSH_CHATTER_TRANSLATION_BATCH_MAX] = {0};
+
+  char *search_cursor = translated;
+  for (size_t idx = 0U; idx < job_count; ++idx) {
+    char marker[32];
+    int marker_len = snprintf(marker, sizeof(marker), "[[SEG%02zu]]", idx);
+    if (marker_len < 0) {
+      return false;
+    }
+
+    char *marker_pos = strstr(search_cursor, marker);
+    if (marker_pos == NULL) {
+      return false;
+    }
+
+    char *start = marker_pos + (size_t)marker_len;
+    while (*start == '\r' || *start == '\n') {
+      ++start;
+    }
+
+    segment_starts[idx] = start;
+    search_cursor = start;
+  }
+
+  for (size_t idx = 0U; idx + 1U < job_count; ++idx) {
+    char marker[32];
+    int marker_len = snprintf(marker, sizeof(marker), "[[SEG%02zu]]", idx + 1U);
+    if (marker_len < 0) {
+      return false;
+    }
+
+    char *next_pos = strstr(segment_starts[idx], marker);
+    if (next_pos == NULL) {
+      return false;
+    }
+
+    char *end = next_pos;
+    while (end > segment_starts[idx] && (end[-1] == '\r' || end[-1] == '\n')) {
+      --end;
+    }
+    segment_ends[idx] = end;
+  }
+
+  char *last_end = translated + strlen(translated);
+  while (last_end > segment_starts[job_count - 1U] && (last_end[-1] == '\r' || last_end[-1] == '\n')) {
+    --last_end;
+  }
+  segment_ends[job_count - 1U] = last_end;
+
+  char restored_segments[SSH_CHATTER_TRANSLATION_BATCH_MAX][SSH_CHATTER_TRANSLATION_WORKING_LEN];
+  for (size_t idx = 0U; idx < job_count; ++idx) {
+    if (segment_starts[idx] == NULL || segment_ends[idx] == NULL || segment_ends[idx] < segment_starts[idx]) {
+      return false;
+    }
+
+    size_t segment_len = (size_t)(segment_ends[idx] - segment_starts[idx]);
+    if (segment_len + 1U > SSH_CHATTER_TRANSLATION_WORKING_LEN) {
+      return false;
+    }
+
+    char segment_buffer[SSH_CHATTER_TRANSLATION_WORKING_LEN];
+    memcpy(segment_buffer, segment_starts[idx], segment_len);
+    segment_buffer[segment_len] = '\0';
+
+    if (!translation_restore_text(segment_buffer, restored_segments[idx], sizeof(restored_segments[idx]),
+                                  jobs[idx]->data.caption.placeholders, jobs[idx]->data.caption.placeholder_count)) {
+      return false;
+    }
+  }
+
+  if (ctx->translation_thread_stop) {
+    for (size_t idx = 0U; idx < job_count; ++idx) {
+      if (jobs[idx] != NULL) {
+        jobs[idx] = NULL;
+      }
+    }
+    return true;
+  }
+
+  for (size_t idx = 0U; idx < job_count; ++idx) {
+    session_translation_publish_result(ctx, jobs[idx], restored_segments[idx], NULL, NULL, true);
+  }
+
+  return true;
+}
+
+static void *session_translation_worker(void *arg) {
+  session_ctx_t *ctx = (session_ctx_t *)arg;
+  if (ctx == NULL) {
+    return NULL;
+  }
+
+  for (;;) {
+    translation_job_t *batch[SSH_CHATTER_TRANSLATION_BATCH_MAX] = {0};
+    size_t batch_count = 0U;
+
+    pthread_mutex_lock(&ctx->translation_mutex);
+    while (!ctx->translation_thread_stop && ctx->translation_pending_head == NULL) {
+      pthread_cond_wait(&ctx->translation_cond, &ctx->translation_mutex);
+    }
+
+    if (ctx->translation_thread_stop) {
+      pthread_mutex_unlock(&ctx->translation_mutex);
+      break;
+    }
+
+    translation_job_t *job = ctx->translation_pending_head;
+    if (job != NULL) {
+      ctx->translation_pending_head = job->next;
+      if (ctx->translation_pending_head == NULL) {
+        ctx->translation_pending_tail = NULL;
+      }
+      job->next = NULL;
+      batch[batch_count++] = job;
+    }
+    pthread_mutex_unlock(&ctx->translation_mutex);
+
+    if (batch_count == 0U) {
+      continue;
+    }
+
+    if (batch[0]->type == TRANSLATION_JOB_INPUT) {
+      session_translation_process_single_job(ctx, batch[0]);
+      continue;
+    }
+
+    size_t estimate = strlen(batch[0]->data.caption.sanitized) + SSH_CHATTER_TRANSLATION_SEGMENT_GUARD;
+
+    if (batch_count == 1U) {
+      bool delay_needed = false;
+      pthread_mutex_lock(&ctx->translation_mutex);
+      if (!ctx->translation_thread_stop && ctx->translation_pending_head == NULL) {
+        delay_needed = true;
+      }
+      pthread_mutex_unlock(&ctx->translation_mutex);
+
+      if (delay_needed) {
+        struct timespec aggregation_delay = {.tv_sec = 0, .tv_nsec = SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS};
+        nanosleep(&aggregation_delay, NULL);
+      }
+    }
+
+    pthread_mutex_lock(&ctx->translation_mutex);
+    while (batch_count < SSH_CHATTER_TRANSLATION_BATCH_MAX && ctx->translation_pending_head != NULL) {
+      translation_job_t *candidate = ctx->translation_pending_head;
+      if (candidate == NULL) {
+        break;
+      }
+
+      if (candidate->type != TRANSLATION_JOB_CAPTION) {
+        break;
+      }
+
+      if (strcmp(candidate->target_language, batch[0]->target_language) != 0) {
+        break;
+      }
+
+      size_t candidate_len = strlen(candidate->data.caption.sanitized) + SSH_CHATTER_TRANSLATION_SEGMENT_GUARD;
+      if (estimate + candidate_len >= SSH_CHATTER_TRANSLATION_BATCH_BUFFER) {
+        break;
+      }
+
+      ctx->translation_pending_head = candidate->next;
+      if (ctx->translation_pending_head == NULL) {
+        ctx->translation_pending_tail = NULL;
+      }
+      candidate->next = NULL;
+      batch[batch_count++] = candidate;
+      estimate += candidate_len;
+    }
+    pthread_mutex_unlock(&ctx->translation_mutex);
+
+    bool processed = false;
+    if (batch_count > 1U) {
+      processed = session_translation_process_batch(ctx, batch, batch_count);
+    }
+
+    if (!processed) {
+      for (size_t idx = 0U; idx < batch_count; ++idx) {
+        session_translation_process_single_job(ctx, batch[idx]);
+      }
+    }
+  }
+
+  return NULL;
+}
+
+static void session_channel_log_write_failure(session_ctx_t *ctx, const char *reason) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  if (reason == NULL || reason[0] == '\0') {
+    reason = "transport write failure";
+  }
+
+  const char *username = ctx->user.name[0] != '\0' ? ctx->user.name : "unknown";
+  printf("[session] transport write failure for %s: %s\n", username, reason);
+}
+
+static bool session_telnet_write_block(session_ctx_t *ctx, const unsigned char *data, size_t length) {
+  if (ctx == NULL || data == NULL || length == 0U || ctx->telnet_fd < 0) {
+    return true;
+  }
+
+  while (length > 0U) {
+    size_t chunk = length;
+    if (chunk > SSH_CHATTER_CHANNEL_WRITE_CHUNK) {
+      chunk = SSH_CHATTER_CHANNEL_WRITE_CHUNK;
+    }
+
+    unsigned char buffer[SSH_CHATTER_CHANNEL_WRITE_CHUNK * 2U];
+    size_t expanded = 0U;
+    for (size_t idx = 0U; idx < chunk; ++idx) {
+      unsigned char byte = data[idx];
+      buffer[expanded++] = byte;
+      if (byte == TELNET_IAC) {
+        buffer[expanded++] = TELNET_IAC;
+      }
+    }
+
+    size_t offset = 0U;
+    while (offset < expanded) {
+      ssize_t written = send(ctx->telnet_fd, buffer + offset, expanded - offset, MSG_NOSIGNAL);
+      if (written < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        return false;
+      }
+      offset += (size_t)written;
+    }
+
+    data += chunk;
+    length -= chunk;
+  }
+
+  return true;
+}
+
+static bool session_channel_wait_writable(session_ctx_t *ctx, int timeout_ms) {
+  if (ctx == NULL) {
+    return false;
+  }
+
+  if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+    if (ctx->telnet_fd < 0) {
+      return false;
+    }
+
+    struct pollfd pfd = {
+        .fd = ctx->telnet_fd,
+        .events = POLLOUT,
+        .revents = 0,
+    };
+
+    for (;;) {
+      int result = poll(&pfd, 1, timeout_ms);
+      if (result < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        return false;
+      }
+      if (result == 0) {
+        return false;
+      }
+      if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        return false;
+      }
+      if (pfd.revents & POLLOUT) {
+        return true;
+      }
+      return false;
+    }
+  }
+
+  if (ctx->session == NULL) {
+    return false;
+  }
+
+  int fd = ssh_get_fd(ctx->session);
+  if (fd < 0) {
+    struct timespec backoff = {
+        .tv_sec = 0,
+        .tv_nsec = SSH_CHATTER_CHANNEL_WRITE_BACKOFF_NS,
+    };
+    nanosleep(&backoff, NULL);
+    return true;
+  }
+
+  struct pollfd pfd = {
+      .fd = fd,
+      .events = POLLOUT,
+      .revents = 0,
+  };
+
+  for (;;) {
+    int result = poll(&pfd, 1, timeout_ms);
+    if (result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return false;
+    }
+    if (result == 0) {
+      return false;
+    }
+    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+      return false;
+    }
+    if (pfd.revents & POLLOUT) {
+      return true;
+    }
+    return false;
+  }
+}
+
+static bool session_channel_write_all(session_ctx_t *ctx, const void *data, size_t length) {
+  if (ctx == NULL || data == NULL || length == 0U || !session_transport_active(ctx)) {
+    return true;
+  }
+
+  const unsigned char *cursor = (const unsigned char *)data;
+  size_t remaining = length;
+  unsigned int stalled = 0U;
+
+  while (remaining > 0U) {
+    if (!session_channel_wait_writable(ctx, SSH_CHATTER_CHANNEL_WRITE_TIMEOUT_MS)) {
+      if (++stalled >= SSH_CHATTER_CHANNEL_WRITE_MAX_STALLS) {
+        session_channel_log_write_failure(ctx, "write timed out");
+        return false;
+      }
+      continue;
+    }
+
+    stalled = 0U;
+
+    size_t chunk = remaining;
+    if (chunk > SSH_CHATTER_CHANNEL_WRITE_CHUNK) {
+      chunk = SSH_CHATTER_CHANNEL_WRITE_CHUNK;
+    }
+
+    if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+      if (!session_telnet_write_block(ctx, cursor, chunk)) {
+        session_channel_log_write_failure(ctx, "telnet write error");
+        return false;
+      }
+      cursor += chunk;
+      remaining -= chunk;
+      continue;
+    }
+
+    ssize_t written = ssh_channel_write(ctx->channel, cursor, (uint32_t)chunk);
+    if (written == SSH_ERROR) {
+      const char *error = ssh_get_error(ctx->session);
+      session_channel_log_write_failure(ctx,
+                                        (error != NULL && error[0] != '\0') ? error : "channel write error");
+      return false;
+    }
+
+    if (written == 0) {
+      if (ssh_channel_is_eof(ctx->channel) || !ssh_channel_is_open(ctx->channel)) {
+        session_channel_log_write_failure(ctx, "channel closed during write");
+        return false;
+      }
+
+      if (++stalled >= SSH_CHATTER_CHANNEL_WRITE_MAX_STALLS) {
+        session_channel_log_write_failure(ctx, "channel write stalled");
+        return false;
+      }
+
+      continue;
+    }
+
+    cursor += written;
+    remaining -= (size_t)written;
+  }
+
+  return true;
+}
+
+static bool session_channel_write_cp437(session_ctx_t *ctx, const char *data, size_t length) {
+  if (ctx == NULL || data == NULL || length == 0U) {
+    return true;
+  }
+
+  iconv_t descriptor = iconv_open("CP437//TRANSLIT", "UTF-8");
+  if (descriptor == (iconv_t)(-1)) {
+    return session_channel_write_all(ctx, data, length);
+  }
+
+  size_t capacity = (length > 0U ? length : 1U) * 4U + 16U;
+  char *buffer = (char *)GC_MALLOC(capacity);
+  if (buffer == NULL) {
+    iconv_close(descriptor);
+    return session_channel_write_all(ctx, data, length);
+  }
+
+  const char *input_cursor = data;
+  size_t input_remaining = length;
+  char *output_cursor = buffer;
+  size_t output_remaining = capacity;
+
+  bool fallback_to_plaintext = false;
+
+  while (input_remaining > 0U) {
+    size_t result = iconv(descriptor, (char **)&input_cursor, &input_remaining, &output_cursor, &output_remaining);
+    if (result == (size_t)-1) {
+      if (errno == E2BIG) {
+        size_t produced = capacity - output_remaining;
+        size_t new_capacity = capacity * 2U;
+        if (new_capacity <= capacity) {
+          new_capacity = capacity + length + 32U;
+        }
+        char *resized = (char *)realloc(buffer, new_capacity);
+        if (resized == NULL) {
+          fallback_to_plaintext = true;
+          goto cleanup;
+        }
+        buffer = resized;
+        output_cursor = buffer + produced;
+        output_remaining = new_capacity - produced;
+        capacity = new_capacity;
+        continue;
+      }
+      if (errno == EILSEQ || errno == EINVAL) {
+        ++input_cursor;
+        --input_remaining;
+        if (output_remaining == 0U) {
+          size_t produced = capacity - output_remaining;
+          size_t new_capacity = capacity * 2U;
+          if (new_capacity <= capacity) {
+            new_capacity = capacity + length + 32U;
+          }
+          char *resized = (char *)realloc(buffer, new_capacity);
+          if (resized == NULL) {
+            fallback_to_plaintext = true;
+            goto cleanup;
+          }
+          buffer = resized;
+          output_cursor = buffer + produced;
+          output_remaining = new_capacity - produced;
+          capacity = new_capacity;
+        }
+        *output_cursor++ = '?';
+        output_remaining -= 1U;
+        continue;
+      }
+      fallback_to_plaintext = true;
+      goto cleanup;
+    }
+  }
+
+cleanup:
+  iconv_close(descriptor);
+  bool success = false;
+  if (fallback_to_plaintext) {
+    success = session_channel_write_all(ctx, data, length);
+  } else {
+    size_t produced = capacity - output_remaining;
+    success = session_channel_write_all(ctx, buffer, produced);
+  }
+  return success;
+}
+
+static bool session_output_lock(session_ctx_t *ctx) {
+  if (ctx == NULL || !ctx->output_lock_initialized) {
+    return false;
+  }
+
+  int error = pthread_mutex_lock(&ctx->output_lock);
+  if (error != 0) {
+    printf("[session] failed to lock output for %s: %s\n",
+           (ctx->user.name[0] != '\0') ? ctx->user.name : "unknown", strerror(error));
+    return false;
+  }
+
+  return true;
+}
+
+static void session_output_unlock(session_ctx_t *ctx) {
+  if (ctx == NULL || !ctx->output_lock_initialized) {
+    return;
+  }
+
+  int error = pthread_mutex_unlock(&ctx->output_lock);
+  if (error != 0) {
+    printf("[session] failed to unlock output for %s: %s\n",
+           (ctx->user.name[0] != '\0') ? ctx->user.name : "unknown", strerror(error));
+  }
+}
+
+static void session_channel_write(session_ctx_t *ctx, const void *data, size_t length) {
+  if (ctx == NULL || data == NULL || length == 0U || ctx->should_exit || !session_transport_active(ctx)) {
+    return;
+  }
+
+  bool locked = session_output_lock(ctx);
+
+  bool success = true;
+  if (ctx->channel_mutex_initialized) {
+    int lock_result = pthread_mutex_lock(&ctx->channel_mutex);
+    if (lock_result == 0) {
+      locked = true;
+    } else {
+      humanized_log_error("session", "failed to lock channel mutex", lock_result);
+    }
+  }
+
+  if (ctx->prefer_cp437_output) {
+    success = session_channel_write_cp437(ctx, (const char *)data, length);
+  } else if (ctx->prefer_utf16_output) {
+    success = session_channel_write_utf16(ctx, (const char *)data, length);
+  } else {
+    success = session_channel_write_all(ctx, data, length);
+  }
+
+  if (locked) {
+    int unlock_result = pthread_mutex_unlock(&ctx->channel_mutex);
+    if (unlock_result != 0) {
+      humanized_log_error("session", "failed to unlock channel mutex", unlock_result);
+    }
+  }
+
+  if (!success) {
+    ctx->should_exit = true;
+  }
+
+  if (locked) {
+    session_output_unlock(ctx);
+  }
+}
+
+static bool session_channel_write_utf16(session_ctx_t *ctx, const char *data, size_t length) {
+  if (ctx == NULL || data == NULL) {
+    return true;
+  }
+
+  size_t idx = 0U;
+  while (idx < length) {
+    unsigned char byte = (unsigned char)data[idx];
+    if (byte == '\033') {
+      size_t start = idx++;
+      if (idx < length) {
+        unsigned char next = (unsigned char)data[idx];
+        if (next == '[') {
+          ++idx;
+          while (idx < length) {
+            unsigned char ch = (unsigned char)data[idx++];
+            if (ch >= '@' && ch <= '~') {
+              break;
+            }
+          }
+        } else if (next == ']') {
+          ++idx;
+          while (idx < length) {
+            unsigned char ch = (unsigned char)data[idx++];
+            if (ch == '\a') {
+              break;
+            }
+            if (ch == '\033' && idx < length) {
+              unsigned char terminator = (unsigned char)data[idx];
+              if (terminator == '\\') {
+                ++idx;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      if (!session_channel_write_all(ctx, data + start, idx - start)) {
+        return false;
+      }
+      continue;
+    }
+
+    if (byte < 0x20U || byte == 0x7FU) {
+      if (!session_channel_write_all(ctx, data + idx, 1U)) {
+        return false;
+      }
+      ++idx;
+      continue;
+    }
+
+    size_t start = idx;
+    while (idx < length) {
+      unsigned char ch = (unsigned char)data[idx];
+      if (ch == '\033' || ch < 0x20U || ch == 0x7FU) {
+        break;
+      }
+      ++idx;
+    }
+
+    if (!session_channel_write_utf16_segment(ctx, data + start, idx - start)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static bool session_channel_write_utf16_segment(session_ctx_t *ctx, const char *data, size_t length) {
+  if (ctx == NULL || data == NULL || length == 0U) {
+    return true;
+  }
+
+  size_t max_output = length * 4U;
+  if (max_output == 0U) {
+    return true;
+  }
+
+  unsigned char stack_buffer[512];
+  unsigned char *buffer = NULL;
+  bool use_stack = max_output <= sizeof(stack_buffer);
+  if (use_stack) {
+    buffer = stack_buffer;
+  } else {
+    buffer = (unsigned char *)GC_MALLOC(max_output);
+    if (buffer == NULL) {
+      return session_channel_write_all(ctx, data, length);
+    }
+  }
+
+  size_t produced = 0U;
+  bool encoded = session_utf8_to_utf16le(data, length, buffer, max_output, &produced);
+  bool result = false;
+  if (encoded) {
+    result = session_channel_write_all(ctx, buffer, produced);
+  } else {
+    result = session_channel_write_all(ctx, data, length);
+  }
+
+  if (!use_stack) {
+  }
+
+  return result;
+}
+
+static size_t session_utf8_decode_codepoint(const unsigned char *data, size_t length, uint32_t *codepoint) {
+  if (data == NULL || length == 0U || codepoint == NULL) {
+    return 0U;
+  }
+
+  unsigned char b0 = data[0];
+  if (b0 < 0x80U) {
+    *codepoint = b0;
+    return 1U;
+  }
+
+  if ((b0 & 0xE0U) == 0xC0U) {
+    if (length < 2U) {
+      return 0U;
+    }
+    unsigned char b1 = data[1];
+    if ((b1 & 0xC0U) != 0x80U) {
+      return 0U;
+    }
+    uint32_t value = ((uint32_t)(b0 & 0x1FU) << 6U) | (uint32_t)(b1 & 0x3FU);
+    if (value < 0x80U) {
+      return 0U;
+    }
+    *codepoint = value;
+    return 2U;
+  }
+
+  if ((b0 & 0xF0U) == 0xE0U) {
+    if (length < 3U) {
+      return 0U;
+    }
+    unsigned char b1 = data[1];
+    unsigned char b2 = data[2];
+    if ((b1 & 0xC0U) != 0x80U || (b2 & 0xC0U) != 0x80U) {
+      return 0U;
+    }
+    uint32_t value = ((uint32_t)(b0 & 0x0FU) << 12U) | ((uint32_t)(b1 & 0x3FU) << 6U) | (uint32_t)(b2 & 0x3FU);
+    if (value < 0x800U || (value >= 0xD800U && value <= 0xDFFFU)) {
+      return 0U;
+    }
+    *codepoint = value;
+    return 3U;
+  }
+
+  if ((b0 & 0xF8U) == 0xF0U) {
+    if (length < 4U) {
+      return 0U;
+    }
+    unsigned char b1 = data[1];
+    unsigned char b2 = data[2];
+    unsigned char b3 = data[3];
+    if ((b1 & 0xC0U) != 0x80U || (b2 & 0xC0U) != 0x80U || (b3 & 0xC0U) != 0x80U) {
+      return 0U;
+    }
+    uint32_t value = ((uint32_t)(b0 & 0x07U) << 18U) | ((uint32_t)(b1 & 0x3FU) << 12U) |
+                     ((uint32_t)(b2 & 0x3FU) << 6U) | (uint32_t)(b3 & 0x3FU);
+    if (value < 0x10000U || value > 0x10FFFFU) {
+      return 0U;
+    }
+    *codepoint = value;
+    return 4U;
+  }
+
+  return 0U;
+}
+
+static bool session_utf8_to_utf16le(const char *input, size_t length, unsigned char *output, size_t capacity,
+                                    size_t *produced) {
+  if (input == NULL || output == NULL) {
+    return false;
+  }
+
+  size_t out_idx = 0U;
+  size_t idx = 0U;
+  while (idx < length) {
+    uint32_t codepoint = 0U;
+    size_t consumed = session_utf8_decode_codepoint((const unsigned char *)input + idx, length - idx, &codepoint);
+    if (consumed == 0U) {
+      codepoint = 0xFFFD;
+      consumed = 1U;
+    }
+    idx += consumed;
+
+    if (codepoint <= 0xFFFFU) {
+      if (codepoint >= 0xD800U && codepoint <= 0xDFFFU) {
+        codepoint = 0xFFFD;
+      }
+      if (out_idx + 2U > capacity) {
+        return false;
+      }
+      output[out_idx++] = (unsigned char)(codepoint & 0xFFU);
+      output[out_idx++] = (unsigned char)((codepoint >> 8U) & 0xFFU);
+      continue;
+    }
+
+    uint32_t adjusted = codepoint - 0x10000U;
+    uint16_t high = (uint16_t)(0xD800U | ((adjusted >> 10U) & 0x3FFU));
+    uint16_t low = (uint16_t)(0xDC00U | (adjusted & 0x3FFU));
+    if (out_idx + 4U > capacity) {
+      return false;
+    }
+    output[out_idx++] = (unsigned char)(high & 0xFFU);
+    output[out_idx++] = (unsigned char)((high >> 8U) & 0xFFU);
+    output[out_idx++] = (unsigned char)(low & 0xFFU);
+    output[out_idx++] = (unsigned char)((low >> 8U) & 0xFFU);
+  }
+
+  if (produced != NULL) {
+    *produced = out_idx;
+  }
+  return true;
+}
+
+static void session_apply_background_fill(session_ctx_t *ctx) {
+  if (ctx == NULL || !session_transport_active(ctx)) {
+    return;
+  }
+
+  bool locked = session_output_lock(ctx);
+  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
+  const size_t bg_len = strlen(bg);
+
+  if (bg_len > 0U) {
+    session_channel_write(ctx, bg, bg_len);
+  }
+
+  session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
+  session_channel_write(ctx, "\r", 1U);
+
+  if (bg_len > 0U) {
+    session_channel_write(ctx, bg, bg_len);
+  }
+
+  if (locked) {
+    session_output_unlock(ctx);
+  }
+}
+
+static void session_write_rendered_line(session_ctx_t *ctx, const char *render_source) {
+  if (ctx == NULL || render_source == NULL || !session_transport_active(ctx)) {
+    return;
+  }
+
+  bool locked = session_output_lock(ctx);
+  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
+  const size_t bg_len = strlen(bg);
+
+  if (bg_len == 0U) {
+    session_channel_write(ctx, render_source, strlen(render_source));
+    session_channel_write(ctx, "\r\n", 2U);
+    if (locked) {
+      session_output_unlock(ctx);
+    }
+    return;
+  }
+
+  session_channel_write(ctx, bg, bg_len);
+  session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
+  session_channel_write(ctx, "\r", 1U);
+
+  char expanded[SSH_CHATTER_TRANSLATION_WORKING_LEN + SSH_CHATTER_MESSAGE_LIMIT];
+  size_t out_idx = 0U;
+  const size_t length = strlen(render_source);
+
+  for (size_t idx = 0U; idx < length && out_idx + 1U < sizeof(expanded);) {
+    if (render_source[idx] == '\033' && idx + 3U < length && render_source[idx + 1U] == '[' &&
+        render_source[idx + 2U] == '0' && render_source[idx + 3U] == 'm') {
+      if (out_idx + 4U >= sizeof(expanded)) {
+        break;
+      }
+
+      memcpy(expanded + out_idx, render_source + idx, 4U);
+      out_idx += 4U;
+      idx += 4U;
+
+      if (out_idx + bg_len >= sizeof(expanded)) {
+        break;
+      }
+      memcpy(expanded + out_idx, bg, bg_len);
+      out_idx += bg_len;
+      continue;
+    }
+
+    expanded[out_idx++] = render_source[idx++];
+  }
+
+  expanded[out_idx] = '\0';
+
+  session_channel_write(ctx, expanded, out_idx);
+  session_channel_write(ctx, "\r\n", 2U);
+  session_channel_write(ctx, bg, bg_len);
+
+  if (locked) {
+    session_output_unlock(ctx);
+  }
+}
+
+static void session_send_caption_line(session_ctx_t *ctx, const char *message) {
+  if (ctx == NULL || message == NULL || !session_transport_active(ctx)) {
+    return;
+  }
+
+  bool locked = session_output_lock(ctx);
+  session_channel_write(ctx, "\r", 1U);
+  session_channel_write(ctx, ANSI_INSERT_LINE, sizeof(ANSI_INSERT_LINE) - 1U);
+
+  session_write_rendered_line(ctx, message);
+
+  if (locked) {
+    session_output_unlock(ctx);
+  }
+}
+
+static void session_render_caption_with_offset(session_ctx_t *ctx, const char *message, size_t move_up) {
+  if (ctx == NULL || message == NULL || !session_transport_active(ctx)) {
+    return;
+  }
+
+  if (move_up == 0U) {
+    session_send_caption_line(ctx, message);
+    return;
+  }
+
+  bool locked = session_output_lock(ctx);
+  session_channel_write(ctx, "\033[s", 3U);
+
+  char command[32];
+  int written = snprintf(command, sizeof(command), "\033[%zuA", move_up);
+  if (written > 0 && (size_t)written < sizeof(command)) {
+    session_channel_write(ctx, command, (size_t)written);
+  }
+
+  session_channel_write(ctx, "\r", 1U);
+  session_write_rendered_line(ctx, message);
+  session_channel_write(ctx, "\033[u", 3U);
+
+  if (locked) {
+    session_output_unlock(ctx);
+  }
+}
+
+static void session_telnet_send_option(session_ctx_t *ctx, unsigned char command, unsigned char option) {
+  if (ctx == NULL || ctx->telnet_fd < 0) {
+    return;
+  }
+
+  unsigned char payload[3] = {TELNET_IAC, command, option};
+  send(ctx->telnet_fd, payload, sizeof(payload), MSG_NOSIGNAL);
+}
+
+static void session_telnet_request_terminal_type(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->telnet_fd < 0 || ctx->telnet_terminal_type_requested) {
+    return;
+  }
+
+  unsigned char payload[] = {TELNET_IAC, TELNET_CMD_SB, TELNET_OPT_TERMINAL_TYPE, 1U, TELNET_IAC, TELNET_CMD_SE};
+  send(ctx->telnet_fd, payload, sizeof(payload), MSG_NOSIGNAL);
+  ctx->telnet_terminal_type_requested = true;
+}
+
+static void session_telnet_handle_option(session_ctx_t *ctx, unsigned char command, unsigned char option) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  switch (command) {
+    case TELNET_CMD_DO:
+      if (option == TELNET_OPT_SUPPRESS_GO_AHEAD || option == TELNET_OPT_ECHO) {
+        session_telnet_send_option(ctx, TELNET_CMD_WILL, option);
+      } else if (option == TELNET_OPT_TERMINAL_TYPE) {
+        session_telnet_send_option(ctx, TELNET_CMD_WONT, option);
+      } else {
+        session_telnet_send_option(ctx, TELNET_CMD_WONT, option);
+      }
+      break;
+    case TELNET_CMD_DONT:
+      session_telnet_send_option(ctx, TELNET_CMD_WONT, option);
+      break;
+    case TELNET_CMD_WILL:
+      if (option == TELNET_OPT_SUPPRESS_GO_AHEAD) {
+        session_telnet_send_option(ctx, TELNET_CMD_DO, option);
+      } else if (option == TELNET_OPT_TERMINAL_TYPE) {
+        session_telnet_send_option(ctx, TELNET_CMD_DO, option);
+        session_telnet_request_terminal_type(ctx);
+      } else {
+        session_telnet_send_option(ctx, TELNET_CMD_DONT, option);
+      }
+      break;
+    case TELNET_CMD_WONT:
+      session_telnet_send_option(ctx, TELNET_CMD_DONT, option);
+      break;
+    default:
+      break;
+  }
+}
+
+static void session_telnet_initialize(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->telnet_fd < 0 || ctx->telnet_negotiated) {
+    return;
+  }
+
+  session_telnet_send_option(ctx, TELNET_CMD_WILL, TELNET_OPT_ECHO);
+  session_telnet_send_option(ctx, TELNET_CMD_WILL, TELNET_OPT_SUPPRESS_GO_AHEAD);
+  session_telnet_send_option(ctx, TELNET_CMD_DO, TELNET_OPT_SUPPRESS_GO_AHEAD);
+  session_telnet_send_option(ctx, TELNET_CMD_DONT, TELNET_OPT_LINEMODE);
+  session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_STATUS);
+  session_telnet_send_option(ctx, TELNET_CMD_DO, TELNET_OPT_TERMINAL_TYPE);
+  session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_TERMINAL_SPEED);
+  session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_NAWS);
+
+  ctx->telnet_negotiated = true;
+}
+
+static int session_telnet_read_byte(session_ctx_t *ctx, unsigned char *out, int timeout_ms) {
+  if (ctx == NULL || out == NULL || ctx->telnet_fd < 0) {
+    return SSH_ERROR;
+  }
+
+  if (ctx->telnet_pending_valid) {
+    ctx->telnet_pending_valid = false;
+    *out = (unsigned char)ctx->telnet_pending_char;
+    return 1;
+  }
+
+  for (;;) {
+    struct pollfd pfd = {
+        .fd = ctx->telnet_fd,
+        .events = POLLIN,
+        .revents = 0,
+    };
+
+    int poll_result = poll(&pfd, 1, timeout_ms);
+    if (poll_result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return SSH_ERROR;
+    }
+    if (poll_result == 0) {
+      return SSH_AGAIN;
+    }
+    if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+      ctx->telnet_eof = true;
+      return 0;
+    }
+
+    unsigned char byte = 0U;
+    ssize_t read_result = recv(ctx->telnet_fd, &byte, 1, 0);
+    if (read_result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        continue;
+      }
+      return SSH_ERROR;
+    }
+    if (read_result == 0) {
+      ctx->telnet_eof = true;
+      return 0;
+    }
+
+    if (byte == TELNET_IAC) {
+      unsigned char command = 0U;
+      ssize_t command_result = recv(ctx->telnet_fd, &command, 1, 0);
+      if (command_result <= 0) {
+        if (command_result < 0 && errno == EINTR) {
+          continue;
+        }
+        ctx->telnet_eof = (command_result == 0);
+        return ctx->telnet_eof ? 0 : SSH_ERROR;
+      }
+
+      if (command == TELNET_IAC) {
+        *out = TELNET_IAC;
+        return 1;
+      }
+
+      if (command == TELNET_CMD_DO || command == TELNET_CMD_DONT || command == TELNET_CMD_WILL ||
+          command == TELNET_CMD_WONT) {
+        unsigned char option = 0U;
+        ssize_t option_result = recv(ctx->telnet_fd, &option, 1, 0);
+        if (option_result <= 0) {
+          if (option_result < 0 && errno == EINTR) {
+            continue;
+          }
+          ctx->telnet_eof = (option_result == 0);
+          return ctx->telnet_eof ? 0 : SSH_ERROR;
+        }
+        session_telnet_handle_option(ctx, command, option);
+        continue;
+      }
+
+      if (command == TELNET_CMD_SB) {
+        unsigned char option = 0U;
+        ssize_t option_result = recv(ctx->telnet_fd, &option, 1, 0);
+        if (option_result <= 0) {
+          if (option_result < 0 && errno == EINTR) {
+            continue;
+          }
+          ctx->telnet_eof = (option_result == 0);
+          return ctx->telnet_eof ? 0 : SSH_ERROR;
+        }
+
+        if (option == TELNET_OPT_TERMINAL_TYPE) {
+          unsigned char qualifier = 0U;
+          ssize_t qual_result = recv(ctx->telnet_fd, &qualifier, 1, 0);
+          if (qual_result <= 0) {
+            if (qual_result < 0 && errno == EINTR) {
+              continue;
+            }
+            ctx->telnet_eof = (qual_result == 0);
+            return ctx->telnet_eof ? 0 : SSH_ERROR;
+          }
+
+          char type_buffer[SSH_CHATTER_TERMINAL_TYPE_LEN];
+          size_t type_len = 0U;
+          bool finished = false;
+
+          while (!finished) {
+            unsigned char chunk = 0U;
+            ssize_t chunk_result = recv(ctx->telnet_fd, &chunk, 1, 0);
+            if (chunk_result < 0) {
+              if (errno == EINTR) {
+                continue;
+              }
+              if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+              }
+              return SSH_ERROR;
+            }
+            if (chunk_result == 0) {
+              ctx->telnet_eof = true;
+              return 0;
+            }
+
+            if (chunk == TELNET_IAC) {
+              unsigned char next = 0U;
+              ssize_t next_result = recv(ctx->telnet_fd, &next, 1, 0);
+              if (next_result < 0) {
+                if (errno == EINTR) {
+                  continue;
+                }
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                  continue;
+                }
+                return SSH_ERROR;
+              }
+              if (next_result == 0) {
+                ctx->telnet_eof = true;
+                return 0;
+              }
+
+              if (next == TELNET_CMD_SE) {
+                finished = true;
+                break;
+              }
+              if (next == TELNET_IAC) {
+                if (type_len + 1U < sizeof(type_buffer)) {
+                  type_buffer[type_len++] = (char)TELNET_IAC;
+                }
+              }
+              continue;
+            }
+
+            if (type_len + 1U < sizeof(type_buffer)) {
+              type_buffer[type_len++] = (char)chunk;
+            }
+          }
+
+          if (type_len < sizeof(type_buffer)) {
+            type_buffer[type_len] = '\0';
+          } else {
+            type_buffer[sizeof(type_buffer) - 1U] = '\0';
+          }
+
+          if (qualifier == 0U) {
+            trim_whitespace_inplace(type_buffer);
+            if (type_buffer[0] != '\0') {
+              for (size_t idx = 0U; type_buffer[idx] != '\0'; ++idx) {
+                type_buffer[idx] = (char)toupper((unsigned char)type_buffer[idx]);
+              }
+              snprintf(ctx->terminal_type, sizeof(ctx->terminal_type), "%s", type_buffer);
+              session_refresh_output_encoding(ctx);
+            }
+          }
+        } else {
+          unsigned char prev = 0U;
+          for (;;) {
+            unsigned char chunk = 0U;
+            ssize_t chunk_result = recv(ctx->telnet_fd, &chunk, 1, 0);
+            if (chunk_result < 0) {
+              if (errno == EINTR) {
+                continue;
+              }
+              if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+              }
+              return SSH_ERROR;
+            }
+            if (chunk_result == 0) {
+              ctx->telnet_eof = true;
+              return 0;
+            }
+            if (prev == TELNET_IAC && chunk == TELNET_CMD_SE) {
+              break;
+            }
+            prev = (chunk == TELNET_IAC) ? TELNET_IAC : 0U;
+          }
+        }
+        continue;
+      }
+
+      if (command == TELNET_CMD_NOP || command == TELNET_CMD_DM || command == TELNET_CMD_BREAK) {
+        continue;
+      }
+
+      continue;
+    }
+
+    if (byte == '\r') {
+      unsigned char next = 0U;
+      ssize_t next_result = recv(ctx->telnet_fd, &next, 1, MSG_PEEK);
+      if (next_result > 0) {
+        if (next == '\n' || next == '\0') {
+          recv(ctx->telnet_fd, &next, 1, 0);
+        } else {
+          recv(ctx->telnet_fd, &next, 1, 0);
+          ctx->telnet_pending_char = (int)next;
+          ctx->telnet_pending_valid = true;
+        }
+      }
+
+      *out = '\n';
+      return 1;
+    }
+
+    *out = byte;
+    return 1;
+  }
+}
+
+static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer, size_t length) {
+  if (ctx == NULL || buffer == NULL || length == 0U) {
+    return false;
+  }
+
+  size_t written = 0U;
+  bool ignore_next_newline = false;
+
+  while (!ctx->should_exit) {
+    unsigned char byte = 0U;
+    int read_result = session_telnet_read_byte(ctx, &byte, -1);
+    if (read_result == SSH_AGAIN) {
+      continue;
+    }
+    if (read_result <= 0) {
+      ctx->should_exit = true;
+      return false;
+    }
+
+    if (ignore_next_newline) {
+      ignore_next_newline = false;
+      if (byte == '\n') {
+        continue;
+      }
+    }
+
+    if (byte == '\0') {
+      ctx->should_exit = true;
+      return false;
+    }
+
+    if (byte == '\r' || byte == '\n') {
+      session_channel_write(ctx, "\r\n", 2U);
+      if (byte == '\r') {
+        ignore_next_newline = true;
+      }
+      break;
+    }
+
+    if (byte == 0x7FU || byte == '\b') {
+      if (written > 0U) {
+        --written;
+        session_channel_write(ctx, "\b \b", 3U);
+      }
+      continue;
+    }
+
+    if (byte == 0x03U || byte == 0x04U) {
+      ctx->should_exit = true;
+      return false;
+    }
+
+    if (byte < 0x20U) {
+      continue;
+    }
+
+    if (written + 1U >= length) {
+      const char bell = '\a';
+      session_channel_write(ctx, &bell, 1U);
+      continue;
+    }
+
+    buffer[written++] = (char)byte;
+    session_channel_write(ctx, (const char *)&byte, 1U);
+  }
+
+  buffer[written] = '\0';
+  return !ctx->should_exit;
+}
+
+static bool session_telnet_can_use_reserved_name(session_ctx_t *ctx) {
+  return ctx != NULL && ctx->lan_operator_credentials_valid;
+}
+
+static bool session_telnet_prompt_initial_nickname(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return false;
+  }
+
+  char nickname[SSH_CHATTER_USERNAME_LEN];
+
+  while (!ctx->should_exit) {
+    session_send_system_line(ctx, "Set your nickname:");
+    session_channel_write(ctx, "> ", 2U);
+
+    if (!session_telnet_collect_line(ctx, nickname, sizeof(nickname))) {
+      return false;
+    }
+
+    trim_whitespace_inplace(nickname);
+
+    const char *lang_args = NULL;
+    if (session_parse_command(nickname, "/set-ui-lang", &lang_args) ||
+        session_parse_command(nickname, "set-ui-lang", &lang_args)) {
+      session_handle_set_ui_lang(ctx, lang_args);
+      continue;
+    }
+    if (nickname[0] == '\0') {
+      session_send_system_line(ctx, "Nickname cannot be empty.");
+      continue;
+    }
+
+    bool invalid_character = false;
+    for (size_t idx = 0U; nickname[idx] != '\0'; ++idx) {
+      const unsigned char ch = (unsigned char)nickname[idx];
+      if (ch <= 0x1FU || ch == 0x7FU || ch == ' ' || ch == '\t') {
+        invalid_character = true;
+        break;
+      }
+    }
+
+    if (invalid_character) {
+      session_send_system_line(ctx, "Names may not include control characters or whitespace.");
+      continue;
+    }
+
+    if (host_is_username_banned(ctx->owner, nickname)) {
+      session_send_system_line(ctx,
+                               "That nickname is blocked for bot detection. Choose another.");
+      continue;
+    }
+
+    if (ctx->owner != NULL && host_username_reserved(ctx->owner, nickname) &&
+        !session_telnet_can_use_reserved_name(ctx)) {
+      session_send_system_line(ctx, "That name is reserved for LAN operators.");
+      continue;
+    }
+
+    session_ctx_t *existing = chat_room_find_user(&ctx->owner->room, nickname);
+    if (existing != NULL && existing != ctx) {
+      session_send_system_line(ctx, "That name is already taken.");
+      continue;
+    }
+
+    snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", nickname);
+    return true;
+  }
+
+  return false;
+}
+
+static int session_transport_read(session_ctx_t *ctx, void *buffer, size_t length, int timeout_ms) {
+  if (ctx == NULL || buffer == NULL || length == 0U) {
+    return SSH_ERROR;
+  }
+
+  if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
+    unsigned char *output = (unsigned char *)buffer;
+    size_t produced = 0U;
+
+    while (produced < length) {
+      unsigned char byte = 0U;
+      int read_result = session_telnet_read_byte(ctx, &byte, timeout_ms);
+      if (read_result == SSH_AGAIN) {
+        if (produced > 0U) {
+          return (int)produced;
+        }
+        return SSH_AGAIN;
+      }
+      if (read_result <= 0) {
+        if (produced > 0U) {
+          return (int)produced;
+        }
+        return read_result;
+      }
+
+      output[produced++] = byte;
+      if (timeout_ms >= 0) {
+        break;
+      }
+    }
+
+    return (int)produced;
+  }
+
+  const uint32_t chunk = (length > UINT32_MAX) ? UINT32_MAX : (uint32_t)length;
+
+  if (timeout_ms >= 0) {
+    return ssh_channel_read_timeout(ctx->channel, buffer, chunk, 0, timeout_ms);
+  }
+
+  return ssh_channel_read(ctx->channel, buffer, chunk, 0);
+}
+
+static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *message,
+                                             bool clear_prompt_text) {
+  if (ctx == NULL || ctx->owner == NULL || message == NULL) {
+    return;
+  }
+
+  chat_history_entry_t entry = {0};
+  if (!host_history_record_user(ctx->owner, ctx, message, &entry)) {
+    return;
+  }
+
+  session_send_history_entry(ctx, &entry);
+  if (ctx->history_scroll_position == 0U && !ctx->bracket_paste_active) {
+    if (clear_prompt_text) {
+      ctx->input_length = 0U;
+      ctx->input_buffer[0] = '\0';
+    }
+    session_refresh_input_line(ctx);
+  }
+  chat_room_broadcast_entry(&ctx->owner->room, &entry, ctx);
+  host_notify_external_clients(ctx->owner, &entry);
+
+  (void)host_eliza_intervene(ctx, message, NULL, false);
+
+  size_t message_length = strnlen(message, SSH_CHATTER_MESSAGE_LIMIT);
+
+  if (!host_moderation_queue_chat(ctx, message, message_length)) {
+    (void)session_security_check_text(ctx, "chat message", message, message_length, true);
+  }
+}
+
+// session_send_line writes a single line while preserving the session's
+// background color even when individual strings reset their ANSI attributes by
+// clearing the row with the palette tint before printing.
+static void session_send_line(session_ctx_t *ctx, const char *message) {
+  if (ctx == NULL || !session_transport_active(ctx) || message == NULL) {
+    return;
+  }
+
+  char buffer[SSH_CHATTER_MESSAGE_LIMIT + 1U];
+  memset(buffer, 0, sizeof(buffer));
+  strncpy(buffer, message, SSH_CHATTER_MESSAGE_LIMIT);
+  buffer[SSH_CHATTER_MESSAGE_LIMIT] = '\0';
+
+  char stripped[SSH_CHATTER_MESSAGE_LIMIT + 1U];
+  bool suppress_translation = translation_strip_no_translate_prefix(buffer, stripped, sizeof(stripped));
+  const char *render_text = suppress_translation ? stripped : buffer;
+
+  session_write_rendered_line(ctx, render_text);
+
+  size_t placeholder_lines = 0U;
+  const bool scope_allows_translation =
+      (!translator_should_limit_to_chat_bbs() || ctx->translation_manual_scope_override);
+  const bool translation_ready = scope_allows_translation && !suppress_translation &&
+                                 !ctx->translation_suppress_output && ctx->translation_enabled &&
+                                 ctx->output_translation_enabled && ctx->output_translation_language[0] != '\0' &&
+                                 render_text[0] != '\0';
+  if (translation_ready && !ctx->in_bbs_mode && !ctx->in_rss_mode) {
+    size_t spacing = ctx->translation_caption_spacing;
+    if (spacing > 8U) {
+      spacing = 8U;
+    }
+    placeholder_lines = spacing + 1U;
+  }
+
+  if (translation_ready && session_translation_queue_caption(ctx, render_text, placeholder_lines)) {
+    if (placeholder_lines > 0U) {
+      session_translation_reserve_placeholders(ctx, placeholder_lines);
+    }
+  }
+
+  session_translation_flush_ready(ctx);
+}
+
+static size_t session_append_fragment(char *dest, size_t dest_size, size_t offset, const char *fragment) {
+  if (dest == NULL || dest_size == 0U) {
+    return offset;
+  }
+
+  if (offset >= dest_size) {
+    return dest_size > 0U ? dest_size - 1U : offset;
+  }
+
+  if (fragment == NULL) {
+    dest[offset] = '\0';
+    return offset;
+  }
+
+  const size_t fragment_len = strlen(fragment);
+  if (fragment_len == 0U) {
+    return offset;
+  }
+
+  if (offset >= dest_size - 1U) {
+    dest[dest_size - 1U] = '\0';
+    return dest_size - 1U;
+  }
+
+  size_t available = dest_size - offset - 1U;
+  if (fragment_len < available) {
+    memcpy(dest + offset, fragment, fragment_len);
+    offset += fragment_len;
+  } else {
+    memcpy(dest + offset, fragment, available);
+    offset += available;
+  }
+
+  dest[offset] = '\0';
+  return offset;
+}
+
+static void session_apply_motd_highlight(const session_ctx_t *ctx, const char *input, char *output, size_t length) {
+  if (output == NULL || length == 0U) {
+    return;
+  }
+
+  output[0] = '\0';
+  if (ctx == NULL || input == NULL) {
+    return;
+  }
+
+  const char *prefix = session_command_prefix(ctx);
+  if (prefix == NULL || prefix[0] == '\0') {
+    prefix = "/";
+  }
+
+  char command[32];
+  snprintf(command, sizeof(command), "%smotd", prefix);
+
+  size_t offset = 0U;
+  offset = session_append_fragment(output, length, offset, "\033[37m");
+
+  const char *cursor = input;
+  const size_t command_len = strlen(command);
+  while (*cursor != '\0' && offset < length - 1U) {
+    const char *match = strstr(cursor, command);
+    if (match == NULL) {
+      offset = session_append_fragment(output, length, offset, cursor);
+      break;
+    }
+
+    if (match > cursor) {
+      size_t chunk_len = (size_t)(match - cursor);
+      if (chunk_len > 0U) {
+        char chunk[SSH_CHATTER_MESSAGE_LIMIT];
+        if (chunk_len >= sizeof(chunk)) {
+          chunk_len = sizeof(chunk) - 1U;
+        }
+        memcpy(chunk, cursor, chunk_len);
+        chunk[chunk_len] = '\0';
+        offset = session_append_fragment(output, length, offset, chunk);
+      }
+    }
+
+    offset = session_append_fragment(output, length, offset, "\033[1;30;43m");
+    offset = session_append_fragment(output, length, offset, command);
+    offset = session_append_fragment(output, length, offset, "\033[0;37m");
+    cursor = match + command_len;
+  }
+
+  offset = session_append_fragment(output, length, offset, "\033[0m");
+}
