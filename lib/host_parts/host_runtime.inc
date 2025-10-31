@@ -2174,7 +2174,7 @@ static void *host_telnet_thread(void *arg) {
       int fd = host_telnet_open_socket(host);
       if (fd < 0) {
         struct timespec backoff = {.tv_sec = 1, .tv_nsec = 0};
-        nanosleep(&backoff, NULL);
+        host_sleep_uninterruptible(&backoff);
         continue;
       }
 
@@ -2195,7 +2195,7 @@ static void *host_telnet_thread(void *arg) {
       }
       humanized_log_error("telnet", "accept failed", errno);
       struct timespec backoff = {.tv_sec = 1, .tv_nsec = 0};
-      nanosleep(&backoff, NULL);
+      host_sleep_uninterruptible(&backoff);
       continue;
     }
 
@@ -2391,7 +2391,7 @@ static bool session_attempt_handshake_restart(session_ctx_t *ctx, unsigned int *
       .tv_sec = 0,
       .tv_nsec = 200000000L,
   };
-  nanosleep(&backoff, NULL);
+  host_sleep_uninterruptible(&backoff);
   return true;
 }
 
@@ -2575,7 +2575,7 @@ static void *session_thread(void *arg) {
     loading_line[written] = '\0';
     session_send_system_line(ctx, loading_line);
     if (wait_time.tv_sec != 0 || wait_time.tv_nsec != 0) {
-      nanosleep(&wait_time, NULL);
+      host_sleep_uninterruptible(&wait_time);
     }
     chat_room_add(&ctx->owner->room, ctx);
     ctx->has_joined_room = true;
@@ -2711,7 +2711,7 @@ static void *session_thread(void *arg) {
               .tv_sec = 0,
               .tv_nsec = SSH_CHATTER_CHANNEL_RECOVERY_DELAY_NS,
           };
-          nanosleep(&retry_delay, NULL);
+          host_sleep_uninterruptible(&retry_delay);
           continue;
         }
 
@@ -3618,7 +3618,7 @@ static void host_sleep_after_error(host_t *host) {
       .tv_sec = (time_t)(delay_ns / 1000000000LL),
       .tv_nsec = (long)(delay_ns % 1000000000LL),
   };
-  nanosleep(&delay, NULL);
+  host_sleep_uninterruptible(&delay);
 }
 
 void host_shutdown(host_t *host) {
@@ -3963,7 +3963,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
               .tv_sec = 0,
               .tv_nsec = 200000000L,
           };
-          nanosleep(&retry_delay, NULL);
+          host_sleep_uninterruptible(&retry_delay);
         }
         continue;
       }
@@ -4128,7 +4128,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         .tv_sec = 1,
         .tv_nsec = 0,
     };
-    nanosleep(&backoff, NULL);
+    host_sleep_uninterruptible(&backoff);
 
     if (host->listener.restart_attempts > 0U) {
       printf("[listener] attempting full listener restart after socket error (attempt %u)\n",

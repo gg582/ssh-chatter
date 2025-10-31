@@ -1059,7 +1059,14 @@ static void *matrix_client_poll_thread(void *user_data) {
           .tv_sec = MATRIX_SYNC_BACKOFF_SECONDS,
           .tv_nsec = 0L,
       };
-      nanosleep(&delay, NULL);
+      struct timespec request = delay;
+      struct timespec remaining = {0};
+      while (nanosleep(&request, &remaining) != 0) {
+        if (errno != EINTR) {
+          break;
+        }
+        request = remaining;
+      }
     }
   }
 

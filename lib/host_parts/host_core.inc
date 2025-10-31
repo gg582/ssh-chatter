@@ -196,6 +196,22 @@ static const lan_operator_env_pair_t LAN_OPERATOR_ENV_PAIRS[] = {
 static const size_t LAN_OPERATOR_ENV_PAIR_COUNT =
     sizeof(LAN_OPERATOR_ENV_PAIRS) / sizeof(LAN_OPERATOR_ENV_PAIRS[0]);
 
+static void host_sleep_uninterruptible(const struct timespec *duration) {
+  if (duration == NULL) {
+    return;
+  }
+
+  struct timespec request = *duration;
+  struct timespec remaining = {0};
+
+  while (nanosleep(&request, &remaining) != 0) {
+    if (errno != EINTR) {
+      break;
+    }
+    request = remaining;
+  }
+}
+
 static bool host_address_is_wildcard(const char *address) {
   if (address == NULL) {
     return true;

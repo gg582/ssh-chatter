@@ -5,6 +5,7 @@
 #include "headers/translator.h"
 
 #include <curl/curl.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -315,7 +316,14 @@ static void translator_rate_limit_wait(void) {
 
     struct timespec wait_time = translator_timespec_diff(&g_next_allowed_request, &now);
     pthread_mutex_unlock(&g_rate_mutex);
-    nanosleep(&wait_time, NULL);
+    struct timespec request = wait_time;
+    struct timespec remaining = {0};
+    while (nanosleep(&request, &remaining) != 0) {
+      if (errno != EINTR) {
+        break;
+      }
+      request = remaining;
+    }
   }
 }
 
@@ -332,7 +340,14 @@ static void translator_moderation_throttle_wait(void) {
 
     struct timespec wait_time = translator_timespec_diff(&g_next_allowed_moderation, &now);
     pthread_mutex_unlock(&g_moderation_mutex);
-    nanosleep(&wait_time, NULL);
+    struct timespec request = wait_time;
+    struct timespec remaining = {0};
+    while (nanosleep(&request, &remaining) != 0) {
+      if (errno != EINTR) {
+        break;
+      }
+      request = remaining;
+    }
   }
 }
 
@@ -2623,4 +2638,3 @@ bool translator_moderate_text(const char *category, const char *content, bool *b
 
   return false;
 }
-

@@ -1214,7 +1214,7 @@ static void *host_bbs_watchdog_thread(void *arg) {
           .tv_sec = (time_t)chunk,
           .tv_nsec = 0L,
       };
-      nanosleep(&pause, NULL);
+      host_sleep_uninterruptible(&pause);
       if (remaining <= chunk) {
         remaining = 0U;
       } else {
@@ -2534,7 +2534,7 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
 
       if (attempt + 1 < max_attempts) {
         struct timespec retry_delay = {.tv_sec = 1, .tv_nsec = 0L};
-        nanosleep(&retry_delay, NULL);
+        host_sleep_uninterruptible(&retry_delay);
       }
       continue;
     }
@@ -2785,7 +2785,7 @@ static void *session_translation_worker(void *arg) {
 
       if (delay_needed) {
         struct timespec aggregation_delay = {.tv_sec = 0, .tv_nsec = SSH_CHATTER_TRANSLATION_BATCH_DELAY_NS};
-        nanosleep(&aggregation_delay, NULL);
+        host_sleep_uninterruptible(&aggregation_delay);
       }
     }
 
@@ -2934,7 +2934,7 @@ static bool session_channel_wait_writable(session_ctx_t *ctx, int timeout_ms) {
         .tv_sec = 0,
         .tv_nsec = SSH_CHATTER_CHANNEL_WRITE_BACKOFF_NS,
     };
-    nanosleep(&backoff, NULL);
+    host_sleep_uninterruptible(&backoff);
     return true;
   }
 

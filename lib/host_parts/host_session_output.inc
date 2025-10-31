@@ -3251,7 +3251,7 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
   printf("[%s] %s\n", ctx->user.name, normalized);
 
   const struct timespec tiny_delay = {.tv_sec = 0, .tv_nsec = 5000000L};
-  nanosleep(&tiny_delay, NULL);
+  host_sleep_uninterruptible(&tiny_delay);
 
   if (ctx->username_conflict) {
     session_handle_username_conflict_input(ctx, normalized);

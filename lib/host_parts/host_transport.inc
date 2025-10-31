@@ -3916,7 +3916,10 @@ static bool host_security_execute_clamav_backend(host_t *host, char *notice, siz
   }
 
   struct timespec start = {0, 0};
-  clock_gettime(CLOCK_MONOTONIC, &start);
+  if (clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
+    start.tv_sec = 0;
+    start.tv_nsec = 0;
+  }
 
   int pipefd[2];
   if (pipe(pipefd) == -1) {
@@ -3937,17 +3940,53 @@ static bool host_security_execute_clamav_backend(host_t *host, char *notice, siz
     snprintf(notice, notice_length,
              "* [security] Scheduled ClamAV scan fork() failed (%s).", reason);
     host_security_disable_clamav(host, reason);
-    close(pipefd[0]);
-    close(pipefd[1]);
+    int saved_errno = errno;
+    int close_result = 0;
+    do {
+      close_result = close(pipefd[0]);
+    } while (close_result != 0 && errno == EINTR);
+    if (close_result != 0) {
+      errno = saved_errno;
+    }
+    saved_errno = errno;
+    do {
+      close_result = close(pipefd[1]);
+    } while (close_result != 0 && errno == EINTR);
+    if (close_result != 0) {
+      errno = saved_errno;
+    }
     return true;
   }
 
   if (pid == 0) {
     // child process: redirect stdout/stderr to pipe
-    close(pipefd[0]);
-    dup2(pipefd[1], STDOUT_FILENO);
-    dup2(pipefd[1], STDERR_FILENO);
-    close(pipefd[1]);
+    int saved_errno = errno;
+    int close_result = 0;
+    do {
+      close_result = close(pipefd[0]);
+    } while (close_result != 0 && errno == EINTR);
+    if (close_result != 0) {
+      fprintf(stderr, "[security] close() failed in child: %s\n", strerror(errno));
+      _exit(126);
+    }
+    errno = saved_errno;
+
+    if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
+      fprintf(stderr, "[security] dup2() to STDOUT failed: %s\n", strerror(errno));
+      _exit(126);
+    }
+    if (dup2(pipefd[1], STDERR_FILENO) == -1) {
+      fprintf(stderr, "[security] dup2() to STDERR failed: %s\n", strerror(errno));
+      _exit(126);
+    }
+
+    do {
+      close_result = close(pipefd[1]);
+    } while (close_result != 0 && errno == EINTR);
+    if (close_result != 0) {
+      fprintf(stderr, "[security] close() on pipe failed: %s\n", strerror(errno));
+      _exit(126);
+    }
 
     // execute clamscan without shell parsing issues
     const char *argv[] = {"sh", "-c", host->security_clamav_command, NULL};
@@ -3959,7 +3998,25 @@ static bool host_security_execute_clamav_backend(host_t *host, char *notice, siz
   }
 
   // parent process: turn pipefd[0] into a FILE* for compatibility
-  close(pipefd[1]);
+  int saved_errno = errno;
+  int close_result = 0;
+  do {
+    close_result = close(pipefd[1]);
+  } while (close_result != 0 && errno == EINTR);
+  if (close_result != 0) {
+    int error_code = errno;
+    errno = saved_errno;
+    char reason[128];
+    snprintf(reason, sizeof(reason), "%s", strerror(error_code));
+    snprintf(notice, notice_length,
+             "* [security] Scheduled ClamAV scan close() failed (%s).", reason);
+    host_security_disable_clamav(host, reason);
+    do {
+      close_result = close(pipefd[0]);
+    } while (close_result != 0 && errno == EINTR);
+    return true;
+  }
+  errno = saved_errno;
   FILE *pipe = fdopen(pipefd[0], "r");
   if (!pipe) {
     int error_code = errno;
@@ -3993,10 +4050,16 @@ static bool host_security_execute_clamav_backend(host_t *host, char *notice, siz
     output[output_length] = '\0';
   }
 
-  errno = 0;
-  int status = pclose(pipe);
+  int status = -1;
+  do {
+    errno = 0;
+    status = pclose(pipe);
+  } while (status == -1 && errno == EINTR);
   struct timespec end = {0, 0};
-  clock_gettime(CLOCK_MONOTONIC, &end);
+  if (clock_gettime(CLOCK_MONOTONIC, &end) != 0) {
+    end.tv_sec = 0;
+    end.tv_nsec = 0;
+  }
   host->security_clamav_last_run = end;
   struct timespec elapsed = timespec_diff(&end, &start);
   double seconds = (double)elapsed.tv_sec + (double)elapsed.tv_nsec / 1000000000.0;
@@ -4078,7 +4141,7 @@ static void *host_security_clamav_backend(void *arg) {
           .tv_sec = (time_t)chunk,
           .tv_nsec = 0,
       };
-      nanosleep(&pause_duration, NULL);
+      host_sleep_uninterruptible(&pause_duration);
       if (remaining < chunk) {
         remaining = 0U;
       } else {

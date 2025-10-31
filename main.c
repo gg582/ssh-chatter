@@ -47,7 +47,14 @@ static void sleep_before_restart(unsigned int attempts) {
       .tv_sec = attempts < 5U ? 1L : (attempts < 10U ? 5L : 30L),
       .tv_nsec = 0L,
   };
-  nanosleep(&restart_delay, NULL);
+  struct timespec request = restart_delay;
+  struct timespec remaining = {0};
+  while (nanosleep(&request, &remaining) != 0) {
+    if (errno != EINTR) {
+      break;
+    }
+    request = remaining;
+  }
 }
 
 int main(int argc, char **argv) {

@@ -350,7 +350,7 @@ static void host_moderation_backoff(unsigned int attempts) {
       .tv_sec = (attempts < 3U) ? 1L : ((attempts < 6U) ? 5L : 30L),
       .tv_nsec = 0L,
   };
-  nanosleep(&delay, NULL);
+  host_sleep_uninterruptible(&delay);
 }
 
 static void host_moderation_close_worker(host_t *host) {
@@ -3742,7 +3742,7 @@ static void *host_rss_backend(void *arg) {
           .tv_sec = (time_t)chunk,
           .tv_nsec = 0L,
       };
-      nanosleep(&pause, NULL);
+      host_sleep_uninterruptible(&pause);
       if (remaining <= chunk) {
         remaining = 0U;
       } else {
