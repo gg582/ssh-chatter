@@ -7776,9 +7776,6 @@ static void host_security_configure(host_t *host) {
       snprintf(host->security_clamav_command, sizeof(host->security_clamav_command), "%s", command);
       atomic_store(&host->security_clamav_enabled, true);
       pipeline_enabled = true;
-      printf("[security] ClamAV scanning enabled via command: %s\n", host->security_clamav_command);
-    } else {
-      printf("[security] unable to enable ClamAV scanning: command is too long\n");
     }
   }
 
@@ -8032,11 +8029,6 @@ static bool host_security_execute_clamav_backend(host_t *host, char *notice, siz
 
   int exit_code = WEXITSTATUS(status);
   if (exit_code == 0) {
-    if (output[0] != '\0') {
-      snprintf(notice, notice_length, "* [security] Scheduled ClamAV scan finished in %.1fs (clean): %s", seconds, output);
-    } else {
-      snprintf(notice, notice_length, "* [security] Scheduled ClamAV scan finished in %.1fs (clean).", seconds);
-    }
     return true;
   }
 
