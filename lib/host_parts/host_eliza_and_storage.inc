@@ -2768,7 +2768,7 @@ static void *session_translation_worker(void *arg) {
       continue;
     }
 
-    if (batch[0]->type == TRANSLATION_JOB_INPUT) {
+    if (batch[0]->type != TRANSLATION_JOB_CAPTION) {
       session_translation_process_single_job(ctx, batch[0]);
       continue;
     }
