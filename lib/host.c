@@ -1257,6 +1257,7 @@ typedef struct session_ui_locale {
   const char *help_operator_title;
   const char *welcome_help_hint;
   const char *welcome_motd_hint;
+  const char *welcome_history_hint;
   const char *chat_spacing_usage;
   const char *chat_spacing_immediate;
   const char *chat_spacing_single;
@@ -1306,6 +1307,7 @@ static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT] = 
         .help_operator_title = "Operator commands:",
         .welcome_help_hint = "Use %shelp to view the manual.",
         .welcome_motd_hint = "Use %smotd to read the information.",
+        .welcome_history_hint = "Previous messages are hidden. Use Up/Down arrows to browse older chat.",
         .chat_spacing_usage = "Usage: %schat-spacing <0-5>",
         .chat_spacing_immediate =
             "Translation captions will appear immediately without reserving extra blank lines.",
@@ -1343,6 +1345,7 @@ static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT] = 
         .help_operator_title = "운영자 명령:",
         .welcome_help_hint = "%shelp 명령으로 도움말을 확인하세요.",
         .welcome_motd_hint = "%smotd 명령으로 안내를 읽을 수 있습니다.",
+        .welcome_history_hint = "이전 메시지는 숨겨져 있습니다. 위/아래 화살표로 지난 채팅을 살펴보세요.",
         .chat_spacing_usage = "사용법: %schat-spacing <0-5>",
         .chat_spacing_immediate = "번역 자막이 빈 줄을 예약하지 않고 즉시 표시됩니다.",
         .chat_spacing_single = "번역 자막이 표시되기 전에 빈 줄 1줄을 예약합니다.",
@@ -1375,6 +1378,7 @@ static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT] = 
         .help_operator_title = "オペレーター用コマンド:",
         .welcome_help_hint = "%shelp でヘルプを表示できます。",
         .welcome_motd_hint = "%smotd でお知らせを確認できます。",
+        .welcome_history_hint = "以前のメッセージは非表示です。上下の矢印で過去のチャットを確認できます。",
         .chat_spacing_usage = "使い方: %schat-spacing <0-5>",
         .chat_spacing_immediate = "翻訳字幕は空行を確保せずすぐに表示されます。",
         .chat_spacing_single = "翻訳字幕は表示前に空行を 1 行確保します。",
@@ -1407,6 +1411,7 @@ static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT] = 
         .help_operator_title = "管理员命令：",
         .welcome_help_hint = "使用 %shelp 查看帮助。",
         .welcome_motd_hint = "使用 %smotd 阅读公告。",
+        .welcome_history_hint = "之前的消息已隐藏。使用上下方向键查看较早的聊天。",
         .chat_spacing_usage = "用法：%schat-spacing <0-5>",
         .chat_spacing_immediate = "翻译字幕会立即显示，不再预留空行。",
         .chat_spacing_single = "翻译字幕在显示前会预留 1 行空白。",
@@ -1439,6 +1444,7 @@ static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT] = 
         .help_operator_title = "Команды оператора:",
         .welcome_help_hint = "Команду %shelp используйте для справки.",
         .welcome_motd_hint = "%smotd покажет объявление.",
+        .welcome_history_hint = "Предыдущие сообщения скрыты. Используйте стрелки вверх/вниз, чтобы просмотреть старый чат.",
         .chat_spacing_usage = "Использование: %schat-spacing <0-5>",
         .chat_spacing_immediate = "Подписи перевода будут появляться сразу, без запасных пустых строк.",
         .chat_spacing_single = "Подписи перевода перед выводом резервируют 1 пустую строку.",
@@ -5009,6 +5015,8 @@ static size_t session_utf8_decode_codepoint(const unsigned char *data, size_t le
 static bool session_utf8_to_utf16le(const char *input, size_t length, unsigned char *output, size_t capacity,
                                     size_t *produced);
 static bool session_channel_write_all(session_ctx_t *ctx, const void *data, size_t length);
+static bool session_output_lock(session_ctx_t *ctx);
+static void session_output_unlock(session_ctx_t *ctx);
 static bool session_channel_wait_writable(session_ctx_t *ctx, int timeout_ms);
 static void session_channel_log_write_failure(session_ctx_t *ctx, const char *reason);
 static int session_transport_read(session_ctx_t *ctx, void *buffer, size_t length, int timeout_ms);
@@ -5065,6 +5073,7 @@ static void session_telnet_request_terminal_type(session_ctx_t *ctx);
 static void session_telnet_capture_startup_metadata(session_ctx_t *ctx);
 static void session_history_record(session_ctx_t *ctx, const char *line);
 static void session_history_navigate(session_ctx_t *ctx, int direction);
+static void session_scrollback_reset_position(session_ctx_t *ctx);
 static void session_scrollback_navigate(session_ctx_t *ctx, int direction);
 static bool session_try_localized_command_forward(session_ctx_t *ctx, const char *line);
 static void chat_history_entry_prepare_user(chat_history_entry_t *entry, const session_ctx_t *from, const char *message);
@@ -5228,7 +5237,6 @@ static bool session_parse_color_arguments(char *working, char **tokens, size_t m
 static size_t session_utf8_prev_char_len(const char *buffer, size_t length);
 static int session_utf8_char_width(const char *bytes, size_t length);
 static void host_history_record_system(host_t *host, const char *message);
-static void session_send_history(session_ctx_t *ctx);
 static void session_send_history_entry(session_ctx_t *ctx, const chat_history_entry_t *entry);
 static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *message,
                                              bool clear_prompt_text);
@@ -15581,12 +15589,50 @@ cleanup:
   return success;
 }
 
+static bool session_output_lock(session_ctx_t *ctx) {
+  if (ctx == NULL || !ctx->output_lock_initialized) {
+    return false;
+  }
+
+  int error = pthread_mutex_lock(&ctx->output_lock);
+  if (error != 0) {
+    printf("[session] failed to lock output for %s: %s\n",
+           (ctx->user.name[0] != '\0') ? ctx->user.name : "unknown", strerror(error));
+    return false;
+  }
+
+  return true;
+}
+
+static void session_output_unlock(session_ctx_t *ctx) {
+  if (ctx == NULL || !ctx->output_lock_initialized) {
+    return;
+  }
+
+  int error = pthread_mutex_unlock(&ctx->output_lock);
+  if (error != 0) {
+    printf("[session] failed to unlock output for %s: %s\n",
+           (ctx->user.name[0] != '\0') ? ctx->user.name : "unknown", strerror(error));
+  }
+}
+
 static void session_channel_write(session_ctx_t *ctx, const void *data, size_t length) {
   if (ctx == NULL || data == NULL || length == 0U || ctx->should_exit || !session_transport_active(ctx)) {
     return;
   }
 
+  bool locked = session_output_lock(ctx);
+
   bool success = true;
+  if (ctx->channel_mutex_initialized) {
+    int lock_result = pthread_mutex_lock(&ctx->channel_mutex);
+    if (lock_result == 0) {
+      locked = true;
+    } else {
+      humanized_log_error("session", "failed to lock channel mutex", lock_result);
+    }
+  }
+
   if (ctx->prefer_cp437_output) {
     success = session_channel_write_cp437(ctx, (const char *)data, length);
   } else if (ctx->prefer_utf16_output) {
@@ -15595,8 +15641,19 @@ static void session_channel_write(session_ctx_t *ctx, const void *data, size_t l
     success = session_channel_write_all(ctx, data, length);
   }
 
+  if (locked) {
+    int unlock_result = pthread_mutex_unlock(&ctx->channel_mutex);
+    if (unlock_result != 0) {
+      humanized_log_error("session", "failed to unlock channel mutex", unlock_result);
+    }
+  }
+
   if (!success) {
     ctx->should_exit = true;
+  }
+
+  if (locked) {
+    session_output_unlock(ctx);
   }
 }
 
@@ -15824,6 +15881,7 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
     return;
   }
 
+  bool locked = session_output_lock(ctx);
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   const size_t bg_len = strlen(bg);
 
@@ -15837,6 +15895,10 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
   if (bg_len > 0U) {
     session_channel_write(ctx, bg, bg_len);
   }
+
+  if (locked) {
+    session_output_unlock(ctx);
+  }
 }
 
 static void session_write_rendered_line(session_ctx_t *ctx, const char *render_source) {
@@ -15844,12 +15906,16 @@ static void session_write_rendered_line(session_ctx_t *ctx, const char *render_s
     return;
   }
 
+  bool locked = session_output_lock(ctx);
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   const size_t bg_len = strlen(bg);
 
   if (bg_len == 0U) {
     session_channel_write(ctx, render_source, strlen(render_source));
     session_channel_write(ctx, "\r\n", 2U);
+    if (locked) {
+      session_output_unlock(ctx);
+    }
     return;
   }
 
@@ -15888,6 +15954,10 @@ static void session_write_rendered_line(session_ctx_t *ctx, const char *render_s
   session_channel_write(ctx, expanded, out_idx);
   session_channel_write(ctx, "\r\n", 2U);
   session_channel_write(ctx, bg, bg_len);
+
+  if (locked) {
+    session_output_unlock(ctx);
+  }
 }
 
 static void session_send_caption_line(session_ctx_t *ctx, const char *message) {
@@ -15895,10 +15965,15 @@ static void session_send_caption_line(session_ctx_t *ctx, const char *message) {
     return;
   }
 
+  bool locked = session_output_lock(ctx);
   session_channel_write(ctx, "\r", 1U);
   session_channel_write(ctx, ANSI_INSERT_LINE, sizeof(ANSI_INSERT_LINE) - 1U);
 
   session_write_rendered_line(ctx, message);
+
+  if (locked) {
+    session_output_unlock(ctx);
+  }
 }
 
 static void session_render_caption_with_offset(session_ctx_t *ctx, const char *message, size_t move_up) {
@@ -15911,6 +15986,7 @@ static void session_render_caption_with_offset(session_ctx_t *ctx, const char *m
     return;
   }
 
+  bool locked = session_output_lock(ctx);
   session_channel_write(ctx, "\033[s", 3U);
 
   char command[32];
@@ -15922,6 +15998,10 @@ static void session_render_caption_with_offset(session_ctx_t *ctx, const char *m
   session_channel_write(ctx, "\r", 1U);
   session_write_rendered_line(ctx, message);
   session_channel_write(ctx, "\033[u", 3U);
+
+  if (locked) {
+    session_output_unlock(ctx);
+  }
 }
 
 static void session_telnet_send_option(session_ctx_t *ctx, unsigned char command, unsigned char option) {
@@ -17910,6 +17990,7 @@ static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
     return;
   }
 
+  bool locked = session_output_lock(ctx);
   if (include_separator) {
     session_render_separator(ctx, "Input");
   }
@@ -17943,6 +18024,10 @@ static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
   if (ctx->input_length > 0U) {
     session_channel_write(ctx, ctx->input_buffer, ctx->input_length);
   }
+
+  if (locked) {
+    session_output_unlock(ctx);
+  }
 }
 
 static void session_refresh_input_line(session_ctx_t *ctx) {
@@ -17950,6 +18035,7 @@ static void session_refresh_input_line(session_ctx_t *ctx) {
     return;
   }
 
+  bool locked = session_output_lock(ctx);
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   if (bg[0] != '\0') {
     session_channel_write(ctx, bg, strlen(bg));
@@ -17963,6 +18049,10 @@ static void session_refresh_input_line(session_ctx_t *ctx) {
   }
 
   session_render_prompt(ctx, false);
+
+  if (locked) {
+    session_output_unlock(ctx);
+  }
 }
 
 static void session_set_input_text(session_ctx_t *ctx, const char *text) {
@@ -18184,7 +18274,7 @@ static bool session_try_command_completion(session_ctx_t *ctx) {
     updated[updated_len] = '\0';
     session_set_input_text(ctx, updated);
     ctx->input_history_position = -1;
-    ctx->history_scroll_position = 0U;
+    session_scrollback_reset_position(ctx);
     return true;
   }
 
@@ -18228,7 +18318,7 @@ static bool session_try_command_completion(session_ctx_t *ctx) {
     updated[updated_len] = '\0';
     session_set_input_text(ctx, updated);
     ctx->input_history_position = -1;
-    ctx->history_scroll_position = 0U;
+    session_scrollback_reset_position(ctx);
     return true;
   }
 
@@ -18266,6 +18356,16 @@ static bool session_try_command_completion(session_ctx_t *ctx) {
   }
   session_refresh_input_line(ctx);
   return true;
+}
+
+static void session_scrollback_reset_position(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  ctx->history_scroll_position = 0U;
+  ctx->history_latest_notified = false;
+  ctx->history_oldest_notified = false;
 }
 
 static void session_history_record(session_ctx_t *ctx, const char *line) {
@@ -18322,7 +18422,7 @@ static void session_history_record(session_ctx_t *ctx, const char *line) {
   }
 
   ctx->input_history_position = -1;
-  ctx->history_scroll_position = 0U;
+  session_scrollback_reset_position(ctx);
 }
 
 static void session_history_navigate(session_ctx_t *ctx, int direction) {
@@ -18330,7 +18430,7 @@ static void session_history_navigate(session_ctx_t *ctx, int direction) {
     return;
   }
 
-  ctx->history_scroll_position = 0U;
+  session_scrollback_reset_position(ctx);
 
   if (ctx->input_history_count == 0U) {
     ctx->input_history_position = (int)ctx->input_history_count;
@@ -18432,13 +18532,24 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
   bool at_boundary = (new_position == position);
   ctx->history_scroll_position = new_position;
 
+  bool at_latest = (ctx->history_scroll_position == 0U);
+  bool at_oldest = (ctx->history_scroll_position == max_position && total > 0U);
+
+  if (!at_latest) {
+    ctx->history_latest_notified = false;
+  }
+  if (!at_oldest) {
+    ctx->history_oldest_notified = false;
+  }
+
   const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
   session_channel_write(ctx, clear_sequence, sizeof(clear_sequence) - 1U);
   session_channel_write(ctx, "\r\n", 2U);
 
   if (direction < 0 && at_boundary && new_position == 0U) {
-    if (position == 0U) {
+    if (!ctx->history_latest_notified) {
       session_send_system_line(ctx, "Already at the latest messages.");
+      ctx->history_latest_notified = true;
     }
     session_render_prompt(ctx, false);
     goto cleanup;
@@ -18456,7 +18567,10 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
   const size_t oldest_visible = (newest_visible + 1U > chunk) ? (newest_visible + 1U - chunk) : 0U;
 
   if (direction > 0 && (reached_oldest || (at_boundary && new_position == max_position))) {
-    session_send_system_line(ctx, "Reached the oldest stored message.");
+    if (!ctx->history_oldest_notified) {
+      session_send_system_line(ctx, "Reached the oldest stored message.");
+      ctx->history_oldest_notified = true;
+    }
   }
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];
@@ -18471,6 +18585,9 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
   size_t copied = host_history_copy_range(ctx->owner, oldest_visible, buffer, request);
   if (copied == 0U) {
     session_send_system_line(ctx, "Unable to read chat history right now.");
+    ctx->history_scroll_position = (total > 0U) ? max_position : 0U;
+    ctx->history_latest_notified = false;
+    ctx->history_oldest_notified = false;
     session_render_prompt(ctx, false);
     goto cleanup;
   }
@@ -18480,7 +18597,10 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
   }
 
   if (direction < 0 && new_position == 0U) {
-    session_send_system_line(ctx, "End of scrollback.");
+    if (!ctx->history_latest_notified) {
+      session_send_system_line(ctx, "End of scrollback.");
+      ctx->history_latest_notified = true;
+    }
   }
 
   session_render_prompt(ctx, false);
@@ -19082,49 +19202,6 @@ static const char *chat_attachment_type_label(chat_attachment_type_t type) {
   default:
     return "attachment";
   }
-}
-
-static void session_send_history(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->owner == NULL || !session_transport_active(ctx)) {
-    return;
-  }
-
-  size_t total = host_history_total(ctx->owner);
-  if (total == 0U) {
-    return;
-  }
-
-  size_t window = SSH_CHATTER_SCROLLBACK_CHUNK;
-  if (window == 0U) {
-    window = 1U;
-  }
-  if (window > total) {
-    window = total;
-  }
-
-  chat_history_entry_t snapshot[SSH_CHATTER_SCROLLBACK_CHUNK];
-  size_t start_index = total - window;
-  size_t copied = host_history_copy_range(ctx->owner, start_index, snapshot, window);
-  if (copied == 0U) {
-    return;
-  }
-
-  char header[SSH_CHATTER_MESSAGE_LIMIT];
-  if (total > copied) {
-    snprintf(header, sizeof(header), "Recent activity (last %zu of %zu messages):", copied, total);
-  } else {
-    snprintf(header, sizeof(header), "Recent activity (last %zu message%s):", copied, copied == 1U ? "" : "s");
-  }
-  session_render_separator(ctx, "Recent activity");
-  session_send_system_line(ctx, header);
-
-  for (size_t idx = 0; idx < copied; ++idx) {
-    session_send_history_entry(ctx, &snapshot[idx]);
-  }
-
-  session_send_system_line(ctx, "Use the Up/Down arrow keys to browse stored chat history.");
-  session_render_separator(ctx, "Chatroom");
-  ctx->history_scroll_position = 0U;
 }
 
 static bool session_handle_service_request(ssh_message message) {
@@ -31363,7 +31440,7 @@ static void session_reset_for_retry(session_ctx_t *ctx) {
   ctx->input_history_count = 0U;
   memset(ctx->input_history_is_command, 0, sizeof(ctx->input_history_is_command));
   ctx->input_history_position = -1;
-  ctx->history_scroll_position = 0U;
+  session_scrollback_reset_position(ctx);
   ctx->has_last_message_time = false;
   ctx->last_message_time.tv_sec = 0;
   ctx->last_message_time.tv_nsec = 0;
@@ -31480,13 +31557,29 @@ static void *host_telnet_thread(void *arg) {
       close(client_fd);
       continue;
     }
-        ctx->ops = &telnet_session_ops;
-        ctx->transport_kind = SESSION_TRANSPORT_TELNET;
+    ctx->ops = &telnet_session_ops;
+    ctx->transport_kind = SESSION_TRANSPORT_TELNET;
     ctx->telnet_fd = client_fd;
     ctx->telnet_negotiated = false;
     ctx->telnet_eof = false;
     ctx->telnet_pending_valid = false;
+    pthread_mutexattr_t lock_attr;
+    pthread_mutexattr_init(&lock_attr);
+    pthread_mutexattr_settype(&lock_attr, PTHREAD_MUTEX_RECURSIVE);
+    int mutex_error = pthread_mutex_init(&ctx->output_lock, &lock_attr);
+    pthread_mutexattr_destroy(&lock_attr);
+    if (mutex_error != 0) {
+      humanized_log_error("telnet", "failed to initialise session output lock", mutex_error);
+      session_cleanup(ctx);
+      continue;
+    }
+    ctx->output_lock_initialized = true;
     ctx->owner = host;
+    if (pthread_mutex_init(&ctx->channel_mutex, NULL) == 0) {
+      ctx->channel_mutex_initialized = true;
+    } else {
+      humanized_log_error("session", "failed to initialize channel mutex", errno != 0 ? errno : ENOMEM);
+    }
     ctx->auth = (auth_profile_t){0};
     snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
     ctx->input_mode = SESSION_INPUT_MODE_CHAT;
@@ -31648,10 +31741,19 @@ static void session_cleanup(session_ctx_t *ctx) {
   }
 
   session_translation_worker_shutdown(ctx);
+  if (ctx->channel_mutex_initialized) {
+    pthread_mutex_destroy(&ctx->channel_mutex);
+    ctx->channel_mutex_initialized = false;
+  }
   if (ctx->transport_kind == SESSION_TRANSPORT_SSH && ctx->channel != NULL) {
     ssh_channel_request_send_exit_status(ctx->channel, ctx->exit_status);
   }
   session_close_channel(ctx);
+
+  if (ctx->output_lock_initialized) {
+    pthread_mutex_destroy(&ctx->output_lock);
+    ctx->output_lock_initialized = false;
+  }
 
   if (ctx->session != NULL) {
     ssh_disconnect(ctx->session);
@@ -31816,13 +31918,19 @@ static void *session_thread(void *arg) {
     printf("[join] %s\n", ctx->user.name);
 
     session_render_banner(ctx);
-    session_send_history(ctx);
+    ctx->history_scroll_position = 0U;
     host_refresh_motd(ctx->owner);
     if (ctx->owner->motd[0] != '\0') {
       session_send_system_line(ctx, ctx->owner->motd);
     }
     const session_ui_locale_t *locale = session_ui_get_locale(ctx);
     const char *prefix = session_command_prefix(ctx);
+
+    session_send_system_line(ctx,
+                             "Chat history starts hidden. Press the UpArrow/DownArrow keys to load older messages when you need them.");
+    if (locale->help_scroll_hint != NULL && locale->help_scroll_hint[0] != '\0') {
+      session_send_system_line(ctx, locale->help_scroll_hint);
+    }
 
     if (locale->welcome_help_hint != NULL && locale->welcome_help_hint[0] != '\0') {
       const char *args[] = {prefix};
@@ -32133,7 +32241,7 @@ static void *session_thread(void *arg) {
 
       if (ch == '\b' || ch == 0x7f) {
         ctx->input_history_position = -1;
-        ctx->history_scroll_position = 0U;
+        session_scrollback_reset_position(ctx);
         session_local_backspace(ctx);
         continue;
       }
@@ -32144,7 +32252,7 @@ static void *session_thread(void *arg) {
         }
         if (ctx->input_length + 1U < sizeof(ctx->input_buffer)) {
           ctx->input_history_position = -1;
-          ctx->history_scroll_position = 0U;
+          session_scrollback_reset_position(ctx);
           ctx->input_buffer[ctx->input_length++] = ' ';
           session_local_echo_char(ctx, ' ');
         }
@@ -32168,7 +32276,7 @@ static void *session_thread(void *arg) {
 
       if (ctx->input_length + 1U < sizeof(ctx->input_buffer)) {
         ctx->input_history_position = -1;
-        ctx->history_scroll_position = 0U;
+        session_scrollback_reset_position(ctx);
         ctx->input_buffer[ctx->input_length++] = ch;
         session_local_echo_char(ctx, ch);
       }
@@ -33222,7 +33330,23 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       ctx->telnet_fd = -1;
       ctx->telnet_eof = false;
       ctx->telnet_pending_valid = false;
+      pthread_mutexattr_t lock_attr;
+      pthread_mutexattr_init(&lock_attr);
+      pthread_mutexattr_settype(&lock_attr, PTHREAD_MUTEX_RECURSIVE);
+      int mutex_error = pthread_mutex_init(&ctx->output_lock, &lock_attr);
+      pthread_mutexattr_destroy(&lock_attr);
+      if (mutex_error != 0) {
+        humanized_log_error("host", "failed to initialise session output lock", mutex_error);
+        session_cleanup(ctx);
+        continue;
+      }
+      ctx->output_lock_initialized = true;
       ctx->owner = host;
+      if (pthread_mutex_init(&ctx->channel_mutex, NULL) == 0) {
+        ctx->channel_mutex_initialized = true;
+      } else {
+        humanized_log_error("session", "failed to initialize channel mutex", errno != 0 ? errno : ENOMEM);
+      }
       ctx->auth = (auth_profile_t){0};
       snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
       ctx->input_mode = SESSION_INPUT_MODE_CHAT;

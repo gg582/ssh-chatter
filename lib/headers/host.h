@@ -522,8 +522,10 @@ typedef struct session_ctx {
   session_ui_language_t ui_language;
   pthread_mutex_t translation_mutex;
   pthread_cond_t translation_cond;
+  pthread_mutex_t output_lock;
   bool translation_mutex_initialized;
   bool translation_cond_initialized;
+  bool output_lock_initialized;
   bool translation_thread_started;
   bool translation_thread_stop;
   pthread_t translation_thread;
