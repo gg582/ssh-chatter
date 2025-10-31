@@ -31818,8 +31818,9 @@ static void *session_thread(void *arg) {
     session_render_banner(ctx);
     session_send_history(ctx);
     host_refresh_motd(ctx->owner);
-    if (ctx->owner->motd[0] != '\0') {
-      session_send_system_line(ctx, ctx->owner->motd);
+    session_send_system_line(ctx, "type /motd to get info");
+    if (ctx->telnet_fd >= 0) {
+      session_send_system_line(ctx, "for telnet users: please check /motd and follow guides");
     }
     const session_ui_locale_t *locale = session_ui_get_locale(ctx);
     const char *prefix = session_command_prefix(ctx);
