@@ -3947,7 +3947,21 @@ static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  if (strcasecmp(token, "on") == 0) {
+  bool requested_enable = false;
+  bool recognized = false;
+  if (session_argument_is_disable(token)) {
+    recognized = true;
+    requested_enable = false;
+  } else {
+    recognized = parse_bool_token(token, &requested_enable);
+  }
+
+  if (!recognized) {
+    session_send_system_line(ctx, "Usage: /gemini <on|off>");
+    return;
+  }
+
+  if (requested_enable) {
     translator_set_gemini_enabled(true);
     session_send_system_line(ctx, "Gemini translation enabled. Ollama fallback remains available.");
 
@@ -3959,20 +3973,16 @@ static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  if (strcasecmp(token, "off") == 0) {
-    translator_set_gemini_enabled(false);
-    session_send_system_line(ctx, "Gemini translation disabled. Using Ollama gemma2:2b only.");
-    session_send_system_line(ctx, "While Gemini is off, only chat messages and BBS posts will be translated.");
+  translator_set_gemini_enabled(false);
+  session_send_system_line(ctx, "Gemini translation disabled. Using Ollama gemma2:2b only.");
+  session_send_system_line(ctx, "While Gemini is off, only chat messages and BBS posts will be translated.");
 
-    char notice[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(notice, sizeof(notice),
-             "* [%s] disabled Gemini translation; using Ollama fallback only (chat and BBS posts).", ctx->user.name);
-    host_history_record_system(ctx->owner, notice);
-    chat_room_broadcast(&ctx->owner->room, notice, NULL);
-    return;
-  }
-
-  session_send_system_line(ctx, "Usage: /gemini <on|off>");
+  char notice[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(notice, sizeof(notice),
+           "* [%s] disabled Gemini translation; using Ollama fallback only (chat and BBS posts).", ctx->user.name);
+  host_history_record_system(ctx->owner, notice);
+  chat_room_broadcast(&ctx->owner->room, notice, NULL);
+  return;
 }
 
 static void session_handle_captcha(session_ctx_t *ctx, const char *arguments) {
@@ -4003,7 +4013,21 @@ static void session_handle_captcha(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  if (strcasecmp(token, "on") == 0) {
+  bool requested_enable = false;
+  bool recognized = false;
+  if (session_argument_is_disable(token)) {
+    recognized = true;
+    requested_enable = false;
+  } else {
+    recognized = parse_bool_token(token, &requested_enable);
+  }
+
+  if (!recognized) {
+    session_send_system_line(ctx, "Usage: /captcha <on|off>");
+    return;
+  }
+
+  if (requested_enable) {
     bool was_enabled = atomic_exchange(&host->captcha_enabled, true);
     if (was_enabled) {
       session_send_system_line(ctx, "Captcha is already enabled.");
@@ -4020,24 +4044,20 @@ static void session_handle_captcha(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  if (strcasecmp(token, "off") == 0) {
-    bool was_enabled = atomic_exchange(&host->captcha_enabled, false);
-    if (!was_enabled) {
-      session_send_system_line(ctx, "Captcha is already disabled.");
-    } else {
-      session_send_system_line(ctx, "Captcha disabled. New connections will skip the puzzle.");
-      char notice[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(notice, sizeof(notice), "* [%s] disabled captcha for new connections.", ctx->user.name);
-      host_history_record_system(host, notice);
-      chat_room_broadcast(&host->room, notice, NULL);
-      pthread_mutex_lock(&host->lock);
-      host_state_save_locked(host);
-      pthread_mutex_unlock(&host->lock);
-    }
-    return;
+  bool was_enabled = atomic_exchange(&host->captcha_enabled, false);
+  if (!was_enabled) {
+    session_send_system_line(ctx, "Captcha is already disabled.");
+  } else {
+    session_send_system_line(ctx, "Captcha disabled. New connections will skip the puzzle.");
+    char notice[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(notice, sizeof(notice), "* [%s] disabled captcha for new connections.", ctx->user.name);
+    host_history_record_system(host, notice);
+    chat_room_broadcast(&host->room, notice, NULL);
+    pthread_mutex_lock(&host->lock);
+    host_state_save_locked(host);
+    pthread_mutex_unlock(&host->lock);
   }
-
-  session_send_system_line(ctx, "Usage: /captcha <on|off>");
+  return;
 }
 
 static void session_handle_eliza(session_ctx_t *ctx, const char *arguments) {
@@ -4067,7 +4087,21 @@ static void session_handle_eliza(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  if (strcasecmp(token, "on") == 0) {
+  bool requested_enable = false;
+  bool recognized = false;
+  if (session_argument_is_disable(token)) {
+    recognized = true;
+    requested_enable = false;
+  } else {
+    recognized = parse_bool_token(token, &requested_enable);
+  }
+
+  if (!recognized) {
+    session_send_system_line(ctx, "Usage: /eliza <on|off>");
+    return;
+  }
+
+  if (requested_enable) {
     if (host_eliza_enable(ctx->owner)) {
       session_send_system_line(ctx, "eliza enabled. She will now mingle with the room and watch for severe issues.");
     } else {
@@ -4076,16 +4110,12 @@ static void session_handle_eliza(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  if (strcasecmp(token, "off") == 0) {
-    if (host_eliza_disable(ctx->owner)) {
-      session_send_system_line(ctx, "eliza disabled. She will no longer intervene.");
-    } else {
-      session_send_system_line(ctx, "eliza is already inactive.");
-    }
-    return;
+  if (host_eliza_disable(ctx->owner)) {
+    session_send_system_line(ctx, "eliza disabled. She will no longer intervene.");
+  } else {
+    session_send_system_line(ctx, "eliza is already inactive.");
   }
-
-  session_send_system_line(ctx, "Usage: /eliza <on|off>");
+  return;
 }
 
 static void session_handle_eliza_chat(session_ctx_t *ctx, const char *arguments) {
