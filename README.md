@@ -6,7 +6,7 @@ SSH-Chatter has started from a C reimplementation of the Go [`ssh-chat`](https:/
 > [!IMPORTANT]
 > **✨ Highlights from the latest builds**
 > - Named polls got quality-of-life upgrades: run `/vote <label> <question>|<choices...>` for multi-choice ballots, or `/vote-single <label> <question>|<choices...>` when you only need one pick.
-> - `/eliza-chat` now keeps shared memories in `eliza_memory.dat`, letting everyone continue a persistent conversation with the resident Eliza persona.
+> - Chat with the resident Eliza persona using `/pm eliza <message>` for a direct line without the old `/eliza-chat` command.
 > - `/banname <nickname>` lets operators block suspicious login names up front, forcing clients to pick something else before joining.
 > - Follow communities from inside the terminal with the `/rss` reader (`/rss list`, `/rss read <tag>`, operators manage feeds with `/rss add <url> <tag>` and `/rss del <tag>`).
 > - Matrix rooms can now mirror the chat through a triple-layer AES-256-GCM bridge (`CHATTER_MATRIX_*` toggles encrypt every hop in a Tor-style onion before messages leave the server).
@@ -15,7 +15,7 @@ SSH-Chatter has started from a C reimplementation of the Go [`ssh-chat`](https:/
 
 - Named poll management via `/vote` for multiple-choice polls (vote with `/1 <label>` or `/elect <label> <choice>`) plus `/vote-single` for classic single-choice runs, including graceful shutdown with `/vote @close <label>`.
 - Terminal-friendly RSS reader accessible with `/rss list`, `/rss read <tag>`, plus `/rss add <url> <tag>` and `/rss del <tag>` (operators only) so the room can browse headlines together.
-- Shared eliza memory store powering `/eliza-chat <message>`, letting everyone chat with the eliza persona while grounding replies in prior conversations persisted to `eliza_memory.dat`.
+- Talk with the eliza persona by sending `/pm eliza <message>`; the dedicated `/eliza-chat` command has been retired in favour of private messages.
 - Background BBS watchdog thread that uses the Gemini/Ollama moderation backends to remove posts that advertise crimes or harmful material, plus `/delete-msg` for targeted chat history cleanup.
 - Poll state persistence to `vote_state.dat` (overridable via `CHATTER_VOTE_FILE`) so active polls and their votes survive restarts.
 - `/bbs` command unlocking a retro bulletin board system with tags, comments, bumping, and a multi-line composer that ends on a locale-aware terminator (defaulting to `>/__BBS_END>`).
@@ -246,7 +246,6 @@ Supported environment variables include:
 - `CHATTER_EXTRA_ARGS` – Additional arguments appended to the `ssh-chatter` invocation.
 - `CHATTER_VOTE_FILE` – Path to the vote state file (default `vote_state.dat`).
 - `CHATTER_GEMINI_COOLDOWN_FILE` – Path to the Gemini cooldown state file (default `gemini_cooldown.dat`).
-- `CHATTER_ELIZA_MEMORY_FILE` – Path to the persistent eliza memory store (default `eliza_memory.dat`).
 - `CHATTER_SECURITY_FILTER` – Set to `off`/`false`/`0` to disable the layered security filter (enabled by default).
 - `CHATTER_SECURITY_AI` – Set to `on`/`true`/`1` to enable AI moderation (disabled by default).
 - `CHATTER_CLAMAV` – Set to `off`/`false`/`0` to disable ClamAV scanning (enabled by default when `clamscan` is available).

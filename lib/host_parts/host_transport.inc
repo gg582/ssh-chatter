@@ -1138,7 +1138,6 @@ static void session_handle_chat_spacing(session_ctx_t *ctx, const char *argument
 static void session_handle_mode(session_ctx_t *ctx, const char *arguments);
 static void session_handle_history(session_ctx_t *ctx, const char *arguments);
 static void session_handle_eliza(session_ctx_t *ctx, const char *arguments);
-static void session_handle_eliza_chat(session_ctx_t *ctx, const char *arguments);
 static void session_handle_status(session_ctx_t *ctx, const char *arguments);
 static void session_handle_showstatus(session_ctx_t *ctx, const char *arguments);
 static void session_handle_weather(session_ctx_t *ctx, const char *arguments);

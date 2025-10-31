@@ -1618,12 +1618,6 @@ static const session_command_alias_t kSessionCommandAliases[] = {
         },
     },
     {
-        .canonical = "/eliza-chat",
-        .localized = {
-            [SESSION_UI_LANGUAGE_KO] = "/엘리자채팅",
-        },
-    },
-    {
         .canonical = "/ban",
         .localized = {
             [SESSION_UI_LANGUAGE_KO] = "/밴",

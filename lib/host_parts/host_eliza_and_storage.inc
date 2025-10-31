@@ -1,6 +1,6 @@
 // Eliza memory management, BBS persistence, and rendering helpers.
 
-static void host_eliza_memory_store(host_t *host, const char *prompt, const char *reply) {
+static void __attribute__((unused)) host_eliza_memory_store(host_t *host, const char *prompt, const char *reply) {
   if (host == NULL || prompt == NULL || reply == NULL) {
     return;
   }
@@ -35,7 +35,7 @@ static void host_eliza_memory_store(host_t *host, const char *prompt, const char
   pthread_mutex_unlock(&host->lock);
 }
 
-static size_t host_eliza_memory_collect_tokens(const char *prompt, char tokens[][32], size_t max_tokens) {
+static size_t __attribute__((unused)) host_eliza_memory_collect_tokens(const char *prompt, char tokens[][32], size_t max_tokens) {
   if (tokens == NULL || max_tokens == 0U || prompt == NULL) {
     return 0U;
   }
@@ -87,8 +87,8 @@ static size_t host_eliza_memory_collect_tokens(const char *prompt, char tokens[]
   return count;
 }
 
-static size_t host_eliza_memory_collect_context(host_t *host, const char *prompt, char *context,
-                                                size_t context_length) {
+static size_t __attribute__((unused)) host_eliza_memory_collect_context(host_t *host, const char *prompt, char *context,
+                                                                        size_t context_length) {
   if (context == NULL || context_length == 0U) {
     return 0U;
   }
@@ -229,7 +229,7 @@ static size_t host_eliza_memory_collect_context(host_t *host, const char *prompt
   return best_count;
 }
 
-static void host_eliza_history_normalize_line(char *text) {
+static void __attribute__((unused)) host_eliza_history_normalize_line(char *text) {
   if (text == NULL) {
     return;
   }
@@ -264,7 +264,7 @@ static void host_eliza_history_normalize_line(char *text) {
   text[write_index] = '\0';
 }
 
-static size_t host_eliza_history_collect_context(host_t *host, char *context, size_t context_length) {
+static size_t __attribute__((unused)) host_eliza_history_collect_context(host_t *host, char *context, size_t context_length) {
   if (context == NULL || context_length == 0U) {
     return 0U;
   }
@@ -390,7 +390,7 @@ static size_t host_eliza_history_collect_context(host_t *host, char *context, si
   return collected;
 }
 
-static void host_eliza_prepare_preview(const char *source, char *dest, size_t dest_length) {
+static void __attribute__((unused)) host_eliza_prepare_preview(const char *source, char *dest, size_t dest_length) {
   if (dest == NULL || dest_length == 0U) {
     return;
   }
@@ -424,7 +424,7 @@ static void host_eliza_prepare_preview(const char *source, char *dest, size_t de
   }
 }
 
-static size_t host_eliza_bbs_collect_context(host_t *host, char *context, size_t context_length) {
+static size_t __attribute__((unused)) host_eliza_bbs_collect_context(host_t *host, char *context, size_t context_length) {
   if (context == NULL || context_length == 0U) {
     return 0U;
   }
@@ -1608,7 +1608,6 @@ typedef enum translation_job_type {
   TRANSLATION_JOB_CAPTION = 0,
   TRANSLATION_JOB_INPUT,
   TRANSLATION_JOB_PRIVATE_MESSAGE,
-  TRANSLATION_JOB_ELIZA_CHAT,
 } translation_job_type_t;
 
 typedef struct translation_job {
@@ -1631,10 +1630,6 @@ typedef struct translation_job {
       char to_target_label[SSH_CHATTER_MESSAGE_LIMIT];
       char to_sender_label[SSH_CHATTER_MESSAGE_LIMIT];
     } pm;
-    struct {
-      char prompt[SSH_CHATTER_MESSAGE_LIMIT];
-      char formatted_prompt[SSH_CHATTER_ELIZA_PROMPT_BUFFER];
-    } eliza;
   } data;
 } translation_job_t;
 
@@ -2191,40 +2186,6 @@ static void session_translation_flush_ready(session_ctx_t *ctx) {
       continue;
     }
 
-    if (ready->type == TRANSLATION_JOB_ELIZA_CHAT) {
-      if (ready->success) {
-        if (ctx->owner != NULL) {
-          host_eliza_memory_store(ctx->owner, ready->original, ready->translated);
-          clock_gettime(CLOCK_MONOTONIC, &ctx->owner->eliza_last_action);
-        }
-
-        session_ctx_t palette = {0};
-        if (ctx->owner != NULL) {
-          palette.user_color_code = ctx->owner->user_theme.userColor;
-          palette.user_highlight_code = ctx->owner->user_theme.highlight;
-          palette.user_is_bold = ctx->owner->user_theme.isBold;
-        }
-
-        session_send_private_message_line(ctx, &palette, "eliza -> you", ready->translated);
-
-        if (ctx->owner != NULL) {
-          ctx->last_message_time = ctx->owner->eliza_last_action;
-          ctx->has_last_message_time = true;
-        }
-
-        printf("[eliza-chat] %s -> eliza: %s\n", ctx->user.name, ready->original);
-        printf("[eliza-chat] eliza -> %s: %s\n", ctx->user.name, ready->translated);
-      } else {
-        const char *error_message =
-            ready->error_message[0] != '\0' ? ready->error_message : "eliza can't reply right now. Try again in a moment.";
-        session_send_system_line(ctx, error_message);
-      }
-
-      refreshed = true;
-      ready = next;
-      continue;
-    }
-
     size_t placeholder_lines = ready->placeholder_lines;
     size_t move_up = 0U;
     if (placeholder_lines > 0U && ctx->translation_placeholder_active_lines >= placeholder_lines) {
@@ -2364,20 +2325,6 @@ static void session_translation_publish_result(session_ctx_t *ctx, const transla
     snprintf(result->pm_to_target_label, sizeof(result->pm_to_target_label), "%s", job->data.pm.to_target_label);
     snprintf(result->pm_to_sender_label, sizeof(result->pm_to_sender_label), "%s", job->data.pm.to_sender_label);
     session_translation_normalize_output(result->translated);
-  } else if (job->type == TRANSLATION_JOB_ELIZA_CHAT) {
-    snprintf(result->original, sizeof(result->original), "%s", job->data.eliza.prompt);
-    if (payload != NULL) {
-      snprintf(result->translated, sizeof(result->translated), "%s", payload);
-    } else {
-      result->translated[0] = '\0';
-    }
-    if (error_message != NULL) {
-      snprintf(result->error_message, sizeof(result->error_message), "%s", error_message);
-    } else {
-      result->error_message[0] = '\0';
-    }
-    result->detected_language[0] = '\0';
-    session_translation_normalize_output(result->translated);
   } else {
     const char *message = payload;
     if (message == NULL || message[0] == '\0') {
@@ -2454,35 +2401,6 @@ static void session_translation_process_single_job(session_ctx_t *ctx, translati
         snprintf(message, sizeof(message), "Translation failed (%s); sending your original message.", error);
       } else {
         snprintf(message, sizeof(message), "Translation failed; sending your original message.");
-      }
-      if (ctx->translation_thread_stop) {
-        return;
-      }
-      session_translation_publish_result(ctx, job, NULL, NULL, message, false);
-    }
-    return;
-  }
-
-  if (job->type == TRANSLATION_JOB_ELIZA_CHAT) {
-    if (ctx->translation_thread_stop) {
-      return;
-    }
-
-    char reply[SSH_CHATTER_MESSAGE_LIMIT];
-    reply[0] = '\0';
-    if (translator_eliza_respond(job->data.eliza.formatted_prompt, reply, sizeof(reply))) {
-      trim_whitespace_inplace(reply);
-      if (ctx->translation_thread_stop) {
-        return;
-      }
-      session_translation_publish_result(ctx, job, reply, NULL, NULL, true);
-    } else {
-      const char *error = translator_last_error();
-      char message[128];
-      if (error != NULL && error[0] != '\0') {
-        snprintf(message, sizeof(message), "eliza can't reply right now (%s).", error);
-      } else {
-        snprintf(message, sizeof(message), "eliza can't reply right now. Try again in a moment.");
       }
       if (ctx->translation_thread_stop) {
         return;

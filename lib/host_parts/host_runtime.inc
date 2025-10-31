@@ -858,10 +858,6 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_eliza(ctx, args);
     return;
   }
-  else if (session_parse_command_any(ctx, "/eliza-chat", effective_line, &args)) {
-    session_handle_eliza_chat(ctx, args);
-    return;
-  }
   else if (session_parse_command_any(ctx, "/chat-spacing", effective_line, &args)) {
     session_handle_chat_spacing(ctx, args);
     return;
