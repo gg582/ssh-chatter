@@ -90,6 +90,7 @@
 #define SSH_CHATTER_VERSION_PATTERN_LEN 16384
 #define SSH_CHATTER_VERSION_NOTE_LEN 96
 #define SSH_CHATTER_CIDR_TEXT_LEN 64
+#define SSH_CHATTER_MAX_PROTECTED_IPS 16
 
 #include "user_data.h"
 
@@ -733,6 +734,8 @@ typedef struct host {
     char ip[SSH_CHATTER_IP_LEN];
   } operator_grants[SSH_CHATTER_MAX_GRANTS];
   size_t operator_grant_count;
+  char protected_ips[SSH_CHATTER_MAX_PROTECTED_IPS][SSH_CHATTER_IP_LEN];
+  size_t protected_ip_count;
   version_ip_ban_rule_t version_ip_ban_rules[SSH_CHATTER_MAX_VERSION_IP_BANS];
   size_t version_ip_ban_rule_count;
   struct {
