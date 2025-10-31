@@ -1003,6 +1003,10 @@ typedef enum session_help_template_arg_kind {
   SESSION_HELP_TEMPLATE_ARG_COMMAND_GOOD,
   SESSION_HELP_TEMPLATE_ARG_COMMAND_SAD,
   SESSION_HELP_TEMPLATE_ARG_COMMAND_WTF,
+  SESSION_HELP_TEMPLATE_ARG_COMMAND_COOL,
+  SESSION_HELP_TEMPLATE_ARG_COMMAND_ANGRY,
+  SESSION_HELP_TEMPLATE_ARG_COMMAND_CHECKED,
+  SESSION_HELP_TEMPLATE_ARG_COMMAND_LOVE,
   SESSION_HELP_TEMPLATE_ARG_COMMAND_BBS,
 } session_help_template_arg_kind_t;
 
@@ -1292,6 +1296,42 @@ static const session_command_alias_t kSessionCommandAliases[] = {
         },
     },
     {
+        .canonical = "/cool",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/멋져요",
+            [SESSION_UI_LANGUAGE_JP] = "/クール",
+            [SESSION_UI_LANGUAGE_ZH] = "/酷",
+            [SESSION_UI_LANGUAGE_RU] = "/круто",
+        },
+    },
+    {
+        .canonical = "/angry",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/화나요",
+            [SESSION_UI_LANGUAGE_JP] = "/怒り",
+            [SESSION_UI_LANGUAGE_ZH] = "/生气",
+            [SESSION_UI_LANGUAGE_RU] = "/злой",
+        },
+    },
+    {
+        .canonical = "/checked",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/확인",
+            [SESSION_UI_LANGUAGE_JP] = "/確認済み",
+            [SESSION_UI_LANGUAGE_ZH] = "/已检查",
+            [SESSION_UI_LANGUAGE_RU] = "/проверено",
+        },
+    },
+    {
+        .canonical = "/love",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/사랑해요",
+            [SESSION_UI_LANGUAGE_JP] = "/愛",
+            [SESSION_UI_LANGUAGE_ZH] = "/爱",
+            [SESSION_UI_LANGUAGE_RU] = "/любовь",
+        },
+    },
+    {
         .canonical = "/bbs",
         .localized = {
             [SESSION_UI_LANGUAGE_KO] = "/게시판",
@@ -1304,6 +1344,18 @@ static const session_command_alias_t kSessionCommandAliases[] = {
         .canonical = "/vote",
         .localized = {
             [SESSION_UI_LANGUAGE_KO] = "/투표",
+        },
+    },
+    {
+        .canonical = "/poll",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/전역투표",
+        },
+    },
+    {
+        .canonical = "/soulmate",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/영혼의단짝",
         },
     },
     {
@@ -1654,6 +1706,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "按名称中包含的文字搜索用户。",
             "Найти пользователей, чьи имена содержат указанный текст.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/검색 <텍스트>",
+            [SESSION_UI_LANGUAGE_JP] = "/検索 <テキスト>",
+            [SESSION_UI_LANGUAGE_ZH] = "/搜索 <文本>",
+            [SESSION_UI_LANGUAGE_RU] = "/поиск <текст>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1665,6 +1725,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "分享图片链接。",
             "Поделиться ссылкой на изображение.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/이미지 <url> [캡션]",
+            [SESSION_UI_LANGUAGE_JP] = "/画像 <url> [キャプション]",
+            [SESSION_UI_LANGUAGE_ZH] = "/图片 <url> [标题]",
+            [SESSION_UI_LANGUAGE_RU] = "/изображение <url> [подпись]",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1676,6 +1744,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "分享视频链接。",
             "Поделиться ссылкой на видео.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/영상 <url> [캡션]",
+            [SESSION_UI_LANGUAGE_JP] = "/動画 <url> [キャプション]",
+            [SESSION_UI_LANGUAGE_ZH] = "/视频 <url> [标题]",
+            [SESSION_UI_LANGUAGE_RU] = "/видео <url> [подпись]",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1687,6 +1763,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "分享音频链接。",
             "Поделиться ссылкой на аудио.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/오디오 <url> [캡션]",
+            [SESSION_UI_LANGUAGE_JP] = "/音声 <url> [キャプション]",
+            [SESSION_UI_LANGUAGE_ZH] = "/音频 <url> [标题]",
+            [SESSION_UI_LANGUAGE_RU] = "/аудио <url> [подпись]",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1698,6 +1782,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "分享可下载的文件。",
             "Поделиться загружаемым файлом.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/파일 <url> [캡션]",
+            [SESSION_UI_LANGUAGE_JP] = "/ファイル <url> [キャプション]",
+            [SESSION_UI_LANGUAGE_ZH] = "/文件 <url> [标题]",
+            [SESSION_UI_LANGUAGE_RU] = "/файлы <url> [подпись]",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1709,6 +1801,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "管理你的邮箱。",
             "Управлять почтовым ящиком.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/메일 [받은편지함|보내기 <사용자> <메시지>|지우기]",
+            [SESSION_UI_LANGUAGE_JP] = "/メール [受信箱|送信 <ユーザー> <メッセージ>|クリア]",
+            [SESSION_UI_LANGUAGE_ZH] = "/邮件 [收件箱|发送 <用户> <消息>|清除]",
+            [SESSION_UI_LANGUAGE_RU] = "/почта [входящие|отправить <пользователь> <сообщение>|очистить]",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1720,6 +1820,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "打开 ASCII 头像编辑器。",
             "Открыть редактор ASCII-аватаров.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/프로필사진",
+            [SESSION_UI_LANGUAGE_JP] = "/プロフィール写真",
+            [SESSION_UI_LANGUAGE_ZH] = "/头像",
+            [SESSION_UI_LANGUAGE_RU] = "/аватар",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1731,6 +1839,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "打开 ASCII 艺术编辑器（最多128行，每个 IP 10 分钟一次）。",
             "Открыть редактор ASCII-арта (до 128 строк, раз в 10 минут на IP).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/아스키아트",
+            [SESSION_UI_LANGUAGE_JP] = "/アスキーアート",
+            [SESSION_UI_LANGUAGE_ZH] = "/ASCII艺术",
+            [SESSION_UI_LANGUAGE_RU] = "/ASCIIарт",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1742,6 +1858,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "在聊天中启动小游戏（使用 %ssuspend! 或 Ctrl+Z 退出）。",
             "Запустить мини-игру в чате (выход — %ssuspend! или Ctrl+Z).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/게임 <테트리스|라이어게임|알파>",
+            [SESSION_UI_LANGUAGE_JP] = "/ゲーム <テトリス|ライアーゲーム|アルファ>",
+            [SESSION_UI_LANGUAGE_ZH] = "/游戏 <俄罗斯方块|谎言游戏|阿尔法>",
+            [SESSION_UI_LANGUAGE_RU] = "/игра <тетрис|лжец|альфа>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1753,6 +1877,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "设置昵称的配色。",
             "Настроить оформление вашего ника.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/색상 (텍스트;하이라이트[;굵게])",
+            [SESSION_UI_LANGUAGE_JP] = "/色 (テキスト;ハイライト[;太字])",
+            [SESSION_UI_LANGUAGE_ZH] = "/颜色 (文本;高亮[;粗体])",
+            [SESSION_UI_LANGUAGE_RU] = "/цвет (текст;выделение[;жирный])",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1764,6 +1896,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "自定义界面颜色（用 %ssystemcolor reset 重置）。",
             "Настроить цвета интерфейса (сброс — %ssystemcolor reset).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/시스템색상 (전경;배경[;하이라이트][;굵게])",
+            [SESSION_UI_LANGUAGE_JP] = "/システムカラー (前景色;背景色[;ハイライト][;太字])",
+            [SESSION_UI_LANGUAGE_ZH] = "/系统颜色 (前景;背景[;高亮][;粗体])",
+            [SESSION_UI_LANGUAGE_RU] = "/системныйцвет (передний;фон[;выделение][;жирный])",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1775,6 +1915,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "设置终端输出的翻译语言。",
             "Задать язык для перевода терминальных сообщений.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/번역언어설정 <언어|끄기>",
+            [SESSION_UI_LANGUAGE_JP] = "/翻訳言語設定 <言語|オフ>",
+            [SESSION_UI_LANGUAGE_ZH] = "/设置翻译语言 <语言|关闭>",
+            [SESSION_UI_LANGUAGE_RU] = "/установить-язык-перевода <язык|выкл>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1786,6 +1934,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "翻译你发送的消息。",
             "Переводить исходящие сообщения.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/대상언어설정 <언어|끄기>",
+            [SESSION_UI_LANGUAGE_JP] = "/ターゲット言語設定 <言語|オフ>",
+            [SESSION_UI_LANGUAGE_ZH] = "/设置目标语言 <语言|关闭>",
+            [SESSION_UI_LANGUAGE_RU] = "/установить-целевой-язык <язык|выкл>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1797,6 +1953,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "显示指定地区和城市的天气。",
             "Показать погоду для региона и города.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/날씨 <지역> <도시>",
+            [SESSION_UI_LANGUAGE_JP] = "/天気 <地域> <都市>",
+            [SESSION_UI_LANGUAGE_ZH] = "/天气 <地区> <城市>",
+            [SESSION_UI_LANGUAGE_RU] = "/погода <регион> <город>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1808,6 +1972,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "在设定语言后开启或关闭翻译。",
             "Включить или отключить перевод после настройки языков.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/번역 <켜기|끄기>",
+            [SESSION_UI_LANGUAGE_JP] = "/翻訳 <オン|オフ>",
+            [SESSION_UI_LANGUAGE_ZH] = "/翻译 <开|关>",
+            [SESSION_UI_LANGUAGE_RU] = "/перевод <вкл|выкл>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1819,6 +1991,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "与共享的 Eliza 人格聊天。",
             "Пообщаться с общей персоной Элиза.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/엘리자채팅 <메시지>",
+            [SESSION_UI_LANGUAGE_JP] = "/エリザチャット <メッセージ>",
+            [SESSION_UI_LANGUAGE_ZH] = "/伊丽莎聊天 <消息>",
+            [SESSION_UI_LANGUAGE_RU] = "/элиза-чат <сообщение>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1830,6 +2010,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "在聊天翻译字幕前预留空行。",
             "Резервировать пустые строки перед переводами в чате.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/채팅간격 <0-5>",
+            [SESSION_UI_LANGUAGE_JP] = "/チャット間隔 <0-5>",
+            [SESSION_UI_LANGUAGE_ZH] = "/聊天间距 <0-5>",
+            [SESSION_UI_LANGUAGE_RU] = "/интервал-чата <0-5>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1841,6 +2029,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "应用预设的界面配色（参见 %spalette list）。",
             "Применить готовую палитру интерфейса (см. %spalette list).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/팔레트 <이름>",
+            [SESSION_UI_LANGUAGE_JP] = "/パレット <名前>",
+            [SESSION_UI_LANGUAGE_ZH] = "/调色板 <名称>",
+            [SESSION_UI_LANGUAGE_RU] = "/палитра <имя>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1852,6 +2048,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "查看今日功能（每天一次）。",
             "Узнать сегодняшнюю функцию (раз в день).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/오늘",
+            [SESSION_UI_LANGUAGE_JP] = "/今日",
+            [SESSION_UI_LANGUAGE_ZH] = "/今日",
+            [SESSION_UI_LANGUAGE_RU] = "/сегодня",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1863,6 +2067,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "查看其他时区的服务器时间。",
             "Показать серверное время в другом часовом поясе.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/날짜 <시간대>",
+            [SESSION_UI_LANGUAGE_JP] = "/日付 <タイムゾーン>",
+            [SESSION_UI_LANGUAGE_ZH] = "/日期 <时区>",
+            [SESSION_UI_LANGUAGE_RU] = "/дата <часовойпояс>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1874,6 +2086,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "记录你使用的操作系统。",
             "Сохранить информацию о вашей ОС.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/운영체제 <이름>",
+            [SESSION_UI_LANGUAGE_JP] = "/OS <名前>",
+            [SESSION_UI_LANGUAGE_ZH] = "/操作系统 <名称>",
+            [SESSION_UI_LANGUAGE_RU] = "/ОС <имя>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1885,6 +2105,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "查看他人记录的操作系统。",
             "Посмотреть, какую ОС указал другой пользователь.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/운영체제확인 <사용자이름>",
+            [SESSION_UI_LANGUAGE_JP] = "/OS取得 <ユーザー名>",
+            [SESSION_UI_LANGUAGE_ZH] = "/获取操作系统 <用户名>",
+            [SESSION_UI_LANGUAGE_RU] = "/получить-ОС <имяпользователя>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1896,6 +2124,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "登记你的生日。",
             "Зарегистрировать дату рождения.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/생일 YYYY-MM-DD",
+            [SESSION_UI_LANGUAGE_JP] = "/誕生日 YYYY-MM-DD",
+            [SESSION_UI_LANGUAGE_ZH] = "/生日 YYYY-MM-DD",
+            [SESSION_UI_LANGUAGE_RU] = "/деньрождения ГГГГ-ММ-ДД",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1907,6 +2143,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "列出与你同生日的用户。",
             "Показать пользователей с той же датой рождения.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/영혼의단짝",
+            [SESSION_UI_LANGUAGE_JP] = "/ソウルメイト",
+            [SESSION_UI_LANGUAGE_ZH] = "/灵魂伴侣",
+            [SESSION_UI_LANGUAGE_RU] = "/родственнаядуша",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1918,6 +2162,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "列出记录的操作系统相同的用户。",
             "Показать пользователей с той же записанной ОС.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/짝",
+            [SESSION_UI_LANGUAGE_JP] = "/ペア",
+            [SESSION_UI_LANGUAGE_ZH] = "/配对",
+            [SESSION_UI_LANGUAGE_RU] = "/пара",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1929,6 +2181,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "私下查看所有在线用户。",
             "Получить приватный список всех подключённых.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/접속자",
+            [SESSION_UI_LANGUAGE_JP] = "/接続中",
+            [SESSION_UI_LANGUAGE_ZH] = "/在线",
+            [SESSION_UI_LANGUAGE_RU] = "/подключенные",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1940,6 +2200,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "查看 Immigrants' Flag 名人堂。",
             "Открыть зал славы Immigrants' Flag.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/알파센타우리착륙자",
+            [SESSION_UI_LANGUAGE_JP] = "/アルファケンタウリ着陸者",
+            [SESSION_UI_LANGUAGE_ZH] = "/半人马座阿尔法星登陆者",
+            [SESSION_UI_LANGUAGE_RU] = "/альфа-центавра-посадочные",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1951,6 +2219,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "发起或查看快速投票。",
             "Создать или просмотреть быстрый опрос.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/전역투표 <질문>|<옵션...>",
+            [SESSION_UI_LANGUAGE_JP] = "/投票 <質問>|<選択肢...>",
+            [SESSION_UI_LANGUAGE_ZH] = "/投票 <问题>|<选项...>",
+            [SESSION_UI_LANGUAGE_RU] = "/опрос <вопрос>|<вариант...>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1962,6 +2238,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "发起或查看命名的多选投票（用 %svote @close <label> 结束）。",
             "Создать или просмотреть именованный многовариантный опрос (закрытие — %svote @close <label>).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/투표 <라벨> <질문>|<옵션...>",
+            [SESSION_UI_LANGUAGE_JP] = "/投票 <ラベル> <質問>|<選択肢...>",
+            [SESSION_UI_LANGUAGE_ZH] = "/投票 <标签> <问题>|<选项...>",
+            [SESSION_UI_LANGUAGE_RU] = "/голосовать <метка> <вопрос>|<вариант...>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1973,6 +2257,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "发起或查看命名的单选投票。",
             "Создать или просмотреть именованный одно вариантный опрос.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/단일투표 <라벨> <질문>|<옵션...>",
+            [SESSION_UI_LANGUAGE_JP] = "/単一投票 <ラベル> <質問>|<選択肢...>",
+            [SESSION_UI_LANGUAGE_ZH] = "/单选投票 <标签> <问题>|<选项...>",
+            [SESSION_UI_LANGUAGE_RU] = "/голосовать-один <метка> <вопрос>|<вариант...>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1984,6 +2276,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "按标签在命名投票中投票。",
             "Проголосовать в именованном опросе по метке.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/선택 <라벨> <선택>",
+            [SESSION_UI_LANGUAGE_JP] = "/選択 <ラベル> <選択肢>",
+            [SESSION_UI_LANGUAGE_ZH] = "/选择 <标签> <选项>",
+            [SESSION_UI_LANGUAGE_RU] = "/выбрать <метка> <выбор>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -1995,6 +2295,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "向用户发送提醒铃声。",
             "Отправить звуковой сигнал пользователю.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/호출 <사용자이름>",
+            [SESSION_UI_LANGUAGE_JP] = "/つつく <ユーザー名>",
+            [SESSION_UI_LANGUAGE_ZH] = "/戳 <用户名>",
+            [SESSION_UI_LANGUAGE_RU] = "/пинг <имяпользователя>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2006,6 +2314,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "本地屏蔽某用户或 IP 的消息（用 %sblock list 查看）。",
             "Скрыть сообщения пользователя или IP локально (проверка через %sblock list).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/차단 <사용자|IP>",
+            [SESSION_UI_LANGUAGE_JP] = "/ブロック <ユーザー|IP>",
+            [SESSION_UI_LANGUAGE_ZH] = "/屏蔽 <用户|IP>",
+            [SESSION_UI_LANGUAGE_RU] = "/заблокировать <пользователь|IP>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2017,6 +2333,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "解除本地屏蔽。",
             "Удалить локальную блокировку.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/차단해제 <대상|모두>",
+            [SESSION_UI_LANGUAGE_JP] = "/ブロック解除 <ターゲット|すべて>",
+            [SESSION_UI_LANGUAGE_ZH] = "/解除屏蔽 <目标|全部>",
+            [SESSION_UI_LANGUAGE_RU] = "/разблокировать <цель|все>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_FORMATTED,
@@ -2028,11 +2352,21 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "按编号为消息添加表情反应。",
             "Реагировать на сообщение по номеру.",
         },
+        .label_arg_count = 7U,
+        .label_args = {
+            SESSION_HELP_TEMPLATE_ARG_PREFIX,
+            SESSION_HELP_TEMPLATE_ARG_PREFIX,
+            SESSION_HELP_TEMPLATE_ARG_PREFIX,
+            SESSION_HELP_TEMPLATE_ARG_PREFIX,
+            SESSION_HELP_TEMPLATE_ARG_PREFIX,
+            SESSION_HELP_TEMPLATE_ARG_PREFIX,
+            SESSION_HELP_TEMPLATE_ARG_PREFIX,
+        },
         .label_translations = {
-            [SESSION_UI_LANGUAGE_KO] = "%s좋아요|%s슬퍼요|%scool|%sangry|%schecked|%slove|%s어쩌라고 <id>",
-            [SESSION_UI_LANGUAGE_JP] = "%sいいね|%sかなしい|%scool|%sangry|%schecked|%slove|%sなんだと <id>",
-            [SESSION_UI_LANGUAGE_ZH] = "%s点赞|%s难过|%scool|%sangry|%schecked|%slove|%s搞什么 <id>",
-            [SESSION_UI_LANGUAGE_RU] = "%sкласс|%sгрусть|%scool|%sangry|%schecked|%slove|%sчтоэто <id>",
+            [SESSION_UI_LANGUAGE_KO] = "/좋아요|/슬퍼요|/멋져요|/화나요|/확인|/사랑해요|/어쩌라고 <id>",
+            [SESSION_UI_LANGUAGE_JP] = "/いいね|/かなしい|/クール|/怒り|/確認済み|/愛|/なんだと <id>",
+            [SESSION_UI_LANGUAGE_ZH] = "/点赞|/难过|/酷|/生气|/已检查|/爱|/搞什么 <id>",
+            [SESSION_UI_LANGUAGE_RU] = "/класс|/грусть|/круто|/злой|/проверено|/любовь|/чтоэто <id>",
         },
     },
     {
@@ -2045,6 +2379,17 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "为当前投票的选项投票。",
             "Проголосовать за вариант в активном опросе.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/1 .. /5",
+            [SESSION_UI_LANGUAGE_JP] = "/1 .. /5",
+            [SESSION_UI_LANGUAGE_ZH] = "/1 .. /5",
+            [SESSION_UI_LANGUAGE_RU] = "/1 .. /5",
+        },
+        .label_arg_count = 2U,
+        .label_args = {
+            SESSION_HELP_TEMPLATE_ARG_PREFIX,
+            SESSION_HELP_TEMPLATE_ARG_PREFIX,
+        },
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2056,6 +2401,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "列出已保存的 RSS 源。",
             "Показать сохранённые RSS-ленты.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/rss 목록",
+            [SESSION_UI_LANGUAGE_JP] = "/rss 一覧",
+            [SESSION_UI_LANGUAGE_ZH] = "/rss 列表",
+            [SESSION_UI_LANGUAGE_RU] = "/rss список",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2067,6 +2420,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "在内嵌阅读器中打开已保存的源。",
             "Открыть сохранённую ленту во встроенном ридере.",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/rss 읽기 <태그>",
+            [SESSION_UI_LANGUAGE_JP] = "/rss 読む <タグ>",
+            [SESSION_UI_LANGUAGE_ZH] = "/rss 阅读 <标签>",
+            [SESSION_UI_LANGUAGE_RU] = "/rss читать <тег>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2078,6 +2439,14 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "暂停正在进行的游戏（游戏中按 Ctrl+Z）。",
             "Приостановить активную игру (Ctrl+Z во время игры).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/일시중지!",
+            [SESSION_UI_LANGUAGE_JP] = "/一時停止!",
+            [SESSION_UI_LANGUAGE_ZH] = "/暂停!",
+            [SESSION_UI_LANGUAGE_RU] = "/приостановить!",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
 };
 
@@ -2092,6 +2461,14 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "限制翻译范围（仅限管理员）。",
             "Ограничить область перевода (только для операторов).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/번역범위 <채팅|채팅기록없음|모두>",
+            [SESSION_UI_LANGUAGE_JP] = "/翻訳範囲 <チャット|チャット履歴なし|すべて>",
+            [SESSION_UI_LANGUAGE_ZH] = "/翻译范围 <聊天|无聊天记录|全部>",
+            [SESSION_UI_LANGUAGE_RU] = "/область-перевода <чат|чат-без-истории|все>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2103,6 +2480,14 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "切换 Gemini 提供方（仅限管理员）。",
             "Включить/выключить провайдер Gemini (оператор).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/제미니 <켜기|끄기>",
+            [SESSION_UI_LANGUAGE_JP] = "/ジェミニ <オン|オフ>",
+            [SESSION_UI_LANGUAGE_ZH] = "/Gemini <开|关>",
+            [SESSION_UI_LANGUAGE_RU] = "/джемини <вкл|выкл>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2114,6 +2499,14 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "清除 Gemini 自动冷却（仅限管理员）。",
             "Снять автоматическую задержку Gemini (оператор).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/제미니-해제",
+            [SESSION_UI_LANGUAGE_JP] = "/ジェミニ-解除",
+            [SESSION_UI_LANGUAGE_ZH] = "/Gemini-解冻",
+            [SESSION_UI_LANGUAGE_RU] = "/джемини-разморозить",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2125,6 +2518,14 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "切换验证码要求（仅限管理员）。",
             "Включить/выключить требование капчи (оператор).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/캡차 <켜기|끄기>",
+            [SESSION_UI_LANGUAGE_JP] = "/キャプチャ <オン|オフ>",
+            [SESSION_UI_LANGUAGE_ZH] = "/验证码 <开|关>",
+            [SESSION_UI_LANGUAGE_RU] = "/капча <вкл|выкл>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2136,6 +2537,14 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "切换 Eliza 管理员人格（仅限管理员）。",
             "Включить/выключить модератора Элиза (оператор).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/엘리자 <켜기|끄기>",
+            [SESSION_UI_LANGUAGE_JP] = "/エリザ <オン|オフ>",
+            [SESSION_UI_LANGUAGE_ZH] = "/伊丽莎 <开|关>",
+            [SESSION_UI_LANGUAGE_RU] = "/элиза <вкл|выкл>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2147,6 +2556,14 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "为 IP 授予管理员权限（仅限局域网）。",
             "Выдать операторские права IP-адресу (только LAN).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/권한부여 <IP>",
+            [SESSION_UI_LANGUAGE_JP] = "/許可 <IP>",
+            [SESSION_UI_LANGUAGE_ZH] = "/授予 <IP>",
+            [SESSION_UI_LANGUAGE_RU] = "/выдать <IP>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2158,6 +2575,14 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "撤销 IP 的管理员权限（局域网最高管理员）。",
             "Отозвать операторские права IP (только старший LAN-админ).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/권한해제 <IP>",
+            [SESSION_UI_LANGUAGE_JP] = "/取り消し <IP>",
+            [SESSION_UI_LANGUAGE_ZH] = "/撤销 <IP>",
+            [SESSION_UI_LANGUAGE_RU] = "/отозвать <IP>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2167,8 +2592,16 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "사용자를 강제로 종료합니다 (운영자 전용).",
             "ユーザーを切断します（オペレーター専用）。",
             "断开某位用户（仅限管理员）。",
-            "Отключить пользователя (оператор).",
+            "Отключить пользователя (operator).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/강퇴 <사용자이름>",
+            [SESSION_UI_LANGUAGE_JP] = "/キック <ユーザー名>",
+            [SESSION_UI_LANGUAGE_ZH] = "/踢出 <用户名>",
+            [SESSION_UI_LANGUAGE_RU] = "/кик <имяпользователя>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2180,6 +2613,14 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "封禁用户（仅限管理员）。",
             "Забанить пользователя (оператор).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/밴 <사용자이름>",
+            [SESSION_UI_LANGUAGE_JP] = "/バン <ユーザー名>",
+            [SESSION_UI_LANGUAGE_ZH] = "/封禁 <用户名>",
+            [SESSION_UI_LANGUAGE_RU] = "/бан <имяпользователя>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2191,6 +2632,14 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "屏蔽昵称（仅限管理员）。",
             "Заблокировать ник (оператор).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/닉네임차단 <닉네임>",
+            [SESSION_UI_LANGUAGE_JP] = "/ニックネーム禁止 <ニックネーム>",
+            [SESSION_UI_LANGUAGE_ZH] = "/屏蔽昵称 <昵称>",
+            [SESSION_UI_LANGUAGE_RU] = "/забанить-ник <ник>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2202,6 +2651,14 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "列出当前生效的封禁（仅限管理员）。",
             "Показать активные баны (оператор).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/밴목록",
+            [SESSION_UI_LANGUAGE_JP] = "/バンリスト",
+            [SESSION_UI_LANGUAGE_ZH] = "/封禁列表",
+            [SESSION_UI_LANGUAGE_RU] = "/список-банов",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2211,8 +2668,16 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "채팅 기록 메시지를 삭제합니다 (운영자 전용).",
             "チャット履歴のメッセージを削除します（オペレーター専用）。",
             "删除聊天记录中的消息（仅限管理员）。",
-            "Удалить сообщения из истории чата (оператор).",
+            "Удалить сообщения из истории чата (operator).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/메시지삭제 <ID|시작-끝>",
+            [SESSION_UI_LANGUAGE_JP] = "/メッセージ削除 <ID|開始-終了>",
+            [SESSION_UI_LANGUAGE_ZH] = "/删除消息 <ID|开始-结束>",
+            [SESSION_UI_LANGUAGE_RU] = "/удалить-сообщение <ID|начало-конец>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2222,8 +2687,16 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "차단을 해제합니다 (운영자 전용).",
             "BAN を解除します（オペレーター専用）。",
             "解除封禁（仅限管理员）。",
-            "Снять бан (оператор).",
+            "Снять бан (operator).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/사면 <사용자|IP>",
+            [SESSION_UI_LANGUAGE_JP] = "/許し <ユーザー|IP>",
+            [SESSION_UI_LANGUAGE_ZH] = "/赦免 <用户|IP>",
+            [SESSION_UI_LANGUAGE_RU] = "/помиловать <пользователь|IP>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2235,6 +2708,14 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "注册新的源（仅限管理员）。",
             "Добавить ленту (оператор).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/rss 추가 <url> <태그>",
+            [SESSION_UI_LANGUAGE_JP] = "/rss 追加 <url> <タグ>",
+            [SESSION_UI_LANGUAGE_ZH] = "/rss 添加 <url> <标签>",
+            [SESSION_UI_LANGUAGE_RU] = "/rss добавить <url> <тег>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2244,8 +2725,16 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "피드를 삭제합니다 (운영자 전용).",
             "フィードを削除します（オペレーター専用）。",
             "删除源（仅限管理员）。",
-            "Удалить ленту (оператор).",
+            "Удалить ленту (operator).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/rss 삭제 <태그>",
+            [SESSION_UI_LANGUAGE_JP] = "/rss 削除 <タグ>",
+            [SESSION_UI_LANGUAGE_ZH] = "/rss 删除 <标签>",
+            [SESSION_UI_LANGUAGE_RU] = "/rss удалить <тег>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -2255,8 +2744,16 @@ static const session_help_entry_t kSessionHelpOperator[] = {
             "사용자의 마지막 접속 주소를 확인합니다 (운영자 전용).",
             "ユーザーの最新の接続アドレスを確認します（オペレーター専用）。",
             "查看用户最近的连接地址（仅限管理员）。",
-            "Посмотреть последний известный адрес пользователя (оператор).",
+            "Посмотреть последний известный адрес пользователя (operator).",
         },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "/주소확인 <사용자이름>",
+            [SESSION_UI_LANGUAGE_JP] = "/アドレス取得 <ユーザー名>",
+            [SESSION_UI_LANGUAGE_ZH] = "/获取地址 <用户名>",
+            [SESSION_UI_LANGUAGE_RU] = "/получить-адрес <имяпользователя>",
+        },
+        .label_arg_count = 0U,
+        .label_args = {},
     },
 };
 
@@ -2861,6 +3358,18 @@ static size_t session_help_collect_arguments(session_ctx_t *ctx,
       break;
     case SESSION_HELP_TEMPLATE_ARG_COMMAND_WTF:
       value = session_command_alias_preferred_by_canonical(ctx, "/wtf");
+      break;
+    case SESSION_HELP_TEMPLATE_ARG_COMMAND_COOL:
+      value = session_command_alias_preferred_by_canonical(ctx, "/cool");
+      break;
+    case SESSION_HELP_TEMPLATE_ARG_COMMAND_ANGRY:
+      value = session_command_alias_preferred_by_canonical(ctx, "/angry");
+      break;
+    case SESSION_HELP_TEMPLATE_ARG_COMMAND_CHECKED:
+      value = session_command_alias_preferred_by_canonical(ctx, "/checked");
+      break;
+    case SESSION_HELP_TEMPLATE_ARG_COMMAND_LOVE:
+      value = session_command_alias_preferred_by_canonical(ctx, "/love");
       break;
     case SESSION_HELP_TEMPLATE_ARG_COMMAND_BBS:
       value = session_command_alias_preferred_by_canonical(ctx, "/bbs");
@@ -3844,7 +4353,7 @@ static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text);
 static bool session_render_external_banner(session_ctx_t *ctx);
 static void session_render_banner_ascii(session_ctx_t *ctx);
 static void session_render_prelogin_banner(session_ctx_t *ctx);
-static bool session_client_geo_is_korean(const session_ctx_t *ctx);
+static session_ui_language_t session_client_geo_language(const session_ctx_t *ctx);
 static void session_render_prelogin_language_prompt(session_ctx_t *ctx);
 static void session_render_banner(session_ctx_t *ctx);
 static const char *session_editor_terminator(const session_ctx_t *ctx);
@@ -15521,16 +16030,7 @@ static void session_telnet_capture_startup_metadata(session_ctx_t *ctx) {
   }
 }
 
-static bool session_detect_provider_ip(const char *ip, char *label, size_t length) {
-  if (label != NULL && length > 0U) {
-    label[0] = '\0';
-  }
-
-  if (ip == NULL || ip[0] == '\0' || label == NULL || length == 0U) {
-    return false;
-  }
-
-  typedef struct provider_prefix {
+typedef struct provider_prefix {
     const char *prefix;
     const char *label;
   } provider_prefix_t;
@@ -15541,6 +16041,11 @@ static bool session_detect_provider_ip(const char *ip, char *label, size_t lengt
       {"73.", "US ISP"},             {"96.", "US ISP"},         {"107.", "US ISP"},
       {"174.", "US ISP"},            {"2600:", "US ISP"},       {"2604:", "US ISP"},
       {"2605:", "US ISP"},           {"2607:", "US ISP"},       {"2609:", "US ISP"},
+      {"1.0.", "Japanese ISP"},       {"106.130.", "Japanese ISP"}, {"118.103.", "Japanese ISP"},
+      {"126.", "Japanese ISP"},       {"133.", "Japanese ISP"},     {"153.", "Japanese ISP"},
+      {"210.", "Japanese ISP"},       {"219.", "Japanese ISP"},     {"220.", "Japanese ISP"},
+      {"2400:", "Japanese ISP"},     {"2404:", "Japanese ISP"},   {"2406:", "Japanese ISP"},
+      {"2408:", "Japanese ISP"},
       {"24.114.", "Canadian ISP"},   {"142.", "Canadian ISP"}, {"2603:", "Canadian ISP"},
       {"185.", "EU ISP"},            {"195.", "EU ISP"},       {"2a00:", "EU ISP"},
       {"2a02:", "EU ISP"},           {"2a03:", "EU ISP"},      {"2a09:", "EU ISP"},
@@ -15549,6 +16054,15 @@ static bool session_detect_provider_ip(const char *ip, char *label, size_t lengt
       {"2408:", "Chinese ISP"},      {"2409:", "Chinese ISP"}, {"49.", "Indian ISP"},
       {"103.", "Indian ISP"},        {"106.", "Indian ISP"},   {"2405:", "Indian ISP"},
       {"2406:", "Indian ISP"},       {"100.64.", "Carrier-grade NAT"}};
+
+static bool session_detect_provider_ip(const char *ip, char *label, size_t length) {
+  if (label != NULL && length > 0U) {
+    label[0] = '\0';
+  }
+
+  if (ip == NULL || ip[0] == '\0' || label == NULL || length == 0U) {
+    return false;
+  }
 
   for (size_t idx = 0U; idx < sizeof(kProviderPrefixes) / sizeof(kProviderPrefixes[0]); ++idx) {
     const provider_prefix_t *entry = &kProviderPrefixes[idx];
@@ -15560,6 +16074,40 @@ static bool session_detect_provider_ip(const char *ip, char *label, size_t lengt
   }
 
   return false;
+}
+
+  static const struct {
+    const char *label;
+    session_ui_language_t language;
+  } kProviderLanguageMapping[] = {
+      {"Korean ISP", SESSION_UI_LANGUAGE_KO},
+      {"US ISP", SESSION_UI_LANGUAGE_EN},
+      {"Canadian ISP", SESSION_UI_LANGUAGE_EN},
+      {"EU ISP", SESSION_UI_LANGUAGE_EN},
+      {"Russian ISP", SESSION_UI_LANGUAGE_RU},
+      {"Chinese ISP", SESSION_UI_LANGUAGE_ZH},
+      {"Indian ISP", SESSION_UI_LANGUAGE_EN},
+      {"Japanese ISP", SESSION_UI_LANGUAGE_JP},
+  };
+
+
+static session_ui_language_t session_client_geo_language(const session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return SESSION_UI_LANGUAGE_COUNT;
+  }
+
+  char label[64];
+  if (!session_detect_provider_ip(ctx->client_ip, label, sizeof(label))) {
+    return SESSION_UI_LANGUAGE_COUNT;
+  }
+
+  for (size_t idx = 0U; idx < sizeof(kProviderLanguageMapping) / sizeof(kProviderLanguageMapping[0]); ++idx) {
+    if (strcasecmp(label, kProviderLanguageMapping[idx].label) == 0) {
+      return kProviderLanguageMapping[idx].language;
+    }
+  }
+
+  return SESSION_UI_LANGUAGE_COUNT;
 }
 
 static bool session_blocklist_add(session_ctx_t *ctx, const char *ip, const char *username, bool ip_wide,
@@ -16566,27 +17114,9 @@ static void session_render_banner_ascii(session_ctx_t *ctx) {
   }
 }
 
-static bool session_client_geo_is_korean(const session_ctx_t *ctx) {
-  if (ctx == NULL) {
-    return false;
-  }
-
-  if (session_is_lan_client(ctx->client_ip)) {
-    return true;
-  }
-
-  char label[64];
-  if (session_detect_provider_ip(ctx->client_ip, label, sizeof(label))) {
-    if (label[0] != '\0' && strcasecmp(label, "Korean ISP") == 0) {
-      return true;
-    }
-  }
-
-  return false;
-}
 
 static void session_render_prelogin_language_prompt(session_ctx_t *ctx) {
-  if (ctx == NULL || session_client_geo_is_korean(ctx)) {
+  if (ctx == NULL || session_client_geo_language(ctx) != SESSION_UI_LANGUAGE_KO) {
     return;
   }
 
@@ -18139,8 +18669,9 @@ static captcha_language_t session_captcha_primary_language(const session_ctx_t *
     return preferred_language;
   }
 
-  if (session_client_geo_is_korean(ctx)) {
-    return CAPTCHA_LANGUAGE_KO;
+  session_ui_language_t geo_language = session_client_geo_language(ctx);
+  if (geo_language != SESSION_UI_LANGUAGE_COUNT) {
+      return session_captcha_language_from_ui(geo_language);
   }
 
   char label[64];
@@ -28969,7 +29500,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_birthday(ctx, arguments);
     return;
   }
-  else if (strncmp(line, "/soulmate", 9) == 0) {
+  else if (strcasecmp(line, session_command_alias_preferred_by_canonical(ctx, "/soulmate")) == 0) {
     const char *arguments = line + 9;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
@@ -29029,7 +29560,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  else if (strncmp(line, "/poll", 5) == 0) {
+  else if (strcasecmp(line, session_command_alias_preferred_by_canonical(ctx, "/poll")) == 0) {
     const char *arguments = line + 5;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
@@ -30320,7 +30851,13 @@ static void *host_telnet_thread(void *arg) {
     ctx->auth = (auth_profile_t){0};
     snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
     ctx->input_mode = SESSION_INPUT_MODE_CHAT;
-    ctx->ui_language = SESSION_UI_LANGUAGE_KO;
+
+    session_ui_language_t geo_language = session_client_geo_language(ctx);
+    if (geo_language != SESSION_UI_LANGUAGE_COUNT) {
+        ctx->ui_language = geo_language;
+    } else {
+        ctx->ui_language = SESSION_UI_LANGUAGE_KO;
+    }
 
     pthread_mutex_lock(&host->lock);
     ++host->connection_count;
@@ -32045,7 +32582,13 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       ctx->auth = (auth_profile_t){0};
       snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%.*s", (int)sizeof(ctx->client_ip) - 1, peer_address);
       ctx->input_mode = SESSION_INPUT_MODE_CHAT;
-      ctx->ui_language = SESSION_UI_LANGUAGE_KO;
+
+      session_ui_language_t geo_language = session_client_geo_language(ctx);
+      if (geo_language != SESSION_UI_LANGUAGE_COUNT) {
+          ctx->ui_language = geo_language;
+      } else {
+          ctx->ui_language = SESSION_UI_LANGUAGE_KO;
+      }
       if (client_banner != NULL && client_banner[0] != '\0') {
         snprintf(ctx->client_banner, sizeof(ctx->client_banner), "%s", client_banner);
       }
