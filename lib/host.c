@@ -52,6 +52,27 @@
 
 #include "humanized/humanized.h"
 
+static void session_dispatch_command(session_ctx_t *ctx, const char *line);
+static void session_handle_mode(session_ctx_t *ctx, const char *arguments);
+static void session_handle_nick(session_ctx_t *ctx, const char *arguments);
+static void session_handle_exit(session_ctx_t *ctx);
+
+static const session_ops_t ssh_session_ops = {
+    .dispatch_command = session_dispatch_command,
+    .handle_mode = session_handle_mode,
+    .handle_nick = session_handle_nick,
+    .handle_exit = session_handle_exit,
+};
+
+static const session_ops_t telnet_session_ops = {
+    .dispatch_command = session_dispatch_command,
+    .handle_mode = session_handle_mode,
+    .handle_nick = session_handle_nick,
+    .handle_exit = session_handle_exit,
+};
+
+
+
 #ifndef NI_MAXHOST
 #define NI_MAXHOST 1025
 #endif
@@ -2327,12 +2348,12 @@ static bool session_try_localized_command_forward(session_ctx_t *ctx, const char
   }
 
   if (*remainder == '\0') {
-    session_handle_mode(ctx, command_label);
+    ctx->ops->handle_mode(ctx, command_label);
     return true;
   }
 
   if (*remainder == '/') {
-    session_dispatch_command(ctx, remainder);
+    ctx->ops->dispatch_command(ctx, remainder);
     return true;
   }
 
@@ -2341,7 +2362,7 @@ static bool session_try_localized_command_forward(session_ctx_t *ctx, const char
   size_t copy_len = strnlen(remainder, sizeof(forwarded) - 2U);
   memcpy(&forwarded[1], remainder, copy_len);
   forwarded[copy_len + 1U] = '\0';
-  session_dispatch_command(ctx, forwarded);
+  ctx->ops->dispatch_command(ctx, forwarded);
   return true;
 }
 
@@ -8110,14 +8131,7 @@ typedef struct host_eliza_intervene_task {
 } host_eliza_intervene_task_t;
 
 static void host_eliza_task_free(host_eliza_intervene_task_t *task) {
-  if (task == NULL) {
-    return;
-  }
-
-  if (task->allocated_with_gc) {
-  } else {
-    free(task);
-  }
+  (void)task;
 }
 
 static bool host_eliza_worker_init(host_t *host) {
@@ -8310,15 +8324,10 @@ static bool host_eliza_intervene(session_ctx_t *ctx, const char *content, const 
   }
 
   host_eliza_intervene_task_t *task = (host_eliza_intervene_task_t *)GC_MALLOC(sizeof(*task));
-  if (task != NULL) {
-    task->allocated_with_gc = true;
-  } else {
-    task = (host_eliza_intervene_task_t *)malloc(sizeof(*task));
-    if (task == NULL) {
-      return false;
-    }
-    task->allocated_with_gc = false;
+  if (task == NULL) {
+    return false;
   }
+  task->allocated_with_gc = true;
 
   task->ctx = ctx;
   task->from_filter = from_filter;
@@ -14314,7 +14323,7 @@ static bool session_channel_write_cp437(session_ctx_t *ctx, const char *data, si
   }
 
   size_t capacity = (length > 0U ? length : 1U) * 4U + 16U;
-  char *buffer = (char *)malloc(capacity);
+  char *buffer = (char *)GC_MALLOC(capacity);
   if (buffer == NULL) {
     iconv_close(descriptor);
     return session_channel_write_all(ctx, data, length);
@@ -14491,7 +14500,7 @@ static bool session_channel_write_utf16_segment(session_ctx_t *ctx, const char *
   if (use_stack) {
     buffer = stack_buffer;
   } else {
-    buffer = (unsigned char *)malloc(max_output);
+    buffer = (unsigned char *)GC_MALLOC(max_output);
     if (buffer == NULL) {
       return session_channel_write_all(ctx, data, length);
     }
@@ -18525,7 +18534,7 @@ static void session_handle_username_conflict_input(session_ctx_t *ctx, const cha
   }
 
   if (session_line_is_exit_command(line)) {
-    session_handle_exit(ctx);
+    ctx->ops->handle_exit(ctx);
     return;
   }
 
@@ -18621,7 +18630,7 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
     if (session_try_localized_command_forward(ctx, normalized)) {
       return;
     }
-    session_dispatch_command(ctx, normalized);
+    ctx->ops->dispatch_command(ctx, normalized);
     return;
   }
 
@@ -18640,7 +18649,7 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
       command_buffer[command_len + 1U] = '\0';
       command_text = command_buffer;
     }
-    session_dispatch_command(ctx, command_text);
+    ctx->ops->dispatch_command(ctx, command_text);
     return;
   }
 
@@ -28693,12 +28702,12 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   }
 
   else if (strncmp(line, "/exit", 5) == 0) {
-    session_handle_exit(ctx);
+    ctx->ops->handle_exit(ctx);
     return;
   }
 
   else if (session_parse_command(line, "/nick", &args)) {
-    session_handle_nick(ctx, args);
+    ctx->ops->handle_nick(ctx, args);
     return;
   }
 
@@ -28889,7 +28898,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
   else if (session_parse_command(line, "/mode", &args)) {
-    session_handle_mode(ctx, args);
+    ctx->ops->handle_mode(ctx, args);
     return;
   }
   else if (strncmp(line, "/palette", 8) == 0) {
@@ -30301,8 +30310,8 @@ static void *host_telnet_thread(void *arg) {
       close(client_fd);
       continue;
     }
-
-    ctx->transport_kind = SESSION_TRANSPORT_TELNET;
+        ctx->ops = &telnet_session_ops;
+        ctx->transport_kind = SESSION_TRANSPORT_TELNET;
     ctx->telnet_fd = client_fd;
     ctx->telnet_negotiated = false;
     ctx->telnet_eof = false;
@@ -32024,6 +32033,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         ssh_free(session);
         continue;
       }
+      ctx->ops = &ssh_session_ops;
 
       ctx->session = session;
       ctx->channel = NULL;

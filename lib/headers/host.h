@@ -101,6 +101,16 @@ struct matrix_client;
 struct translation_job;
 struct translation_result;
 
+struct session_ctx;
+
+typedef struct session_ops {
+    void (*dispatch_command)(struct session_ctx *ctx, const char *line);
+    void (*handle_mode)(struct session_ctx *ctx, const char *arguments);
+    void (*handle_nick)(struct session_ctx *ctx, const char *arguments);
+    void (*handle_exit)(struct session_ctx *ctx);
+} session_ops_t;
+
+
 typedef struct join_activity_entry {
   char ip[SSH_CHATTER_IP_LEN];
   char last_username[SSH_CHATTER_USERNAME_LEN];
@@ -536,6 +546,7 @@ typedef struct session_ctx {
   session_rss_view_t rss_view;
   bool user_data_loaded;
   user_data_record_t user_data;
+  const session_ops_t *ops;
 } session_ctx_t;
 
 typedef struct user_preference {

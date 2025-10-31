@@ -669,7 +669,7 @@ static bool matrix_client_send_entry(matrix_client_t *client, const chat_history
   }
 
   size_t encrypted_capacity = (SSH_CHATTER_MESSAGE_LIMIT * 4U) + 4096U;
-  char *encrypted = (char *)malloc(encrypted_capacity);
+  char *encrypted = (char *)GC_MALLOC(encrypted_capacity);
   if (encrypted == NULL) {
     errno = ENOMEM;
     return false;
@@ -843,7 +843,7 @@ static void matrix_client_handle_body(matrix_client_t *client, const char *body)
   }
 
   size_t decrypted_capacity = SSH_CHATTER_MESSAGE_LIMIT * 4U;
-  char *plaintext = (char *)malloc(decrypted_capacity);
+  char *plaintext = (char *)GC_MALLOC(decrypted_capacity);
   if (plaintext == NULL) {
     return;
   }
@@ -889,7 +889,7 @@ static void matrix_client_process_event(matrix_client_t *client, const char *eve
     return;
   }
 
-  char *buffer = (char *)malloc(length + 1U);
+  char *buffer = (char *)GC_MALLOC(length + 1U);
   if (buffer == NULL) {
     return;
   }

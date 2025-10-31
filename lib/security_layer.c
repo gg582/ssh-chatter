@@ -14,6 +14,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <gc/gc.h>
+
 #define SECURITY_ONION_PREFIX "TorOnion/v1:"
 
 static bool security_layer_derive_subkeys(security_layer_t *layer) {
@@ -112,7 +114,7 @@ static bool security_layer_encode_component(const security_layer_component_t *co
   }
 
   size_t buffer_len = component->cipher_len + SECURITY_LAYER_IV_LEN + SECURITY_LAYER_TAG_LEN;
-  unsigned char *buffer = (unsigned char *)malloc(buffer_len == 0U ? 1U : buffer_len);
+  unsigned char *buffer = (unsigned char *)GC_MALLOC(buffer_len == 0U ? 1U : buffer_len);
   if (buffer == NULL) {
     errno = ENOMEM;
     return false;
@@ -125,7 +127,7 @@ static bool security_layer_encode_component(const security_layer_component_t *co
   }
 
   size_t encoded_len = 4U * ((buffer_len + 2U) / 3U);
-  char *encoded = (char *)malloc(encoded_len + 1U);
+  char *encoded = (char *)GC_MALLOC(encoded_len + 1U);
   if (encoded == NULL) {
     OPENSSL_cleanse(buffer, buffer_len);
     free(buffer);
@@ -163,14 +165,14 @@ bool security_layer_encrypt_message(const security_layer_t *layer, const char *p
 
   unsigned char *working = NULL;
   if (plain_len > 0U) {
-    working = (unsigned char *)malloc(plain_len);
+    working = (unsigned char *)GC_MALLOC(plain_len);
     if (working == NULL) {
       errno = ENOMEM;
       return false;
     }
     memcpy(working, plaintext, plain_len);
   } else {
-    working = (unsigned char *)malloc(1U);
+    working = (unsigned char *)GC_MALLOC(1U);
     if (working == NULL) {
       errno = ENOMEM;
       return false;
@@ -193,14 +195,14 @@ bool security_layer_encrypt_message(const security_layer_t *layer, const char *p
     component->cipher_len = working_len;
     component->ciphertext = NULL;
     if (working_len > 0U) {
-      component->ciphertext = (unsigned char *)malloc(working_len);
+      component->ciphertext = (unsigned char *)GC_MALLOC(working_len);
       if (component->ciphertext == NULL) {
         errno = ENOMEM;
         success = false;
         break;
       }
     } else {
-      component->ciphertext = (unsigned char *)malloc(1U);
+      component->ciphertext = (unsigned char *)GC_MALLOC(1U);
       if (component->ciphertext == NULL) {
         errno = ENOMEM;
         success = false;
@@ -347,7 +349,7 @@ static bool security_layer_decode_segment(const char *segment, unsigned char **b
   }
 
   size_t segment_len = strlen(segment);
-  unsigned char *decoded = (unsigned char *)malloc((segment_len * 3U) / 4U + 4U);
+  unsigned char *decoded = (unsigned char *)GC_MALLOC((segment_len * 3U) / 4U + 4U);
   if (decoded == NULL) {
     errno = ENOMEM;
     return false;
@@ -450,7 +452,7 @@ bool security_layer_decrypt_message(const security_layer_t *layer, const char *e
         success = false;
         break;
       }
-      current_cipher = (unsigned char *)malloc(cipher_len > 0U ? cipher_len : 1U);
+      current_cipher = (unsigned char *)GC_MALLOC(cipher_len > 0U ? cipher_len : 1U);
       if (current_cipher == NULL) {
         OPENSSL_cleanse(decoded, decoded_len);
         free(decoded);
@@ -491,7 +493,7 @@ bool security_layer_decrypt_message(const security_layer_t *layer, const char *e
       break;
     }
 
-    unsigned char *plaintext_layer = (unsigned char *)malloc(current_len > 0U ? current_len : 1U);
+    unsigned char *plaintext_layer = (unsigned char *)GC_MALLOC(current_len > 0U ? current_len : 1U);
     if (plaintext_layer == NULL) {
       EVP_CIPHER_CTX_free(ctx);
       OPENSSL_cleanse(decoded, decoded_len);
