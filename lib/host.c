@@ -1279,6 +1279,54 @@ static const session_command_alias_t kSessionCommandAliases[] = {
             [SESSION_UI_LANGUAGE_RU] = "/доска",
         },
     },
+    {
+        .canonical = "/vote",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/투표",
+        },
+    },
+    {
+        .canonical = "/vote-single",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/단일투표",
+        },
+    },
+    {
+        .canonical = "/elect",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/선택",
+        },
+    },
+    {
+        .canonical = "/eliza-chat",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/엘리자채팅",
+        },
+    },
+    {
+        .canonical = "/banname",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/이름차단",
+        },
+    },
+    {
+        .canonical = "/delete-msg",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/메시지삭제",
+        },
+    },
+    {
+        .canonical = "/grant",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/권한부여",
+        },
+    },
+    {
+        .canonical = "/revoke",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/권한해제",
+        },
+    },
 };
 
 static const size_t kSessionCommandAliasCount =
@@ -21295,8 +21343,15 @@ static void session_handle_vote_command(session_ctx_t *ctx, const char *argument
     return;
   }
 
+  const char *close_command = NULL;
   if (strncmp(working, "@close", 6) == 0 && (working[6] == '\0' || isspace((unsigned char)working[6]))) {
-    const char *label_start = working + 6;
+    close_command = "@close";
+  } else if (strncmp(working, "@종료", 7) == 0 && (working[7] == '\0' || isspace((unsigned char)working[7]))) {
+    close_command = "@종료";
+  }
+
+  if (close_command != NULL) {
+    const char *label_start = working + strlen(close_command);
     while (*label_start != '\0' && isspace((unsigned char)*label_start)) {
       ++label_start;
     }
@@ -23179,7 +23234,7 @@ static void session_handle_rss(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  if (strcasecmp(command, "add") == 0) {
+  if (strcasecmp(command, "add") == 0 || strcasecmp(command, "추가") == 0) {
     if (!ctx->user.is_operator) {
       session_send_system_line(ctx, "Only operators may add RSS feeds.");
       return;
@@ -23214,7 +23269,7 @@ static void session_handle_rss(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  if (strcasecmp(command, "del") == 0) {
+  if (strcasecmp(command, "del") == 0 || strcasecmp(command, "삭제") == 0) {
     if (!ctx->user.is_operator) {
       session_send_system_line(ctx, "Only operators may delete RSS feeds.");
       return;

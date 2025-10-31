@@ -563,7 +563,7 @@ static bool matrix_client_send_payload(matrix_client_t *client, const char *payl
   pthread_mutex_unlock(&client->lock);
 
   char url[512];
-  snprintf(url, sizeof(url), "%s/_matrix/client/v3/rooms/%s/send/m.room.message/%" PRIu64,
+  snprintf(url, sizeof(url), "%s/_matrix/client/r0/rooms/%s/send/m.room.message/%" PRIu64,
            client->homeserver, encoded_room, txn_id);
   curl_free(encoded_room);
 
@@ -1011,7 +1011,7 @@ static bool matrix_client_sync(matrix_client_t *client) {
   }
 
   char url[768];
-  snprintf(url, sizeof(url), "%s/_matrix/client/v3/sync?timeout=%ld", client->homeserver, MATRIX_SYNC_TIMEOUT_MS);
+  snprintf(url, sizeof(url), "%s/_matrix/client/r0/sync?timeout=%ld", client->homeserver, MATRIX_SYNC_TIMEOUT_MS);
 
   pthread_mutex_lock(&client->lock);
   char since_token[sizeof(client->since_token)];
