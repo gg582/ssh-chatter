@@ -29222,38 +29222,44 @@ static bool session_parse_command(const char *line, const char *command, const c
 
 static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   const char *args = NULL;
+  const char *effective_line = line;
 
-  if (strncmp(line, "/help", 5) == 0) {
+  // Handle double slash commands by effectively removing the first slash
+  if (line != NULL && line[0] == '/' && line[1] == '/') {
+    effective_line = line + 1;
+  }
+
+  if (session_parse_command_any(ctx, "/help", effective_line, &args)) {
     session_print_help(ctx);
     return;
   }
 
-  else if (session_parse_command(line, "/advanced", &args)) {
+  else if (session_parse_command_any(ctx, "/advanced", effective_line, &args)) {
     session_print_help_extra(ctx);
     return;
   }
 
-  else if (session_parse_command(line, "/history", &args)) {
+  else if (session_parse_command_any(ctx, "/history", effective_line, &args)) {
     session_handle_history(ctx, args);
     return;
   }
 
-  else if (strncmp(line, "/exit", 5) == 0) {
+  else if (session_parse_command_any(ctx, "/exit", effective_line, &args)) {
     ctx->ops->handle_exit(ctx);
     return;
   }
 
-  else if (session_parse_command(line, "/nick", &args)) {
+  else if (session_parse_command_any(ctx, "/nick", effective_line, &args)) {
     ctx->ops->handle_nick(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/pm", &args)) {
+  else if (session_parse_command_any(ctx, "/pm", effective_line, &args)) {
     session_handle_pm(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/asciiart", &args)) {
+  else if (session_parse_command_any(ctx, "/asciiart", effective_line, &args)) {
     if (*args != '\0') {
       session_send_system_line(ctx, "Usage: /asciiart");
     } else {
@@ -29262,7 +29268,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  else if (session_parse_command(line, "/motd", &args)) {
+  else if (session_parse_command_any(ctx, "/motd", effective_line, &args)) {
     if (*args != '\0') {
       session_send_system_line(ctx, "Usage: /motd");
     } else {
@@ -29271,17 +29277,17 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  else if (session_parse_command(line, "/status", &args)) {
+  else if (session_parse_command_any(ctx, "/status", effective_line, &args)) {
     session_handle_status(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/showstatus", &args)) {
+  else if (session_parse_command_any(ctx, "/showstatus", effective_line, &args)) {
     session_handle_showstatus(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/users", &args)) {
+  else if (session_parse_command_any(ctx, "/users", effective_line, &args)) {
     if (*args != '\0') {
       session_send_system_line(ctx, "Usage: /users");
     } else {
@@ -29290,12 +29296,12 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  else if (session_parse_command(line, "/search", &args)) {
+  else if (session_parse_command_any(ctx, "/search", effective_line, &args)) {
     session_handle_search(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/chat", &args)) {
+  else if (session_parse_command_any(ctx, "/chat", effective_line, &args)) {
     session_handle_chat_lookup(ctx, args);
     return;
   }
@@ -29305,148 +29311,144 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  else if (session_parse_command(line, "/image", &args)) {
+  else if (session_parse_command_any(ctx, "/image", effective_line, &args)) {
     session_handle_image(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/video", &args)) {
+  else if (session_parse_command_any(ctx, "/video", effective_line, &args)) {
     session_handle_video(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/audio", &args)) {
+  else if (session_parse_command_any(ctx, "/audio", effective_line, &args)) {
     session_handle_audio(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/files", &args)) {
+  else if (session_parse_command_any(ctx, "/files", effective_line, &args)) {
     session_handle_files(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/mail", &args)) {
+  else if (session_parse_command_any(ctx, "/mail", effective_line, &args)) {
     session_handle_mail(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/profilepic", &args)) {
+  else if (session_parse_command_any(ctx, "/profilepic", effective_line, &args)) {
     session_handle_profile_picture(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/game", &args)) {
+  else if (session_parse_command_any(ctx, "/game", effective_line, &args)) {
     session_handle_game(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/banlist", &args)) {
+  else if (session_parse_command_any(ctx, "/banlist", effective_line, &args)) {
     session_handle_ban_list(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/banname", &args)) {
+  else if (session_parse_command_any(ctx, "/banname", effective_line, &args)) {
     session_handle_ban_name(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/ban", &args)) {
+  else if (session_parse_command_any(ctx, "/ban", effective_line, &args)) {
     session_handle_ban(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/delete-msg", &args)) {
+  else if (session_parse_command_any(ctx, "/delete-msg", effective_line, &args)) {
     session_handle_delete_message(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/block", &args)) {
+  else if (session_parse_command_any(ctx, "/block", effective_line, &args)) {
     session_handle_block(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/unblock", &args)) {
+  else if (session_parse_command_any(ctx, "/unblock", effective_line, &args)) {
     session_handle_unblock(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/pardon", &args)) {
+  else if (session_parse_command_any(ctx, "/pardon", effective_line, &args)) {
     session_handle_pardon(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/poke", &args)) {
+  else if (session_parse_command_any(ctx, "/poke", effective_line, &args)) {
     session_handle_poke(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/color", &args)) {
+  else if (session_parse_command_any(ctx, "/color", effective_line, &args)) {
     session_handle_color(ctx, args);
     return;
   }
 
-  else if (session_parse_command(line, "/systemcolor", &args)) {
+  else if (session_parse_command_any(ctx, "/systemcolor", effective_line, &args)) {
     session_handle_system_color(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/set-trans-lang", &args)) {
+  else if (session_parse_command_any(ctx, "/set-trans-lang", effective_line, &args)) {
     session_handle_set_trans_lang(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/set-target-lang", &args)) {
+  else if (session_parse_command_any(ctx, "/set-target-lang", effective_line, &args)) {
     session_handle_set_target_lang(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/set-ui-lang", &args)) {
+  else if (session_parse_command_any(ctx, "/set-ui-lang", effective_line, &args)) {
     session_handle_set_ui_lang(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/weather", &args)) {
+  else if (session_parse_command_any(ctx, "/weather", effective_line, &args)) {
     session_handle_weather(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/translate", &args)) {
+  else if (session_parse_command_any(ctx, "/translate", effective_line, &args)) {
     session_handle_translate(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/translate-scope", &args)) {
+  else if (session_parse_command_any(ctx, "/translate-scope", effective_line, &args)) {
     session_handle_translate_scope(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/gemini-unfreeze", &args)) {
+  else if (session_parse_command_any(ctx, "/gemini-unfreeze", effective_line, &args)) {
     session_handle_gemini_unfreeze(ctx);
     return;
   }
-  else if (session_parse_command(line, "/gemini", &args)) {
+  else if (session_parse_command_any(ctx, "/gemini", effective_line, &args)) {
     session_handle_gemini(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/captcha", &args)) {
+  else if (session_parse_command_any(ctx, "/captcha", effective_line, &args)) {
     session_handle_captcha(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/eliza", &args)) {
+  else if (session_parse_command_any(ctx, "/eliza", effective_line, &args)) {
     session_handle_eliza(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/eliza-chat", &args)) {
+  else if (session_parse_command_any(ctx, "/eliza-chat", effective_line, &args)) {
     session_handle_eliza_chat(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/chat-spacing", &args)) {
+  else if (session_parse_command_any(ctx, "/chat-spacing", effective_line, &args)) {
     session_handle_chat_spacing(ctx, args);
     return;
   }
-  else if (session_parse_command(line, "/mode", &args)) {
+  else if (session_parse_command_any(ctx, "/mode", effective_line, &args)) {
     ctx->ops->handle_mode(ctx, args);
     return;
   }
-  else if (strncmp(line, "/palette", 8) == 0) {
-    const char *arguments = line + 8;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
-    session_handle_palette(ctx, arguments);
+  else if (session_parse_command_any(ctx, "/palette", effective_line, &args)) {
+    session_handle_palette(ctx, args);
     return;
   }
-  else if (strncmp(line, "/suspend!", 9) == 0) {
+  else if (session_parse_command_any(ctx, "/suspend!", effective_line, &args)) {
     if (ctx->game.active) {
       session_game_suspend(ctx, "Game suspended.");
     } else {
@@ -29454,40 +29456,24 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  else if (strncmp(line, "/today", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
-    if (*arguments != '\0') {
+  else if (session_parse_command_any(ctx, "/today", effective_line, &args)) {
+    if (*args != '\0') {
       session_send_system_line(ctx, "Usage: /today");
     } else {
       session_handle_today(ctx);
     }
     return;
   }
-  else if (strncmp(line, "/date", 5) == 0) {
-    const char *arguments = line + 5;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
-    session_handle_date(ctx, arguments);
+  else if (session_parse_command_any(ctx, "/date", effective_line, &args)) {
+    session_handle_date(ctx, args);
     return;
   }
-  else if (strncmp(line, "/os", 3) == 0) {
-    const char *arguments = line + 3;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
-    session_handle_os(ctx, arguments);
+  else if (session_parse_command_any(ctx, "/os", effective_line, &args)) {
+    session_handle_os(ctx, args);
     return;
   }
-  else if (strncmp(line, "/getos", 6) == 0) {
-    const char *arguments = line + 6;
-    while (*arguments == ' ' || *arguments == '\t') {
-      ++arguments;
-    }
-    session_handle_getos(ctx, arguments);
+  else if (session_parse_command_any(ctx, "/getos", effective_line, &args)) {
+    session_handle_getos(ctx, args);
     return;
   }
   else if (strncmp(line, "/getaddr", 8) == 0) {
