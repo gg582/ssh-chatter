@@ -2870,6 +2870,114 @@ static bool session_bbs_is_admin_only_tag(const char *tag) {
   return false;
 }
 
+static void session_bbs_compact_preview(const char *input, char *output, size_t length) {
+  if (output == NULL || length == 0U) {
+    return;
+  }
+  output[0] = '\0';
+  if (input == NULL) {
+    return;
+  }
+
+  size_t out_idx = 0U;
+  bool last_space = true;
+  bool truncated = false;
+  const unsigned char *cursor = (const unsigned char *)input;
+
+  while (*cursor != '\0') {
+    unsigned char ch = *cursor++;
+    if (ch == '\r' || ch == '\n' || ch == '\t') {
+      ch = ' ';
+    }
+    if (ch < 32U) {
+      continue;
+    }
+    if (ch == ' ') {
+      if (last_space) {
+        continue;
+      }
+      last_space = true;
+    } else {
+      last_space = false;
+    }
+
+    if (out_idx + 1U >= length) {
+      truncated = true;
+      break;
+    }
+
+    output[out_idx++] = (char)ch;
+  }
+
+  if (last_space && out_idx > 0U) {
+    --out_idx;
+  }
+
+  if (truncated && out_idx + 3U < length) {
+    output[out_idx++] = '.';
+    output[out_idx++] = '.';
+    output[out_idx++] = '.';
+  }
+
+  output[out_idx] = '\0';
+}
+
+static void session_bbs_announce_post(host_t *host, const bbs_post_t *post) {
+  if (host == NULL || post == NULL || host->matrix_client == NULL) {
+    return;
+  }
+
+  char author[SSH_CHATTER_USERNAME_LEN];
+  snprintf(author, sizeof(author), "%s", post->author);
+  trim_whitespace_inplace(author);
+
+  char title[SSH_CHATTER_BBS_TITLE_LEN];
+  snprintf(title, sizeof(title), "%s", post->title);
+  trim_whitespace_inplace(title);
+
+  char preview[128];
+  session_bbs_compact_preview(post->body, preview, sizeof(preview));
+
+  char notice[SSH_CHATTER_MESSAGE_LIMIT];
+  if (preview[0] != '\0') {
+    snprintf(notice, sizeof(notice), "* [bbs] #%llu %s posted \"%s\" — %s", (unsigned long long)post->id,
+             author[0] != '\0' ? author : "unknown", title[0] != '\0' ? title : "(untitled)", preview);
+  } else {
+    snprintf(notice, sizeof(notice), "* [bbs] #%llu %s posted \"%s\"", (unsigned long long)post->id,
+             author[0] != '\0' ? author : "unknown", title[0] != '\0' ? title : "(untitled)");
+  }
+
+  host_history_record_system(host, notice);
+}
+
+static void session_bbs_announce_comment(host_t *host, const bbs_post_t *post, const bbs_comment_t *comment) {
+  if (host == NULL || post == NULL || comment == NULL || host->matrix_client == NULL) {
+    return;
+  }
+
+  char author[SSH_CHATTER_USERNAME_LEN];
+  snprintf(author, sizeof(author), "%s", comment->author);
+  trim_whitespace_inplace(author);
+
+  char title[SSH_CHATTER_BBS_TITLE_LEN];
+  snprintf(title, sizeof(title), "%s", post->title);
+  trim_whitespace_inplace(title);
+
+  char preview[128];
+  session_bbs_compact_preview(comment->text, preview, sizeof(preview));
+
+  char notice[SSH_CHATTER_MESSAGE_LIMIT];
+  if (preview[0] != '\0') {
+    snprintf(notice, sizeof(notice), "* [bbs] #%llu %s commented on \"%s\": %s", (unsigned long long)post->id,
+             author[0] != '\0' ? author : "unknown", title[0] != '\0' ? title : "(untitled)", preview);
+  } else {
+    snprintf(notice, sizeof(notice), "* [bbs] #%llu %s commented on \"%s\"", (unsigned long long)post->id,
+             author[0] != '\0' ? author : "unknown", title[0] != '\0' ? title : "(untitled)");
+  }
+
+  host_history_record_system(host, notice);
+}
+
 static void session_bbs_reset_pending_post(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return;
@@ -3004,6 +3112,7 @@ static void session_bbs_commit_pending_post(session_ctx_t *ctx) {
 
   session_bbs_reset_pending_post(ctx);
 
+  session_bbs_announce_post(ctx->owner, &snapshot);
   session_bbs_render_post(ctx, &snapshot, "Post created.", true, false);
 }
 
@@ -3346,7 +3455,9 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  bbs_comment_t *comment = &post->comments[post->comment_count++];
+  size_t comment_index = post->comment_count;
+  bbs_comment_t *comment = &post->comments[comment_index];
+  post->comment_count++;
   snprintf(comment->author, sizeof(comment->author), "%s", ctx->user.name);
   size_t comment_len = strnlen(comment_text, SSH_CHATTER_BBS_COMMENT_LEN - 1U);
   memcpy(comment->text, comment_text, comment_len);
@@ -3359,6 +3470,9 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   host_bbs_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 
+  if (comment_index < snapshot.comment_count) {
+    session_bbs_announce_comment(ctx->owner, &snapshot, &snapshot.comments[comment_index]);
+  }
   session_bbs_render_post(ctx, &snapshot, "Comment added.", false, true);
 }
 
