@@ -126,6 +126,15 @@ typedef struct join_activity_entry {
   struct timespec last_asciiart_post;
 } join_activity_entry_t;
 
+typedef struct connection_guard_entry {
+  char ip[SSH_CHATTER_IP_LEN];
+  struct timespec window_start;
+  size_t attempts;
+  struct timespec blocked_until;
+  unsigned int block_count;
+  struct timespec last_seen;
+} connection_guard_entry_t;
+
 typedef struct client_manager client_manager_t;
 typedef struct webssh_client webssh_client_t;
 
@@ -479,6 +488,8 @@ typedef struct session_ctx {
   size_t history_scroll_position;
   struct timespec last_message_time;
   bool has_last_message_time;
+  bool history_latest_notified;
+  bool history_oldest_notified;
   char os_name[SSH_CHATTER_OS_NAME_LEN];
   int daily_year;
   int daily_yday;
@@ -523,9 +534,11 @@ typedef struct session_ctx {
   pthread_mutex_t translation_mutex;
   pthread_cond_t translation_cond;
   pthread_mutex_t output_lock;
+  pthread_mutex_t channel_mutex;
   bool translation_mutex_initialized;
   bool translation_cond_initialized;
   bool output_lock_initialized;
+  bool channel_mutex_initialized;
   bool translation_thread_started;
   bool translation_thread_stop;
   pthread_t translation_thread;
@@ -750,6 +763,13 @@ typedef struct host {
   join_activity_entry_t *join_activity;
   size_t join_activity_count;
   size_t join_activity_capacity;
+  connection_guard_entry_t *connection_guard;
+  size_t connection_guard_count;
+  size_t connection_guard_capacity;
+  struct {
+    unsigned int consecutive_errors;
+    struct timespec last_error_time;
+  } health_guard;
   _Atomic bool captcha_enabled;
   uint64_t captcha_nonce;
   bool has_last_captcha;
