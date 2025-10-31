@@ -13349,8 +13349,12 @@ static bool session_argument_is_disable(const char *token) {
     return false;
   }
 
-  return strcasecmp(token, "off") == 0 || strcasecmp(token, "none") == 0 || strcasecmp(token, "disable") == 0 ||
-         strcasecmp(token, "stop") == 0;
+  if (strcasecmp(token, "off") == 0 || strcasecmp(token, "none") == 0 || strcasecmp(token, "disable") == 0 ||
+      strcasecmp(token, "stop") == 0) {
+    return true;
+  }
+
+  return strcmp(token, "끄기") == 0 || strcmp(token, "オフ") == 0 || strcmp(token, "关") == 0 || strcmp(token, "выкл") == 0;
 }
 
 static void session_language_normalize(const char *input, char *normalized, size_t length) {
@@ -29306,7 +29310,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
-  else if (session_parse_command_any(ctx, "/reply", line, &args)) {
+  else if (session_parse_command_any(ctx, "/reply", effective_line, &args)) {
     session_handle_reply(ctx, args);
     return;
   }
@@ -29476,24 +29480,24 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_getos(ctx, args);
     return;
   }
-  else if (strncmp(line, "/getaddr", 8) == 0) {
-    const char *arguments = line + 8;
+  else if (strncmp(effective_line, "/getaddr", 8) == 0) {
+    const char *arguments = effective_line + 8;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
     session_handle_getaddr(ctx, arguments);
     return;
   }
-  else if (strncmp(line, "/birthday", 9) == 0) {
-    const char *arguments = line + 9;
+  else if (strncmp(effective_line, "/birthday", 9) == 0) {
+    const char *arguments = effective_line + 9;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
     session_handle_birthday(ctx, arguments);
     return;
   }
-  else if (strcasecmp(line, session_command_alias_preferred_by_canonical(ctx, "/soulmate")) == 0) {
-    const char *arguments = line + 9;
+  else if (strcasecmp(effective_line, session_command_alias_preferred_by_canonical(ctx, "/soulmate")) == 0) {
+    const char *arguments = effective_line + 9;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
@@ -29504,24 +29508,24 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  else if (strncmp(line, "/grant", 6) == 0) {
-    const char *arguments = line + 6;
+  else if (strncmp(effective_line, "/grant", 6) == 0) {
+    const char *arguments = effective_line + 6;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
     session_handle_grant(ctx, arguments);
     return;
   }
-  else if (strncmp(line, "/revoke", 7) == 0) {
-    const char *arguments = line + 7;
+  else if (strncmp(effective_line, "/revoke", 7) == 0) {
+    const char *arguments = effective_line + 7;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
     session_handle_revoke(ctx, arguments);
     return;
   }
-  else if (strncmp(line, "/pair", 5) == 0) {
-    const char *arguments = line + 5;
+  else if (strncmp(effective_line, "/pair", 5) == 0) {
+    const char *arguments = effective_line + 5;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
@@ -29532,8 +29536,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  else if (strncmp(line, "/connected", 10) == 0) {
-    const char *arguments = line + 10;
+  else if (strncmp(effective_line, "/connected", 10) == 0) {
+    const char *arguments = effective_line + 10;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
@@ -29544,7 +29548,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  else if (session_parse_command(line, "/alpha-centauri-landers", &args)) {
+  else if (session_parse_command(effective_line, "/alpha-centauri-landers", &args)) {
     if (*args != '\0') {
       session_send_system_line(ctx, "Usage: /alpha-centauri-landers");
     } else {
@@ -29552,16 +29556,16 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  else if (strcasecmp(line, session_command_alias_preferred_by_canonical(ctx, "/poll")) == 0) {
-    const char *arguments = line + 5;
+  else if (strcasecmp(effective_line, session_command_alias_preferred_by_canonical(ctx, "/poll")) == 0) {
+    const char *arguments = effective_line + 5;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
     session_handle_poll(ctx, arguments);
     return;
   }
-  else if (strncmp(line, "/vote-single", 12) == 0) {
-    const char *arguments = line + 12;
+  else if (strncmp(effective_line, "/vote-single", 12) == 0) {
+    const char *arguments = effective_line + 12;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
@@ -29572,8 +29576,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  else if (strncmp(line, "/vote", 5) == 0) {
-    const char *arguments = line + 5;
+  else if (strncmp(effective_line, "/vote", 5) == 0) {
+    const char *arguments = effective_line + 5;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
@@ -29584,8 +29588,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  else if (strncmp(line, "/elect", 6) == 0) {
-    const char *arguments = line + 6;
+  else if (strncmp(effective_line, "/elect", 6) == 0) {
+    const char *arguments = effective_line + 6;
     while (*arguments == ' ' || *arguments == '\t') {
       ++arguments;
     }
@@ -29596,24 +29600,24 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     }
     return;
   }
-  else if (session_parse_command(line, "/rss", &args)) {
+  else if (session_parse_command(effective_line, "/rss", &args)) {
     session_handle_rss(ctx, args);
     return;
   }
-  else if (session_parse_command_any(ctx, "/bbs", line, &args)) {
+  else if (session_parse_command_any(ctx, "/bbs", effective_line, &args)) {
     session_handle_bbs(ctx, (args != NULL && args[0] != '\0') ? args : NULL);
     return;
   }
 
-  else if (session_parse_command(line, "/kick", &args)) {
+  else if (session_parse_command(effective_line, "/kick", &args)) {
     session_handle_kick(ctx, args);
     return;
   }
 
-  else if (line[0] == '/') {
-    if (isdigit((unsigned char)line[1])) {
+  else if (effective_line[0] == '/') {
+    if (isdigit((unsigned char)effective_line[1])) {
       char *endptr = NULL;
-      unsigned long vote_index = strtoul(line + 1, &endptr, 10);
+      unsigned long vote_index = strtoul(effective_line + 1, &endptr, 10);
       const unsigned long max_vote = sizeof(ctx->owner->poll.options) / sizeof(ctx->owner->poll.options[0]);
       if (vote_index >= 1UL && vote_index <= max_vote) {
         while (endptr != NULL && (*endptr == ' ' || *endptr == '\t')) {
@@ -29654,7 +29658,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
       }
 
       const char *arguments = NULL;
-      if (!session_parse_command_any(ctx, canonical, line, &arguments)) {
+      if (!session_parse_command_any(ctx, canonical, effective_line, &arguments)) {
         continue;
       }
 
@@ -30573,13 +30577,15 @@ static bool parse_bool_token(const char *token, bool *value) {
   }
 
   if (strcasecmp(token, "true") == 0 || strcasecmp(token, "yes") == 0 || strcasecmp(token, "on") == 0 ||
-      strcasecmp(token, "bold") == 0) {
+      strcasecmp(token, "bold") == 0 || strcmp(token, "켜기") == 0 || strcmp(token, "オン") == 0 ||
+      strcmp(token, "开") == 0 || strcmp(token, "вкл") == 0) {
     *value = true;
     return true;
   }
 
   if (strcasecmp(token, "false") == 0 || strcasecmp(token, "no") == 0 || strcasecmp(token, "off") == 0 ||
-      strcasecmp(token, "normal") == 0) {
+      strcasecmp(token, "normal") == 0 || strcmp(token, "끄기") == 0 || strcmp(token, "オフ") == 0 ||
+      strcmp(token, "关") == 0 || strcmp(token, "выкл") == 0) {
     *value = false;
     return true;
   }
