@@ -477,6 +477,10 @@ typedef struct session_ctx {
   bool prelogin_banner_rendered;
   unsigned int channel_error_retries;
   size_t history_scroll_position;
+  bool history_latest_notified;
+  bool history_oldest_notified;
+  pthread_mutex_t channel_mutex;
+  bool channel_mutex_initialized;
   struct timespec last_message_time;
   bool has_last_message_time;
   char os_name[SSH_CHATTER_OS_NAME_LEN];
