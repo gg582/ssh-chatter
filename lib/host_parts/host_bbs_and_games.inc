@@ -3818,27 +3818,36 @@ static void session_translate_scope_send_usage(session_ctx_t *ctx) {
   }
 
   const char *prefix = session_command_prefix(ctx);
-  const char *usage_format = "Usage: %stranslate-scope <chat|chat-nohistory|all>";
+  char *usage_format_head = "Usage: ";
+  char *usage_format_tail = "translate-scope <chat|chat-nohistory|all>";
 
   switch (ctx->ui_language) {
     case SESSION_UI_LANGUAGE_KO:
-      usage_format = "사용법: %s번역범위 <채팅|채팅기록없음|모두>";
+      usage_format_head = "사용법: ";
+      usage_format_tail = "번역범위 <채팅|채팅기록없음|모두>";
       break;
     case SESSION_UI_LANGUAGE_JP:
-      usage_format = "使い方: %s翻訳範囲 <チャット|チャット履歴なし|すべて>";
+      usage_format_head = "使い方: ";
+      usage_format_tail = "翻訳範囲 <チャット|チャット履歴なし|すべて>";
       break;
     case SESSION_UI_LANGUAGE_ZH:
-      usage_format = "用法：%s翻译范围 <聊天|无聊天记录|全部>";
+      usage_format_head = "用法：";
+      usage_format_tail = "翻译范围 <聊天|无聊天记录|全部>";
       break;
     case SESSION_UI_LANGUAGE_RU:
-      usage_format = "Использование: %sобласть-перевода <чат|чат-без-истории|все>";
+      usage_format_head = "Использование: ";
+      usage_format_tail = "область-перевода <чат|чат-без-истории|все>";
       break;
     default:
       break;
   }
 
   char usage_line[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(usage_line, sizeof(usage_line), usage_format, prefix);
+  strncat(usage_line, usage_format_head, strnlen(usage_format_head, SSH_CHATTER_MESSAGE_LIMIT));
+  
+  size_t prefix_len = strnlen(prefix, SSH_CHATTER_MESSAGE_LIMIT);
+  if(prefix_len > 0) strncat(usage_line, prefix, prefix_len);
+  strncat(usage_line, usage_format_tail, strnlen(usage_format_tail, SSH_CHATTER_MESSAGE_LIMIT));
   session_send_system_line(ctx, usage_line);
 }
 
