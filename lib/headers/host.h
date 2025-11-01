@@ -525,6 +525,7 @@ typedef struct session_ctx {
   bool bbs_rendering_editor;
   char bbs_breaking_messages[SSH_CHATTER_BBS_BREAKING_MAX][SSH_CHATTER_MESSAGE_LIMIT];
   size_t bbs_breaking_count;
+  bool breaking_alerts_enabled;
   bool prefer_utf16_output;
   bool prefer_cp437_output;
   bool translation_enabled;
@@ -603,6 +604,7 @@ typedef struct user_preference {
   char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   char ui_language[SSH_CHATTER_LANG_NAME_LEN];
+  bool breaking_alerts_enabled;
   struct {
     char label[SSH_CHATTER_POLL_LABEL_LEN];
     uint64_t poll_id;

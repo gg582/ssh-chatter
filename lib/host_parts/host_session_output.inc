@@ -353,12 +353,8 @@ static void session_blocklist_show(session_ctx_t *ctx) {
   }
 }
 
-static bool session_bbs_should_defer_breaking(session_ctx_t *ctx, const char *message) {
-  if (ctx == NULL || message == NULL) {
-    return false;
-  }
-
-  if (!ctx->bbs_post_pending || ctx->bbs_rendering_editor) {
+static bool session_message_contains_breaking(const char *message) {
+  if (message == NULL) {
     return false;
   }
 
@@ -378,10 +374,52 @@ static bool session_bbs_should_defer_breaking(session_ctx_t *ctx, const char *me
   return false;
 }
 
+static bool session_bbs_should_defer_breaking(session_ctx_t *ctx, const char *message) {
+  if (ctx == NULL || message == NULL) {
+    return false;
+  }
+
+  if (!ctx->breaking_alerts_enabled) {
+    return false;
+  }
+
+  if (!ctx->bbs_post_pending || ctx->bbs_rendering_editor) {
+    return false;
+  }
+
+  return session_message_contains_breaking(message);
+}
+
+static void session_bbs_format_breaking_notice(const char *message, char *out, size_t length) {
+  if (out == NULL || length == 0U) {
+    return;
+  }
+
+  out[0] = '\0';
+
+  if (message == NULL) {
+    return;
+  }
+
+  size_t offset = 0U;
+  offset = session_append_fragment(out, length, offset, ANSI_BG_BRIGHT_BLUE);
+  offset = session_append_fragment(out, length, offset, ANSI_BRIGHT_MAGENTA);
+  offset = session_append_fragment(out, length, offset, ANSI_BOLD);
+  offset = session_append_fragment(out, length, offset, message);
+  session_append_fragment(out, length, offset, ANSI_RESET);
+}
+
 static void session_bbs_buffer_breaking_notice(session_ctx_t *ctx, const char *message) {
   if (ctx == NULL || message == NULL) {
     return;
   }
+
+  if (!ctx->breaking_alerts_enabled) {
+    return;
+  }
+
+  char formatted[SSH_CHATTER_MESSAGE_LIMIT];
+  session_bbs_format_breaking_notice(message, formatted, sizeof(formatted));
 
   size_t limit = SSH_CHATTER_BBS_BREAKING_MAX;
   if (limit == 0U) {
@@ -390,14 +428,14 @@ static void session_bbs_buffer_breaking_notice(session_ctx_t *ctx, const char *m
 
   if (ctx->bbs_breaking_count < limit) {
     snprintf(ctx->bbs_breaking_messages[ctx->bbs_breaking_count],
-             sizeof(ctx->bbs_breaking_messages[ctx->bbs_breaking_count]), "%s", message);
+             sizeof(ctx->bbs_breaking_messages[ctx->bbs_breaking_count]), "%s", formatted);
     ctx->bbs_breaking_count += 1U;
   } else {
     for (size_t idx = 1U; idx < limit; ++idx) {
       snprintf(ctx->bbs_breaking_messages[idx - 1U], sizeof(ctx->bbs_breaking_messages[idx - 1U]), "%s",
                ctx->bbs_breaking_messages[idx]);
     }
-    snprintf(ctx->bbs_breaking_messages[limit - 1U], sizeof(ctx->bbs_breaking_messages[limit - 1U]), "%s", message);
+    snprintf(ctx->bbs_breaking_messages[limit - 1U], sizeof(ctx->bbs_breaking_messages[limit - 1U]), "%s", formatted);
   }
 
   session_bbs_render_editor(ctx, NULL);
@@ -512,12 +550,21 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
     memcpy(segment, cursor, segment_length);
     segment[segment_length] = '\0';
 
+    const bool segment_breaking = ctx->breaking_alerts_enabled && session_message_contains_breaking(segment);
+    const bool already_highlighted = strstr(segment, ANSI_BG_BRIGHT_BLUE) != NULL;
+    const char *segment_view = segment;
+    char highlighted[SSH_CHATTER_MESSAGE_LIMIT];
+    if (segment_breaking && !already_highlighted) {
+      session_bbs_format_breaking_notice(segment, highlighted, sizeof(highlighted));
+      segment_view = highlighted;
+    }
+
     char formatted[SSH_CHATTER_MESSAGE_LIMIT];
     size_t offset = 0U;
     offset = session_append_fragment(formatted, sizeof(formatted), offset, bg);
     offset = session_append_fragment(formatted, sizeof(formatted), offset, fg);
     offset = session_append_fragment(formatted, sizeof(formatted), offset, bold);
-    offset = session_append_fragment(formatted, sizeof(formatted), offset, segment);
+    offset = session_append_fragment(formatted, sizeof(formatted), offset, segment_view);
     session_append_fragment(formatted, sizeof(formatted), offset, ANSI_RESET);
     session_send_line(ctx, formatted);
 
@@ -1067,7 +1114,7 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
   }
   session_send_system_line(ctx, publish_hint);
 
-  if (ctx->bbs_breaking_count > 0U && !ascii_mode) {
+  if (ctx->breaking_alerts_enabled && ctx->bbs_breaking_count > 0U && !ascii_mode) {
     session_send_system_line(ctx, "");
     session_send_system_line(ctx, "Breaking updates:");
     for (size_t idx = 0U; idx < ctx->bbs_breaking_count; ++idx) {
@@ -3179,6 +3226,41 @@ static void session_handle_username_conflict_input(session_ctx_t *ctx, const cha
   session_send_system_line(ctx, "Type /exit to quit.");
 }
 
+static bool session_prepare_slash_command(const char *input, char *output, size_t length) {
+  if (input == NULL || output == NULL || length == 0U) {
+    return false;
+  }
+
+  const unsigned char *start = (const unsigned char *)input;
+  while (*start != '\0' && isspace((unsigned char)*start)) {
+    ++start;
+  }
+
+  if (*start != '/') {
+    return false;
+  }
+
+  const unsigned char *end = start;
+  while (*end != '\0') {
+    ++end;
+  }
+  while (end > start && isspace((unsigned char)*(end - 1U))) {
+    --end;
+  }
+
+  size_t copy_len = (size_t)(end - start);
+  if (copy_len == 0U) {
+    return false;
+  }
+  if (copy_len >= length) {
+    copy_len = length - 1U;
+  }
+
+  memcpy(output, start, copy_len);
+  output[copy_len] = '\0';
+  return true;
+}
+
 static void session_process_line(session_ctx_t *ctx, const char *line) {
   if (ctx == NULL || line == NULL) {
     return;
@@ -3197,6 +3279,8 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
     session_asciiart_capture_text(ctx, normalized);
     return;
   }
+
+  char command_line[SSH_CHATTER_MAX_INPUT_LEN];
 
   if (normalized[0] == '\0') {
     return;
@@ -3259,6 +3343,16 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
     return;
   }
 
+  if (!translation_bypass) {
+    if (session_prepare_slash_command(normalized, command_line, sizeof(command_line))) {
+      if (session_try_localized_command_forward(ctx, command_line)) {
+        return;
+      }
+      ctx->ops->dispatch_command(ctx, command_line);
+      return;
+    }
+  }
+
   if (!translation_bypass && normalized[0] == '/') {
     if (session_try_localized_command_forward(ctx, normalized)) {
       return;
@@ -3282,7 +3376,11 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
       command_buffer[command_len + 1U] = '\0';
       command_text = command_buffer;
     }
-    ctx->ops->dispatch_command(ctx, command_text);
+    if (session_prepare_slash_command(command_text, command_buffer, sizeof(command_buffer))) {
+      ctx->ops->dispatch_command(ctx, command_buffer);
+    } else {
+      ctx->ops->dispatch_command(ctx, command_text);
+    }
     return;
   }
 

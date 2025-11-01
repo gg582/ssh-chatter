@@ -1454,6 +1454,7 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
   ctx->input_translation_language[0] = '\0';
   ctx->last_detected_input_language[0] = '\0';
   ctx->ui_language = SESSION_UI_LANGUAGE_KO;
+  ctx->breaking_alerts_enabled = false;
 
   if (has_snapshot) {
     if (snapshot.ui_language[0] != '\0') {
@@ -1536,6 +1537,7 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
     ctx->input_translation_enabled = snapshot.input_translation_enabled;
     snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s",
              snapshot.input_translation_language);
+    ctx->breaking_alerts_enabled = snapshot.breaking_alerts_enabled;
   }
 
   (void)session_user_data_load(ctx);
@@ -1553,6 +1555,20 @@ static bool session_argument_is_disable(const char *token) {
   }
 
   return strcmp(token, "끄기") == 0 || strcmp(token, "オフ") == 0 || strcmp(token, "关") == 0 || strcmp(token, "выкл") == 0;
+}
+
+static bool session_argument_is_enable(const char *token) {
+  if (token == NULL) {
+    return false;
+  }
+
+  if (strcasecmp(token, "on") == 0 || strcasecmp(token, "enable") == 0 || strcasecmp(token, "start") == 0 ||
+      strcasecmp(token, "show") == 0) {
+    return true;
+  }
+
+  return strcmp(token, "켜기") == 0 || strcmp(token, "オン") == 0 || strcmp(token, "开") == 0 || strcmp(token, "开启") == 0 ||
+         strcmp(token, "表示") == 0 || strcmp(token, "вкл") == 0;
 }
 
 static void session_language_normalize(const char *input, char *normalized, size_t length) {
