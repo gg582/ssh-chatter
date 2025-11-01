@@ -17,7 +17,7 @@
 #include <ctype.h>
 #include <time.h>
 
-#include <gc/gc.h>
+#include "gc_compat.h"
 
 #define TRANSLATOR_MAX_RESPONSE 1<<20
 #define TRANSLATOR_DEFAULT_BASE_URL "https://generativelanguage.googleapis.com/v1beta"

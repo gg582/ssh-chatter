@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <gc/gc.h>
+#include "gc_compat.h"
 
 #define SECURITY_ONION_PREFIX "TorOnion/v1:"
 

@@ -18,7 +18,7 @@
 #include "translation_helpers.h"
 
 #include <curl/curl.h>
-#include <gc/gc.h>
+#include "gc_compat.h"
 #include <iconv.h>
 #include <ctype.h>
 #include <dirent.h>
