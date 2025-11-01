@@ -38,7 +38,7 @@ CFLAGS = -std=c2x -Ofast \
         -MMD -MP \
 
     COMMON_LDFLAGS = \
-        -lpthread -ldl -lcurl -lm -lcrypto \
+        -lpthread -ldl -lcurl -lm -lcrypto -lgc \
         -flto=$(shell nproc) -fuse-linker-plugin \
         -Wl,-Ofast \
         -Wl,--sort-common \
