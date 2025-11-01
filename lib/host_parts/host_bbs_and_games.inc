@@ -3812,6 +3812,36 @@ static void session_handle_breaking_alerts(session_ctx_t *ctx, const char *argum
   }
 }
 
+static void session_translate_scope_send_usage(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  const char *prefix = session_command_prefix(ctx);
+  const char *usage_format = "Usage: %stranslate-scope <chat|chat-nohistory|all>";
+
+  switch (ctx->ui_language) {
+    case SESSION_UI_LANGUAGE_KO:
+      usage_format = "사용법: %s번역범위 <채팅|채팅기록없음|모두>";
+      break;
+    case SESSION_UI_LANGUAGE_JP:
+      usage_format = "使い方: %s翻訳範囲 <チャット|チャット履歴なし|すべて>";
+      break;
+    case SESSION_UI_LANGUAGE_ZH:
+      usage_format = "用法：%s翻译范围 <聊天|无聊天记录|全部>";
+      break;
+    case SESSION_UI_LANGUAGE_RU:
+      usage_format = "Использование: %sобласть-перевода <чат|чат-без-истории|все>";
+      break;
+    default:
+      break;
+  }
+
+  char usage_line[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(usage_line, sizeof(usage_line), usage_format, prefix);
+  session_send_system_line(ctx, usage_line);
+}
+
 static void session_handle_translate_scope(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;
@@ -3822,7 +3852,7 @@ static void session_handle_translate_scope(session_ctx_t *ctx, const char *argum
     return;
   }
 
-  char token[16];
+  char token[64];
   token[0] = '\0';
   if (arguments != NULL) {
     const char *cursor = arguments;
@@ -3869,11 +3899,39 @@ static void session_handle_translate_scope(session_ctx_t *ctx, const char *argum
       }
     }
 
-    session_send_system_line(ctx, "Usage: /translate-scope <chat|chat-nohistory|all>");
+    session_translate_scope_send_usage(ctx);
     return;
   }
 
+  bool limit_chat_scope = false;
+  bool limit_chat_nohistory_scope = false;
+  bool restore_full_scope = false;
+
   if (strcasecmp(token, "chat") == 0 || strcasecmp(token, "limit") == 0 || strcasecmp(token, "on") == 0) {
+    limit_chat_scope = true;
+  }
+  if (strcasecmp(token, "chat-nohistory") == 0 || strcasecmp(token, "chat_nohistory") == 0 ||
+      strcasecmp(token, "chat-nohist") == 0) {
+    limit_chat_nohistory_scope = true;
+  }
+  if (strcasecmp(token, "all") == 0 || strcasecmp(token, "full") == 0 || strcasecmp(token, "off") == 0) {
+    restore_full_scope = true;
+  }
+
+  if (!limit_chat_scope && !limit_chat_nohistory_scope && !restore_full_scope) {
+    if (strcmp(token, "채팅") == 0 || strcmp(token, "チャット") == 0 || strcmp(token, "聊天") == 0 ||
+        strcmp(token, "чат") == 0) {
+      limit_chat_scope = true;
+    } else if (strcmp(token, "채팅기록없음") == 0 || strcmp(token, "チャット履歴なし") == 0 ||
+               strcmp(token, "无聊天记录") == 0 || strcmp(token, "чат-без-истории") == 0) {
+      limit_chat_nohistory_scope = true;
+    } else if (strcmp(token, "모두") == 0 || strcmp(token, "すべて") == 0 || strcmp(token, "全部") == 0 ||
+               strcmp(token, "все") == 0 || strcmp(token, "всё") == 0) {
+      restore_full_scope = true;
+    }
+  }
+
+  if (limit_chat_scope) {
     if (translator_is_manual_chat_bbs_only() && !translator_is_manual_skip_scrollback()) {
       session_send_system_line(ctx,
                                "Translation scope is already limited to chat messages and BBS posts.");
@@ -3891,8 +3949,7 @@ static void session_handle_translate_scope(session_ctx_t *ctx, const char *argum
     return;
   }
 
-  if (strcasecmp(token, "chat-nohistory") == 0 || strcasecmp(token, "chat_nohistory") == 0 ||
-      strcasecmp(token, "chat-nohist") == 0) {
+  if (limit_chat_nohistory_scope) {
     if (translator_is_manual_chat_bbs_only() && translator_is_manual_skip_scrollback()) {
       session_send_system_line(ctx,
                                "Translation scope is already limited to chat/BBS posts with scrollback translation disabled.");
@@ -3912,7 +3969,7 @@ static void session_handle_translate_scope(session_ctx_t *ctx, const char *argum
     return;
   }
 
-  if (strcasecmp(token, "all") == 0 || strcasecmp(token, "full") == 0 || strcasecmp(token, "off") == 0) {
+  if (restore_full_scope) {
     if (translator_is_ollama_only()) {
       session_send_system_line(ctx,
                                "Full translation scope cannot be restored while Gemini is unavailable."
@@ -3938,7 +3995,7 @@ static void session_handle_translate_scope(session_ctx_t *ctx, const char *argum
     return;
   }
 
-  session_send_system_line(ctx, "Usage: /translate-scope <chat-nohistory|chat|all>");
+  session_translate_scope_send_usage(ctx);
 }
 
 static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
