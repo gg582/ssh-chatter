@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -45,6 +46,7 @@ struct matrix_client {
   bool thread_initialized;
   _Atomic bool stop;
   _Atomic bool running;
+  _Atomic bool disabled;
   char homeserver[256];
   char access_token[512];
   char room_id[256];
@@ -65,7 +67,15 @@ typedef struct matrix_payload {
   char message[SSH_CHATTER_MESSAGE_LIMIT];
   bool system;
   bool from_self;
+  char category[32];
 } matrix_payload_t;
+
+static bool matrix_url_is_https(const char *url) {
+  if (url == NULL) {
+    return false;
+  }
+  return strncasecmp(url, "https://", 8) == 0;
+}
 
 static size_t matrix_curl_write(void *contents, size_t size, size_t nmemb, void *userp) {
   size_t total = size * nmemb;
@@ -96,6 +106,26 @@ static void matrix_buffer_free(matrix_buffer_t *buffer) {
     buffer->data = NULL;
   }
   buffer->length = 0U;
+}
+
+static void matrix_client_disable(matrix_client_t *client, const char *message, int error_code) {
+  if (client == NULL) {
+    return;
+  }
+
+  bool expected = false;
+  if (!atomic_compare_exchange_strong(&client->disabled, &expected, true)) {
+    return;
+  }
+
+  int log_code = (error_code != 0) ? error_code : EIO;
+  if (message != NULL && message[0] != '\0') {
+    humanized_log_error("matrix", message, log_code);
+  } else {
+    humanized_log_error("matrix", "matrix bridge disabled after failure", log_code);
+  }
+
+  atomic_store(&client->stop, true);
 }
 
 static const char *matrix_getenv(const char *name) {
@@ -163,8 +193,13 @@ static bool matrix_probe_homeserver(const char *homeserver) {
   curl_easy_setopt(curl, CURLOPT_URL, url);
   curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
   curl_easy_setopt(curl, CURLOPT_USERAGENT, MATRIX_USER_AGENT);
-  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+  if (matrix_url_is_https(homeserver)) {
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+  } else {
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+  }
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, matrix_curl_write);
@@ -495,8 +530,13 @@ static bool matrix_client_issue_request(matrix_client_t *client, const char *met
   curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_USERAGENT, MATRIX_USER_AGENT);
-  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-  curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+  if (matrix_url_is_https(url)) {
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+  } else {
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+  }
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
 
@@ -544,6 +584,11 @@ static bool matrix_client_send_payload(matrix_client_t *client, const char *payl
   bool sent = false;
   pthread_mutex_lock(&client->http_lock);
 
+  if (atomic_load(&client->disabled)) {
+    pthread_mutex_unlock(&client->http_lock);
+    return false;
+  }
+
   CURL *curl = curl_easy_init();
   if (curl == NULL) {
     pthread_mutex_unlock(&client->http_lock);
@@ -572,14 +617,15 @@ static bool matrix_client_send_payload(matrix_client_t *client, const char *payl
   matrix_buffer_t response = {0};
   long status = 0;
   sent = matrix_client_issue_request(client, "PUT", url, payload, &response, &status);
-  if (!sent) {
-    char message[256];
-    snprintf(message, sizeof(message), "matrix send failed (HTTP %ld)", status);
-    humanized_log_error("matrix", message, errno != 0 ? errno : EIO);
-  }
+  int saved_errno = errno;
   matrix_buffer_free(&response);
   curl_easy_cleanup(curl);
   pthread_mutex_unlock(&client->http_lock);
+  if (!sent) {
+    char message[256];
+    snprintf(message, sizeof(message), "matrix send failed (HTTP %ld); matrix bridge disabled", status);
+    matrix_client_disable(client, message, saved_errno != 0 ? saved_errno : EIO);
+  }
   return sent;
 }
 
@@ -606,6 +652,17 @@ static bool matrix_client_should_skip(matrix_client_t *client, const chat_histor
   return should_skip;
 }
 
+static bool matrix_entry_is_bbs_notice(const chat_history_entry_t *entry) {
+  if (entry == NULL || entry->is_user_message) {
+    return false;
+  }
+  const char *message = entry->message;
+  if (message == NULL) {
+    return false;
+  }
+  return strncmp(message, "* [bbs]", 7) == 0;
+}
+
 static bool matrix_client_build_plaintext(matrix_client_t *client, const chat_history_entry_t *entry, char *plaintext,
                                           size_t plaintext_len) {
   (void)client;
@@ -623,14 +680,21 @@ static bool matrix_client_build_plaintext(matrix_client_t *client, const chat_hi
   }
 
   int written = snprintf(plaintext, plaintext_len,
-                         "{\"username\":\"%s\",\"message\":\"%s\",\"system\":%s,\"source\":\"ssh-chatter\","
-                         "\"message_id\":%" PRIu64 "",
+                         "{\"username\":\"%s\",\"message\":\"%s\",\"system\":%s,\"source\":\"ssh-chatter\",\"message_id\":%" PRIu64,
                          escaped_username, escaped_message, entry->is_user_message ? "false" : "true",
                          entry->message_id);
   if (written < 0 || (size_t)written >= plaintext_len) {
     return false;
   }
   size_t offset = (size_t)written;
+
+  if (matrix_entry_is_bbs_notice(entry)) {
+    int appended = snprintf(plaintext + offset, plaintext_len - offset, ",\"category\":\"bbs\"");
+    if (appended < 0 || (size_t)appended >= plaintext_len - offset) {
+      return false;
+    }
+    offset += (size_t)appended;
+  }
 
   if (entry->attachment_type != CHAT_ATTACHMENT_NONE && entry->attachment_target[0] != '\0') {
     char escaped_target[SSH_CHATTER_ATTACHMENT_TARGET_LEN * 6];
@@ -643,25 +707,29 @@ static bool matrix_client_build_plaintext(matrix_client_t *client, const chat_hi
     }
     const char *label = matrix_attachment_label(entry->attachment_type);
     int appended = snprintf(plaintext + offset, plaintext_len - offset,
-                            ",\"attachment\":{\"type\":\"%s\",\"target\":\"%s\",\"caption\":\"%s\"}}",
+                            ",\"attachment\":{\"type\":\"%s\",\"target\":\"%s\",\"caption\":\"%s\"}",
                             label, escaped_target, escaped_caption);
     if (appended < 0 || (size_t)appended >= plaintext_len - offset) {
       return false;
     }
     offset += (size_t)appended;
-  } else {
-    if (offset + 1U >= plaintext_len) {
-      return false;
-    }
-    plaintext[offset++] = '}';
-    plaintext[offset] = '\0';
   }
+
+  if (offset + 1U >= plaintext_len) {
+    return false;
+  }
+  plaintext[offset++] = '}';
+  plaintext[offset] = '\0';
 
   return true;
 }
 
 static bool matrix_client_send_entry(matrix_client_t *client, const chat_history_entry_t *entry) {
   if (client == NULL || entry == NULL || client->security == NULL) {
+    return false;
+  }
+
+  if (atomic_load(&client->disabled)) {
     return false;
   }
 
@@ -681,14 +749,14 @@ static bool matrix_client_send_entry(matrix_client_t *client, const chat_history
   OPENSSL_cleanse(plaintext, sizeof(plaintext));
   if (!encrypted_ok) {
     OPENSSL_cleanse(encrypted, encrypted_capacity);
-    free(encrypted);
+    GC_free(encrypted);
     return false;
   }
 
   char escaped_body[(SSH_CHATTER_MESSAGE_LIMIT * 4U) + 4096U];
   if (!matrix_json_escape(encrypted, escaped_body, sizeof(escaped_body))) {
     OPENSSL_cleanse(encrypted, encrypted_capacity);
-    free(encrypted);
+    GC_free(encrypted);
     return false;
   }
 
@@ -696,7 +764,7 @@ static bool matrix_client_send_entry(matrix_client_t *client, const chat_history
   int written = snprintf(payload, sizeof(payload),
                          "{\"msgtype\":\"m.notice\",\"body\":\"%s\"}", escaped_body);
   OPENSSL_cleanse(encrypted, encrypted_capacity);
-  free(encrypted);
+  GC_free(encrypted);
   if (written < 0 || (size_t)written >= sizeof(payload)) {
     return false;
   }
@@ -710,6 +778,9 @@ static void matrix_client_on_message(client_connection_t *connection, const chat
   }
 
   matrix_client_t *client = (matrix_client_t *)connection->user_data;
+  if (atomic_load(&client->disabled)) {
+    return;
+  }
   if (entry->username[0] == '\0') {
     return;
   }
@@ -723,7 +794,9 @@ static void matrix_client_on_message(client_connection_t *connection, const chat
   }
 
   if (!matrix_client_send_entry(client, entry)) {
-    humanized_log_error("matrix", "failed to relay message to matrix", errno != 0 ? errno : EIO);
+    if (!atomic_load(&client->disabled)) {
+      humanized_log_error("matrix", "failed to relay message to matrix", errno != 0 ? errno : EIO);
+    }
   }
 }
 
@@ -806,6 +879,8 @@ static bool matrix_client_parse_payload(const char *plaintext, matrix_payload_t 
     }
   }
 
+  (void)matrix_json_extract_string(plaintext, "\"category\"", payload->category, sizeof(payload->category));
+
   return true;
 }
 
@@ -852,7 +927,7 @@ static void matrix_client_handle_body(matrix_client_t *client, const char *body)
 
   if (!security_layer_decrypt_message(client->security, body, plaintext, decrypted_capacity)) {
     OPENSSL_cleanse(plaintext, decrypted_capacity);
-    free(plaintext);
+    GC_free(plaintext);
     return;
   }
 
@@ -862,7 +937,7 @@ static void matrix_client_handle_body(matrix_client_t *client, const char *body)
   }
 
   OPENSSL_cleanse(plaintext, decrypted_capacity);
-  free(plaintext);
+  GC_free(plaintext);
 }
 
 static const char *matrix_find_matching(const char *start, char open, char close) {
@@ -900,20 +975,20 @@ static void matrix_client_process_event(matrix_client_t *client, const char *eve
 
   if (strstr(buffer, "\"type\":\"m.room.message\"") == NULL) {
     OPENSSL_cleanse(buffer, length);
-    free(buffer);
+    GC_free(buffer);
     return;
   }
 
   char event_id[128];
   if (!matrix_json_extract_string(buffer, "\"event_id\"", event_id, sizeof(event_id))) {
     OPENSSL_cleanse(buffer, length);
-    free(buffer);
+    GC_free(buffer);
     return;
   }
 
   if (matrix_client_event_recent(client, event_id)) {
     OPENSSL_cleanse(buffer, length);
-    free(buffer);
+    GC_free(buffer);
     return;
   }
 
@@ -921,7 +996,7 @@ static void matrix_client_process_event(matrix_client_t *client, const char *eve
   if (content_pos == NULL) {
     matrix_client_record_event(client, event_id);
     OPENSSL_cleanse(buffer, length);
-    free(buffer);
+    GC_free(buffer);
     return;
   }
 
@@ -929,14 +1004,14 @@ static void matrix_client_process_event(matrix_client_t *client, const char *eve
   if (colon == NULL) {
     matrix_client_record_event(client, event_id);
     OPENSSL_cleanse(buffer, length);
-    free(buffer);
+    GC_free(buffer);
     return;
   }
   colon = matrix_skip_whitespace(colon + 1);
   if (colon == NULL || *colon != '"') {
     matrix_client_record_event(client, event_id);
     OPENSSL_cleanse(buffer, length);
-    free(buffer);
+    GC_free(buffer);
     return;
   }
 
@@ -944,14 +1019,14 @@ static void matrix_client_process_event(matrix_client_t *client, const char *eve
   if (!matrix_json_decode_string(colon, body, sizeof(body), NULL)) {
     matrix_client_record_event(client, event_id);
     OPENSSL_cleanse(buffer, length);
-    free(buffer);
+    GC_free(buffer);
     return;
   }
 
   matrix_client_handle_body(client, body);
   matrix_client_record_event(client, event_id);
   OPENSSL_cleanse(buffer, length);
-  free(buffer);
+  GC_free(buffer);
 }
 
 static void matrix_client_process_sync(matrix_client_t *client, const char *json) {
@@ -1012,6 +1087,10 @@ static bool matrix_client_sync(matrix_client_t *client) {
     return false;
   }
 
+  if (atomic_load(&client->disabled)) {
+    return false;
+  }
+
   char url[768];
   snprintf(url, sizeof(url), "%s/_matrix/client/r0/sync?timeout=%ld", client->homeserver, MATRIX_SYNC_TIMEOUT_MS);
 
@@ -1039,10 +1118,17 @@ static bool matrix_client_sync(matrix_client_t *client) {
   long status = 0;
   bool ok = matrix_client_issue_request(client, "GET", url, NULL, &response, &status);
   if (!ok) {
+    int saved_errno = errno;
+    char message[256];
+    int error_code = (saved_errno != 0) ? saved_errno : EIO;
     if (status == 401) {
-      humanized_log_error("matrix", "authentication failed for matrix sync", EACCES);
+      snprintf(message, sizeof(message), "matrix sync authentication failed; matrix bridge disabled");
+      error_code = EACCES;
+    } else {
+      snprintf(message, sizeof(message), "matrix sync failed (HTTP %ld); matrix bridge disabled", status);
     }
     matrix_buffer_free(&response);
+    matrix_client_disable(client, message, error_code);
     return false;
   }
 
@@ -1144,6 +1230,7 @@ matrix_client_t *matrix_client_create(host_t *host, client_manager_t *manager, s
   client->pending_skip_username[0] = '\0';
   client->pending_skip_message[0] = '\0';
   atomic_store(&client->skip_next_broadcast, false);
+  atomic_store(&client->disabled, false);
   client->recent_event_count = 0U;
   client->recent_event_head = 0U;
 

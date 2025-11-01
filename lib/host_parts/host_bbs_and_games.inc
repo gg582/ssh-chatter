@@ -3750,6 +3750,68 @@ static void session_handle_translate(session_ctx_t *ctx, const char *arguments) 
   }
 }
 
+static void session_handle_breaking_alerts(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  char working[32];
+  if (arguments == NULL) {
+    working[0] = '\0';
+  } else {
+    snprintf(working, sizeof(working), "%s", arguments);
+  }
+  trim_whitespace_inplace(working);
+
+  const char *prefix = session_command_prefix(ctx);
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(usage, sizeof(usage), "Usage: %sbreaking <on|off|toggle>", prefix);
+
+  if (working[0] == '\0') {
+    char status[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(status, sizeof(status), "Breaking alerts are currently %s.",
+             ctx->breaking_alerts_enabled ? "ON" : "OFF");
+    session_send_system_line(ctx, status);
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  bool desired_state = ctx->breaking_alerts_enabled;
+  bool recognized = false;
+
+  if (session_argument_is_disable(working)) {
+    desired_state = false;
+    recognized = true;
+  } else if (session_argument_is_enable(working)) {
+    desired_state = true;
+    recognized = true;
+  } else if (strcasecmp(working, "toggle") == 0) {
+    desired_state = !ctx->breaking_alerts_enabled;
+    recognized = true;
+  }
+
+  if (!recognized) {
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  if (!desired_state) {
+    ctx->breaking_alerts_enabled = false;
+    if (ctx->bbs_breaking_count > 0U) {
+      ctx->bbs_breaking_count = 0U;
+      memset(ctx->bbs_breaking_messages, 0, sizeof(ctx->bbs_breaking_messages));
+    }
+    session_send_system_line(ctx, "Breaking alerts disabled.");
+  } else {
+    ctx->breaking_alerts_enabled = true;
+    session_send_system_line(ctx, "Breaking alerts enabled.");
+  }
+
+  if (ctx->owner != NULL) {
+    host_store_breaking_alerts(ctx->owner, ctx);
+  }
+}
+
 static void session_handle_translate_scope(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;
