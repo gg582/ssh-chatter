@@ -249,6 +249,74 @@ static join_activity_entry_t *host_find_join_activity_locked(host_t *host, const
   return NULL;
 }
 
+static void host_prune_join_activity_locked(host_t *host, const struct timespec *reference_time) {
+  if (host == NULL || host->join_activity == NULL || host->join_activity_count == 0U) {
+    return;
+  }
+
+  struct timespec now = {0, 0};
+  if (reference_time != NULL && (reference_time->tv_sec != 0 || reference_time->tv_nsec != 0)) {
+    now = *reference_time;
+  } else {
+    clock_gettime(CLOCK_MONOTONIC, &now);
+  }
+
+  size_t idx = 0U;
+  while (idx < host->join_activity_count) {
+    join_activity_entry_t *entry = &host->join_activity[idx];
+    bool remove_entry = false;
+
+    if (entry->last_attempt.tv_sec == 0 && entry->last_attempt.tv_nsec == 0) {
+      remove_entry = true;
+    } else {
+      struct timespec age = timespec_diff(&now, &entry->last_attempt);
+      long long age_ns = timespec_to_ns(&age);
+      if (age_ns >= SSH_CHATTER_JOIN_ACTIVITY_RETENTION_NS) {
+        remove_entry = true;
+      } else if (entry->asciiart_has_cooldown) {
+        struct timespec ascii_age = timespec_diff(&now, &entry->last_asciiart_post);
+        long long ascii_age_ns = timespec_to_ns(&ascii_age);
+        if (ascii_age_ns >= SSH_CHATTER_JOIN_ACTIVITY_RETENTION_NS) {
+          entry->asciiart_has_cooldown = false;
+        }
+      }
+    }
+
+    if (remove_entry) {
+      size_t last_index = host->join_activity_count - 1U;
+      if (idx != last_index) {
+        host->join_activity[idx] = host->join_activity[last_index];
+      }
+      memset(&host->join_activity[last_index], 0, sizeof(host->join_activity[last_index]));
+      host->join_activity_count = last_index;
+      continue;
+    }
+
+    ++idx;
+  }
+
+  if (host->join_activity_count == 0U) {
+    free(host->join_activity);
+    host->join_activity = NULL;
+    host->join_activity_capacity = 0U;
+  } else if (host->join_activity_capacity > 8U &&
+             host->join_activity_count <= host->join_activity_capacity / 2U) {
+    size_t new_capacity = host->join_activity_capacity / 2U;
+    if (new_capacity < 8U) {
+      new_capacity = 8U;
+    }
+    if (new_capacity < host->join_activity_count) {
+      new_capacity = host->join_activity_count;
+    }
+    join_activity_entry_t *resized =
+        (join_activity_entry_t *)realloc(host->join_activity, new_capacity * sizeof(*resized));
+    if (resized != NULL) {
+      host->join_activity = resized;
+      host->join_activity_capacity = new_capacity;
+    }
+  }
+}
+
 static join_activity_entry_t *host_ensure_join_activity_locked(host_t *host, const char *ip) {
   if (host == NULL || ip == NULL || ip[0] == '\0') {
     return NULL;
@@ -328,6 +396,7 @@ static host_join_attempt_result_t host_register_join_attempt(host_t *host, const
   bool kick_ip = false;
 
   pthread_mutex_lock(&host->lock);
+  host_prune_join_activity_locked(host, &now);
   join_activity_entry_t *entry = host_ensure_join_activity_locked(host, ip);
   if (entry == NULL) {
     pthread_mutex_unlock(&host->lock);
@@ -3761,14 +3830,24 @@ void host_shutdown(host_t *host) {
     client_manager_destroy(host->clients);
     host->clients = NULL;
   }
+  chat_history_entry_t *history_buffer = NULL;
+  join_activity_entry_t *join_buffer = NULL;
   pthread_mutex_lock(&host->lock);
+  history_buffer = host->history;
   host->history = NULL;
   host->history_capacity = 0U;
   host->history_count = 0U;
-  pthread_mutex_unlock(&host->lock);
+  join_buffer = host->join_activity;
   host->join_activity = NULL;
   host->join_activity_capacity = 0U;
   host->join_activity_count = 0U;
+  pthread_mutex_unlock(&host->lock);
+  if (history_buffer != NULL) {
+    free(history_buffer);
+  }
+  if (join_buffer != NULL) {
+    free(join_buffer);
+  }
   free(host->connection_guard);
   host->connection_guard = NULL;
   host->connection_guard_capacity = 0U;
@@ -3776,11 +3855,16 @@ void host_shutdown(host_t *host) {
   host->health_guard.consecutive_errors = 0U;
   host->health_guard.last_error_time.tv_sec = 0;
   host->health_guard.last_error_time.tv_nsec = 0L;
+  session_ctx_t **room_members = NULL;
   pthread_mutex_lock(&host->room.lock);
+  room_members = host->room.members;
   host->room.members = NULL;
   host->room.member_capacity = 0U;
   host->room.member_count = 0U;
   pthread_mutex_unlock(&host->room.lock);
+  if (room_members != NULL) {
+    free(room_members);
+  }
   if (host->user_data_lock_initialized) {
     pthread_mutex_destroy(&host->user_data_lock);
     host->user_data_lock_initialized = false;
@@ -4031,6 +4115,8 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
 #ifdef ENOSR
             case ENOSR:
 #endif
+              fatal_socket_error = true;
+              should_backoff_after_socket_error = false;
               break;
             default:
               break;
