@@ -39,6 +39,8 @@ struct matrix_client {
   client_connection_t connection;
   pthread_mutex_t lock;
   pthread_mutex_t http_lock;
+  bool lock_initialized;
+  bool http_lock_initialized;
   pthread_t thread;
   bool thread_initialized;
   _Atomic bool stop;
@@ -1145,13 +1147,21 @@ matrix_client_t *matrix_client_create(host_t *host, client_manager_t *manager, s
   client->recent_event_count = 0U;
   client->recent_event_head = 0U;
 
-  if (pthread_mutex_init(&client->lock, NULL) != 0 || pthread_mutex_init(&client->http_lock, NULL) != 0) {
-    pthread_mutex_destroy(&client->lock);
-    pthread_mutex_destroy(&client->http_lock);
+  if (pthread_mutex_init(&client->lock, NULL) != 0) {
     OPENSSL_cleanse(client->access_token, sizeof(client->access_token));
     free(client);
     return NULL;
   }
+  client->lock_initialized = true;
+
+  if (pthread_mutex_init(&client->http_lock, NULL) != 0) {
+    pthread_mutex_destroy(&client->lock);
+    client->lock_initialized = false;
+    OPENSSL_cleanse(client->access_token, sizeof(client->access_token));
+    free(client);
+    return NULL;
+  }
+  client->http_lock_initialized = true;
 
   memset(&client->connection, 0, sizeof(client->connection));
   client->connection.kind = CLIENT_KIND_BOT;
@@ -1162,8 +1172,14 @@ matrix_client_t *matrix_client_create(host_t *host, client_manager_t *manager, s
   client->connection.user_data = client;
 
   if (!client_manager_register(manager, &client->connection)) {
-    pthread_mutex_destroy(&client->lock);
-    pthread_mutex_destroy(&client->http_lock);
+    if (client->http_lock_initialized) {
+      pthread_mutex_destroy(&client->http_lock);
+      client->http_lock_initialized = false;
+    }
+    if (client->lock_initialized) {
+      pthread_mutex_destroy(&client->lock);
+      client->lock_initialized = false;
+    }
     OPENSSL_cleanse(client->access_token, sizeof(client->access_token));
     free(client);
     return NULL;
@@ -1173,8 +1189,14 @@ matrix_client_t *matrix_client_create(host_t *host, client_manager_t *manager, s
   atomic_store(&client->running, false);
   if (pthread_create(&client->thread, NULL, matrix_client_poll_thread, client) != 0) {
     client_manager_unregister(manager, &client->connection);
-    pthread_mutex_destroy(&client->lock);
-    pthread_mutex_destroy(&client->http_lock);
+    if (client->http_lock_initialized) {
+      pthread_mutex_destroy(&client->http_lock);
+      client->http_lock_initialized = false;
+    }
+    if (client->lock_initialized) {
+      pthread_mutex_destroy(&client->lock);
+      client->lock_initialized = false;
+    }
     OPENSSL_cleanse(client->access_token, sizeof(client->access_token));
     free(client);
     return NULL;
@@ -1200,8 +1222,14 @@ void matrix_client_destroy(matrix_client_t *client) {
     client_manager_unregister(client->manager, &client->connection);
   }
 
-  pthread_mutex_destroy(&client->lock);
-  pthread_mutex_destroy(&client->http_lock);
+  if (client->lock_initialized) {
+    pthread_mutex_destroy(&client->lock);
+    client->lock_initialized = false;
+  }
+  if (client->http_lock_initialized) {
+    pthread_mutex_destroy(&client->http_lock);
+    client->http_lock_initialized = false;
+  }
   OPENSSL_cleanse(client->access_token, sizeof(client->access_token));
   OPENSSL_cleanse(client->pending_skip_username, sizeof(client->pending_skip_username));
   OPENSSL_cleanse(client->pending_skip_message, sizeof(client->pending_skip_message));
