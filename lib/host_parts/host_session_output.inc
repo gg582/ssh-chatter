@@ -2345,6 +2345,7 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
 
     if (entry->attachment_type == CHAT_ATTACHMENT_IMAGE && entry->message_id > 0U) {
       char hint[SSH_CHATTER_MESSAGE_LIMIT];
+      snprintf(hint, sizeof(hint), "    ↳ tip: copy the link into a browser to view the image.");
       session_send_plain_line(ctx, hint);
     }
 
