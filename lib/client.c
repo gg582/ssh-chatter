@@ -13,6 +13,7 @@
 struct client_manager {
   struct host *host;
   pthread_mutex_t lock;
+  bool lock_initialized;
   client_connection_t *connections[CLIENT_MANAGER_MAX_CONNECTIONS];
   size_t connection_count;
 };
@@ -24,7 +25,11 @@ client_manager_t *client_manager_create(struct host *host) {
   }
 
   manager->host = host;
-  pthread_mutex_init(&manager->lock, NULL);
+  if (pthread_mutex_init(&manager->lock, NULL) != 0) {
+    free(manager);
+    return NULL;
+  }
+  manager->lock_initialized = true;
   manager->connection_count = 0U;
   memset(manager->connections, 0, sizeof(manager->connections));
   return manager;
@@ -32,6 +37,11 @@ client_manager_t *client_manager_create(struct host *host) {
 
 void client_manager_destroy(client_manager_t *manager) {
   if (manager == NULL) {
+    return;
+  }
+
+  if (!manager->lock_initialized) {
+    free(manager);
     return;
   }
 
@@ -58,11 +68,12 @@ void client_manager_destroy(client_manager_t *manager) {
   }
 
   pthread_mutex_destroy(&manager->lock);
+  manager->lock_initialized = false;
   free(manager);
 }
 
 bool client_manager_register(client_manager_t *manager, client_connection_t *connection) {
-  if (manager == NULL || connection == NULL || connection->on_message == NULL) {
+  if (manager == NULL || !manager->lock_initialized || connection == NULL || connection->on_message == NULL) {
     return false;
   }
 
@@ -84,7 +95,7 @@ bool client_manager_register(client_manager_t *manager, client_connection_t *con
 }
 
 void client_manager_unregister(client_manager_t *manager, client_connection_t *connection) {
-  if (manager == NULL || connection == NULL) {
+  if (manager == NULL || !manager->lock_initialized || connection == NULL) {
     return;
   }
 
@@ -114,7 +125,7 @@ void client_manager_unregister(client_manager_t *manager, client_connection_t *c
 }
 
 void client_manager_notify_history(client_manager_t *manager, const struct chat_history_entry *entry) {
-  if (manager == NULL || entry == NULL) {
+  if (manager == NULL || !manager->lock_initialized || entry == NULL) {
     return;
   }
 
