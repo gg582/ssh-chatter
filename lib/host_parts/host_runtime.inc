@@ -1,5 +1,7 @@
 // Remaining operator commands, ban management, and host lifecycle entry points.
 
+#define TELNET_STABLE_RESET_SECONDS 10.0
+
 static void session_handle_gemini_unfreeze(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;
@@ -2179,15 +2181,118 @@ static void *host_telnet_thread(void *arg) {
     socklen_t addr_len = sizeof(addr);
     int client_fd = accept(host->telnet.fd, (struct sockaddr *)&addr, &addr_len);
     if (client_fd < 0) {
-      if (errno == EINTR) {
+      int accept_error = errno;
+      if (accept_error == EINTR) {
         continue;
       }
       if (atomic_load(&host->telnet.stop)) {
         break;
       }
-      humanized_log_error("telnet", "accept failed", errno);
-      struct timespec backoff = {.tv_sec = 1, .tv_nsec = 0};
-      host_sleep_uninterruptible(&backoff);
+
+      char message[256];
+      const char *system_message = strerror(accept_error);
+      if (system_message != NULL && system_message[0] != '\0') {
+        snprintf(message, sizeof(message), "accept failed: %s", system_message);
+      } else {
+        snprintf(message, sizeof(message), "accept failed (code %d)", accept_error);
+      }
+      humanized_log_error("telnet", message, accept_error);
+
+      bool fatal_socket_error = false;
+      bool should_backoff = true;
+      switch (accept_error) {
+        case EINTR:
+          continue;
+        case EAGAIN:
+#ifdef EWOULDBLOCK
+#if EWOULDBLOCK != EAGAIN
+        case EWOULDBLOCK:
+#endif
+#endif
+        case ECONNABORTED:
+        case ECONNRESET:
+        case ETIMEDOUT:
+#ifdef ENOTCONN
+        case ENOTCONN:
+#endif
+#ifdef EHOSTUNREACH
+        case EHOSTUNREACH:
+#endif
+#ifdef ENETDOWN
+        case ENETDOWN:
+#endif
+#ifdef ENETRESET
+        case ENETRESET:
+#endif
+#ifdef ENETUNREACH
+        case ENETUNREACH:
+#endif
+        case EPIPE:
+#ifdef EPROTO
+        case EPROTO:
+#endif
+          break;
+        case EBADF:
+        case ENOTSOCK:
+        case EINVAL:
+        case EMFILE:
+        case ENFILE:
+#ifdef ENOBUFS
+        case ENOBUFS:
+#endif
+#ifdef ENOMEM
+        case ENOMEM:
+#endif
+        default:
+          fatal_socket_error = true;
+          should_backoff = false;
+          break;
+      }
+
+      if (fatal_socket_error) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+
+        double elapsed_seconds = 0.0;
+        if (host->telnet.last_error_time.tv_sec != 0 || host->telnet.last_error_time.tv_nsec != 0L) {
+          struct timespec elapsed = timespec_diff(&now, &host->telnet.last_error_time);
+          elapsed_seconds = (double)elapsed.tv_sec + (double)elapsed.tv_nsec / 1000000000.0;
+          if (elapsed_seconds >= TELNET_STABLE_RESET_SECONDS && host->telnet.restart_attempts > 0U) {
+            printf("[telnet] listener stable for %.3f seconds; clearing restart backoff\n", elapsed_seconds);
+            host->telnet.restart_attempts = 0U;
+          }
+        }
+
+        host->telnet.last_error_time = now;
+        host->telnet.restart_attempts += 1U;
+
+        if (host->telnet.fd >= 0) {
+          close(host->telnet.fd);
+          host->telnet.fd = -1;
+        }
+
+        if (elapsed_seconds > 0.0) {
+          printf("[telnet] last fatal error occurred %.3f seconds ago\n", elapsed_seconds);
+        }
+
+        printf("[telnet] restarting listener after socket error (attempt %u)\n", host->telnet.restart_attempts);
+
+        struct timespec restart_delay = {
+            .tv_sec = host->telnet.restart_attempts < 5U ? 1L
+                     : (host->telnet.restart_attempts < 10U ? 5L : 30L),
+            .tv_nsec = 0L,
+        };
+        host_sleep_uninterruptible(&restart_delay);
+        continue;
+      }
+
+      if (should_backoff) {
+        struct timespec retry_delay = {
+            .tv_sec = 0,
+            .tv_nsec = 200000000L,
+        };
+        host_sleep_uninterruptible(&retry_delay);
+      }
       continue;
     }
 

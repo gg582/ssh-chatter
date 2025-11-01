@@ -12,7 +12,17 @@
 #include <time.h>
 #include <sys/types.h>
 
-#include "gc_compat.h"
+#if defined(__has_include)
+#  if __has_include(<gc/gc.h>)
+#    include <gc/gc.h>
+#  elif __has_include(<gc.h>)
+#    include <gc.h>
+#  else
+#    error "libgc header not found"
+#  endif
+#else
+#  include <gc/gc.h>
+#endif
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096

@@ -18,7 +18,17 @@
 #include "translation_helpers.h"
 
 #include <curl/curl.h>
-#include "gc_compat.h"
+#if defined(__has_include)
+#  if __has_include(<gc/gc.h>)
+#    include <gc/gc.h>
+#  elif __has_include(<gc.h>)
+#    include <gc.h>
+#  else
+#    error "libgc header not found"
+#  endif
+#else
+#  include <gc/gc.h>
+#endif
 #include <iconv.h>
 #include <ctype.h>
 #include <dirent.h>

@@ -17,7 +17,17 @@
 #include <ctype.h>
 #include <time.h>
 
-#include "gc_compat.h"
+#if defined(__has_include)
+#  if __has_include(<gc/gc.h>)
+#    include <gc/gc.h>
+#  elif __has_include(<gc.h>)
+#    include <gc.h>
+#  else
+#    error "libgc header not found"
+#  endif
+#else
+#  include <gc/gc.h>
+#endif
 
 #define TRANSLATOR_MAX_RESPONSE 1<<20
 #define TRANSLATOR_DEFAULT_BASE_URL "https://generativelanguage.googleapis.com/v1beta"
