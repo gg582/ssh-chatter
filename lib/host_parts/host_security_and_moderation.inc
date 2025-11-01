@@ -1969,6 +1969,8 @@ static void host_state_save_locked(host_t *host) {
     serialized.input_translation_enabled = pref->input_translation_enabled ? 1U : 0U;
     serialized.translation_master_explicit = pref->translation_master_explicit ? 1U : 0U;
     memset(serialized.reserved, 0, sizeof(serialized.reserved));
+    serialized.breaking_alerts_enabled = pref->breaking_alerts_enabled ? 1U : 0U;
+    memset(serialized.reserved2, 0, sizeof(serialized.reserved2));
     snprintf(serialized.birthday, sizeof(serialized.birthday), "%s", pref->birthday);
     snprintf(serialized.output_translation_language, sizeof(serialized.output_translation_language), "%s",
              pref->output_translation_language);
@@ -2640,11 +2642,49 @@ static void host_state_load(host_t *host) {
 
   for (uint32_t idx = 0; success && idx < preference_count; ++idx) {
     host_state_preference_entry_t serialized = {0};
-    if (version >= 9U) {
+    if (version >= 10U) {
       if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
         success = false;
         break;
       }
+    } else if (version >= 9U) {
+      host_state_preference_entry_v8_t legacy8 = {0};
+      if (fread(&legacy8, sizeof(legacy8), 1U, fp) != 1U) {
+        success = false;
+        break;
+      }
+      serialized.has_user_theme = legacy8.has_user_theme;
+      serialized.has_system_theme = legacy8.has_system_theme;
+      serialized.user_is_bold = legacy8.user_is_bold;
+      serialized.system_is_bold = legacy8.system_is_bold;
+      snprintf(serialized.username, sizeof(serialized.username), "%s", legacy8.username);
+      snprintf(serialized.user_color_name, sizeof(serialized.user_color_name), "%s", legacy8.user_color_name);
+      snprintf(serialized.user_highlight_name, sizeof(serialized.user_highlight_name), "%s",
+               legacy8.user_highlight_name);
+      snprintf(serialized.system_fg_name, sizeof(serialized.system_fg_name), "%s", legacy8.system_fg_name);
+      snprintf(serialized.system_bg_name, sizeof(serialized.system_bg_name), "%s", legacy8.system_bg_name);
+      snprintf(serialized.system_highlight_name, sizeof(serialized.system_highlight_name), "%s",
+               legacy8.system_highlight_name);
+      snprintf(serialized.os_name, sizeof(serialized.os_name), "%s", legacy8.os_name);
+      serialized.daily_year = legacy8.daily_year;
+      serialized.daily_yday = legacy8.daily_yday;
+      snprintf(serialized.daily_function, sizeof(serialized.daily_function), "%s", legacy8.daily_function);
+      serialized.last_poll_id = legacy8.last_poll_id;
+      serialized.last_poll_choice = legacy8.last_poll_choice;
+      serialized.has_birthday = legacy8.has_birthday;
+      serialized.translation_caption_spacing = legacy8.translation_caption_spacing;
+      serialized.translation_enabled = legacy8.translation_enabled;
+      serialized.output_translation_enabled = legacy8.output_translation_enabled;
+      serialized.input_translation_enabled = legacy8.input_translation_enabled;
+      serialized.translation_master_explicit = legacy8.translation_master_explicit;
+      snprintf(serialized.birthday, sizeof(serialized.birthday), "%s", legacy8.birthday);
+      snprintf(serialized.output_translation_language, sizeof(serialized.output_translation_language), "%s",
+               legacy8.output_translation_language);
+      snprintf(serialized.input_translation_language, sizeof(serialized.input_translation_language), "%s",
+               legacy8.input_translation_language);
+      snprintf(serialized.ui_language, sizeof(serialized.ui_language), "%s", legacy8.ui_language);
+      serialized.breaking_alerts_enabled = 0U;
+      memset(serialized.reserved2, 0, sizeof(serialized.reserved2));
     } else if (version >= 7U) {
       host_state_preference_entry_v7_t legacy7 = {0};
       if (fread(&legacy7, sizeof(legacy7), 1U, fp) != 1U) {
@@ -2681,6 +2721,8 @@ static void host_state_load(host_t *host) {
       snprintf(serialized.input_translation_language, sizeof(serialized.input_translation_language), "%s",
                legacy7.input_translation_language);
       serialized.ui_language[0] = '\0';
+      serialized.breaking_alerts_enabled = 0U;
+      memset(serialized.reserved2, 0, sizeof(serialized.reserved2));
     } else if (version == 6U) {
       host_state_preference_entry_v6_t legacy6 = {0};
       if (fread(&legacy6, sizeof(legacy6), 1U, fp) != 1U) {
@@ -2716,6 +2758,8 @@ static void host_state_load(host_t *host) {
       snprintf(serialized.input_translation_language, sizeof(serialized.input_translation_language), "%s",
                legacy6.input_translation_language);
       serialized.ui_language[0] = '\0';
+      serialized.breaking_alerts_enabled = 0U;
+      memset(serialized.reserved2, 0, sizeof(serialized.reserved2));
     } else if (version == 5U) {
       host_state_preference_entry_v5_t legacy5 = {0};
       if (fread(&legacy5, sizeof(legacy5), 1U, fp) != 1U) {
@@ -2749,6 +2793,8 @@ static void host_state_load(host_t *host) {
       serialized.output_translation_language[0] = '\0';
       serialized.input_translation_language[0] = '\0';
       serialized.ui_language[0] = '\0';
+      serialized.breaking_alerts_enabled = 0U;
+      memset(serialized.reserved2, 0, sizeof(serialized.reserved2));
     } else if (version == 4U) {
       host_state_preference_entry_v4_t legacy4 = {0};
       if (fread(&legacy4, sizeof(legacy4), 1U, fp) != 1U) {
@@ -2782,6 +2828,8 @@ static void host_state_load(host_t *host) {
       serialized.output_translation_language[0] = '\0';
       serialized.input_translation_language[0] = '\0';
       serialized.ui_language[0] = '\0';
+      serialized.breaking_alerts_enabled = 0U;
+      memset(serialized.reserved2, 0, sizeof(serialized.reserved2));
     } else {
       host_state_preference_entry_v3_t legacy = {0};
       if (fread(&legacy, sizeof(legacy), 1U, fp) != 1U) {
@@ -2815,6 +2863,8 @@ static void host_state_load(host_t *host) {
       serialized.output_translation_language[0] = '\0';
       serialized.input_translation_language[0] = '\0';
       serialized.ui_language[0] = '\0';
+      serialized.breaking_alerts_enabled = 0U;
+      memset(serialized.reserved2, 0, sizeof(serialized.reserved2));
     }
 
     if (host->preference_count >= SSH_CHATTER_MAX_PREFERENCES) {
@@ -2852,6 +2902,7 @@ static void host_state_load(host_t *host) {
              serialized.output_translation_language);
     snprintf(pref->input_translation_language, sizeof(pref->input_translation_language), "%s",
              serialized.input_translation_language);
+    pref->breaking_alerts_enabled = serialized.breaking_alerts_enabled != 0U;
     ++host->preference_count;
   }
 

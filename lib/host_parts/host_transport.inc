@@ -1187,6 +1187,7 @@ static void session_translation_normalize_output(char *text);
 static void host_handle_translation_quota_exhausted(host_t *host);
 static void session_handle_translation_quota_exhausted(session_ctx_t *ctx, const char *error_detail);
 static bool session_argument_is_disable(const char *token);
+static bool session_argument_is_enable(const char *token);
 static void session_language_normalize(const char *input, char *normalized, size_t length);
 static bool session_language_equals(const char *lhs, const char *rhs);
 static session_ui_language_t session_ui_language_from_code(const char *code);
@@ -1754,7 +1755,7 @@ static const char *const TETROMINO_SHAPES[7][4] = {
 static const char TETROMINO_DISPLAY_CHARS[7] = {'I', 'J', 'L', 'O', 'S', 'T', 'Z'};
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
-static const uint32_t HOST_STATE_VERSION = 9U;
+static const uint32_t HOST_STATE_VERSION = 10U;
 static const uint32_t ELIZA_STATE_MAGIC = 0x454c5354U; /* 'ELST' */
 static const uint32_t ELIZA_STATE_VERSION = 1U;
 
@@ -1938,6 +1939,36 @@ typedef struct host_state_preference_entry_v7 {
   char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
 } host_state_preference_entry_v7_t;
 
+typedef struct host_state_preference_entry_v8 {
+  uint8_t has_user_theme;
+  uint8_t has_system_theme;
+  uint8_t user_is_bold;
+  uint8_t system_is_bold;
+  char username[SSH_CHATTER_USERNAME_LEN];
+  char user_color_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char user_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_fg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_bg_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  char os_name[SSH_CHATTER_OS_NAME_LEN];
+  int32_t daily_year;
+  int32_t daily_yday;
+  char daily_function[64];
+  uint64_t last_poll_id;
+  int32_t last_poll_choice;
+  uint8_t has_birthday;
+  uint8_t translation_caption_spacing;
+  uint8_t translation_enabled;
+  uint8_t output_translation_enabled;
+  uint8_t input_translation_enabled;
+  uint8_t translation_master_explicit;
+  uint8_t reserved[2];
+  char birthday[16];
+  char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+  char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
+  char ui_language[SSH_CHATTER_LANG_NAME_LEN];
+} host_state_preference_entry_v8_t;
+
 typedef struct host_state_preference_entry {
   uint8_t has_user_theme;
   uint8_t has_system_theme;
@@ -1966,6 +1997,8 @@ typedef struct host_state_preference_entry {
   char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   char ui_language[SSH_CHATTER_LANG_NAME_LEN];
+  uint8_t breaking_alerts_enabled;
+  uint8_t reserved2[7];
 } host_state_preference_entry_t;
 
 static const uint32_t BAN_STATE_MAGIC = 0x5348424eU; /* 'SHBN' */
@@ -3498,6 +3531,20 @@ static void host_store_translation_preferences(host_t *host, const session_ctx_t
              ctx->output_translation_language);
     snprintf(pref->input_translation_language, sizeof(pref->input_translation_language), "%s",
              ctx->input_translation_language);
+  }
+  host_state_save_locked(host);
+  pthread_mutex_unlock(&host->lock);
+}
+
+static void host_store_breaking_alerts(host_t *host, const session_ctx_t *ctx) {
+  if (host == NULL || ctx == NULL) {
+    return;
+  }
+
+  pthread_mutex_lock(&host->lock);
+  user_preference_t *pref = host_ensure_preference_locked(host, ctx->user.name);
+  if (pref != NULL) {
+    pref->breaking_alerts_enabled = ctx->breaking_alerts_enabled;
   }
   host_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);

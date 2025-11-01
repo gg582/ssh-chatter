@@ -929,6 +929,10 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_eliza(ctx, args);
     return;
   }
+  else if (session_parse_command_any(ctx, "/breaking", effective_line, &args)) {
+    session_handle_breaking_alerts(ctx, args);
+    return;
+  }
   else if (session_parse_command_any(ctx, "/chat-spacing", effective_line, &args)) {
     session_handle_chat_spacing(ctx, args);
     return;
