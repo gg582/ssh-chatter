@@ -2631,6 +2631,12 @@ static void chat_room_add(chat_room_t *room, session_ctx_t *session) {
   }
 
   pthread_mutex_lock(&room->lock);
+  for (size_t idx = 0; idx < room->member_count; ++idx) {
+    if (room->members[idx] == session) {
+      pthread_mutex_unlock(&room->lock);
+      return;
+    }
+  }
   if (chat_room_ensure_capacity(room, room->member_count + 1U)) {
     room->members[room->member_count++] = session;
   } else {
