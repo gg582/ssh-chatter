@@ -1533,6 +1533,15 @@ static const session_command_alias_t kSessionCommandAliases[] = {
         },
     },
     {
+        .canonical = "/nick",
+        .localized = {
+            [SESSION_UI_LANGUAGE_KO] = "/닉네임",
+            [SESSION_UI_LANGUAGE_JP] = "/ニックネーム",
+            [SESSION_UI_LANGUAGE_ZH] = "/昵称",
+            [SESSION_UI_LANGUAGE_RU] = "/ник",
+        },
+    },
+    {
         .canonical = "/good",
         .localized = {
             [SESSION_UI_LANGUAGE_KO] = "/좋아요",
