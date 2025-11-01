@@ -5,7 +5,7 @@
 
 #include <errno.h>
 #include <getopt.h>
-#include <gc/gc.h>
+#include "gc_compat.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>

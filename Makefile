@@ -5,7 +5,7 @@ CFLAGS = -std=c2x -Ofast \
         -Wall -Wextra -Wshadow -Wformat=2 -Wundef -Wconversion -Wdouble-promotion \
         -fno-omit-frame-pointer -fstack-protector-strong -fno-common \
         -fPIC \
-        -g -lgc \
+        -g \
 	-D_FORTIFY_SOURCE=2 \
 	-march=native \
 	-flto=$(shell nproc) \
@@ -28,15 +28,6 @@ CFLAGS = -std=c2x -Ofast \
 	-fstrict-aliasing \
 	-fno-trapping-math \
 	-fstrict-overflow \
-        -DGC_THREADS \
-        -DPARALLEL_MARK \
-        -DNO_DEBUGGING \
-        -DUSE_MMAP \
-        -DUSE_MUNMAP \
-        -DGC_LARGE_ALLOC \
-        -DGC_ATOMIC_UNCOLLECTABLE \
-        -DGC_ENABLE_INCREMENTAL \
-        -DGC_TIME_LIMIT=50 \
         -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free \
         -fmerge-all-constants \
         -fipa-pure-const \
@@ -47,7 +38,7 @@ CFLAGS = -std=c2x -Ofast \
         -MMD -MP \
 
     COMMON_LDFLAGS = \
-        -lpthread -ldl -lcurl -lm -lgc -lcrypto \
+        -lpthread -ldl -lcurl -lm -lcrypto \
         -flto=$(shell nproc) -fuse-linker-plugin \
         -Wl,-Ofast \
         -Wl,--sort-common \

@@ -12,7 +12,7 @@
 #include <time.h>
 #include <sys/types.h>
 
-#include <gc/gc.h>
+#include "gc_compat.h"
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
