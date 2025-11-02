@@ -489,6 +489,7 @@ typedef struct session_ctx {
   size_t history_scroll_position;
   struct timespec last_message_time;
   bool has_last_message_time;
+  size_t chat_message_count;
   char os_name[SSH_CHATTER_OS_NAME_LEN];
   int daily_year;
   int daily_yday;
