@@ -1904,10 +1904,17 @@ static void host_state_save_locked(host_t *host) {
     }
   }
 
+  const chat_history_entry_t *history_entries = host->history_override;
+  size_t history_entry_count = host->history_override_count;
+  bool using_override = (history_entries != NULL) || (host->history_override_count == 0U && host->history_override != NULL);
+  if (!using_override) {
+    history_entry_count = host->history_total;
+  }
+
   host_state_header_t header = {0};
   header.base.magic = HOST_STATE_MAGIC;
   header.base.version = HOST_STATE_VERSION;
-  header.base.history_count = (uint32_t)host->history_count;
+  header.base.history_count = (uint32_t)history_entry_count;
   header.base.preference_count = (uint32_t)preference_count;
   header.legacy_sound_count = 0U;
   header.grant_count = (uint32_t)host->operator_grant_count;
@@ -1917,30 +1924,52 @@ static void host_state_save_locked(host_t *host) {
 
   bool success = fwrite(&header, sizeof(header), 1U, fp) == 1U;
 
-  if (host->history_count > 0U && host->history == NULL) {
+  if (!using_override && host->history_count > 0U && host->history == NULL) {
     success = false;
   }
 
-  for (size_t idx = 0; success && idx < host->history_count; ++idx) {
-    const chat_history_entry_t *entry = &host->history[idx];
+  if (success) {
+    if (using_override) {
+      if (history_entries != NULL) {
+        for (size_t idx = 0U; success && idx < history_entry_count; ++idx) {
+          if (!host_state_write_history_entry(fp, &history_entries[idx])) {
+            success = false;
+          }
+        }
+      }
+    } else {
+      size_t older_count = host->history_start_index;
+      if (older_count > 0U) {
+        FILE *input = NULL;
+        uint32_t version = 0U;
+        uint32_t file_history_count = 0U;
+        if (host_state_stream_open(host->state_file_path, &input, &version, &file_history_count)) {
+          size_t limit = older_count;
+          if (limit > (size_t)file_history_count) {
+            limit = (size_t)file_history_count;
+          }
+          for (size_t idx = 0U; success && idx < limit; ++idx) {
+            chat_history_entry_t entry_value = {0};
+            if (!host_state_read_history_entry(input, version, &entry_value)) {
+              success = false;
+              break;
+            }
+            if (!host_state_write_history_entry(fp, &entry_value)) {
+              success = false;
+              break;
+            }
+          }
+          fclose(input);
+        } else {
+          success = false;
+        }
+      }
 
-    host_state_history_entry_v3_t serialized = {0};
-    serialized.base.is_user_message = entry->is_user_message ? 1U : 0U;
-    serialized.base.user_is_bold = entry->user_is_bold ? 1U : 0U;
-    snprintf(serialized.base.username, sizeof(serialized.base.username), "%s", entry->username);
-    snprintf(serialized.base.message, sizeof(serialized.base.message), "%s", entry->message);
-    snprintf(serialized.base.user_color_name, sizeof(serialized.base.user_color_name), "%s", entry->user_color_name);
-    snprintf(serialized.base.user_highlight_name, sizeof(serialized.base.user_highlight_name), "%s",
-             entry->user_highlight_name);
-    serialized.message_id = entry->message_id;
-    serialized.attachment_type = (uint8_t)entry->attachment_type;
-    memset(serialized.reserved, 0, sizeof(serialized.reserved));
-    snprintf(serialized.attachment_target, sizeof(serialized.attachment_target), "%s", entry->attachment_target);
-    snprintf(serialized.attachment_caption, sizeof(serialized.attachment_caption), "%s", entry->attachment_caption);
-    memcpy(serialized.reaction_counts, entry->reaction_counts, sizeof(serialized.reaction_counts));
-
-    if (fwrite(&serialized, sizeof(serialized), 1U, fp) != 1U) {
-      success = false;
+      for (size_t idx = 0U; success && idx < host->history_count; ++idx) {
+        if (!host_state_write_history_entry(fp, &host->history[idx])) {
+          success = false;
+        }
+      }
     }
   }
 
@@ -2564,14 +2593,21 @@ static void host_state_load(host_t *host) {
 
   bool success = true;
 
-  if (history_count > 0U) {
-    success = host_history_reserve_locked(host, history_count);
+  size_t cache_limit = SSH_CHATTER_HISTORY_CACHE_LIMIT;
+  size_t keep_start = 0U;
+  size_t keep_count = history_count;
+  if (cache_limit > 0U && keep_count > cache_limit) {
+    keep_start = keep_count - cache_limit;
+    keep_count = cache_limit;
+  }
+
+  if (keep_count > 0U) {
+    success = host_history_reserve_locked(host, keep_count);
   }
   host->history_count = 0U;
 
   for (uint32_t idx = 0; success && idx < history_count; ++idx) {
-    chat_history_entry_t *entry = &host->history[idx];
-    memset(entry, 0, sizeof(*entry));
+    chat_history_entry_t entry_value = {0};
 
     if (version >= 3U) {
       host_state_history_entry_v3_t serialized = {0};
@@ -2580,22 +2616,21 @@ static void host_state_load(host_t *host) {
         break;
       }
 
-      entry->is_user_message = serialized.base.is_user_message != 0U;
-      entry->user_is_bold = serialized.base.user_is_bold != 0U;
-      snprintf(entry->username, sizeof(entry->username), "%s", serialized.base.username);
-      snprintf(entry->message, sizeof(entry->message), "%s", serialized.base.message);
-      snprintf(entry->user_color_name, sizeof(entry->user_color_name), "%s", serialized.base.user_color_name);
-      snprintf(entry->user_highlight_name, sizeof(entry->user_highlight_name), "%s",
-               serialized.base.user_highlight_name);
-      entry->message_id = serialized.message_id;
+      entry_value.is_user_message = serialized.base.is_user_message != 0U;
+      entry_value.user_is_bold = serialized.base.user_is_bold != 0U;
+      snprintf(entry_value.username, sizeof(entry_value.username), "%s", serialized.base.username);
+      snprintf(entry_value.message, sizeof(entry_value.message), "%s", serialized.base.message);
+      snprintf(entry_value.user_color_name, sizeof(entry_value.user_color_name), "%s", serialized.base.user_color_name);
+      snprintf(entry_value.user_highlight_name, sizeof(entry_value.user_highlight_name), "%s", serialized.base.user_highlight_name);
+      entry_value.message_id = serialized.message_id;
       if (serialized.attachment_type > CHAT_ATTACHMENT_FILE) {
-        entry->attachment_type = CHAT_ATTACHMENT_NONE;
+        entry_value.attachment_type = CHAT_ATTACHMENT_NONE;
       } else {
-        entry->attachment_type = (chat_attachment_type_t)serialized.attachment_type;
+        entry_value.attachment_type = (chat_attachment_type_t)serialized.attachment_type;
       }
-      snprintf(entry->attachment_target, sizeof(entry->attachment_target), "%s", serialized.attachment_target);
-      snprintf(entry->attachment_caption, sizeof(entry->attachment_caption), "%s", serialized.attachment_caption);
-      memcpy(entry->reaction_counts, serialized.reaction_counts, sizeof(entry->reaction_counts));
+      snprintf(entry_value.attachment_target, sizeof(entry_value.attachment_target), "%s", serialized.attachment_target);
+      snprintf(entry_value.attachment_caption, sizeof(entry_value.attachment_caption), "%s", serialized.attachment_caption);
+      memcpy(entry_value.reaction_counts, serialized.reaction_counts, sizeof(entry_value.reaction_counts));
     } else if (version == 2U) {
       host_state_history_entry_v2_t serialized = {0};
       if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
@@ -2603,24 +2638,23 @@ static void host_state_load(host_t *host) {
         break;
       }
 
-      entry->is_user_message = serialized.base.is_user_message != 0U;
-      entry->user_is_bold = serialized.base.user_is_bold != 0U;
-      snprintf(entry->username, sizeof(entry->username), "%s", serialized.base.username);
-      snprintf(entry->message, sizeof(entry->message), "%s", serialized.base.message);
-      snprintf(entry->user_color_name, sizeof(entry->user_color_name), "%s", serialized.base.user_color_name);
-      snprintf(entry->user_highlight_name, sizeof(entry->user_highlight_name), "%s",
-               serialized.base.user_highlight_name);
-      entry->message_id = serialized.message_id;
+      entry_value.is_user_message = serialized.base.is_user_message != 0U;
+      entry_value.user_is_bold = serialized.base.user_is_bold != 0U;
+      snprintf(entry_value.username, sizeof(entry_value.username), "%s", serialized.base.username);
+      snprintf(entry_value.message, sizeof(entry_value.message), "%s", serialized.base.message);
+      snprintf(entry_value.user_color_name, sizeof(entry_value.user_color_name), "%s", serialized.base.user_color_name);
+      snprintf(entry_value.user_highlight_name, sizeof(entry_value.user_highlight_name), "%s", serialized.base.user_highlight_name);
+      entry_value.message_id = serialized.message_id;
       if (serialized.attachment_type > CHAT_ATTACHMENT_AUDIO) {
-        entry->attachment_type = CHAT_ATTACHMENT_NONE;
+        entry_value.attachment_type = CHAT_ATTACHMENT_NONE;
       } else {
-        entry->attachment_type = (chat_attachment_type_t)serialized.attachment_type;
+        entry_value.attachment_type = (chat_attachment_type_t)serialized.attachment_type;
       }
-      snprintf(entry->attachment_target, sizeof(entry->attachment_target), "%s", serialized.attachment_target);
-      snprintf(entry->attachment_caption, sizeof(entry->attachment_caption), "%s", serialized.attachment_caption);
-      memcpy(entry->reaction_counts, serialized.reaction_counts, sizeof(entry->reaction_counts));
-      if (serialized.sound_alias[0] != '\0' && entry->attachment_caption[0] == '\0') {
-        snprintf(entry->attachment_caption, sizeof(entry->attachment_caption), "%s", serialized.sound_alias);
+      snprintf(entry_value.attachment_target, sizeof(entry_value.attachment_target), "%s", serialized.attachment_target);
+      snprintf(entry_value.attachment_caption, sizeof(entry_value.attachment_caption), "%s", serialized.attachment_caption);
+      memcpy(entry_value.reaction_counts, serialized.reaction_counts, sizeof(entry_value.reaction_counts));
+      if (serialized.sound_alias[0] != '\0' && entry_value.attachment_caption[0] == '\0') {
+        snprintf(entry_value.attachment_caption, sizeof(entry_value.attachment_caption), "%s", serialized.sound_alias);
       }
     } else {
       host_state_history_entry_v1_t serialized = {0};
@@ -2629,20 +2663,28 @@ static void host_state_load(host_t *host) {
         break;
       }
 
-      entry->is_user_message = serialized.is_user_message != 0U;
-      entry->user_is_bold = serialized.user_is_bold != 0U;
-      snprintf(entry->username, sizeof(entry->username), "%s", serialized.username);
-      snprintf(entry->message, sizeof(entry->message), "%s", serialized.message);
-      snprintf(entry->user_color_name, sizeof(entry->user_color_name), "%s", serialized.user_color_name);
-      snprintf(entry->user_highlight_name, sizeof(entry->user_highlight_name), "%s", serialized.user_highlight_name);
-      entry->attachment_type = CHAT_ATTACHMENT_NONE;
-      entry->message_id = 0U;
+      entry_value.is_user_message = serialized.is_user_message != 0U;
+      entry_value.user_is_bold = serialized.user_is_bold != 0U;
+      snprintf(entry_value.username, sizeof(entry_value.username), "%s", serialized.username);
+      snprintf(entry_value.message, sizeof(entry_value.message), "%s", serialized.message);
+      snprintf(entry_value.user_color_name, sizeof(entry_value.user_color_name), "%s", serialized.user_color_name);
+      snprintf(entry_value.user_highlight_name, sizeof(entry_value.user_highlight_name), "%s", serialized.user_highlight_name);
+      entry_value.attachment_type = CHAT_ATTACHMENT_NONE;
+      entry_value.message_id = 0U;
     }
 
-    host_history_normalize_entry(host, entry);
-    ++host->history_count;
+    host_history_normalize_entry(host, &entry_value);
+    if ((uint32_t)idx >= keep_start) {
+      size_t target_index = host->history_count;
+      if (target_index < host->history_capacity) {
+        host->history[target_index] = entry_value;
+        ++host->history_count;
+      }
+    }
   }
 
+  host->history_start_index = keep_start;
+  host->history_total = history_count;
   memset(host->preferences, 0, sizeof(host->preferences));
   host->preference_count = 0U;
 
@@ -2941,10 +2983,10 @@ static void host_state_load(host_t *host) {
   }
 
   if (next_message_id == 0U) {
-    next_message_id = (uint64_t)host->history_count + 1U;
+    next_message_id = (uint64_t)host->history_total + 1U;
   }
-  if (next_message_id <= (uint64_t)host->history_count) {
-    next_message_id = (uint64_t)host->history_count + 1U;
+  if (next_message_id <= (uint64_t)host->history_total) {
+    next_message_id = (uint64_t)host->history_total + 1U;
   }
   host->next_message_id = next_message_id;
 
