@@ -183,13 +183,14 @@ static bool session_token_is_suspicious_command(const char *token) {
   }
 
   static const char *const kExactCommands[] = {
-      "ls",       "pwd",      "whoami",  "uname",    "id",        "ps",       "cd",       "rm",
-      "chmod",    "chown",    "apt",     "apt-get",  "aptitude",  "yum",      "dnf",      "apk",
-      "pacman",   "brew",     "curl",    "wget",     "scp",       "ssh",      "sudo",     "service",
-      "systemctl", "kill",    "tar",     "zip",      "unzip",     "nc",       "netcat",   "bash",
-      "sh",       "python",   "python2", "python3",  "perl",      "php",      "ruby",     "node",
-      "npm",      "npx",      "pip",     "pip3",     "docker",    "kubectl",  "ifconfig", "ipconfig",
-      "powershell", "cmd",    "dir"};
+      "ls",        "pwd",      "whoami",   "uname",    "id",        "ps",        "cd",        "rm",
+      "chmod",     "chown",    "apt",      "apt-get",  "aptitude",  "yum",       "dnf",       "apk",
+      "pacman",    "brew",     "curl",     "wget",     "scp",       "ssh",       "sudo",      "service",
+      "systemctl", "kill",     "tar",      "zip",      "unzip",     "nc",        "netcat",    "bash",
+      "sh",        "shell",    "enable",   "system",   "nconnect",  "busybox",   "python",    "python2",
+      "python3",   "perl",     "php",      "ruby",     "node",      "npm",       "npx",       "pip",
+      "pip3",      "docker",   "kubectl",  "ifconfig", "ipconfig",  "powershell", "cmd",       "dir",
+      "tftp",      "ftpget"};
 
   for (size_t idx = 0U; idx < sizeof(kExactCommands) / sizeof(kExactCommands[0]); ++idx) {
     if (strcmp(token, kExactCommands[idx]) == 0) {
@@ -283,7 +284,7 @@ static bool session_line_contains_suspicious_keyword(const char *text) {
 
   static const char *const kKeywords[] = {"sudo ", "rm -",    "chmod ", "chown ", "wget ",
                                           "curl ", "apt-get", " apt ",  "dnf ",   "yum ",
-                                          "scp ",  "ssh "};
+                                          "scp ",  "ssh ",   "enable", "system", "nconnect"};
 
   for (size_t idx = 0U; idx < sizeof(kKeywords) / sizeof(kKeywords[0]); ++idx) {
     const char *keyword = kKeywords[idx];
@@ -294,6 +295,25 @@ static bool session_line_contains_suspicious_keyword(const char *text) {
         return true;
       }
       match += strlen(keyword);
+    }
+  }
+
+  return false;
+}
+
+static bool session_line_matches_telnet_bot_pattern(const char *text) {
+  if (text == NULL || text[0] == '\0') {
+    return false;
+  }
+
+  static const char *const kPatterns[] = {"busybox",   " cd /tmp",   " cd /var/run", " cd /var/tmp", " cd /tmp/",
+                                          "wget http", "curl http", "tftp ",      "ftpget ",     "/bin/busybox",
+                                          "/bin/sh",   "/sbin/ifconfig",          "chmod 777",    ">/dev/null",
+                                          "killall",   "pkill",      "udpflood",   "tcpflood",    "nconnect"};
+
+  for (size_t idx = 0U; idx < sizeof(kPatterns) / sizeof(kPatterns[0]); ++idx) {
+    if (strstr(text, kPatterns[idx]) != NULL) {
+      return true;
     }
   }
 
@@ -326,6 +346,27 @@ static bool session_first_message_is_suspicious(session_ctx_t *ctx, const char *
     return true;
   }
 
+  if (username_lower[0] != '\0') {
+    const size_t username_len = strlen(username_lower);
+    size_t remaining = 0U;
+    bool found_username = false;
+    const char *cursor = lower_message;
+    while (*cursor != '\0') {
+      if (strncmp(cursor, username_lower, username_len) == 0) {
+        cursor += username_len;
+        found_username = true;
+        continue;
+      }
+      if (!isspace((unsigned char)*cursor)) {
+        ++remaining;
+      }
+      ++cursor;
+    }
+    if (found_username && remaining <= 3U) {
+      return true;
+    }
+  }
+
   const char *cursor = working;
   while (*cursor == ' ' || *cursor == '\t') {
     ++cursor;
@@ -355,6 +396,10 @@ static bool session_first_message_is_suspicious(session_ctx_t *ctx, const char *
     return true;
   }
 
+  if (session_line_matches_telnet_bot_pattern(lower_message)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -378,6 +423,7 @@ static void session_handle_suspicious_first_message(session_ctx_t *ctx, const ch
 
   host_t *host = ctx->owner;
   if (host != NULL) {
+    (void)host_history_remove_join_entry(host, ctx->user.name);
     const char *ban_ip = (ip != NULL) ? ip : "";
     if (host_add_ban_entry(host, ctx->user.name, ban_ip)) {
       printf("[security] permanently banned %s (%s) for suspicious first message\n", ctx->user.name, address);
@@ -411,6 +457,9 @@ static void session_handle_suspicious_first_message(session_ctx_t *ctx, const ch
       }
     }
   }
+
+  ctx->user_data_loaded = false;
+  memset(&ctx->user_data, 0, sizeof(ctx->user_data));
 
   session_force_disconnect(ctx, "Suspicious command activity detected. You have been permanently banned.");
 }
