@@ -2,6 +2,16 @@
 
 #define TELNET_STABLE_RESET_SECONDS 10.0
 
+static session_ctx_t *session_create(void) {
+#if defined(SSH_CHATTER_USE_GC) && SSH_CHATTER_USE_GC
+  return (session_ctx_t *)GC_CALLOC(1U, sizeof(session_ctx_t));
+#else
+  return (session_ctx_t *)calloc(1U, sizeof(session_ctx_t));
+#endif
+}
+
+static void session_destroy(session_ctx_t *ctx);
+
 static void session_handle_gemini_unfreeze(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;
@@ -2385,7 +2395,7 @@ static void *host_telnet_thread(void *arg) {
 
     printf("[telnet] accepted client from %s\n", peer_address);
 
-    session_ctx_t *ctx = GC_CALLOC(1U, sizeof(session_ctx_t));
+    session_ctx_t *ctx = session_create();
     if (ctx == NULL) {
       humanized_log_error("telnet", "failed to allocate session context", ENOMEM);
       close(client_fd);
@@ -2404,7 +2414,7 @@ static void *host_telnet_thread(void *arg) {
     pthread_mutexattr_destroy(&lock_attr);
     if (mutex_error != 0) {
       humanized_log_error("telnet", "failed to initialise session output lock", mutex_error);
-      session_cleanup(ctx);
+      session_destroy(ctx);
       continue;
     }
     ctx->output_lock_initialized = true;
@@ -2435,7 +2445,7 @@ static void *host_telnet_thread(void *arg) {
     pthread_t thread_id;
     if (pthread_create(&thread_id, NULL, session_thread, ctx) != 0) {
       humanized_log_error("telnet", "failed to spawn session thread", errno);
-      session_cleanup(ctx);
+      session_destroy(ctx);
       continue;
     }
 
@@ -2597,6 +2607,18 @@ static void session_cleanup(session_ctx_t *ctx) {
 
 }
 
+static void session_destroy(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  session_cleanup(ctx);
+
+#if !(defined(SSH_CHATTER_USE_GC) && SSH_CHATTER_USE_GC)
+  free(ctx);
+#endif
+}
+
 static void *session_thread(void *arg) {
   session_ctx_t *ctx = (session_ctx_t *)arg;
   if (ctx == NULL) {
@@ -2632,7 +2654,7 @@ static void *session_thread(void *arg) {
     if (!authenticated) {
       if (session_authenticate(ctx) != 0) {
         humanized_log_error("session", "authentication failed", EACCES);
-        session_cleanup(ctx);
+        session_destroy(ctx);
         SESSION_THREAD_RETURN(NULL);
       }
       authenticated = true;
@@ -2643,7 +2665,7 @@ static void *session_thread(void *arg) {
       if (session_attempt_handshake_restart(ctx, &handshake_retries)) {
         continue;
       }
-      session_cleanup(ctx);
+      session_destroy(ctx);
       SESSION_THREAD_RETURN(NULL);
     }
 
@@ -2652,7 +2674,7 @@ static void *session_thread(void *arg) {
       if (session_attempt_handshake_restart(ctx, &handshake_retries)) {
         continue;
       }
-      session_cleanup(ctx);
+      session_destroy(ctx);
       SESSION_THREAD_RETURN(NULL);
     }
 
@@ -2665,7 +2687,7 @@ static void *session_thread(void *arg) {
 
   if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
     if (!session_telnet_prompt_initial_nickname(ctx)) {
-      session_cleanup(ctx);
+      session_destroy(ctx);
       SESSION_THREAD_RETURN(NULL);
     }
   }
@@ -2680,13 +2702,13 @@ static void *session_thread(void *arg) {
   }
   const bool captcha_exempt = session_is_captcha_exempt(ctx);
   if (captcha_enabled && !captcha_exempt && !session_run_captcha(ctx)) {
-    session_cleanup(ctx);
+    session_destroy(ctx);
     SESSION_THREAD_RETURN(NULL);
   }
 
   if (host_is_ip_banned(ctx->owner, ctx->client_ip)) {
     session_send_system_line(ctx, "You are banned from this server.");
-    session_cleanup(ctx);
+    session_destroy(ctx);
     SESSION_THREAD_RETURN(NULL);
   }
 
@@ -2728,12 +2750,12 @@ static void *session_thread(void *arg) {
         host_register_join_attempt(ctx->owner, ctx->user.name, ctx->client_ip);
     if (join_result == HOST_JOIN_ATTEMPT_BAN) {
       session_send_system_line(ctx, "Rapid reconnect detected. You have been banned.");
-      session_cleanup(ctx);
+      session_destroy(ctx);
       SESSION_THREAD_RETURN(NULL);
     }
     if (join_result == HOST_JOIN_ATTEMPT_KICK) {
       session_send_system_line(ctx, "Rapid reconnect detected. You have been kicked.");
-      session_cleanup(ctx);
+      session_destroy(ctx);
       SESSION_THREAD_RETURN(NULL);
     }
 
@@ -3152,7 +3174,7 @@ static void *session_thread(void *arg) {
     chat_room_remove(&ctx->owner->room, ctx);
   }
 
-  session_cleanup(ctx);
+  session_destroy(ctx);
 
   SESSION_THREAD_RETURN(NULL);
 
@@ -4280,7 +4302,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         printf("[auto-ban] %s banned after repeated connection flooding\n", peer_address);
       }
 
-      session_ctx_t *ctx = GC_CALLOC(1U, sizeof(session_ctx_t));
+      session_ctx_t *ctx = session_create();
       if (ctx == NULL) {
         humanized_log_error("host", "failed to allocate session context", ENOMEM);
         ssh_disconnect(session);
@@ -4302,7 +4324,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       pthread_mutexattr_destroy(&lock_attr);
       if (mutex_error != 0) {
         humanized_log_error("host", "failed to initialise session output lock", mutex_error);
-        session_cleanup(ctx);
+        session_destroy(ctx);
         continue;
       }
       ctx->output_lock_initialized = true;
@@ -4337,7 +4359,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       pthread_t thread_id;
       if (pthread_create(&thread_id, NULL, session_thread, ctx) != 0) {
         humanized_log_error("host", "failed to spawn session thread", errno);
-        session_cleanup(ctx);
+        session_destroy(ctx);
         continue;
       }
 

@@ -1052,6 +1052,8 @@ static void session_local_backspace(session_ctx_t *ctx);
 static void session_clear_input(session_ctx_t *ctx);
 static bool session_try_command_completion(session_ctx_t *ctx);
 static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch);
+static session_ctx_t *session_create(void);
+static void session_destroy(session_ctx_t *ctx);
 static void session_cleanup(session_ctx_t *ctx);
 static void *session_thread(void *arg);
 static void host_telnet_listener_stop(host_t *host);
