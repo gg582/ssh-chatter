@@ -3970,6 +3970,10 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *mes
     return;
   }
 
+  if (ctx->chat_message_count < SIZE_MAX) {
+    ctx->chat_message_count += 1U;
+  }
+
   session_send_history_entry(ctx, &entry);
   if (ctx->history_scroll_position == 0U && !ctx->bracket_paste_active) {
     if (clear_prompt_text) {
