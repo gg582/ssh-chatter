@@ -2603,6 +2603,19 @@ static void *session_thread(void *arg) {
     return NULL;
   }
 
+  sshc_memory_context_t *memory_scope = NULL;
+  if (ctx->owner != NULL) {
+    memory_scope = sshc_memory_context_push(ctx->owner->memory_context);
+  }
+
+#define SESSION_THREAD_RETURN(value) \
+  do { \
+    if (memory_scope != NULL) { \
+      sshc_memory_context_pop(memory_scope); \
+    } \
+    return (value); \
+  } while (0)
+
   ctx->exit_status = EXIT_FAILURE;
   session_apply_theme_defaults(ctx);
 
@@ -2620,7 +2633,7 @@ static void *session_thread(void *arg) {
       if (session_authenticate(ctx) != 0) {
         humanized_log_error("session", "authentication failed", EACCES);
         session_cleanup(ctx);
-        return NULL;
+        SESSION_THREAD_RETURN(NULL);
       }
       authenticated = true;
     }
@@ -2631,7 +2644,7 @@ static void *session_thread(void *arg) {
         continue;
       }
       session_cleanup(ctx);
-      return NULL;
+      SESSION_THREAD_RETURN(NULL);
     }
 
     if (session_prepare_shell(ctx) != 0) {
@@ -2640,7 +2653,7 @@ static void *session_thread(void *arg) {
         continue;
       }
       session_cleanup(ctx);
-      return NULL;
+      SESSION_THREAD_RETURN(NULL);
     }
 
     break;
@@ -2653,7 +2666,7 @@ static void *session_thread(void *arg) {
   if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
     if (!session_telnet_prompt_initial_nickname(ctx)) {
       session_cleanup(ctx);
-      return NULL;
+      SESSION_THREAD_RETURN(NULL);
     }
   }
 
@@ -2668,13 +2681,13 @@ static void *session_thread(void *arg) {
   const bool captcha_exempt = session_is_captcha_exempt(ctx);
   if (captcha_enabled && !captcha_exempt && !session_run_captcha(ctx)) {
     session_cleanup(ctx);
-    return NULL;
+    SESSION_THREAD_RETURN(NULL);
   }
 
   if (host_is_ip_banned(ctx->owner, ctx->client_ip)) {
     session_send_system_line(ctx, "You are banned from this server.");
     session_cleanup(ctx);
-    return NULL;
+    SESSION_THREAD_RETURN(NULL);
   }
 
   const bool banned_username = host_is_username_banned(ctx->owner, ctx->user.name);
@@ -2716,12 +2729,12 @@ static void *session_thread(void *arg) {
     if (join_result == HOST_JOIN_ATTEMPT_BAN) {
       session_send_system_line(ctx, "Rapid reconnect detected. You have been banned.");
       session_cleanup(ctx);
-      return NULL;
+      SESSION_THREAD_RETURN(NULL);
     }
     if (join_result == HOST_JOIN_ATTEMPT_KICK) {
       session_send_system_line(ctx, "Rapid reconnect detected. You have been kicked.");
       session_cleanup(ctx);
-      return NULL;
+      SESSION_THREAD_RETURN(NULL);
     }
 
     (void)host_try_load_motd_from_path(ctx->owner, "/etc/ssh-chatter/motd");
@@ -3141,13 +3154,17 @@ static void *session_thread(void *arg) {
 
   session_cleanup(ctx);
 
-  return NULL;
+  SESSION_THREAD_RETURN(NULL);
+
+#undef SESSION_THREAD_RETURN
 }
 
 void host_init(host_t *host, auth_profile_t *auth) {
   if (host == NULL) {
     return;
   }
+
+  sshc_memory_context_t *memory_scope = sshc_memory_context_push(host->memory_context);
 
   translator_global_init();
 
@@ -3381,6 +3398,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
   host_security_start_clamav_backend(host);
   host_bbs_start_watchdog(host);
   host_rss_start_backend(host);
+  sshc_memory_context_pop(memory_scope);
 }
 
 static void host_build_birthday_notice_locked(host_t *host, char *line, size_t length) {
@@ -3623,8 +3641,12 @@ static bool host_try_load_motd_from_path(host_t *host, const char *path) {
 }
 
 void host_set_motd(host_t *host, const char *motd) {
+  sshc_memory_context_t *memory_scope = NULL;
+  if (host != NULL) {
+    memory_scope = sshc_memory_context_push(host->memory_context);
+  }
   if (host == NULL || motd == NULL) {
-    return;
+    goto exit_host_set_motd;
   }
 
   char motd_path[PATH_MAX];
@@ -3657,7 +3679,7 @@ void host_set_motd(host_t *host, const char *motd) {
 
   for (size_t idx = 0U; idx < path_count; ++idx) {
     if (paths_to_try[idx] != NULL && host_try_load_motd_from_path(host, paths_to_try[idx])) {
-      return;
+      goto exit_host_set_motd;
     }
   }
 
@@ -3677,12 +3699,22 @@ void host_set_motd(host_t *host, const char *motd) {
   snprintf(host->motd_base, sizeof(host->motd_base), "%s", normalized);
   host_refresh_motd_locked(host);
   pthread_mutex_unlock(&host->lock);
+
+exit_host_set_motd:
+  if (memory_scope != NULL) {
+    sshc_memory_context_pop(memory_scope);
+  }
 }
 
 bool host_post_client_message(host_t *host, const char *username, const char *message, const char *color_name,
                              const char *highlight_name, bool is_bold) {
+  bool success = false;
+  sshc_memory_context_t *memory_scope = NULL;
+  if (host != NULL) {
+    memory_scope = sshc_memory_context_push(host->memory_context);
+  }
   if (host == NULL || username == NULL || username[0] == '\0' || message == NULL) {
-    return false;
+    goto exit_host_post_client_message;
   }
 
   chat_history_entry_t entry = {0};
@@ -3706,12 +3738,18 @@ bool host_post_client_message(host_t *host, const char *username, const char *me
 
   chat_history_entry_t stored = {0};
   if (!host_history_commit_entry(host, &entry, &stored)) {
-    return false;
+    goto exit_host_post_client_message;
   }
 
   chat_room_broadcast_entry(&host->room, &stored, NULL);
   host_notify_external_clients(host, &stored);
-  return true;
+  success = true;
+
+exit_host_post_client_message:
+  if (memory_scope != NULL) {
+    sshc_memory_context_pop(memory_scope);
+  }
+  return success;
 }
 
 bool host_snapshot_last_captcha(host_t *host, char *question, size_t question_length, char *answer,
@@ -3795,6 +3833,8 @@ void host_shutdown(host_t *host) {
   if (host == NULL) {
     return;
   }
+
+  sshc_memory_context_t *memory_scope = sshc_memory_context_push(host->memory_context);
 
   host_eliza_worker_shutdown(host);
   host_moderation_shutdown(host);
@@ -3881,6 +3921,8 @@ void host_shutdown(host_t *host) {
     security_layer_free(&host->security_layer);
     host->security_layer_initialized = false;
   }
+
+  sshc_memory_context_pop(memory_scope);
 }
 
 int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory,

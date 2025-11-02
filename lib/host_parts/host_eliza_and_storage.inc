@@ -1197,6 +1197,8 @@ static void *host_bbs_watchdog_thread(void *arg) {
     return NULL;
   }
 
+  sshc_memory_context_t *memory_scope = sshc_memory_context_push(host->memory_context);
+
   atomic_store(&host->bbs_watchdog_thread_running, true);
   printf("[bbs] watchdog thread started\n");
 
@@ -1225,8 +1227,10 @@ static void *host_bbs_watchdog_thread(void *arg) {
 
   atomic_store(&host->bbs_watchdog_thread_running, false);
   printf("[bbs] watchdog thread stopped\n");
+  sshc_memory_context_pop(memory_scope);
   return NULL;
 }
+
 
 static void host_bbs_start_watchdog(host_t *host) {
   if (host == NULL) {
@@ -2673,6 +2677,11 @@ static void *session_translation_worker(void *arg) {
     return NULL;
   }
 
+  sshc_memory_context_t *memory_scope = NULL;
+  if (ctx->owner != NULL) {
+    memory_scope = sshc_memory_context_push(ctx->owner->memory_context);
+  }
+
   for (;;) {
     translation_job_t *batch[SSH_CHATTER_TRANSLATION_BATCH_MAX] = {0};
     size_t batch_count = 0U;
@@ -2765,6 +2774,9 @@ static void *session_translation_worker(void *arg) {
     }
   }
 
+  if (memory_scope != NULL) {
+    sshc_memory_context_pop(memory_scope);
+  }
   return NULL;
 }
 
