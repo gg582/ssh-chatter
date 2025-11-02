@@ -2899,6 +2899,10 @@ static bool host_history_reserve_locked(host_t *host, size_t min_capacity) {
     return false;
   }
 
+  if (SSH_CHATTER_HISTORY_CACHE_LIMIT > 0U && min_capacity > SSH_CHATTER_HISTORY_CACHE_LIMIT) {
+    min_capacity = SSH_CHATTER_HISTORY_CACHE_LIMIT;
+  }
+
   if (min_capacity <= host->history_capacity) {
     return true;
   }
@@ -2949,11 +2953,41 @@ static bool host_history_append_locked(host_t *host, const chat_history_entry_t 
     return false;
   }
 
-  if (!host_history_reserve_locked(host, host->history_count + 1U)) {
+  size_t cache_limit = SSH_CHATTER_HISTORY_CACHE_LIMIT;
+  if (cache_limit == 0U) {
+    cache_limit = host->history_count + 1U;
+  }
+
+  size_t desired_capacity = host->history_count + 1U;
+  if (cache_limit > 0U && desired_capacity > cache_limit) {
+    desired_capacity = cache_limit;
+  }
+
+  if (!host_history_reserve_locked(host, desired_capacity)) {
     return false;
   }
 
-  host->history[host->history_count++] = *entry;
+  if (cache_limit == 0U || host->history_count < cache_limit) {
+    host->history[host->history_count++] = *entry;
+  } else if (host->history_count > 0U) {
+    memmove(host->history, host->history + 1, (host->history_count - 1U) * sizeof(host->history[0]));
+    host->history[host->history_count - 1U] = *entry;
+    host->history_start_index += 1U;
+  } else {
+    host->history[0] = *entry;
+    host->history_count = 1U;
+  }
+
+  host->history_total += 1U;
+  if (host->history_total < host->history_count) {
+    host->history_total = host->history_count;
+  }
+
+  if (cache_limit > 0U) {
+    size_t expected_start = (host->history_total > host->history_count) ? (host->history_total - host->history_count) : 0U;
+    host->history_start_index = expected_start;
+  }
+
   host_state_save_locked(host);
   return true;
 }
@@ -2965,9 +2999,232 @@ static size_t host_history_total(host_t *host) {
 
   size_t count = 0U;
   pthread_mutex_lock(&host->lock);
-  count = host->history_count;
+  count = host->history_total;
   pthread_mutex_unlock(&host->lock);
   return count;
+}
+
+static bool host_state_read_history_entry(FILE *fp, uint32_t version, chat_history_entry_t *entry) {
+  if (fp == NULL || entry == NULL) {
+    return false;
+  }
+
+  memset(entry, 0, sizeof(*entry));
+
+  if (version >= 3U) {
+    host_state_history_entry_v3_t serialized = {0};
+    if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+      return false;
+    }
+
+    entry->is_user_message = serialized.base.is_user_message != 0U;
+    entry->user_is_bold = serialized.base.user_is_bold != 0U;
+    snprintf(entry->username, sizeof(entry->username), "%s", serialized.base.username);
+    snprintf(entry->message, sizeof(entry->message), "%s", serialized.base.message);
+    snprintf(entry->user_color_name, sizeof(entry->user_color_name), "%s", serialized.base.user_color_name);
+    snprintf(entry->user_highlight_name, sizeof(entry->user_highlight_name), "%s", serialized.base.user_highlight_name);
+    entry->message_id = serialized.message_id;
+    if (serialized.attachment_type > CHAT_ATTACHMENT_FILE) {
+      entry->attachment_type = CHAT_ATTACHMENT_NONE;
+    } else {
+      entry->attachment_type = (chat_attachment_type_t)serialized.attachment_type;
+    }
+    snprintf(entry->attachment_target, sizeof(entry->attachment_target), "%s", serialized.attachment_target);
+    snprintf(entry->attachment_caption, sizeof(entry->attachment_caption), "%s", serialized.attachment_caption);
+    memcpy(entry->reaction_counts, serialized.reaction_counts, sizeof(entry->reaction_counts));
+    return true;
+  }
+
+  if (version == 2U) {
+    host_state_history_entry_v2_t serialized = {0};
+    if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+      return false;
+    }
+
+    entry->is_user_message = serialized.base.is_user_message != 0U;
+    entry->user_is_bold = serialized.base.user_is_bold != 0U;
+    snprintf(entry->username, sizeof(entry->username), "%s", serialized.base.username);
+    snprintf(entry->message, sizeof(entry->message), "%s", serialized.base.message);
+    snprintf(entry->user_color_name, sizeof(entry->user_color_name), "%s", serialized.base.user_color_name);
+    snprintf(entry->user_highlight_name, sizeof(entry->user_highlight_name), "%s", serialized.base.user_highlight_name);
+    entry->message_id = serialized.message_id;
+    if (serialized.attachment_type > CHAT_ATTACHMENT_AUDIO) {
+      entry->attachment_type = CHAT_ATTACHMENT_NONE;
+    } else {
+      entry->attachment_type = (chat_attachment_type_t)serialized.attachment_type;
+    }
+    snprintf(entry->attachment_target, sizeof(entry->attachment_target), "%s", serialized.attachment_target);
+    snprintf(entry->attachment_caption, sizeof(entry->attachment_caption), "%s", serialized.attachment_caption);
+    memcpy(entry->reaction_counts, serialized.reaction_counts, sizeof(entry->reaction_counts));
+    if (serialized.sound_alias[0] != '\0' && entry->attachment_caption[0] == '\0') {
+      snprintf(entry->attachment_caption, sizeof(entry->attachment_caption), "%s", serialized.sound_alias);
+    }
+    return true;
+  }
+
+  host_state_history_entry_v1_t serialized = {0};
+  if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+    return false;
+  }
+
+  entry->is_user_message = serialized.is_user_message != 0U;
+  entry->user_is_bold = serialized.user_is_bold != 0U;
+  snprintf(entry->username, sizeof(entry->username), "%s", serialized.username);
+  snprintf(entry->message, sizeof(entry->message), "%s", serialized.message);
+  snprintf(entry->user_color_name, sizeof(entry->user_color_name), "%s", serialized.user_color_name);
+  snprintf(entry->user_highlight_name, sizeof(entry->user_highlight_name), "%s", serialized.user_highlight_name);
+  entry->attachment_type = CHAT_ATTACHMENT_NONE;
+  entry->message_id = 0U;
+  return true;
+}
+
+static bool host_state_write_history_entry(FILE *fp, const chat_history_entry_t *entry) {
+  if (fp == NULL || entry == NULL) {
+    return false;
+  }
+
+  host_state_history_entry_v3_t serialized = {0};
+  serialized.base.is_user_message = entry->is_user_message ? 1U : 0U;
+  serialized.base.user_is_bold = entry->user_is_bold ? 1U : 0U;
+  snprintf(serialized.base.username, sizeof(serialized.base.username), "%s", entry->username);
+  snprintf(serialized.base.message, sizeof(serialized.base.message), "%s", entry->message);
+  snprintf(serialized.base.user_color_name, sizeof(serialized.base.user_color_name), "%s", entry->user_color_name);
+  snprintf(serialized.base.user_highlight_name, sizeof(serialized.base.user_highlight_name), "%s",
+           entry->user_highlight_name);
+  serialized.message_id = entry->message_id;
+  serialized.attachment_type = (uint8_t)entry->attachment_type;
+  snprintf(serialized.attachment_target, sizeof(serialized.attachment_target), "%s", entry->attachment_target);
+  snprintf(serialized.attachment_caption, sizeof(serialized.attachment_caption), "%s", entry->attachment_caption);
+  memcpy(serialized.reaction_counts, entry->reaction_counts, sizeof(serialized.reaction_counts));
+  memset(serialized.reserved, 0, sizeof(serialized.reserved));
+
+  return fwrite(&serialized, sizeof(serialized), 1U, fp) == 1U;
+}
+
+static bool host_state_stream_open(const char *path, FILE **out_fp, uint32_t *version, uint32_t *history_count) {
+  if (path == NULL || path[0] == '\0' || out_fp == NULL || version == NULL || history_count == NULL) {
+    return false;
+  }
+
+  FILE *fp = fopen(path, "rb");
+  if (fp == NULL) {
+    return false;
+  }
+
+  host_state_header_v1_t base_header = {0};
+  if (fread(&base_header, sizeof(base_header), 1U, fp) != 1U) {
+    fclose(fp);
+    return false;
+  }
+
+  if (base_header.magic != HOST_STATE_MAGIC) {
+    fclose(fp);
+    return false;
+  }
+
+  uint32_t file_version = base_header.version;
+  if (file_version == 0U || file_version > HOST_STATE_VERSION) {
+    fclose(fp);
+    return false;
+  }
+
+  if (file_version >= 2U) {
+    uint32_t sound_count_raw = 0U;
+    uint32_t grant_count_raw = 0U;
+    uint64_t next_id_raw = 0U;
+    if (fread(&sound_count_raw, sizeof(sound_count_raw), 1U, fp) != 1U ||
+        fread(&grant_count_raw, sizeof(grant_count_raw), 1U, fp) != 1U ||
+        fread(&next_id_raw, sizeof(next_id_raw), 1U, fp) != 1U) {
+      fclose(fp);
+      return false;
+    }
+  }
+
+  if (file_version >= 8U) {
+    uint8_t captcha_enabled_raw = 0U;
+    uint8_t reserved_bytes[7];
+    if (fread(&captcha_enabled_raw, sizeof(captcha_enabled_raw), 1U, fp) != 1U ||
+        fread(reserved_bytes, sizeof(reserved_bytes), 1U, fp) != 1U) {
+      fclose(fp);
+      return false;
+    }
+  }
+
+  *version = file_version;
+  *history_count = base_header.history_count;
+  *out_fp = fp;
+  return true;
+}
+
+static size_t host_state_history_entry_stride(uint32_t version) {
+  if (version >= 3U) {
+    return sizeof(host_state_history_entry_v3_t);
+  }
+  if (version == 2U) {
+    return sizeof(host_state_history_entry_v2_t);
+  }
+  if (version == 1U) {
+    return sizeof(host_state_history_entry_v1_t);
+  }
+  return 0U;
+}
+
+static size_t host_state_read_history_range(const char *path, size_t start, chat_history_entry_t *buffer, size_t count) {
+  if (buffer == NULL || count == 0U) {
+    return 0U;
+  }
+
+  FILE *fp = NULL;
+  uint32_t version = 0U;
+  uint32_t total = 0U;
+  if (!host_state_stream_open(path, &fp, &version, &total)) {
+    return 0U;
+  }
+
+  size_t produced = 0U;
+  if ((size_t)total <= start) {
+    fclose(fp);
+    return 0U;
+  }
+
+  size_t stride = host_state_history_entry_stride(version);
+  if (stride == 0U) {
+    fclose(fp);
+    return 0U;
+  }
+
+  if (start > 0U) {
+    bool skip_ok = false;
+    if (stride <= SIZE_MAX / start) {
+      off_t offset = (off_t)(stride * start);
+      if (offset >= 0 && fseeko(fp, offset, SEEK_CUR) == 0) {
+        skip_ok = true;
+      }
+    }
+
+    if (!skip_ok) {
+      size_t remaining = start;
+      while (remaining > 0U) {
+        chat_history_entry_t discarded = {0};
+        if (!host_state_read_history_entry(fp, version, &discarded)) {
+          fclose(fp);
+          return 0U;
+        }
+        --remaining;
+      }
+    }
+  }
+
+  while (produced < count) {
+    chat_history_entry_t entry = {0};
+    if (!host_state_read_history_entry(fp, version, &entry)) {
+      break;
+    }
+    buffer[produced++] = entry;
+  }
+
+  fclose(fp);
+  return produced;
 }
 
 static size_t host_history_copy_range(host_t *host, size_t start_index, chat_history_entry_t *buffer, size_t capacity) {
@@ -2975,23 +3232,87 @@ static size_t host_history_copy_range(host_t *host, size_t start_index, chat_his
     return 0U;
   }
 
-  size_t copied = 0U;
+  chat_history_entry_t *cached_copy = NULL;
+  size_t cached_count = 0U;
+  size_t cached_offset = 0U;
+  size_t before_cache = 0U;
+  size_t total_available = 0U;
+  char state_path[PATH_MAX];
+  state_path[0] = '\0';
+
   pthread_mutex_lock(&host->lock);
-  size_t total = host->history_count;
-  if (start_index >= total || host->history == NULL) {
+  size_t total = host->history_total;
+  if (start_index >= total) {
     pthread_mutex_unlock(&host->lock);
     return 0U;
   }
 
-  size_t available = total - start_index;
-  if (available > capacity) {
-    available = capacity;
+  size_t cache_start = host->history_start_index;
+  size_t cache_count = host->history_count;
+  size_t cache_end = cache_start + cache_count;
+
+  total_available = total - start_index;
+  if (total_available > capacity) {
+    total_available = capacity;
   }
 
-  memcpy(buffer, host->history + start_index, available * sizeof(chat_history_entry_t));
-  copied = available;
+  if (start_index < cache_start) {
+    before_cache = cache_start - start_index;
+    if (before_cache > total_available) {
+      before_cache = total_available;
+    }
+    if (before_cache > 0U && host->state_file_path[0] != '\0') {
+      snprintf(state_path, sizeof(state_path), "%s", host->state_file_path);
+    }
+  }
+
+  size_t cache_portion = 0U;
+  size_t cache_begin_index = start_index + before_cache;
+  if (total_available > before_cache && cache_begin_index < cache_end && host->history != NULL) {
+    cache_portion = total_available - before_cache;
+    size_t available_cache = cache_end - cache_begin_index;
+    if (cache_portion > available_cache) {
+      cache_portion = available_cache;
+    }
+  }
+
+  if (cache_portion > 0U) {
+    cached_copy = (chat_history_entry_t *)malloc(cache_portion * sizeof(*cached_copy));
+    if (cached_copy == NULL) {
+      pthread_mutex_unlock(&host->lock);
+      return 0U;
+    }
+    cached_offset = cache_begin_index - cache_start;
+    for (size_t idx = 0U; idx < cache_portion; ++idx) {
+      cached_copy[idx] = host->history[cached_offset + idx];
+    }
+    cached_count = cache_portion;
+  }
+
   pthread_mutex_unlock(&host->lock);
-  return copied;
+
+  size_t produced = 0U;
+
+  if (before_cache > 0U) {
+    if (state_path[0] == '\0') {
+      free(cached_copy);
+      return 0U;
+    }
+    size_t fetched = host_state_read_history_range(state_path, start_index, buffer, before_cache);
+    if (fetched < before_cache) {
+      free(cached_copy);
+      return fetched;
+    }
+    produced += fetched;
+  }
+
+  if (cached_count > 0U && cached_copy != NULL) {
+    memcpy(buffer + produced, cached_copy, cached_count * sizeof(*cached_copy));
+    produced += cached_count;
+  }
+
+  free(cached_copy);
+  return produced;
 }
 
 static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, chat_history_entry_t *entry) {
@@ -3000,6 +3321,11 @@ static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, cha
   }
 
   bool found = false;
+  size_t older_count = 0U;
+  char state_path[PATH_MAX];
+  state_path[0] = '\0';
+  uint32_t file_version = 0U;
+  uint32_t file_history_count = 0U;
 
   pthread_mutex_lock(&host->lock);
   if (host->history != NULL) {
@@ -3014,7 +3340,40 @@ static bool host_history_find_entry_by_id(host_t *host, uint64_t message_id, cha
       break;
     }
   }
+  if (!found) {
+    older_count = host->history_start_index;
+    if (older_count > 0U && host->state_file_path[0] != '\0') {
+      snprintf(state_path, sizeof(state_path), "%s", host->state_file_path);
+    }
+  }
   pthread_mutex_unlock(&host->lock);
+
+  if (found) {
+    return true;
+  }
+
+  if (state_path[0] != '\0') {
+    FILE *fp = NULL;
+    if (host_state_stream_open(state_path, &fp, &file_version, &file_history_count)) {
+      size_t limit = older_count;
+      if (limit > (size_t)file_history_count) {
+        limit = (size_t)file_history_count;
+      }
+      for (size_t idx = 0U; idx < limit; ++idx) {
+        chat_history_entry_t candidate = {0};
+        if (!host_state_read_history_entry(fp, file_version, &candidate)) {
+          break;
+        }
+        if (candidate.message_id != message_id) {
+          continue;
+        }
+        *entry = candidate;
+        found = true;
+        break;
+      }
+      fclose(fp);
+    }
+  }
 
   return found;
 }
@@ -3041,39 +3400,124 @@ static size_t host_history_delete_range(host_t *host, uint64_t start_id, uint64_
   uint64_t local_last = 0U;
 
   pthread_mutex_lock(&host->lock);
-  if (host->history != NULL && host->history_count > 0U) {
-    size_t write_index = 0U;
-    for (size_t idx = 0U; idx < host->history_count; ++idx) {
-      chat_history_entry_t *entry = &host->history[idx];
-      const bool drop = entry->is_user_message && entry->message_id >= start_id && entry->message_id <= end_id;
-      if (drop) {
-        if (local_first == 0U || entry->message_id < local_first) {
-          local_first = entry->message_id;
-        }
-        if (entry->message_id > local_last) {
-          local_last = entry->message_id;
-        }
-        ++removed;
-        continue;
-      }
 
-      if (write_index != idx) {
-        host->history[write_index] = *entry;
-      }
-      ++write_index;
-    }
+  chat_history_entry_t *entries = NULL;
+  size_t entry_count = 0U;
+  bool history_loaded = false;
 
-    if (removed > 0U) {
-      for (size_t idx = write_index; idx < host->history_count; ++idx) {
-        memset(&host->history[idx], 0, sizeof(host->history[idx]));
+  if (host->state_file_path[0] != '\0') {
+    FILE *fp = NULL;
+    uint32_t version = 0U;
+    uint32_t file_history_count = 0U;
+    if (host_state_stream_open(host->state_file_path, &fp, &version, &file_history_count)) {
+      entry_count = (size_t)file_history_count;
+      if (entry_count > 0U) {
+        entries = (chat_history_entry_t *)malloc(entry_count * sizeof(*entries));
+        if (entries != NULL) {
+          history_loaded = true;
+          for (size_t idx = 0U; idx < entry_count; ++idx) {
+            if (!host_state_read_history_entry(fp, version, &entries[idx])) {
+              history_loaded = false;
+              break;
+            }
+          }
+        }
+      } else {
+        history_loaded = true;
       }
-      host->history_count = write_index;
-      host_state_save_locked(host);
+      fclose(fp);
     }
   }
 
-  if (removed > 0U && host->reply_count > 0U) {
-    size_t write_index = 0U;
+  if (!history_loaded) {
+    entry_count = host->history_count;
+    if (entry_count > 0U) {
+      entries = (chat_history_entry_t *)malloc(entry_count * sizeof(*entries));
+      if (entries == NULL) {
+        pthread_mutex_unlock(&host->lock);
+        return 0U;
+      }
+      for (size_t idx = 0U; idx < entry_count; ++idx) {
+        entries[idx] = host->history[idx];
+      }
+    }
+    history_loaded = true;
+  }
+
+  if (!history_loaded || (entries == NULL && entry_count == 0U)) {
+    pthread_mutex_unlock(&host->lock);
+    free(entries);
+    return 0U;
+  }
+
+  size_t write_index = 0U;
+  for (size_t idx = 0U; idx < entry_count; ++idx) {
+    chat_history_entry_t *entry = &entries[idx];
+    const bool drop = entry->is_user_message && entry->message_id >= start_id && entry->message_id <= end_id;
+    if (drop) {
+      if (local_first == 0U || entry->message_id < local_first) {
+        local_first = entry->message_id;
+      }
+      if (entry->message_id > local_last) {
+        local_last = entry->message_id;
+      }
+      ++removed;
+      continue;
+    }
+
+    if (write_index != idx) {
+      entries[write_index] = *entry;
+    }
+    ++write_index;
+  }
+
+  entry_count = write_index;
+
+  if (removed == 0U) {
+    pthread_mutex_unlock(&host->lock);
+    free(entries);
+    return 0U;
+  }
+
+  size_t cache_limit = SSH_CHATTER_HISTORY_CACHE_LIMIT;
+  size_t new_cache_count = entry_count;
+  if (cache_limit > 0U && new_cache_count > cache_limit) {
+    new_cache_count = cache_limit;
+  }
+  size_t new_cache_start = (entry_count > new_cache_count) ? (entry_count - new_cache_count) : 0U;
+
+  if (!host_history_reserve_locked(host, new_cache_count)) {
+    pthread_mutex_unlock(&host->lock);
+    free(entries);
+    return 0U;
+  }
+
+  for (size_t idx = 0U; idx < new_cache_count; ++idx) {
+    host->history[idx] = entries[new_cache_start + idx];
+  }
+  if (host->history_count > new_cache_count) {
+    for (size_t idx = new_cache_count; idx < host->history_count; ++idx) {
+      memset(&host->history[idx], 0, sizeof(host->history[idx]));
+    }
+  }
+  host->history_count = new_cache_count;
+  host->history_start_index = new_cache_start;
+  host->history_total = entry_count;
+
+  uint64_t max_message_id = 0U;
+  for (size_t idx = 0U; idx < entry_count; ++idx) {
+    if (entries[idx].message_id > max_message_id) {
+      max_message_id = entries[idx].message_id;
+    }
+  }
+  if (max_message_id == 0U) {
+    host->next_message_id = 1U;
+  } else if (host->next_message_id <= max_message_id) {
+    host->next_message_id = max_message_id + 1U;
+  }
+
+  if (host->reply_count > 0U) {
+    size_t reply_write = 0U;
     for (size_t idx = 0U; idx < host->reply_count; ++idx) {
       chat_reply_entry_t *entry = &host->replies[idx];
       if (!entry->in_use) {
@@ -3086,17 +3530,17 @@ static size_t host_history_delete_range(host_t *host, uint64_t start_id, uint64_
         continue;
       }
 
-      if (write_index != idx) {
-        host->replies[write_index] = *entry;
+      if (reply_write != idx) {
+        host->replies[reply_write] = *entry;
       }
-      ++write_index;
+      ++reply_write;
     }
 
     if (reply_removed > 0U) {
-      for (size_t idx = write_index; idx < host->reply_count; ++idx) {
+      for (size_t idx = reply_write; idx < host->reply_count; ++idx) {
         memset(&host->replies[idx], 0, sizeof(host->replies[idx]));
       }
-      host->reply_count = write_index;
+      host->reply_count = reply_write;
 
       uint64_t max_reply_id = 0U;
       for (size_t idx = 0U; idx < host->reply_count; ++idx) {
@@ -3118,20 +3562,26 @@ static size_t host_history_delete_range(host_t *host, uint64_t start_id, uint64_
       host_reply_state_save_locked(host);
     }
   }
+
+  host->history_override = entries;
+  host->history_override_count = entry_count;
+  host_state_save_locked(host);
+  host->history_override = NULL;
+  host->history_override_count = 0U;
+
   pthread_mutex_unlock(&host->lock);
 
-  if (removed > 0U) {
-    if (first_removed != NULL) {
-      *first_removed = local_first;
-    }
-    if (last_removed != NULL) {
-      *last_removed = local_last;
-    }
+  if (first_removed != NULL) {
+    *first_removed = local_first;
+  }
+  if (last_removed != NULL) {
+    *last_removed = local_last;
   }
   if (replies_removed != NULL) {
     *replies_removed = reply_removed;
   }
 
+  free(entries);
   return removed;
 }
 

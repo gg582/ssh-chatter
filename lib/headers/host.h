@@ -38,6 +38,7 @@
 #define ALPHA_MAX_WAYPOINTS 4U
 #define SSH_CHATTER_MAX_BANS 16384
 #define SSH_CHATTER_HISTORY_LIMIT 64
+#define SSH_CHATTER_HISTORY_CACHE_LIMIT 512
 #define SSH_CHATTER_INPUT_HISTORY_LIMIT 64
 #define SSH_CHATTER_SCROLLBACK_CHUNK 16
 #define SSH_CHATTER_MAX_PREFERENCES 1024
@@ -688,6 +689,10 @@ typedef struct host {
   chat_history_entry_t *history;
   size_t history_count;
   size_t history_capacity;
+  size_t history_start_index;
+  size_t history_total;
+  chat_history_entry_t *history_override;
+  size_t history_override_count;
   uint64_t next_message_id;
   chat_reply_entry_t replies[SSH_CHATTER_MAX_REPLIES];
   size_t reply_count;

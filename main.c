@@ -8,6 +8,7 @@
 #include "lib/headers/memory_manager.h"
 #include <stdbool.h>
 #include <stdio.h>
+#include <sys/types.h>
 #include <stdlib.h>
 #include <string.h>
 #include <locale.h>
