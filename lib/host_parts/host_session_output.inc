@@ -159,6 +159,262 @@ typedef struct provider_prefix {
       {"103.", "Indian ISP"},        {"106.", "Indian ISP"},   {"2405:", "Indian ISP"},
       {"2406:", "Indian ISP"},       {"100.64.", "Carrier-grade NAT"}};
 
+static void session_copy_lowercase(const char *source, char *dest, size_t dest_len) {
+  if (dest == NULL || dest_len == 0U) {
+    return;
+  }
+
+  if (source == NULL) {
+    dest[0] = '\0';
+    return;
+  }
+
+  size_t write = 0U;
+  while (source[write] != '\0' && write + 1U < dest_len) {
+    dest[write] = (char)tolower((unsigned char)source[write]);
+    ++write;
+  }
+  dest[write] = '\0';
+}
+
+static bool session_token_is_suspicious_command(const char *token) {
+  if (token == NULL || token[0] == '\0') {
+    return false;
+  }
+
+  static const char *const kExactCommands[] = {
+      "ls",       "pwd",      "whoami",  "uname",    "id",        "ps",       "cd",       "rm",
+      "chmod",    "chown",    "apt",     "apt-get",  "aptitude",  "yum",      "dnf",      "apk",
+      "pacman",   "brew",     "curl",    "wget",     "scp",       "ssh",      "sudo",     "service",
+      "systemctl", "kill",    "tar",     "zip",      "unzip",     "nc",       "netcat",   "bash",
+      "sh",       "python",   "python2", "python3",  "perl",      "php",      "ruby",     "node",
+      "npm",      "npx",      "pip",     "pip3",     "docker",    "kubectl",  "ifconfig", "ipconfig",
+      "powershell", "cmd",    "dir"};
+
+  for (size_t idx = 0U; idx < sizeof(kExactCommands) / sizeof(kExactCommands[0]); ++idx) {
+    if (strcmp(token, kExactCommands[idx]) == 0) {
+      return true;
+    }
+  }
+
+  if ((token[0] == '.' && token[1] == '/') || (token[0] == '/' && token[1] != '\0')) {
+    return true;
+  }
+
+  if (strncmp(token, "python", 6) == 0) {
+    char next = token[6];
+    if (next == '\0' || next == '.' || (next >= '0' && next <= '9')) {
+      return true;
+    }
+  }
+
+  if (strncmp(token, "pip", 3) == 0) {
+    char next = token[3];
+    if (next == '\0' || next == '3' || next == '.') {
+      return true;
+    }
+  }
+
+  if (strncmp(token, "node", 4) == 0) {
+    char next = token[4];
+    if (next == '\0' || next == '.' || (next >= '0' && next <= '9')) {
+      return true;
+    }
+  }
+
+  if (strncmp(token, "npm", 3) == 0) {
+    char next = token[3];
+    if (next == '\0' || next == '-' || (next >= '0' && next <= '9')) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool session_line_contains_shell_operator(const char *text) {
+  if (text == NULL || text[0] == '\0') {
+    return false;
+  }
+
+  if (strstr(text, "&&") != NULL || strstr(text, "||") != NULL || strstr(text, "$(") != NULL ||
+      strchr(text, '`') != NULL) {
+    return true;
+  }
+
+  for (const char *cursor = text; *cursor != '\0'; ++cursor) {
+    char ch = *cursor;
+    if (ch == ';') {
+      char prev = (cursor > text) ? cursor[-1] : '\0';
+      char next = cursor[1];
+      bool prev_sep = prev == '\0' || isspace((unsigned char)prev) || prev == ';' || prev == '&' || prev == '|';
+      bool next_sep = next == '\0' || isspace((unsigned char)next) || next == '&' || next == '|' || next == ';';
+      if (prev_sep || next_sep) {
+        return true;
+      }
+    } else if (ch == '|') {
+      char prev = (cursor > text) ? cursor[-1] : '\0';
+      char next = cursor[1];
+      if (next == '|' || isspace((unsigned char)next) || isspace((unsigned char)prev)) {
+        return true;
+      }
+    } else if (ch == '>') {
+      char prev = (cursor > text) ? cursor[-1] : '\0';
+      char next = cursor[1];
+      if (next == '>' || next == '&' || isspace((unsigned char)next) || isspace((unsigned char)prev)) {
+        return true;
+      }
+    } else if (ch == '<') {
+      char prev = (cursor > text) ? cursor[-1] : '\0';
+      char next = cursor[1];
+      if (next == '<' || isspace((unsigned char)next) || isspace((unsigned char)prev)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+static bool session_line_contains_suspicious_keyword(const char *text) {
+  if (text == NULL || text[0] == '\0') {
+    return false;
+  }
+
+  static const char *const kKeywords[] = {"sudo ", "rm -",    "chmod ", "chown ", "wget ",
+                                          "curl ", "apt-get", " apt ",  "dnf ",   "yum ",
+                                          "scp ",  "ssh "};
+
+  for (size_t idx = 0U; idx < sizeof(kKeywords) / sizeof(kKeywords[0]); ++idx) {
+    const char *keyword = kKeywords[idx];
+    const char *match = text;
+    while ((match = strstr(match, keyword)) != NULL) {
+      char before = (match == text) ? ' ' : match[-1];
+      if (isspace((unsigned char)before) || before == ';' || before == '|' || before == '&') {
+        return true;
+      }
+      match += strlen(keyword);
+    }
+  }
+
+  return false;
+}
+
+static bool session_first_message_is_suspicious(session_ctx_t *ctx, const char *message) {
+  if (ctx == NULL || message == NULL) {
+    return false;
+  }
+
+  if (!ctx->has_joined_room || ctx->chat_message_count > 0U) {
+    return false;
+  }
+
+  char working[SSH_CHATTER_MAX_INPUT_LEN];
+  snprintf(working, sizeof(working), "%s", message);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    return false;
+  }
+
+  char lower_message[sizeof(working)];
+  session_copy_lowercase(working, lower_message, sizeof(lower_message));
+
+  char username_lower[SSH_CHATTER_USERNAME_LEN];
+  session_copy_lowercase(ctx->user.name, username_lower, sizeof(username_lower));
+  if (strcmp(lower_message, username_lower) == 0) {
+    return true;
+  }
+
+  const char *cursor = working;
+  while (*cursor == ' ' || *cursor == '\t') {
+    ++cursor;
+  }
+
+  char token[SSH_CHATTER_MAX_INPUT_LEN];
+  size_t token_len = 0U;
+  while (*cursor != '\0' && !isspace((unsigned char)*cursor) && *cursor != ';' && *cursor != '&' && *cursor != '|' &&
+         *cursor != '>' && *cursor != '<') {
+    if (token_len + 1U >= sizeof(token)) {
+      break;
+    }
+    token[token_len++] = (char)tolower((unsigned char)*cursor);
+    ++cursor;
+  }
+  token[token_len] = '\0';
+
+  if (session_token_is_suspicious_command(token)) {
+    return true;
+  }
+
+  if (session_line_contains_shell_operator(lower_message)) {
+    return true;
+  }
+
+  if (session_line_contains_suspicious_keyword(lower_message)) {
+    return true;
+  }
+
+  return false;
+}
+
+static void session_handle_suspicious_first_message(session_ctx_t *ctx, const char *message) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  char trimmed[SSH_CHATTER_MAX_INPUT_LEN];
+  snprintf(trimmed, sizeof(trimmed), "%s", message != NULL ? message : "");
+  trim_whitespace_inplace(trimmed);
+
+  const char *ip = NULL;
+  if (ctx->client_ip[0] != '\0' && strncmp(ctx->client_ip, "unknown", SSH_CHATTER_IP_LEN) != 0) {
+    ip = ctx->client_ip;
+  }
+
+  const char *address = (ip != NULL) ? ip : "unknown";
+  printf("[security] suspicious first message from %s (%s): %s\n", ctx->user.name, address,
+         trimmed[0] != '\0' ? trimmed : "(empty)");
+
+  host_t *host = ctx->owner;
+  if (host != NULL) {
+    const char *ban_ip = (ip != NULL) ? ip : "";
+    if (host_add_ban_entry(host, ctx->user.name, ban_ip)) {
+      printf("[security] permanently banned %s (%s) for suspicious first message\n", ctx->user.name, address);
+    } else {
+      printf("[security] unable to record permanent ban for %s (%s)\n", ctx->user.name, address);
+    }
+
+    const char *admin_user = getenv("ADMIN1");
+    if (admin_user != NULL && admin_user[0] != '\0') {
+      char admin_ip[SSH_CHATTER_IP_LEN];
+      admin_ip[0] = '\0';
+      if (!host_lookup_member_ip(host, admin_user, admin_ip, sizeof(admin_ip))) {
+        (void)host_lookup_last_ip(host, admin_user, admin_ip, sizeof(admin_ip));
+      }
+
+      char notification[USER_DATA_MAILBOX_MESSAGE_LEN];
+      snprintf(notification, sizeof(notification),
+               "Suspicious first message ban: [%s] from %s sent '%s'.", ctx->user.name, address,
+               trimmed[0] != '\0' ? trimmed : "(empty)");
+
+      char mail_error[128];
+      if (!host_user_data_send_mail(host, admin_user, admin_ip[0] != '\0' ? admin_ip : NULL, "system", notification,
+                                    mail_error, sizeof(mail_error))) {
+        if (mail_error[0] != '\0') {
+          printf("[mail] failed to notify %s about suspicious first message: %s\n", admin_user, mail_error);
+        } else {
+          printf("[mail] failed to notify %s about suspicious first message\n", admin_user);
+        }
+      } else {
+        printf("[mail] notified %s about suspicious first message from %s\n", admin_user, ctx->user.name);
+      }
+    }
+  }
+
+  session_force_disconnect(ctx, "Suspicious command activity detected. You have been permanently banned.");
+}
+
 static bool session_detect_provider_ip(const char *ip, char *label, size_t length) {
   if (label != NULL && length > 0U) {
     label[0] = '\0';
@@ -3423,6 +3679,11 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
 
   ctx->last_message_time = now;
   ctx->has_last_message_time = true;
+
+  if (session_first_message_is_suspicious(ctx, normalized)) {
+    session_handle_suspicious_first_message(ctx, normalized);
+    return;
+  }
 
   if (!translation_bypass && ctx->translation_enabled && ctx->input_translation_enabled &&
       ctx->input_translation_language[0] != '\0') {
