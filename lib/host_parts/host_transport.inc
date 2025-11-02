@@ -2714,7 +2714,7 @@ static void chat_room_broadcast(chat_room_t *room, const char *message, const se
   pthread_mutex_lock(&room->lock);
   expected_targets = room->member_count;
   if (expected_targets > 0U) {
-    targets = GC_CALLOC(expected_targets, sizeof(*targets));
+    targets = calloc(expected_targets, sizeof(*targets));
     if (targets != NULL) {
       for (size_t idx = 0; idx < room->member_count; ++idx) {
         session_ctx_t *member = room->members[idx];
@@ -2754,6 +2754,7 @@ static void chat_room_broadcast(chat_room_t *room, const char *message, const se
     printf("[broadcast] %s\n", message);
   }
 
+  free(targets);
 }
 
 static void chat_room_broadcast_caption(chat_room_t *room, const char *message) {
@@ -2768,7 +2769,7 @@ static void chat_room_broadcast_caption(chat_room_t *room, const char *message) 
   pthread_mutex_lock(&room->lock);
   expected_targets = room->member_count;
   if (expected_targets > 0U) {
-    targets = GC_CALLOC(expected_targets, sizeof(*targets));
+    targets = calloc(expected_targets, sizeof(*targets));
     if (targets != NULL) {
       for (size_t idx = 0; idx < room->member_count; ++idx) {
         session_ctx_t *member = room->members[idx];
@@ -2796,6 +2797,7 @@ static void chat_room_broadcast_caption(chat_room_t *room, const char *message) 
 
   printf("[broadcast caption] %s\n", message);
 
+  free(targets);
 }
 
 static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entry_t *entry, const session_ctx_t *from) {
@@ -2810,7 +2812,7 @@ static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entr
   pthread_mutex_lock(&room->lock);
   expected_targets = room->member_count;
   if (expected_targets > 0U) {
-    targets = GC_CALLOC(expected_targets, sizeof(*targets));
+    targets = calloc(expected_targets, sizeof(*targets));
     if (targets != NULL) {
       for (size_t idx = 0; idx < room->member_count; ++idx) {
         session_ctx_t *member = room->members[idx];
@@ -2857,6 +2859,7 @@ static void chat_room_broadcast_entry(chat_room_t *room, const chat_history_entr
     }
   }
 
+  free(targets);
 }
 
 static void chat_room_broadcast_reaction_update(host_t *host, const chat_history_entry_t *entry) {
