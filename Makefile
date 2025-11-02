@@ -1,7 +1,10 @@
+ENABLE_GC ?= 0
+
 CC := cc
 CFLAGS = -std=c2x -Ofast \
 	-Werror \
         -Ilib/headers \
+        -DSSH_CHATTER_USE_GC=$(ENABLE_GC) \
         -Wall -Wextra -Wshadow -Wformat=2 -Wundef -Wconversion -Wdouble-promotion \
         -fno-omit-frame-pointer -fstack-protector-strong -fno-common \
         -fPIC \
@@ -38,7 +41,7 @@ CFLAGS = -std=c2x -Ofast \
         -MMD -MP \
 
     COMMON_LDFLAGS = \
-        -lpthread -ldl -lcurl -lm -lcrypto -lgc \
+        -lpthread -ldl -lcurl -lm -lcrypto \
         -flto=$(shell nproc) -fuse-linker-plugin \
         -Wl,-Ofast \
         -Wl,--sort-common \
@@ -60,9 +63,9 @@ TARGET := ssh-chatter
 SHARED_TARGET := libssh_chatter_backend.so
 SRC := main.c lib/host.c lib/client.c lib/webssh_client.c lib/translator.c \
        lib/translation_helpers.c lib/ssh_chatter_backend.c lib/user_data.c \
-       lib/matrix_client.c lib/security_layer.c
+       lib/matrix_client.c lib/security_layer.c lib/memory_manager.c
 OBJ := $(SRC:.c=.o)
-SHARED_SRC := lib/translator.c lib/translation_helpers.c lib/ssh_chatter_backend.c
+SHARED_SRC := lib/translator.c lib/translation_helpers.c lib/ssh_chatter_backend.c lib/memory_manager.c
 SHARED_OBJ := $(SHARED_SRC:.c=.o)
 DEP := $(OBJ:.o=.d)
 
@@ -86,3 +89,7 @@ clean:
 	rm -f $(OBJ) $(TARGET) $(SHARED_TARGET) $(DEP)
 
 -include $(DEP)
+
+ifeq ($(ENABLE_GC),1)
+COMMON_LDFLAGS += -lgc
+endif

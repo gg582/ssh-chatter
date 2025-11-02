@@ -1139,6 +1139,17 @@ static bool matrix_client_sync(matrix_client_t *client) {
 
 static void *matrix_client_poll_thread(void *user_data) {
   matrix_client_t *client = (matrix_client_t *)user_data;
+  if (client == NULL) {
+    return NULL;
+  }
+
+  if (client->host == NULL) {
+    humanized_log_error("matrix", "matrix poll thread missing host context", EINVAL);
+    atomic_store(&client->running, false);
+    return NULL;
+  }
+
+  sshc_memory_context_t *memory_scope = sshc_memory_context_push(client->host->memory_context);
   atomic_store(&client->running, true);
 
   while (!atomic_load(&client->stop)) {
@@ -1159,6 +1170,9 @@ static void *matrix_client_poll_thread(void *user_data) {
   }
 
   atomic_store(&client->running, false);
+  if (memory_scope != NULL) {
+    sshc_memory_context_pop(memory_scope);
+  }
   return NULL;
 }
 

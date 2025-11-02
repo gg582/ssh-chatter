@@ -4171,6 +4171,8 @@ static void *host_security_clamav_backend(void *arg) {
     return NULL;
   }
 
+  sshc_memory_context_t *memory_scope = sshc_memory_context_push(host->memory_context);
+
   atomic_store(&host->security_clamav_thread_running, true);
   printf("[security] scheduled ClamAV backend thread started (interval: %u seconds)\n",
          (unsigned int)SSH_CHATTER_CLAMAV_SCAN_INTERVAL_SECONDS);
@@ -4204,6 +4206,7 @@ static void *host_security_clamav_backend(void *arg) {
 
   atomic_store(&host->security_clamav_thread_running, false);
   printf("[security] scheduled ClamAV backend thread stopped\n");
+  sshc_memory_context_pop(memory_scope);
   return NULL;
 }
 

@@ -5,17 +5,7 @@
 
 #include <errno.h>
 #include <getopt.h>
-#if defined(__has_include)
-#  if __has_include(<gc/gc.h>)
-#    include <gc/gc.h>
-#  elif __has_include(<gc.h>)
-#    include <gc.h>
-#  else
-#    error "libgc header not found"
-#  endif
-#else
-#  include <gc/gc.h>
-#endif
+#include "lib/headers/memory_manager.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -187,10 +177,24 @@ int main(int argc, char **argv) {
       continue;
     }
 
+    host->memory_context = sshc_memory_context_create("host");
+    if (host->memory_context == NULL) {
+      ++restart_attempts;
+      humanized_log_error("daemon", "failed to create host memory context", errno != 0 ? errno : ENOMEM);
+      printf("[daemon] retrying host startup (attempt %u)\n", restart_attempts);
+      free(host);
+      sleep_before_restart(restart_attempts);
+      continue;
+    }
+
+    sshc_memory_context_t *init_scope = sshc_memory_context_push(host->memory_context);
     host_init(host, &default_profile);
+    sshc_memory_context_pop(init_scope);
 
     if (motd != NULL) {
+      sshc_memory_context_t *motd_scope = sshc_memory_context_push(host->memory_context);
       host_set_motd(host, motd);
+      sshc_memory_context_pop(motd_scope);
     }
 
     const char *address = bind_address != NULL ? bind_address : "0.0.0.0";
@@ -200,12 +204,18 @@ int main(int argc, char **argv) {
     struct timespec serve_start;
     clock_gettime(CLOCK_MONOTONIC, &serve_start);
     errno = 0;
+    sshc_memory_context_t *serve_scope = sshc_memory_context_push(host->memory_context);
     const int serve_result = host_serve(host, bind_address, bind_port, host_key_dir, telnet_bind_address, telnet_port);
     const int serve_errno = errno;
+    sshc_memory_context_pop(serve_scope);
     struct timespec serve_end;
     clock_gettime(CLOCK_MONOTONIC, &serve_end);
 
+    sshc_memory_context_t *shutdown_scope = sshc_memory_context_push(host->memory_context);
     host_shutdown(host);
+    sshc_memory_context_pop(shutdown_scope);
+    sshc_memory_context_destroy(host->memory_context);
+    host->memory_context = NULL;
     free(host);
     host = NULL;
 

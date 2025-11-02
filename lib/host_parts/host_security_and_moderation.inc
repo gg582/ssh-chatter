@@ -562,6 +562,8 @@ static void *host_moderation_thread(void *arg) {
     return NULL;
   }
 
+  sshc_memory_context_t *memory_scope = sshc_memory_context_push(host->memory_context);
+
   const char *failure_reason = NULL;
 
   while (true) {
@@ -668,6 +670,7 @@ static void *host_moderation_thread(void *arg) {
   }
 
   host_moderation_flush_pending(host, failure_reason);
+  sshc_memory_context_pop(memory_scope);
   return NULL;
 }
 
@@ -1216,6 +1219,8 @@ static void *host_eliza_worker_thread(void *arg) {
     return NULL;
   }
 
+  sshc_memory_context_t *memory_scope = sshc_memory_context_push(host->memory_context);
+
   host_eliza_worker_state_t *worker = &host->eliza_worker;
   atomic_store(&worker->active, true);
 
@@ -1249,6 +1254,7 @@ static void *host_eliza_worker_thread(void *arg) {
   }
 
   atomic_store(&worker->active, false);
+  sshc_memory_context_pop(memory_scope);
   return NULL;
 }
 

@@ -12,17 +12,7 @@
 #include <time.h>
 #include <sys/types.h>
 
-#if defined(__has_include)
-#  if __has_include(<gc/gc.h>)
-#    include <gc/gc.h>
-#  elif __has_include(<gc.h>)
-#    include <gc.h>
-#  else
-#    error "libgc header not found"
-#  endif
-#else
-#  include <gc/gc.h>
-#endif
+#include "memory_manager.h"
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -659,6 +649,7 @@ typedef struct bbs_post {
 } bbs_post_t;
 
 typedef struct host {
+  sshc_memory_context_t *memory_context;
   chat_room_t room;
   ssh_listener_t listener;
   struct {
@@ -804,6 +795,4 @@ bool host_post_client_message(host_t *host, const char *username, const char *me
 void host_shutdown(host_t *host);
 bool host_snapshot_last_captcha(host_t *host, char *question, size_t question_length, char *answer,
                                size_t answer_length, struct timespec *timestamp);
-#undef GC_CALLOC
-void * GC_CALLOC(size_t len, size_t t_len);
 #endif

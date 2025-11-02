@@ -18,17 +18,7 @@
 #include "translation_helpers.h"
 
 #include <curl/curl.h>
-#if defined(__has_include)
-#  if __has_include(<gc/gc.h>)
-#    include <gc/gc.h>
-#  elif __has_include(<gc.h>)
-#    include <gc.h>
-#  else
-#    error "libgc header not found"
-#  endif
-#else
-#  include <gc/gc.h>
-#endif
+#include "memory_manager.h"
 #include <iconv.h>
 #include <ctype.h>
 #include <dirent.h>
@@ -129,27 +119,6 @@ typedef struct alpha_lander_entry {
   uint32_t flag_count;
   uint64_t last_flag_timestamp;
 } alpha_lander_entry_t;
-
-void * GC_CALLOC(size_t len, size_t t_len) {
-  if (len == 0U || t_len == 0U) {
-    return GC_MALLOC(0U);
-  }
-
-  if (len > SIZE_MAX / t_len) {
-    errno = ENOMEM;
-    return NULL;
-  }
-
-  size_t total = len * t_len;
-  void *calloc_mem = GC_MALLOC(total);
-  if (calloc_mem == NULL) {
-    errno = ENOMEM;
-    return NULL;
-  }
-
-  memset(calloc_mem, 0, total);
-  return calloc_mem;
-}
 
 static int alpha_lander_entry_compare(const void *lhs, const void *rhs) {
   const alpha_lander_entry_t *left = (const alpha_lander_entry_t *)lhs;
