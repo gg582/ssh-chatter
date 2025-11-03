@@ -80,14 +80,17 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
           break;
       }
         char palette_line[SSH_CHATTER_MESSAGE_LIMIT];
+        static char palette_line_group[SSH_CHATTER_MESSAGE_LIMIT * 16];
         if (descriptor->is_256_color) {
             snprintf(palette_line, sizeof(palette_line), "  %s - %s (256-color)", name, description);
         } else {
             snprintf(palette_line, sizeof(palette_line), "  %s - %s", name, description);
         }
-        session_send_system_line(ctx, palette_line);
+        strncat(palette_line_group, palette_line, strnlen(palette_line, SSH_CHATTER_MESSAGE_LIMIT));
+        strncat(palette_line_group, "\n", 1);
         if ((idx + 1) % 16 == 0) {
-            session_send_system_line(ctx, ""); // Add a blank line after every 16 entries
+            session_send_system_line(ctx, palette_line_group);
+            memset(palette_line_group, 0, sizeof(SSH_CHATTER_MESSAGE_LIMIT * 16));
         }
     }
     session_send_system_line(ctx, "Apply a palette with /palette <name>.");

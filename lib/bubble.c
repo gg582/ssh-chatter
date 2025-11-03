@@ -88,7 +88,7 @@ static int wrap_text_to_lines(const char *text, int max_width, char *lines[], in
                 if (char_width > 0) {
                     current_line_display_width += char_width;
                 }
-                if (iswspace(wc)) { // Found a space, potential break point
+                if (iswspace((wint_t)wc)) { // Found a space, potential break point
                     last_space_pos = temp_ptr;
                 }
                 temp_ptr += len;
