@@ -598,6 +598,7 @@ typedef struct user_preference {
   char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   char ui_language[SSH_CHATTER_LANG_NAME_LEN];
   bool breaking_alerts_enabled;
+  bool show_continuous_messages;
   struct {
     char label[SSH_CHATTER_POLL_LABEL_LEN];
     uint64_t poll_id;
@@ -798,6 +799,7 @@ typedef struct {
     int count;
 } utf8_code_count_t;
 
+void session_send_raw_text(session_ctx_t *ctx, const char *text);
 void host_init(host_t *host, auth_profile_t *auth);
 void host_set_motd(host_t *host, const char *motd);
 int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory,
@@ -807,4 +809,5 @@ bool host_post_client_message(host_t *host, const char *username, const char *me
 void host_shutdown(host_t *host);
 bool host_snapshot_last_captcha(host_t *host, char *question, size_t question_length, char *answer,
                                size_t answer_length, struct timespec *timestamp);
+
 #endif

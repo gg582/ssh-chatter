@@ -646,21 +646,6 @@ static size_t host_column_reset_sequence_length(const char *text) {
   return 0U;
 }
 
-static bool host_contains_column_reset(const char *text) {
-  if (text == NULL) {
-    return false;
-  }
-
-  while (*text != '\0') {
-    if (host_column_reset_sequence_length(text) > 0U) {
-      return true;
-    }
-    ++text;
-  }
-
-  return false;
-}
-
 static void host_strip_column_reset(char *text) {
   if (text == NULL || text[0] == '\0') {
     return;

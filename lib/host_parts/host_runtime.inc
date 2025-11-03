@@ -57,7 +57,29 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
     for (size_t idx = 0U; idx < sizeof(PALETTE_DEFINITIONS) / sizeof(PALETTE_DEFINITIONS[0]); ++idx) {
       const palette_descriptor_t *descriptor = &PALETTE_DEFINITIONS[idx];
       char line[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(line, sizeof(line), "  %s - %s", descriptor->name, descriptor->description);
+      const char *name = descriptor->name->en;
+      const char *description = descriptor->description->en;
+      switch (session_ui_language_current(ctx)) {
+        case SESSION_UI_LANGUAGE_KO:
+          name = descriptor->name->ko;
+          description = descriptor->description->ko;
+          break;
+        case SESSION_UI_LANGUAGE_JP:
+          name = descriptor->name->jp;
+          description = descriptor->description->jp;
+          break;
+        case SESSION_UI_LANGUAGE_ZH:
+          name = descriptor->name->zh;
+          description = descriptor->description->zh;
+          break;
+        case SESSION_UI_LANGUAGE_RU:
+          name = descriptor->name->ru;
+          description = descriptor->description->ru;
+          break;
+        default:
+          break;
+      }
+      snprintf(line, sizeof(line), "  %s - %s", name, description);
       session_send_system_line(ctx, line);
     }
     session_send_system_line(ctx, "Apply a palette with /palette <name>.");
@@ -80,7 +102,29 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
   session_apply_background_fill(ctx);
 
   char info[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(info, sizeof(info), "Palette '%s' applied - %s", descriptor->name, descriptor->description);
+  const char *name = descriptor->name->en;
+  const char *description = descriptor->description->en;
+  switch (session_ui_language_current(ctx)) {
+    case SESSION_UI_LANGUAGE_KO:
+      name = descriptor->name->ko;
+      description = descriptor->description->ko;
+      break;
+    case SESSION_UI_LANGUAGE_JP:
+      name = descriptor->name->jp;
+      description = descriptor->description->jp;
+      break;
+    case SESSION_UI_LANGUAGE_ZH:
+      name = descriptor->name->zh;
+      description = descriptor->description->zh;
+      break;
+    case SESSION_UI_LANGUAGE_RU:
+      name = descriptor->name->ru;
+      description = descriptor->description->ru;
+      break;
+    default:
+      break;
+  }
+  snprintf(info, sizeof(info), "Palette '%s' applied - %s", name, description);
   session_send_system_line(ctx, info);
   session_render_separator(ctx, "Chatroom");
   session_render_prompt(ctx, true);
@@ -947,6 +991,8 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     session_handle_chat_spacing(ctx, args);
     return;
   }
+
+
   else if (session_parse_command_any(ctx, "/mode", effective_line, &args)) {
     ctx->ops->handle_mode(ctx, args);
     return;
@@ -1217,119 +1263,9 @@ static void session_user_data_touch(session_ctx_t *ctx) {
   ctx->user_data.last_updated = (uint64_t)now;
 }
 
-static void host_user_data_build_match_key(const char *username, char *key, size_t length) {
-  if (key == NULL || length == 0U) {
-    return;
-  }
 
-  key[0] = '\0';
-  if (username == NULL || username[0] == '\0') {
-    return;
-  }
 
-  char sanitized[SSH_CHATTER_USERNAME_LEN * 2U];
-  const bool sanitized_ok = user_data_sanitize_username(username, sanitized, sizeof(sanitized));
-  const char *source = sanitized_ok ? sanitized : username;
 
-  size_t out_idx = 0U;
-  for (size_t idx = 0U; source[idx] != '\0'; ++idx) {
-    unsigned char ch = (unsigned char)source[idx];
-    if (isalnum(ch)) {
-      if (out_idx + 1U < length) {
-        key[out_idx++] = (char)tolower(ch);
-      }
-    }
-  }
-
-  key[out_idx] = '\0';
-}
-
-static bool host_user_data_find_profile_picture(host_t *host, const char *alias, user_data_record_t *record) {
-  if (host == NULL || alias == NULL || alias[0] == '\0' || record == NULL) {
-    return false;
-  }
-
-  user_data_record_t direct_record;
-  const bool direct_loaded = host_user_data_load_existing(host, alias, NULL, &direct_record, false);
-  if (direct_loaded && direct_record.profile_picture[0] != '\0') {
-    *record = direct_record;
-    return true;
-  }
-
-  char alias_key[SSH_CHATTER_USERNAME_LEN * 2U];
-  host_user_data_build_match_key(alias, alias_key, sizeof(alias_key));
-  if (alias_key[0] == '\0') {
-    return false;
-  }
-
-  char alias_path_key[SSH_CHATTER_USERNAME_LEN * 2U];
-  alias_path_key[0] = '\0';
-  if (!user_data_sanitize_username(alias, alias_path_key, sizeof(alias_path_key))) {
-    alias_path_key[0] = '\0';
-  }
-
-  if (host->user_data_root[0] == '\0') {
-    return false;
-  }
-
-  DIR *dir = opendir(host->user_data_root);
-  if (dir == NULL) {
-    return false;
-  }
-
-  bool matched = false;
-  struct dirent *entry = NULL;
-  while (!matched && (entry = readdir(dir)) != NULL) {
-    const char *name = entry->d_name;
-    if (name == NULL || name[0] == '\0') {
-      continue;
-    }
-
-    if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) {
-      continue;
-    }
-
-    size_t name_len = strlen(name);
-    if (name_len <= 4U || strcmp(name + name_len - 4U, ".dat") != 0) {
-      continue;
-    }
-
-    size_t base_len = name_len - 4U;
-    char candidate_name[SSH_CHATTER_USERNAME_LEN * 2U];
-    if (base_len >= sizeof(candidate_name)) {
-      continue;
-    }
-    memcpy(candidate_name, name, base_len);
-    candidate_name[base_len] = '\0';
-
-    if (alias_path_key[0] != '\0' && strcmp(candidate_name, alias_path_key) == 0) {
-      continue;
-    }
-
-    user_data_record_t candidate_record;
-    if (!host_user_data_load_existing(host, candidate_name, NULL, &candidate_record, false)) {
-      continue;
-    }
-
-    if (candidate_record.profile_picture[0] == '\0') {
-      continue;
-    }
-
-    char candidate_key[SSH_CHATTER_USERNAME_LEN * 2U];
-    host_user_data_build_match_key(candidate_record.username, candidate_key, sizeof(candidate_key));
-    if (candidate_key[0] == '\0') {
-      continue;
-    }
-
-    if (strcmp(candidate_key, alias_key) == 0) {
-      *record = candidate_record;
-      matched = true;
-    }
-  }
-
-  closedir(dir);
-  return matched;
-}
 
 static bool host_user_data_load_existing(host_t *host, const char *username, const char *ip,
                                         user_data_record_t *record, bool create_if_missing) {
@@ -1933,7 +1869,7 @@ static const palette_descriptor_t *palette_find_descriptor(const char *name) {
   }
 
   for (size_t idx = 0U; idx < sizeof(PALETTE_DEFINITIONS) / sizeof(PALETTE_DEFINITIONS[0]); ++idx) {
-    if (strcasecmp(PALETTE_DEFINITIONS[idx].name, name) == 0) {
+    if (strcasecmp(PALETTE_DEFINITIONS[idx].id, name) == 0) {
       return &PALETTE_DEFINITIONS[idx];
     }
   }
@@ -3228,12 +3164,24 @@ void host_init(host_t *host, auth_profile_t *auth) {
   if (default_palette != NULL) {
     host_apply_palette_descriptor(host, default_palette);
   } else {
-    host->user_theme.userColor = ANSI_GREEN;
-    host->user_theme.highlight = ANSI_BG_DEFAULT;
+    static char userColor[32];
+    static char highlight[32];
+    static char bgColor[32];
+    static char fgColor[32];
+    static char hlColor[32];
+
+    ansi_256(userColor, sizeof(userColor), MONOKAI_BLUE_USER_COLOR);
+    ansi_bg_256(highlight, sizeof(highlight), 0);
+    ansi_bg_256(bgColor, sizeof(bgColor), MONOKAI_BLUE_BACKGROUND_COLOR);
+    ansi_256(fgColor, sizeof(fgColor), MONOKAI_BLUE_FOREGROUND_COLOR);
+    ansi_bg_256(hlColor, sizeof(hlColor), MONOKAI_BLUE_HIGHLIGHT_COLOR);
+
+    host->user_theme.userColor = userColor;
+    host->user_theme.highlight = highlight;
     host->user_theme.isBold = false;
-    host->system_theme.backgroundColor = ANSI_BG_BLUE;
-    host->system_theme.foregroundColor = ANSI_WHITE;
-    host->system_theme.highlightColor = ANSI_BG_YELLOW;
+    host->system_theme.backgroundColor = bgColor;
+    host->system_theme.foregroundColor = fgColor;
+    host->system_theme.highlightColor = hlColor;
     host->system_theme.isBold = true;
     snprintf(host->default_user_color_name, sizeof(host->default_user_color_name), "%s", "green");
     snprintf(host->default_user_highlight_name, sizeof(host->default_user_highlight_name), "%s", "default");

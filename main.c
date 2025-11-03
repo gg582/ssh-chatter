@@ -25,7 +25,7 @@ static void print_usage(const char *prog_name) {
 }
 
 static double timespec_elapsed_seconds(const struct timespec *start, const struct timespec *end) {
-  if (start == NULL || end == NULL) {
+  if (start == nullptr || end == NULL) {
     return 0.0;
   }
 
@@ -62,10 +62,10 @@ int main(int argc, char **argv) {
   setlocale(LC_ALL, "");
   GC_INIT();
 
-  const char *bind_address = NULL;
-  const char *bind_port = NULL;
-  const char *motd = NULL;
-  const char *host_key_dir = NULL;
+  const char *bind_address = nullptr;
+  const char *bind_port = nullptr;
+  const char *motd = nullptr;
+  const char *host_key_dir = nullptr;
   const char *telnet_port = "2323";
   bool telnet_enabled = true;
   char telnet_bind_storage[64];
@@ -90,15 +90,15 @@ int main(int argc, char **argv) {
         host_key_dir = optarg;
         break;
       case 'T':
-        if (optarg != NULL &&
+        if (optarg != nullptr &&
             (strcmp(optarg, "off") == 0 || strcmp(optarg, "disable") == 0 || strcmp(optarg, "none") == 0)) {
           telnet_enabled = false;
-          telnet_port = NULL;
+          telnet_port = nullptr;
           telnet_bind_overridden = false;
-        } else if (optarg != NULL) {
+        } else if (optarg != nullptr) {
           const char *value = optarg;
           const char *colon = strchr(value, ':');
-          if (colon != NULL) {
+          if (colon != nullptr) {
             size_t host_len = (size_t)(colon - value);
             if (host_len >= sizeof(telnet_bind_storage)) {
               fprintf(stderr,
@@ -157,20 +157,20 @@ int main(int argc, char **argv) {
   }
 
   if (!telnet_enabled) {
-    telnet_port = NULL;
+    telnet_port = nullptr;
     telnet_bind_overridden = false;
-  } else if (telnet_port != NULL && telnet_port[0] == '\0') {
+  } else if (telnet_port != nullptr && telnet_port[0] == '\0') {
     telnet_port = "2323";
   }
 
-  const char *telnet_bind_address = telnet_bind_overridden ? telnet_bind_storage : NULL;
+  const char *telnet_bind_address = telnet_bind_overridden ? telnet_bind_storage : nullptr;
 
   auth_profile_t default_profile = {0};
   unsigned int restart_attempts = 0U;
 
   while (true) {
     host_t *host = calloc(1, sizeof(*host));
-    if (host == NULL) {
+    if (host == nullptr) {
       ++restart_attempts;
       humanized_log_error("daemon", "failed to allocate host state", errno != 0 ? errno : ENOMEM);
       printf("[daemon] retrying host startup (attempt %u)\n", restart_attempts);
@@ -179,7 +179,7 @@ int main(int argc, char **argv) {
     }
 
     host->memory_context = sshc_memory_context_create("host");
-    if (host->memory_context == NULL) {
+    if (host->memory_context == nullptr) {
       ++restart_attempts;
       humanized_log_error("daemon", "failed to create host memory context", errno != 0 ? errno : ENOMEM);
       printf("[daemon] retrying host startup (attempt %u)\n", restart_attempts);
@@ -192,14 +192,14 @@ int main(int argc, char **argv) {
     host_init(host, &default_profile);
     sshc_memory_context_pop(init_scope);
 
-    if (motd != NULL) {
+    if (motd != nullptr) {
       sshc_memory_context_t *motd_scope = sshc_memory_context_push(host->memory_context);
       host_set_motd(host, motd);
       sshc_memory_context_pop(motd_scope);
     }
 
-    const char *address = bind_address != NULL ? bind_address : "0.0.0.0";
-    const char *port = bind_port != NULL ? bind_port : "2222";
+    const char *address = bind_address != nullptr ? bind_address : "0.0.0.0";
+    const char *port = bind_port != nullptr ? bind_port : "2222";
     printf("Starting ssh-chatter on %s:%s\n", address, port);
 
     struct timespec serve_start;
@@ -216,9 +216,9 @@ int main(int argc, char **argv) {
     host_shutdown(host);
     sshc_memory_context_pop(shutdown_scope);
     sshc_memory_context_destroy(host->memory_context);
-    host->memory_context = NULL;
+    host->memory_context = nullptr;
     free(host);
-    host = NULL;
+    host = nullptr;
 
     if (serve_result == 0) {
       return EXIT_SUCCESS;

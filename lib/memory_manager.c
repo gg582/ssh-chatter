@@ -32,7 +32,6 @@ static sshc_memory_allocation_t *sshc_allocations = NULL;
 static __thread sshc_memory_context_t *sshc_tls_context = NULL;
 
 static void sshc_memory_context_init(sshc_memory_context_t *ctx, const char *label) {
-  pthread_mutex_init(&ctx->mutex, NULL);
   ctx->allocations = NULL;
   ctx->label = label;
   ctx->next = NULL;

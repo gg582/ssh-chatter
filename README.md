@@ -112,7 +112,7 @@ If you ever rotate the access token or move the room, repeat steps 3–5. When d
 
 Building the project requires a POSIX environment with:
 
-- A C11 compatible compiler (e.g. `gcc` or `clang`)
+- A C23 compatible compiler (e.g. `gcc` or `clang`)
 - `make`
 - `libssh` development headers and library (`libssh-dev` on Debian/Ubuntu)
 - `libcurl` development headers and library (`libcurl4-openssl-dev` on Debian/Ubuntu)

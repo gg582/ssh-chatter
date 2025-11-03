@@ -2111,313 +2111,14 @@ static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post) {
   host->bbs_post_count = write_index;
 }
 
-static void session_bbs_queue_translation(session_ctx_t *ctx, const bbs_post_t *post) {
-  if (ctx == NULL || post == NULL || !post->in_use) {
-    return;
-  }
 
-  if (!ctx->translation_enabled || !ctx->output_translation_enabled ||
-      ctx->output_translation_language[0] == '\0') {
-    return;
-  }
-
-  char payload[SSH_CHATTER_TRANSLATION_WORKING_LEN];
-  size_t offset = 0U;
-
-  offset = session_append_fragment(payload, sizeof(payload), offset, "Title: ");
-  offset = session_append_fragment(payload, sizeof(payload), offset, post->title);
-  offset = session_append_fragment(payload, sizeof(payload), offset, "\nAuthor: ");
-  offset = session_append_fragment(payload, sizeof(payload), offset, post->author);
-
-  char created_buffer[32];
-  char bumped_buffer[32];
-  bbs_format_time(post->created_at, created_buffer, sizeof(created_buffer));
-  bbs_format_time(post->bumped_at, bumped_buffer, sizeof(bumped_buffer));
-  offset = session_append_fragment(payload, sizeof(payload), offset, "\nCreated: ");
-  offset = session_append_fragment(payload, sizeof(payload), offset, created_buffer);
-  offset = session_append_fragment(payload, sizeof(payload), offset, " (bumped ");
-  offset = session_append_fragment(payload, sizeof(payload), offset, bumped_buffer);
-  offset = session_append_fragment(payload, sizeof(payload), offset, ")\n");
-
-  if (post->tag_count > 0U) {
-    offset = session_append_fragment(payload, sizeof(payload), offset, "Tags: ");
-    for (size_t idx = 0U; idx < post->tag_count; ++idx) {
-      if (idx > 0U) {
-        offset = session_append_fragment(payload, sizeof(payload), offset, ",");
-      }
-      offset = session_append_fragment(payload, sizeof(payload), offset, post->tags[idx]);
-    }
-  } else {
-    offset = session_append_fragment(payload, sizeof(payload), offset, "Tags: (none)");
-  }
-
-  offset = session_append_fragment(payload, sizeof(payload), offset, "\nBody:\n");
-  if (post->body[0] != '\0') {
-    offset = session_append_fragment(payload, sizeof(payload), offset, post->body);
-  } else {
-    offset = session_append_fragment(payload, sizeof(payload), offset, "(empty)");
-  }
-
-  if (post->comment_count > 0U) {
-    offset = session_append_fragment(payload, sizeof(payload), offset, "\nComments:\n");
-    for (size_t idx = 0U; idx < post->comment_count; ++idx) {
-      const bbs_comment_t *comment = &post->comments[idx];
-      offset = session_append_fragment(payload, sizeof(payload), offset, comment->author);
-      offset = session_append_fragment(payload, sizeof(payload), offset, ": ");
-      offset = session_append_fragment(payload, sizeof(payload), offset, comment->text);
-      offset = session_append_fragment(payload, sizeof(payload), offset, "\n");
-    }
-  } else {
-    offset = session_append_fragment(payload, sizeof(payload), offset, "\nComments: none");
-  }
-
-  payload[offset < sizeof(payload) ? offset : sizeof(payload) - 1U] = '\0';
-
-  if (payload[0] == '\0') {
-    return;
-  }
-
-  if (session_translation_queue_caption(ctx, payload, 0U)) {
-    session_translation_flush_ready(ctx);
-  }
-}
 
 // Render an ASCII framed view of a post, including metadata and comments.
-static void session_bbs_emit_line_if_visible(session_ctx_t *ctx, const char *line, bool column_reset,
-                                             size_t offset, size_t window, bool emit, size_t *line_index) {
-  if (line_index == NULL) {
-    return;
-  }
 
-  const char *text = (line != NULL) ? line : "";
-  (void)column_reset;
 
-  if (!emit) {
-    ++(*line_index);
-    return;
-  }
 
-  size_t start = offset;
-  size_t end = (window == 0U || offset > SIZE_MAX - window) ? SIZE_MAX : offset + window;
-  if (*line_index >= start && *line_index < end) {
-    if (host_contains_column_reset(text)) {
-      char sanitized[SSH_CHATTER_MESSAGE_LIMIT];
-      sanitized[0] = '\0';
-      snprintf(sanitized, sizeof(sanitized), "%s", text);
-      host_strip_column_reset(sanitized);
-      session_send_system_line(ctx, sanitized);
-    } else {
-      session_send_system_line(ctx, text);
-    }
-  }
 
-  ++(*line_index);
-}
 
-static size_t session_bbs_render_post_iterate(session_ctx_t *ctx, const bbs_post_t *post, const char *notice,
-                                              size_t offset, size_t window, bool emit) {
-  size_t line_index = 0U;
-
-  char header_label[64];
-  snprintf(header_label, sizeof(header_label), "BBS Post #%" PRIu64, post->id);
-  char separator_line[SSH_CHATTER_MESSAGE_LIMIT];
-  session_format_separator_line(ctx, header_label, separator_line, sizeof(separator_line));
-  session_bbs_emit_line_if_visible(ctx, separator_line, false, offset, window, emit, &line_index);
-
-  if (notice != NULL && notice[0] != '\0') {
-    session_bbs_emit_line_if_visible(ctx, notice, false, offset, window, emit, &line_index);
-    session_bbs_emit_line_if_visible(ctx, "", false, offset, window, emit, &line_index);
-  }
-
-  char created_buffer[32];
-  char bumped_buffer[32];
-  bbs_format_time(post->created_at, created_buffer, sizeof(created_buffer));
-  bbs_format_time(post->bumped_at, bumped_buffer, sizeof(bumped_buffer));
-
-  char metadata[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(metadata, sizeof(metadata), "Title : %s", post->title);
-  session_bbs_emit_line_if_visible(ctx, metadata, false, offset, window, emit, &line_index);
-  snprintf(metadata, sizeof(metadata), "Author: %s", post->author);
-  session_bbs_emit_line_if_visible(ctx, metadata, false, offset, window, emit, &line_index);
-  snprintf(metadata, sizeof(metadata), "Created: %s (bumped %s)", created_buffer, bumped_buffer);
-  session_bbs_emit_line_if_visible(ctx, metadata, false, offset, window, emit, &line_index);
-
-  if (post->tag_count > 0U) {
-    char tag_line[SSH_CHATTER_MESSAGE_LIMIT];
-    int header_written = snprintf(tag_line, sizeof(tag_line), "Tags  : ");
-    size_t tag_offset = header_written > 0 ? (size_t)header_written : 0U;
-    if (tag_offset >= sizeof(tag_line)) {
-      tag_offset = sizeof(tag_line) - 1U;
-    }
-    for (size_t idx = 0U; idx < post->tag_count; ++idx) {
-      size_t tag_len = strlen(post->tags[idx]);
-      if (tag_offset + tag_len + 2U >= sizeof(tag_line)) {
-        break;
-      }
-      if (idx > 0U) {
-        tag_line[tag_offset++] = ',';
-      }
-      memcpy(tag_line + tag_offset, post->tags[idx], tag_len);
-      tag_offset += tag_len;
-      tag_line[tag_offset] = '\0';
-    }
-    session_bbs_emit_line_if_visible(ctx, tag_line, false, offset, window, emit, &line_index);
-  } else {
-    session_bbs_emit_line_if_visible(ctx, "Tags  : (none)", false, offset, window, emit, &line_index);
-  }
-
-  if (ctx != NULL && ctx->owner != NULL) {
-    user_data_record_t author_record;
-    if (host_user_data_find_profile_picture(ctx->owner, post->author, &author_record)) {
-      session_format_separator_line(ctx, "Profile Picture", separator_line, sizeof(separator_line));
-      session_bbs_emit_line_if_visible(ctx, separator_line, false, offset, window, emit, &line_index);
-
-      const char *picture_cursor = author_record.profile_picture;
-      while (picture_cursor != NULL && *picture_cursor != '\0') {
-        const char *newline = strchr(picture_cursor, '\n');
-        if (newline == NULL) {
-          session_bbs_emit_line_if_visible(ctx, picture_cursor, true, offset, window, emit, &line_index);
-          break;
-        }
-
-        size_t len = (size_t)(newline - picture_cursor);
-        if (len >= SSH_CHATTER_MESSAGE_LIMIT) {
-          len = SSH_CHATTER_MESSAGE_LIMIT - 1U;
-        }
-
-        char line[SSH_CHATTER_MESSAGE_LIMIT];
-        memcpy(line, picture_cursor, len);
-        line[len] = '\0';
-        session_bbs_emit_line_if_visible(ctx, line, true, offset, window, emit, &line_index);
-        picture_cursor = newline + 1;
-      }
-
-      session_bbs_emit_line_if_visible(ctx, "", false, offset, window, emit, &line_index);
-    }
-  }
-
-  session_format_separator_line(ctx, "Body", separator_line, sizeof(separator_line));
-  session_bbs_emit_line_if_visible(ctx, separator_line, false, offset, window, emit, &line_index);
-
-  if (post->body[0] != '\0') {
-    const char *body_cursor = post->body;
-    while (body_cursor != NULL && *body_cursor != '\0') {
-      const char *newline = strchr(body_cursor, '\n');
-      if (newline == NULL) {
-        session_bbs_emit_line_if_visible(ctx, body_cursor, true, offset, window, emit, &line_index);
-        break;
-      }
-      size_t len = (size_t)(newline - body_cursor);
-      if (len >= SSH_CHATTER_MESSAGE_LIMIT) {
-        len = SSH_CHATTER_MESSAGE_LIMIT - 1U;
-      }
-      char line[SSH_CHATTER_MESSAGE_LIMIT];
-      memcpy(line, body_cursor, len);
-      line[len] = '\0';
-      session_bbs_emit_line_if_visible(ctx, line, true, offset, window, emit, &line_index);
-      body_cursor = newline + 1;
-    }
-  } else {
-    session_bbs_emit_line_if_visible(ctx, "(empty)", false, offset, window, emit, &line_index);
-  }
-
-  session_format_separator_line(ctx, "Comments", separator_line, sizeof(separator_line));
-  session_bbs_emit_line_if_visible(ctx, separator_line, false, offset, window, emit, &line_index);
-
-  if (post->comment_count == 0U) {
-    session_bbs_emit_line_if_visible(ctx, "No comments yet.", false, offset, window, emit, &line_index);
-  } else {
-    for (size_t idx = 0U; idx < post->comment_count; ++idx) {
-      const bbs_comment_t *comment = &post->comments[idx];
-      char comment_time[32];
-      bbs_format_time(comment->created_at, comment_time, sizeof(comment_time));
-      char line[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(line, sizeof(line), "[%zu] %s (%s)", idx + 1U, comment->author, comment_time);
-      session_bbs_emit_line_if_visible(ctx, line, false, offset, window, emit, &line_index);
-      session_bbs_emit_line_if_visible(ctx, comment->text, true, offset, window, emit, &line_index);
-    }
-  }
-
-  const bool translation_active = ctx->translation_enabled && ctx->output_translation_enabled &&
-                                  ctx->output_translation_language[0] != '\0';
-  if (translation_active && post->comment_count > 0U) {
-    session_bbs_emit_line_if_visible(ctx, "", false, offset, window, emit, &line_index);
-  }
-
-  session_bbs_emit_line_if_visible(ctx, "", false, offset, window, emit, &line_index);
-  session_format_separator_line(ctx, "Write a comment", separator_line, sizeof(separator_line));
-  session_bbs_emit_line_if_visible(ctx, separator_line, false, offset, window, emit, &line_index);
-
-  char reply_instruction[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(reply_instruction, sizeof(reply_instruction),
-           "Reply with /bbs comment %" PRIu64 "|<message> (or /bbs exit to leave this view).", post->id);
-  session_bbs_emit_line_if_visible(ctx, reply_instruction, false, offset, window, emit, &line_index);
-  bool can_edit = (strncmp(post->author, ctx->user.name, SSH_CHATTER_USERNAME_LEN) == 0) || ctx->user.is_operator ||
-                  ctx->user.is_lan_operator;
-  if (can_edit) {
-    char edit_instruction[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(edit_instruction, sizeof(edit_instruction), "Edit this post with /bbs edit %" PRIu64 ".", post->id);
-    session_bbs_emit_line_if_visible(ctx, edit_instruction, false, offset, window, emit, &line_index);
-  }
-  session_bbs_emit_line_if_visible(ctx, "Need a new thread? Use /bbs post <title>[|tags...] instead.", false, offset,
-                                   window, emit, &line_index);
-  session_bbs_emit_line_if_visible(ctx, "Use Up/Down arrows or PgUp/PgDn to scroll this post.", false, offset, window,
-                                   emit, &line_index);
-
-  return line_index;
-}
-
-static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, const char *notice,
-                                    bool reset_scroll, bool scroll_to_bottom) {
-  if (ctx == NULL || post == NULL || !post->in_use) {
-    return;
-  }
-
-  bool previous_override = session_translation_push_scope_override(ctx);
-
-  bool same_post = ctx->bbs_view_active && ctx->bbs_view_post_id == post->id;
-  if (!same_post || reset_scroll) {
-    ctx->bbs_view_scroll_offset = 0U;
-  }
-
-  ctx->bbs_view_active = true;
-  ctx->bbs_view_post_id = post->id;
-
-  if (notice != NULL && notice[0] != '\0') {
-    snprintf(ctx->bbs_view_notice, sizeof(ctx->bbs_view_notice), "%s", notice);
-    ctx->bbs_view_notice_pending = true;
-  }
-
-  const char *active_notice = ctx->bbs_view_notice_pending ? ctx->bbs_view_notice : NULL;
-
-  size_t window = SSH_CHATTER_BBS_VIEW_WINDOW;
-  if (window == 0U) {
-    window = 1U;
-  }
-
-  size_t total_lines = session_bbs_render_post_iterate(ctx, post, active_notice, 0U, window, false);
-  if (total_lines == 0U) {
-    total_lines = 1U;
-  }
-  ctx->bbs_view_total_lines = total_lines;
-
-  size_t max_offset = (total_lines > window) ? (total_lines - window) : 0U;
-  size_t desired_offset = ctx->bbs_view_scroll_offset;
-  if (scroll_to_bottom) {
-    desired_offset = max_offset;
-  }
-  if (desired_offset > max_offset) {
-    desired_offset = max_offset;
-  }
-  ctx->bbs_view_scroll_offset = desired_offset;
-
-  session_bbs_prepare_canvas(ctx);
-  session_bbs_render_post_iterate(ctx, post, active_notice, desired_offset, window, true);
-  ctx->bbs_view_notice_pending = false;
-
-  session_bbs_queue_translation(ctx, post);
-  session_translation_pop_scope_override(ctx, previous_override);
-}
 
 static bool session_bbs_refresh_view(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->owner == NULL || !ctx->bbs_view_active || ctx->bbs_view_post_id == 0U) {
@@ -2442,7 +2143,7 @@ static bool session_bbs_refresh_view(session_ctx_t *ctx) {
     return false;
   }
 
-  session_bbs_render_post(ctx, &snapshot, NULL, false, false);
+  session_bbs_render_post(ctx, &snapshot, NULL, false);
   return true;
 }
 
@@ -2850,7 +2551,7 @@ static void session_bbs_read(session_ctx_t *ctx, uint64_t id) {
     return;
   }
 
-  session_bbs_render_post(ctx, &snapshot, NULL, true, false);
+  session_bbs_render_post(ctx, &snapshot, NULL, true);
 }
 
 // Create a new post using the provided argument format.
@@ -3082,7 +2783,7 @@ static void session_bbs_commit_pending_post(session_ctx_t *ctx) {
     pthread_mutex_unlock(&host->lock);
 
     session_bbs_reset_pending_post(ctx);
-    session_bbs_render_post(ctx, &snapshot, "Post updated.", false, false);
+    session_bbs_render_post(ctx, &snapshot, "Post updated.", false);
     return;
   }
 
@@ -3113,7 +2814,7 @@ static void session_bbs_commit_pending_post(session_ctx_t *ctx) {
   session_bbs_reset_pending_post(ctx);
 
   session_bbs_announce_post(ctx->owner, &snapshot);
-  session_bbs_render_post(ctx, &snapshot, "Post created.", true, false);
+  session_bbs_render_post(ctx, &snapshot, "Post created.", true);
 }
 
 static void session_bbs_begin_post(session_ctx_t *ctx, const char *arguments) {
@@ -3473,7 +3174,7 @@ static void session_bbs_add_comment(session_ctx_t *ctx, const char *arguments) {
   if (comment_index < snapshot.comment_count) {
     session_bbs_announce_comment(ctx->owner, &snapshot, &snapshot.comments[comment_index]);
   }
-  session_bbs_render_post(ctx, &snapshot, "Comment added.", false, true);
+  session_bbs_render_post(ctx, &snapshot, "Comment added.", false);
 }
 
 static void session_bbs_delete(session_ctx_t *ctx, uint64_t id) {
@@ -3530,7 +3231,7 @@ static void session_bbs_regen_post(session_ctx_t *ctx, uint64_t id) {
   host_bbs_state_save_locked(host);
   pthread_mutex_unlock(&host->lock);
 
-  session_bbs_render_post(ctx, &snapshot, "Post bumped to the top.", false, false);
+  session_bbs_render_post(ctx, &snapshot, "Post bumped to the top.", false);
 }
 
 static void session_rss_clear(session_ctx_t *ctx) {

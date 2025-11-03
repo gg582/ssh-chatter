@@ -563,7 +563,6 @@ typedef struct {
 #define SSH_CHATTER_ELIZA_TOKEN_LIMIT 16U
 
 static size_t host_column_reset_sequence_length(const char *text);
-static bool host_contains_column_reset(const char *text);
 static void host_strip_column_reset(char *text);
 
 #define ALPHA_TOTAL_DISTANCE_LY 4.24

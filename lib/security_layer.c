@@ -19,14 +19,14 @@
 #define SECURITY_ONION_PREFIX "TorOnion/v1:"
 
 static bool security_layer_derive_subkeys(security_layer_t *layer) {
-  if (layer == NULL) {
+  if (layer == nullptr) {
     errno = EINVAL;
     return false;
   }
 
   for (size_t idx = 0U; idx < SECURITY_LAYER_LEVELS; ++idx) {
     EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
-    if (mdctx == NULL) {
+    if (mdctx == nullptr) {
       errno = ENOMEM;
       return false;
     }
@@ -35,7 +35,7 @@ static bool security_layer_derive_subkeys(security_layer_t *layer) {
     unsigned int digest_len = 0U;
     unsigned char counter = (unsigned char)(idx + 1U);
 
-    if (EVP_DigestInit_ex(mdctx, EVP_sha512(), NULL) != 1 ||
+    if (EVP_DigestInit_ex(mdctx, EVP_sha512(), nullptr) != 1 ||
         EVP_DigestUpdate(mdctx, layer->master_key, sizeof(layer->master_key)) != 1 ||
         EVP_DigestUpdate(mdctx, &counter, sizeof(counter)) != 1 ||
         EVP_DigestFinal_ex(mdctx, digest, &digest_len) != 1 || digest_len < 32U) {
@@ -52,7 +52,7 @@ static bool security_layer_derive_subkeys(security_layer_t *layer) {
 }
 
 bool security_layer_init(security_layer_t *layer) {
-  if (layer == NULL) {
+  if (layer == nullptr) {
     errno = EINVAL;
     return false;
   }
@@ -76,7 +76,7 @@ bool security_layer_init(security_layer_t *layer) {
 }
 
 void security_layer_free(security_layer_t *layer) {
-  if (layer == NULL) {
+  if (layer == nullptr) {
     return;
   }
 
@@ -93,14 +93,14 @@ typedef struct security_layer_component {
 } security_layer_component_t;
 
 static void security_layer_component_reset(security_layer_component_t *component) {
-  if (component == NULL) {
+  if (component == nullptr) {
     return;
   }
 
-  if (component->ciphertext != NULL) {
+  if (component->ciphertext != nullptr) {
     OPENSSL_cleanse(component->ciphertext, component->cipher_len);
     free(component->ciphertext);
-    component->ciphertext = NULL;
+    component->ciphertext = nullptr;
   }
   component->cipher_len = 0U;
   memset(component->iv, 0, sizeof(component->iv));
@@ -108,14 +108,14 @@ static void security_layer_component_reset(security_layer_component_t *component
 }
 
 static bool security_layer_encode_component(const security_layer_component_t *component, char **encoded_out) {
-  if (component == NULL || encoded_out == NULL) {
+  if (component == nullptr || encoded_out == nullptr) {
     errno = EINVAL;
     return false;
   }
 
   size_t buffer_len = component->cipher_len + SECURITY_LAYER_IV_LEN + SECURITY_LAYER_TAG_LEN;
   unsigned char *buffer = (unsigned char *)GC_MALLOC(buffer_len == 0U ? 1U : buffer_len);
-  if (buffer == NULL) {
+  if (buffer == nullptr) {
     errno = ENOMEM;
     return false;
   }
@@ -128,7 +128,7 @@ static bool security_layer_encode_component(const security_layer_component_t *co
 
   size_t encoded_len = 4U * ((buffer_len + 2U) / 3U);
   char *encoded = (char *)GC_MALLOC(encoded_len + 1U);
-  if (encoded == NULL) {
+  if (encoded == nullptr) {
     OPENSSL_cleanse(buffer, buffer_len);
     free(buffer);
     errno = ENOMEM;
@@ -152,7 +152,7 @@ static bool security_layer_encode_component(const security_layer_component_t *co
 
 bool security_layer_encrypt_message(const security_layer_t *layer, const char *plaintext,
                                     char *out, size_t out_len) {
-  if (layer == NULL || !layer->ready || plaintext == NULL || out == NULL || out_len == 0U) {
+  if (layer == nullptr || !layer->ready || plaintext == nullptr || out == nullptr || out_len == 0U) {
     errno = EINVAL;
     return false;
   }
@@ -163,17 +163,17 @@ bool security_layer_encrypt_message(const security_layer_t *layer, const char *p
     return false;
   }
 
-  unsigned char *working = NULL;
+  unsigned char *working = nullptr;
   if (plain_len > 0U) {
     working = (unsigned char *)GC_MALLOC(plain_len);
-    if (working == NULL) {
+    if (working == nullptr) {
       errno = ENOMEM;
       return false;
     }
     memcpy(working, plaintext, plain_len);
   } else {
     working = (unsigned char *)GC_MALLOC(1U);
-    if (working == NULL) {
+    if (working == nullptr) {
       errno = ENOMEM;
       return false;
     }
@@ -193,17 +193,17 @@ bool security_layer_encrypt_message(const security_layer_t *layer, const char *p
     }
 
     component->cipher_len = working_len;
-    component->ciphertext = NULL;
+    component->ciphertext = nullptr;
     if (working_len > 0U) {
       component->ciphertext = (unsigned char *)GC_MALLOC(working_len);
-      if (component->ciphertext == NULL) {
+      if (component->ciphertext == nullptr) {
         errno = ENOMEM;
         success = false;
         break;
       }
     } else {
       component->ciphertext = (unsigned char *)GC_MALLOC(1U);
-      if (component->ciphertext == NULL) {
+      if (component->ciphertext == nullptr) {
         errno = ENOMEM;
         success = false;
         break;
@@ -211,15 +211,15 @@ bool security_layer_encrypt_message(const security_layer_t *layer, const char *p
     }
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (ctx == NULL) {
+    if (ctx == nullptr) {
       errno = ENOMEM;
       success = false;
       break;
     }
 
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
-        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, (int)sizeof(component->iv), NULL) != 1 ||
-        EVP_EncryptInit_ex(ctx, NULL, NULL, layer->subkeys[idx], component->iv) != 1) {
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1 ||
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, (int)sizeof(component->iv), nullptr) != 1 ||
+        EVP_EncryptInit_ex(ctx, nullptr, nullptr, layer->subkeys[idx], component->iv) != 1) {
       EVP_CIPHER_CTX_free(ctx);
       errno = EIO;
       success = false;
@@ -236,7 +236,7 @@ bool security_layer_encrypt_message(const security_layer_t *layer, const char *p
       }
     } else {
       int tmp_len = 0;
-      if (EVP_EncryptUpdate(ctx, component->ciphertext, &tmp_len, NULL, 0) != 1) {
+      if (EVP_EncryptUpdate(ctx, component->ciphertext, &tmp_len, nullptr, 0) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         errno = EIO;
         success = false;
@@ -280,7 +280,7 @@ bool security_layer_encrypt_message(const security_layer_t *layer, const char *p
     free(working);
     for (size_t idx = 0U; idx < SECURITY_LAYER_LEVELS; ++idx) {
       if (layers[idx].ciphertext == working) {
-        layers[idx].ciphertext = NULL;
+        layers[idx].ciphertext = nullptr;
       }
       security_layer_component_reset(&layers[idx]);
     }
@@ -323,7 +323,7 @@ bool security_layer_encrypt_message(const security_layer_t *layer, const char *p
   }
 
   for (size_t idx = 0U; idx < SECURITY_LAYER_LEVELS; ++idx) {
-    if (encoded_layers[idx] != NULL) {
+    if (encoded_layers[idx] != nullptr) {
       OPENSSL_cleanse(encoded_layers[idx], strlen(encoded_layers[idx]));
       free(encoded_layers[idx]);
     }
@@ -331,7 +331,7 @@ bool security_layer_encrypt_message(const security_layer_t *layer, const char *p
 
   for (size_t idx = 0U; idx < SECURITY_LAYER_LEVELS; ++idx) {
     if (layers[idx].ciphertext == working) {
-      layers[idx].ciphertext = NULL;
+      layers[idx].ciphertext = nullptr;
     }
     security_layer_component_reset(&layers[idx]);
   }
@@ -343,14 +343,14 @@ bool security_layer_encrypt_message(const security_layer_t *layer, const char *p
 }
 
 static bool security_layer_decode_segment(const char *segment, unsigned char **buffer_out, size_t *length_out) {
-  if (segment == NULL || buffer_out == NULL || length_out == NULL) {
+  if (segment == nullptr || buffer_out == nullptr || length_out == nullptr) {
     errno = EINVAL;
     return false;
   }
 
   size_t segment_len = strlen(segment);
   unsigned char *decoded = (unsigned char *)GC_MALLOC((segment_len * 3U) / 4U + 4U);
-  if (decoded == NULL) {
+  if (decoded == nullptr) {
     errno = ENOMEM;
     return false;
   }
@@ -386,7 +386,7 @@ static bool security_layer_decode_segment(const char *segment, unsigned char **b
 
 bool security_layer_decrypt_message(const security_layer_t *layer, const char *envelope,
                                     char *plaintext, size_t plaintext_len) {
-  if (layer == NULL || !layer->ready || envelope == NULL || plaintext == NULL || plaintext_len == 0U) {
+  if (layer == nullptr || !layer->ready || envelope == nullptr || plaintext == nullptr || plaintext_len == 0U) {
     errno = EINVAL;
     return false;
   }
@@ -404,34 +404,34 @@ bool security_layer_decrypt_message(const security_layer_t *layer, const char *e
   }
 
   char *copy = strdup(payload);
-  if (copy == NULL) {
+  if (copy == nullptr) {
     errno = ENOMEM;
     return false;
   }
 
   char *segments[SECURITY_LAYER_LEVELS];
   size_t segment_count = 0U;
-  char *saveptr = NULL;
+  char *saveptr = nullptr;
   char *token = strtok_r(copy, ".", &saveptr);
-  while (token != NULL && segment_count < SECURITY_LAYER_LEVELS) {
+  while (token != nullptr && segment_count < SECURITY_LAYER_LEVELS) {
     segments[segment_count++] = token;
-    token = strtok_r(NULL, ".", &saveptr);
+    token = strtok_r(nullptr, ".", &saveptr);
   }
 
-  if (segment_count != SECURITY_LAYER_LEVELS || token != NULL) {
+  if (segment_count != SECURITY_LAYER_LEVELS || token != nullptr) {
     OPENSSL_cleanse(copy, strlen(copy));
     free(copy);
     errno = EINVAL;
     return false;
   }
 
-  unsigned char *current_cipher = NULL;
+  unsigned char *current_cipher = nullptr;
   size_t current_len = 0U;
   bool success = true;
 
   for (size_t idx = 0U; idx < SECURITY_LAYER_LEVELS; ++idx) {
     size_t layer_index = SECURITY_LAYER_LEVELS - 1U - idx;
-    unsigned char *decoded = NULL;
+    unsigned char *decoded = nullptr;
     size_t decoded_len = 0U;
     if (!security_layer_decode_segment(segments[idx], &decoded, &decoded_len)) {
       success = false;
@@ -453,7 +453,7 @@ bool security_layer_decrypt_message(const security_layer_t *layer, const char *e
         break;
       }
       current_cipher = (unsigned char *)GC_MALLOC(cipher_len > 0U ? cipher_len : 1U);
-      if (current_cipher == NULL) {
+      if (current_cipher == nullptr) {
         OPENSSL_cleanse(decoded, decoded_len);
         free(decoded);
         errno = ENOMEM;
@@ -474,7 +474,7 @@ bool security_layer_decrypt_message(const security_layer_t *layer, const char *e
     }
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (ctx == NULL) {
+    if (ctx == nullptr) {
       OPENSSL_cleanse(decoded, decoded_len);
       free(decoded);
       errno = ENOMEM;
@@ -482,9 +482,9 @@ bool security_layer_decrypt_message(const security_layer_t *layer, const char *e
       break;
     }
 
-    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
-        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, (int)SECURITY_LAYER_IV_LEN, NULL) != 1 ||
-        EVP_DecryptInit_ex(ctx, NULL, NULL, layer->subkeys[layer_index], iv) != 1) {
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1 ||
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, (int)SECURITY_LAYER_IV_LEN, nullptr) != 1 ||
+        EVP_DecryptInit_ex(ctx, nullptr, nullptr, layer->subkeys[layer_index], iv) != 1) {
       EVP_CIPHER_CTX_free(ctx);
       OPENSSL_cleanse(decoded, decoded_len);
       free(decoded);
@@ -494,7 +494,7 @@ bool security_layer_decrypt_message(const security_layer_t *layer, const char *e
     }
 
     unsigned char *plaintext_layer = (unsigned char *)GC_MALLOC(current_len > 0U ? current_len : 1U);
-    if (plaintext_layer == NULL) {
+    if (plaintext_layer == nullptr) {
       EVP_CIPHER_CTX_free(ctx);
       OPENSSL_cleanse(decoded, decoded_len);
       free(decoded);
@@ -517,7 +517,7 @@ bool security_layer_decrypt_message(const security_layer_t *layer, const char *e
       }
     } else {
       int tmp_len = 0;
-      if (EVP_DecryptUpdate(ctx, plaintext_layer, &tmp_len, NULL, 0) != 1) {
+      if (EVP_DecryptUpdate(ctx, plaintext_layer, &tmp_len, nullptr, 0) != 1) {
         OPENSSL_cleanse(plaintext_layer, 1U);
         free(plaintext_layer);
         EVP_CIPHER_CTX_free(ctx);

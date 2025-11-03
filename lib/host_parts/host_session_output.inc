@@ -1,3 +1,5 @@
+#include "../../lib/headers/bubble.h"
+
 // Session output, history delivery, and client-facing helpers.
 
 static void session_send_plain_line(session_ctx_t *ctx, const char *message) {
@@ -921,98 +923,21 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
     return;
   }
 
-  const char *fg = ctx->system_fg_code != NULL ? ctx->system_fg_code : "";
-  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
-  const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
+  session_draw_bubble_top(ctx, false, false);
 
-  if (message[0] == '\0') {
-    char formatted_empty[SSH_CHATTER_MESSAGE_LIMIT];
-    size_t offset = 0U;
-    offset = session_append_fragment(formatted_empty, sizeof(formatted_empty), offset, bg);
-    offset = session_append_fragment(formatted_empty, sizeof(formatted_empty), offset, fg);
-    offset = session_append_fragment(formatted_empty, sizeof(formatted_empty), offset, bold);
-    session_append_fragment(formatted_empty, sizeof(formatted_empty), offset, ANSI_RESET);
-    session_send_line(ctx, formatted_empty);
-    return;
+  char prefixed_message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(prefixed_message, sizeof(prefixed_message), "[system] %s", message);
+
+  char *p = strtok(prefixed_message, "\n");
+  while (p != NULL) {
+    session_draw_bubble_middle(ctx, false, p);
+    p = strtok(NULL, "\n");
   }
 
-  const bool scope_allows_translation =
-      (!translator_should_limit_to_chat_bbs() || ctx->translation_manual_scope_override);
-  const bool translation_ready = scope_allows_translation && ctx->translation_enabled &&
-                                 ctx->output_translation_enabled && ctx->output_translation_language[0] != '\0' &&
-                                 !ctx->in_bbs_mode && !ctx->in_rss_mode;
-  const bool multiline_message = strchr(message, '\n') != NULL;
-  bool translation_block = false;
-  bool previous_suppress = ctx->translation_suppress_output;
-  if (translation_ready && multiline_message && !ctx->translation_suppress_output) {
-    translation_block = true;
-    ctx->translation_suppress_output = true;
-  }
-
-  const char *cursor = message;
-  for (;;) {
-    const char *newline = strchr(cursor, '\n');
-    size_t segment_length = newline != NULL ? (size_t)(newline - cursor) : strlen(cursor);
-    if (segment_length >= SSH_CHATTER_MESSAGE_LIMIT) {
-      segment_length = SSH_CHATTER_MESSAGE_LIMIT - 1U;
-    }
-
-    char segment[SSH_CHATTER_MESSAGE_LIMIT];
-    memcpy(segment, cursor, segment_length);
-    segment[segment_length] = '\0';
-
-    const bool segment_breaking = ctx->breaking_alerts_enabled && session_message_contains_breaking(segment);
-    const bool already_highlighted = strstr(segment, ANSI_BG_BRIGHT_BLUE) != NULL;
-    const char *segment_view = segment;
-    char highlighted[SSH_CHATTER_MESSAGE_LIMIT];
-    if (segment_breaking && !already_highlighted) {
-      session_bbs_format_breaking_notice(segment, highlighted, sizeof(highlighted));
-      segment_view = highlighted;
-    }
-
-    char formatted[SSH_CHATTER_MESSAGE_LIMIT];
-    size_t offset = 0U;
-    offset = session_append_fragment(formatted, sizeof(formatted), offset, bg);
-    offset = session_append_fragment(formatted, sizeof(formatted), offset, fg);
-    offset = session_append_fragment(formatted, sizeof(formatted), offset, bold);
-    offset = session_append_fragment(formatted, sizeof(formatted), offset, segment_view);
-    session_append_fragment(formatted, sizeof(formatted), offset, ANSI_RESET);
-    session_send_line(ctx, formatted);
-
-    if (newline == NULL) {
-      break;
-    }
-
-    cursor = newline + 1;
-    if (*cursor == '\r') {
-      ++cursor;
-    }
-
-    if (*cursor == '\0') {
-      char formatted_empty[SSH_CHATTER_MESSAGE_LIMIT];
-      size_t empty_offset = 0U;
-      empty_offset = session_append_fragment(formatted_empty, sizeof(formatted_empty), empty_offset, bg);
-      empty_offset = session_append_fragment(formatted_empty, sizeof(formatted_empty), empty_offset, fg);
-      empty_offset = session_append_fragment(formatted_empty, sizeof(formatted_empty), empty_offset, bold);
-      session_append_fragment(formatted_empty, sizeof(formatted_empty), empty_offset, ANSI_RESET);
-      session_send_line(ctx, formatted_empty);
-      break;
-    }
-  }
-
-  if (translation_block) {
-    ctx->translation_suppress_output = previous_suppress;
-    if (!ctx->translation_suppress_output) {
-      session_translation_queue_block(ctx, message);
-      session_translation_flush_ready(ctx);
-    }
-    return;
-  }
-
-  ctx->translation_suppress_output = previous_suppress;
+  session_draw_bubble_bottom(ctx, false, false);
 }
 
-static void session_send_raw_text(session_ctx_t *ctx, const char *text) {
+void session_send_raw_text(session_ctx_t *ctx, const char *text) {
   if (ctx == NULL || !session_transport_active(ctx) || text == NULL) {
     return;
   }
@@ -1144,6 +1069,58 @@ static void session_bbs_prepare_canvas(session_ctx_t *ctx) {
 
   session_clear_screen(ctx);
   session_apply_background_fill(ctx);
+}
+
+static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, const char *notice,
+                                    bool reset_scroll) {
+  if (ctx == NULL || post == NULL) {
+    return;
+  }
+
+  session_bbs_prepare_canvas(ctx);
+
+  if (reset_scroll) {
+    ctx->bbs_view_scroll_offset = 0U;
+  }
+
+  char title_line[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(title_line, sizeof(title_line), "#%" PRIu64 ": %s", post->id, post->title);
+
+  char author_line[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(author_line, sizeof(author_line), "Author: %s", post->author);
+
+  char created_line[SSH_CHATTER_MESSAGE_LIMIT];
+  time_t created = (time_t)post->created_at;
+  struct tm created_tm;
+  localtime_r(&created, &created_tm);
+  strftime(created_line, sizeof(created_line), "Created: %Y-%m-%d %H:%M:%S", &created_tm);
+
+  char bumped_line[SSH_CHATTER_MESSAGE_LIMIT];
+  time_t bumped = (time_t)post->bumped_at;
+  struct tm bumped_tm;
+  localtime_r(&bumped, &bumped_tm);
+  strftime(bumped_line, sizeof(bumped_line), "Last activity: %Y-%m-%d %H:%M:%S", &bumped_tm);
+
+  session_draw_bubble_top(ctx, false, false);
+  session_draw_bubble_middle(ctx, false, title_line);
+  session_draw_bubble_middle(ctx, false, author_line);
+  session_draw_bubble_middle(ctx, false, created_line);
+  session_draw_bubble_middle(ctx, false, bumped_line);
+  session_draw_bubble_middle(ctx, false, SSH_CHATTER_BBS_EDITOR_BODY_DIVIDER);
+
+  char *p = strtok((char *)post->body, "\n");
+  while (p != NULL) {
+    session_draw_bubble_middle(ctx, false, p);
+    p = strtok(NULL, "\n");
+  }
+
+  session_draw_bubble_bottom(ctx, false, false);
+
+  if (notice != NULL && notice[0] != '\0') {
+    session_send_system_line(ctx, notice);
+  }
+
+  session_render_prompt(ctx, true);
 }
 
 static void session_bbs_recalculate_line_count(session_ctx_t *ctx) {
@@ -1430,13 +1407,15 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
   session_bbs_recalculate_line_count(ctx);
   size_t line_count = ctx->pending_bbs_line_count;
 
+  session_draw_bubble_top(ctx, false, false);
+
   if (ascii_mode) {
     const char *target_label =
         (ctx->asciiart_target == SESSION_ASCIIART_TARGET_PROFILE_PICTURE) ? "profile picture" : "chat";
     char title_line[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(title_line, sizeof(title_line), "ASCII art %s draft (%zu/%u lines)", target_label, line_count,
              (unsigned int)SSH_CHATTER_ASCIIART_MAX_LINES);
-    session_send_system_line(ctx, title_line);
+    session_draw_bubble_middle(ctx, false, title_line);
   } else {
     char title_line[SSH_CHATTER_MESSAGE_LIMIT];
     if (editing_post) {
@@ -1449,7 +1428,7 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
     } else {
       snprintf(title_line, sizeof(title_line), "Composing '%s'", ctx->pending_bbs_title);
     }
-    session_send_system_line(ctx, title_line);
+    session_draw_bubble_middle(ctx, false, title_line);
 
     char tag_buffer[SSH_CHATTER_BBS_MAX_TAGS * (SSH_CHATTER_BBS_TAG_LEN + 2U)];
     tag_buffer[0] = '\0';
@@ -1472,14 +1451,14 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
 
     char tags_line[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(tags_line, sizeof(tags_line), "Tags: %s", tag_buffer[0] != '\0' ? tag_buffer : "(none)");
-    session_send_system_line(ctx, tags_line);
+    session_draw_bubble_middle(ctx, false, tags_line);
   }
 
-  session_send_system_line(ctx, SSH_CHATTER_BBS_EDITOR_BODY_DIVIDER);
+  session_draw_bubble_middle(ctx, false, SSH_CHATTER_BBS_EDITOR_BODY_DIVIDER);
 
   if (line_count == 0U) {
     const char *prefix = ctx->pending_bbs_editing_line ? "> " : "> ";
-    session_send_line(ctx, prefix);
+    session_draw_bubble_middle(ctx, false, prefix);
   } else {
     for (size_t idx = 0U; idx < line_count; ++idx) {
       char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
@@ -1492,14 +1471,14 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
       } else {
         snprintf(display, sizeof(display), "%s%s", prefix, line_buffer);
       }
-      session_send_line(ctx, display);
+      session_draw_bubble_middle(ctx, false, display);
     }
     if (!ctx->pending_bbs_editing_line) {
-      session_send_line(ctx, "> ");
+      session_draw_bubble_middle(ctx, false, "> ");
     }
   }
 
-  session_send_system_line(ctx, SSH_CHATTER_BBS_EDITOR_END_DIVIDER);
+  session_draw_bubble_middle(ctx, false, SSH_CHATTER_BBS_EDITOR_END_DIVIDER);
 
   size_t capacity = session_editor_body_capacity(ctx);
   size_t remaining = 0U;
@@ -1508,13 +1487,13 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
   }
   char remaining_line[64];
   snprintf(remaining_line, sizeof(remaining_line), "Remaining bytes: %zu", remaining);
-  session_send_system_line(ctx, remaining_line);
+  session_draw_bubble_middle(ctx, false, remaining_line);
 
   const char *terminator = session_editor_terminator(ctx);
   char shortcut_hint[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(shortcut_hint, sizeof(shortcut_hint), "Ctrl+S(or Save) inserts %s. Ctrl+A(or Abort) cancels the draft.", terminator);
-  session_send_system_line(ctx, shortcut_hint);
-  session_send_system_line(ctx, "Use Up/Down arrows to revisit a saved line and press Enter to store changes.");
+  session_draw_bubble_middle(ctx, false, shortcut_hint);
+  session_draw_bubble_middle(ctx, false, "Use Up/Down arrows to revisit a saved line and press Enter to store changes.");
   char publish_hint[SSH_CHATTER_MESSAGE_LIMIT];
   if (ascii_mode) {
     snprintf(publish_hint, sizeof(publish_hint), "Typing %s on its own line will finish the artwork.", terminator);
@@ -1523,13 +1502,13 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
   } else {
     snprintf(publish_hint, sizeof(publish_hint), "Typing %s on its own line will publish the post.", terminator);
   }
-  session_send_system_line(ctx, publish_hint);
+  session_draw_bubble_middle(ctx, false, publish_hint);
 
   if (ctx->breaking_alerts_enabled && ctx->bbs_breaking_count > 0U && !ascii_mode) {
-    session_send_system_line(ctx, "");
-    session_send_system_line(ctx, "Breaking updates:");
+    session_draw_bubble_middle(ctx, false, "");
+    session_draw_bubble_middle(ctx, false, "Breaking updates:");
     for (size_t idx = 0U; idx < ctx->bbs_breaking_count; ++idx) {
-      session_send_system_line(ctx, ctx->bbs_breaking_messages[idx]);
+      session_draw_bubble_middle(ctx, false, ctx->bbs_breaking_messages[idx]);
     }
   }
 
@@ -1543,7 +1522,7 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
         *newline = '\0';
       }
       if (*cursor != '\0') {
-        session_send_system_line(ctx, cursor);
+        session_draw_bubble_middle(ctx, false, cursor);
       }
       if (newline == NULL) {
         break;
@@ -1551,6 +1530,8 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
       cursor = newline + 1;
     }
   }
+
+  session_draw_bubble_bottom(ctx, false, false);
 
   session_render_prompt(ctx, false);
   ctx->bbs_rendering_editor = false;
@@ -1656,19 +1637,19 @@ static void session_render_banner_ascii(session_ctx_t *ctx) {
   }
 
   static const char *kBanner[] = {
-      "\033[1;35m+===================================================================+\033[0m",
-      "\033[1;36m|  ██████╗██╗  ██╗ █████╗ ████████╗████████╗███████╗██████╗         |\033[0m",
-      "\033[1;36m| ██╔════╝██║  ██║██╔══██╗╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗        |\033[0m",
-      "\033[1;34m| ██║     ███████║███████║   ██║      ██║   █████╗  ██████╔╝        |\033[0m",
-      "\033[1;34m| ██║     ██╔══██║██╔══██║   ██║      ██║   ██╔══╝  ██╔══██╗        |\033[0m",
-      "\033[1;32m| ╚██████╗██║  ██║██║  ██║   ██║      ██║   ███████╗██║  ██║        |\033[0m",
-      "\033[1;32m|  ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝      ╚═╝   ╚══════╝╚═╝  ╚═╝        |\033[0m",
-      "\033[1;35m+===================================================================+\033[0m",
-      "\033[1;36m|        *** Welcome to CHATTER (2025) ***                          |\033[0m",
-      "\033[1;35m|   Cute and tiny SSH chat written in C.                            |\033[0m",
-      "\033[1;36m|   Type \033[1;33m/help\033[1;36m to see available commands.                           |\033[0m",
-      "\033[1;36m|   Type \033[1;33m/mode\033[1;36m to switch input modes.                               |\033[0m",
-      "\033[1;35m+===================================================================+\033[0m",
+      "\033[38;5;117m+===================================================================+\033[0m",
+      "\033[38;5;117m|  \033[1;38;5;252m██████╗██╗  ██╗ █████╗ ████████╗████████╗███████╗██████╗         \033[38;5;117m|\033[0m",
+      "\033[38;5;117m| \033[1;38;5;252m██╔════╝██║  ██║██╔══██╗╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗        \033[38;5;117m|\033[0m",
+      "\033[38;5;117m| \033[1;38;5;252m██║     ███████║███████║   ██║      ██║   █████╗  ██████╔╝        \033[38;5;117m|\033[0m",
+      "\033[38;5;117m| \033[1;38;5;252m██║     ██╔══██║██╔══██║   ██║      ██║   ██╔══╝  ██╔══██╗        \033[38;5;117m|\033[0m",
+      "\033[38;5;117m| \033[1;38;5;252m╚██████╗██║  ██║██║  ██║   ██║      ██║   ███████╗██║  ██║        \033[38;5;117m|\033[0m",
+      "\033[38;5;117m|  \033[1;38;5;252m╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝      ╚═╝   ╚══════╝╚═╝  ╚═╝        \033[38;5;117m|\033[0m",
+      "\033[38;5;117m+===================================================================+\033[0m",
+      "\033[38;5;117m|        \033[1;38;5;220m*** Welcome to CHATTER (2025) ***                          \033[38;5;117m|\033[0m",
+      "\033[38;5;117m|   \033[38;5;252mCute and tiny SSH chat written in C.                            \033[38;5;117m|\033[0m",
+      "\033[38;5;117m|   \033[38;5;252mType \033[1;38;5;220m/help\033[38;5;252m to see available commands.                           \033[38;5;117m|\033[0m",
+      "\033[38;5;117m|   \033[38;5;252mType \033[1;38;5;220m/mode\033[38;5;252m to switch input modes.                               \033[38;5;117m|\033[0m",
+      "\033[38;5;117m+===================================================================+\033[0m",
   };
 
   for (size_t idx = 0; idx < sizeof(kBanner) / sizeof(kBanner[0]); ++idx) {
@@ -1801,18 +1782,14 @@ static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
     session_render_separator(ctx, "Input");
   }
 
-  session_apply_background_fill(ctx);
-
   const char *fg = ctx->system_fg_code != NULL ? ctx->system_fg_code : "";
-  const char *hl = ctx->system_highlight_code != NULL ? ctx->system_highlight_code : "";
   const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   const char *mode_prompt = ctx->input_mode == SESSION_INPUT_MODE_COMMAND ? "│ cmd> " : "│ > ";
 
   char prompt[128];
   size_t offset = 0U;
-  offset = session_append_fragment(prompt, sizeof(prompt), offset, hl);
-  offset = session_append_fragment(prompt, sizeof(prompt), offset, fg);
+  offset = session_append_fragment(prompt, sizeof(prompt), offset, "\033[38;5;117m");
   offset = session_append_fragment(prompt, sizeof(prompt), offset, bold);
   offset = session_append_fragment(prompt, sizeof(prompt), offset, mode_prompt);
   offset = session_append_fragment(prompt, sizeof(prompt), offset, ANSI_RESET);
@@ -2728,93 +2705,31 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
     return;
   }
 
-  if (entry->is_user_message) {
-    bool previous_override = session_translation_push_scope_override(ctx);
-    const char *highlight = entry->user_highlight_code != NULL ? entry->user_highlight_code : "";
-    const char *color = entry->user_color_code != NULL ? entry->user_color_code : "";
-    const char *bold = entry->user_is_bold ? ANSI_BOLD : "";
-
-    const char *message_text = entry->message;
-    char fallback[SSH_CHATTER_MESSAGE_LIMIT + 64];
-    if ((message_text == NULL || message_text[0] == '\0') && entry->attachment_type != CHAT_ATTACHMENT_NONE) {
-      const char *label = chat_attachment_type_label(entry->attachment_type);
-      snprintf(fallback, sizeof(fallback), "shared a %s", label);
-      message_text = fallback;
-    } else if (message_text == NULL) {
-      message_text = "";
+  bool is_user = entry->is_user_message;
+  bool is_continuous = false;
+  if (is_user) {
+    user_preference_t *pref = host_ensure_preference_locked(ctx->owner, ctx->user.name);
+    if (pref != NULL) {
+      is_continuous = pref->show_continuous_messages;
     }
-
-    bool multiline_message = strchr(message_text, '\n') != NULL;
-    const char *header_body = message_text;
-    if (multiline_message) {
-      header_body = "shared ASCII art:";
-    }
-
-    char header[SSH_CHATTER_MESSAGE_LIMIT + 128];
-    if (entry->message_id > 0U) {
-      snprintf(header, sizeof(header), "[#%" PRIu64 "] %s%s%s[%s]%s %s", entry->message_id, highlight, bold, color,
-               entry->username, ANSI_RESET, header_body);
-    } else {
-      snprintf(header, sizeof(header), "%s%s%s[%s]%s %s", highlight, bold, color, entry->username, ANSI_RESET,
-               header_body);
-    }
-    session_send_plain_line(ctx, header);
-
-    if (multiline_message) {
-      const char *line_start = message_text;
-      while (line_start != NULL) {
-        const char *newline = strchr(line_start, '\n');
-        size_t segment_length = newline != NULL ? (size_t)(newline - line_start) : strlen(line_start);
-        char line[SSH_CHATTER_MESSAGE_LIMIT + 1U];
-        if (segment_length >= sizeof(line)) {
-          segment_length = sizeof(line) - 1U;
-        }
-        if (segment_length > 0U) {
-          memcpy(line, line_start, segment_length);
-        }
-        line[segment_length] = '\0';
-        session_send_plain_line(ctx, line);
-        if (newline == NULL) {
-          break;
-        }
-        line_start = newline + 1;
-      }
-    }
-
-    char attachment_line[SSH_CHATTER_ATTACHMENT_TARGET_LEN + 64];
-    if (entry->attachment_type != CHAT_ATTACHMENT_NONE && entry->attachment_target[0] != '\0') {
-      const char *label = chat_attachment_type_label(entry->attachment_type);
-      snprintf(attachment_line, sizeof(attachment_line), "    ↳ %s: %s", label, entry->attachment_target);
-      session_send_plain_line(ctx, attachment_line);
-    }
-
-    char caption_line[SSH_CHATTER_ATTACHMENT_CAPTION_LEN + 32];
-    if (entry->attachment_caption[0] != '\0') {
-      snprintf(caption_line, sizeof(caption_line), "    ↳ note: %s", entry->attachment_caption);
-      session_send_plain_line(ctx, caption_line);
-    }
-
-    char reactions_line[SSH_CHATTER_MESSAGE_LIMIT];
-    if (chat_history_entry_build_reaction_summary(entry, reactions_line, sizeof(reactions_line))) {
-      char summary_line[SSH_CHATTER_MESSAGE_LIMIT + 32];
-      snprintf(summary_line, sizeof(summary_line), "    ↳ reactions: %s", reactions_line);
-      session_send_plain_line(ctx, summary_line);
-    }
-
-    if (entry->attachment_type == CHAT_ATTACHMENT_IMAGE && entry->message_id > 0U) {
-      char hint[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(hint, sizeof(hint), "    ↳ tip: copy the link into a browser to view the image.");
-      session_send_plain_line(ctx, hint);
-    }
-
-    if (entry->message_id > 0U) {
-      session_send_reply_tree(ctx, entry->message_id, 0U, 1U);
-    }
-
-    session_translation_pop_scope_override(ctx, previous_override);
-  } else {
-    session_send_system_line(ctx, entry->message);
   }
+
+  session_draw_bubble_top(ctx, is_user, is_continuous);
+
+  char line[SSH_CHATTER_MESSAGE_LIMIT];
+  if (is_user) {
+    snprintf(line, sizeof(line), "%s%s%s: %s", entry->user_color_code, entry->user_is_bold ? ANSI_BOLD : "", entry->username, entry->message);
+  } else {
+    snprintf(line, sizeof(line), "%s", entry->message);
+  }
+
+  char *p = strtok(line, "\n");
+  while (p != NULL) {
+    session_draw_bubble_middle(ctx, is_user, p);
+    p = strtok(NULL, "\n");
+  }
+
+  session_draw_bubble_bottom(ctx, is_user, is_continuous);
 }
 
 // Present a summary of a poll, optionally showing the label used for named polls.
@@ -3835,13 +3750,10 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
   ctx->last_message_time = now;
   ctx->has_last_message_time = true;
 
-  pthread_mutex_lock(&ctx->owner->lock);
-  if (session_first_message_is_suspicious(ctx, normalized)) {
-    session_handle_suspicious_first_message(ctx, normalized);
-    return;
-  }
-  pthread_mutex_unlock(&ctx->owner->lock);
-
+     if (session_first_message_is_suspicious(ctx, normalized)) {
+       session_handle_suspicious_first_message(ctx, normalized);
+       return;
+     }
   if (!translation_bypass && ctx->translation_enabled && ctx->input_translation_enabled &&
       ctx->input_translation_language[0] != '\0') {
     if (session_translation_queue_input(ctx, normalized)) {

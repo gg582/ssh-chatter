@@ -841,9 +841,12 @@ static const color_entry_t HIGHLIGHT_COLOR_MAP[] = {
   {"亮白色", ANSI_BG_BRIGHT_WHITE},   {"ярко-белый", ANSI_BG_BRIGHT_WHITE},
 };
 
+#include "l10n.h"
+
 typedef struct palette_descriptor {
-  const char *name;
-  const char *description;
+  const char *id;
+  const l10n_string_t *name;
+  const l10n_string_t *description;
   const char *user_color_name;
   const char *user_highlight_name;
   bool user_is_bold;
@@ -851,91 +854,17 @@ typedef struct palette_descriptor {
   const char *system_bg_name;
   const char *system_highlight_name;
   bool system_is_bold;
+  bool is_256_color;
 } palette_descriptor_t;
 
+static const l10n_string_t PALETTE_NAME_WINDOWS = {"windows", "윈도우", "ウィンドウズ", "视窗", "Окна"};
+static const l10n_string_t PALETTE_DESC_WINDOWS = {"High contrast palette reminiscent of Windows (ANSI)", "윈도우를 연상시키는 고대비 팔레트 (ANSI)", "ウィンドウズを彷彿とさせるハイコントラストパレット (ANSI)", "让人联想到Windows的高对比度调色板 (ANSI)", "Высококонтрастная палитра, напоминающая Windows (ANSI)"};
+static const l10n_string_t PALETTE_NAME_MONOKAI_BLUE = {"monokai-blue", "모노카이 블루", "モノカイブルー", "摩诺凯蓝", "Монокай синий"};
+static const l10n_string_t PALETTE_DESC_MONOKAI_BLUE = {"A Monokai interpretation with a blue tone (256 colors)", "푸른 색조의 모노카이 테마 (256 colors)", "青を基調としたモノカイの解釈 (256 colors)", "带有蓝色调的Monokai诠释 (256 colors)", "Интерпретация Monokai с синим оттенком (256 colors)"};
+
 static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
-  {"windows", "High contrast palette reminiscent of Windows", "cyan", "blue", true, "white", "blue", "yellow", true},
-  {"gnu-linux", "Modern, elegant, and free. the universal rhythm of your workflow.", "bright-green", "black", true, "blue", "black", "bright-yellow", true},
-  {"macos", "Precision in silence. Minimalist contemporary unix.", "bright-white", "black", false, "bright-blue", "black", "white", false},
-  {"freebsd", "Rigid and graceful BSD. The biggest 'True UNIX'", "bright-red", "black", false, "red", "black", "bright-white", false},
-  {"solaris", "Ancient sun of enterprise UNIX: Sun, Machine, nostalgia.", "bright-yellow", "black", true, "bright-red", "black", "bright-white", true},
-  {"openbsd-fortress", "Security through simplicity. calm blue walls over disciplined darkness.", "bright-blue", "black", false, "bright-white", "black", "cyan", false},
-  {"netbsd-universal", "Runs on anything. Maybe your fridge, too?", "bright-cyan", "black", false, "bright-white", "black", "bright-yellow", false},
-
-  {"moe", "Soft magenta accents with playful highlights", "bright-magenta", "white", true, "white", "bright-magenta", "cyan", true},
-  {"neon-genesis-evangelion", "Sho-nen yo Shin-wa ni nare--", "bright-red", "white", true, "white", "bright-magenta", "blue", true},
-  {"megami", "Japanese anime goddess cliché", "bright-white", "black", false, "bright-yellow", "blue", "cyan", false},
-
-  {"clean", "Balanced neutral palette", "default", "default", false, "white", "default", "default", false},
-  {"adwaita", "Bright background inspired by GNOME Adwaita", "blue", "default", false, "blue", "bright-white", "white", true},
-
-  {"80shacker", "Bright monochrome green inspired by old CRT", "bright-green", "default", true, "bright-green", "default", "default", true},
-  {"plato", "Bright monochrome yellow inspired by old Amber CRT", "yellow", "default", false, "yellow", "default", "default", false},
-  {"atarist", "Sharp paper-white monochrome for high-res work", "bright-white", "black", true, "bright-white", "black", "black", false},
-  {"win95bsod", "High-contrast blue screen of death style", "bright-white", "blue", true, "bright-white", "blue", "cyan", true},
-  {"chn-hanzi", "Bright cyan high-clarity Chinese text terminal", "bright-cyan", "black", true, "white", "black", "cyan", true},
-
-  {"usa-flag", "Flag blue base with red/white highlights", "bright-white", "blue", true, "red", "blue", "bright-white", true},
-  {"jpn-flag", "Minimalist white with rising sun red accent", "bright-white", "black", false, "red", "black", "black", true},
-  {"chn-flag", "Star-red background with lucky yellow text", "bright-yellow", "red", true, "white", "red", "white", true},
-  {"rus-flag", "Tricolor base with strong red emphasis", "bright-white", "blue", true, "red", "blue", "bright-white", true},
-  {"de-flag", "Tricolor base with strong red/yellow emphasis", "bright-black", "black", true, "yellow", "black", "red", true},
-  {"holy-light", "Christian sacred light on pure white/blue base", "bright-white", "blue", false, "blue", "black", "yellow", true},
-
-  {"islam", "Iconic color of muslim, white/green base", "bright-white", "green", false, "green", "black", "bright-white", true},
-  {"dharma-ochre", "Ochre robes of enlightenment and vitality", "yellow", "black", true, "red", "black", "yellow", true},
-  {"yin-yang", "Balance of Black and White with Jade accent", "white", "black", false, "green", "black", "white", false},
-
-  {"soviet-cold", "Cold blue/white terminal for scientific systems", "white", "blue", false, "white", "cyan", "blue", true},
-  {"hi-tel", "1990s Korean BBS blue background and text style", "bright-white", "blue", true, "bright-white", "blue", "magenta", true},
-  {"amiga-cli", "AmigaOS style with cyan/blue", "cyan", "blue", true, "cyan", "blue", "blue", true},
-  {"jpn-pc98", "NEC PC-9801 subtle, earthy low-res tones", "yellow", "black", false, "red", "black", "yellow", false},
-  {"deep-blue", "IBM Supercomputer monitoring interface style", "white", "blue", true, "cyan", "blue", "white", true},
-
-  {"korea", "Taegeuk-gi inspired black base with red and blue accents", "bright-blue", "blue", true, "bright-white", "blue", "red", true},
-
-  {"neo-seoul", "Neon skyline of Gangnam and Hongdae: glowing magenta and cyan lights on dark asphalt", "bright-magenta", "black", true, "bright-cyan", "black", "cyan", true},
-  {"incheon-industrial", "Metallic cranes and sodium streetlights of Incheon docks", "bright-yellow", "black", true, "bright-yellow", "black", "bright-red", true},
-  {"gyeonggi-modern", "Suburban calm of modern Korea. asphalt gray and warm window light", "bright-white", "black", false, "bright-yellow", "black", "bright-cyan", false},
-  {"korean-palace", "Royal dancheong harmony: jade green, vermilion red, and gold over black lacquer", "bright-yellow", "black", true, "red", "black", "green", false},
-
-  {"gyeongsangbukdo", "Stoic mountains and agricultural spirit. stone, pine, and the quiet gold of temples", "bright-yellow", "black", false, "bright-green", "black", "bright-white", false},
-  {"daegu-summer", "The biggest, the hottest of north gyeongsang: Blazing red-orange heat and festival gold under night sky", "bright-red", "black", true, "bright-yellow", "black", "yellow", true},
-  {"gyeongju-heritage", "Eternal relics and golden crowns: moonlit stone and ancient buddhism with blue flag of shilla military force", "bright-white", "black", false, "bright-yellow", "black", "blue", false},
-  {"kangwon-winter", "Cold white peaks and blue shadows of Gangwon’s frozen dawn", "bright-white", "blue", true, "bright-cyan", "blue", "white", true},
-  {"ulsan-steel", "Molten metal glow inside heavy industry furnace halls", "bright-red", "black", true, "bright-yellow", "black", "red", true},
-
-  {"jeolla-seaside", "Quiet sea and horizon light of Mokpo and Yeosu nights", "bright-cyan", "black", false, "cyan", "black", "bright-blue", true},
-  {"gwangju-biennale", "Experimental art city with a heritage of democracy: violet neon and philosophical blue", "bright-magenta", "black", true, "bright-blue", "black", "magenta", true},
-  {"jeonju-hanok", "The symbol of north jeolla. warm roofs and calm golden light", "bright-yellow", "black", false, "yellow", "black", "bright-white", false},
-
-  {"daejeon-tech", "Futuristic research district glow: clean LED light on steel gray night", "white", "black", true, "white", "black", "bright-green", true},
-  {"sejong-night", "Balanced dark-blue administration city under cool LED light", "bright-white", "blue", true, "bright-cyan", "blue", "white", true},
-  {"cheongju-intellect", "Scholarly ink and soft dawn over hills: serene blue clarity", "bright-cyan", "black", false, "bright-white", "black", "cyan", false},
-  {"chungcheong-field", "Muted greens and dust gold of inland farmlands", "yellow", "black", false, "green", "black", "yellow", false},
-
-  {"jeju-rock", "Volcanic basalt, moss green, and deep sea mist of Jeju Island", "bright-green", "black", false, "bright-cyan", "black", "green", false},
-
-  {"gyeongsangnamdo", "Sea breeze and industry — blue steel, orange dusk, and vibrant harbors", "bright-blue", "black", true, "bright-yellow", "black", "bright-cyan", true},
-  {"busan-harbor", "Night harbor lights and steel-blue waters of Busan Port", "bright-blue", "black", true, "cyan", "black", "bright-blue", true},
-
-  {"han", "Deep unresolved sorrow and austere beauty pale blue and gray layers", "bright-cyan", "blue", false, "white", "blue", "bright-white", false},
-  {"jeong", "Warm emotional bonds and communal comfort soft red and gold glow on darkness", "bright-red", "black", true, "black", "black", "bright-yellow", true},
-  {"heung", "Joyful energy and dynamic spirit: brilliant magenta and yellow over black", "bright-magenta", "black", true, "bright-yellow", "black", "magenta", true},
-  {"nunchi", "Subtle perception and quiet adaptation: dim neutral tones with cyan glints", "white", "black", false, "bright-cyan", "black", "cyan", false},
-
-  {"pcbang-night", "Late-night gaming neon: cold blue LEDs, energy drink, and so on", "bright-cyan", "black", true, "bright-red", "black", "bright-blue", true},
-  {"alcohol", "Soju nights and neon haze: industrial green bottles and pink laughter", "bright-green", "black", true, "bright-magenta", "black", "green", true},
-
-  {"korean-hardcore", "I don't wanna die yet! neon blood and cold steel over asphalt black", "bright-red", "black", true, "bright-blue", "black", "bright-red", true},
-  {"korean-nationalists", "Slightly exclusive types. you know the kind.", "bright-green", "black", true, "bright-blue", "black", "bright-cyan", true},
-
-  {"medieval-korea", "Celadon grace and temple gold over aged ink-black lacquer", "bright-cyan", "black", false, "bright-yellow", "black", "cyan", false},
-  {"stoneage-korea", "Primitive contrast of pale clothing and ground stone tools - raw earth and silence", "bright-white", "black", false, "bright-yellow", "black", "white", false},
-
-  {"flame-and-blood", "An East Asian war of 1592–1598. A great conflict akin to a world war, where flame met blood and nothing could be forsaken.", "bright-blue", "black", true, "bright-yellow", "black", "red", true},
-  {"korean-war", "The Korean War: an unforgettable sorrow beneath ash, blood, and snow.", "bright-white", "black", false, "bright-red", "black", "white", false},
-  {"independence-spirit", "The spirit of independence. A soul that we must remember.", "bright-red", "black", true, "blue", "black", "bright-yellow", true},
+  {"windows", &PALETTE_NAME_WINDOWS, &PALETTE_DESC_WINDOWS, "cyan", "blue", true, "white", "blue", "yellow", true, false},
+  {"monokai-blue", &PALETTE_NAME_MONOKAI_BLUE, &PALETTE_DESC_MONOKAI_BLUE, "bright-blue", "default", false, "white", "bright-black", "yellow", true, true},
 };
 
 typedef int (*accept_channel_fn_t)(ssh_message, ssh_channel);
@@ -1017,7 +946,7 @@ static void session_render_caption_with_offset(session_ctx_t *ctx, const char *m
 static void session_send_line(session_ctx_t *ctx, const char *message);
 static void session_send_plain_line(session_ctx_t *ctx, const char *message);
 static void session_send_system_line(session_ctx_t *ctx, const char *message);
-static void session_send_raw_text(session_ctx_t *ctx, const char *text);
+void session_send_raw_text(session_ctx_t *ctx, const char *text);
 static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text);
 static bool session_render_external_banner(session_ctx_t *ctx);
 static void session_render_banner_ascii(session_ctx_t *ctx);
@@ -1360,13 +1289,12 @@ static void session_bbs_reset_pending_post(session_ctx_t *ctx);
 static bbs_post_t *host_find_bbs_post_locked(host_t *host, uint64_t id);
 static bbs_post_t *host_allocate_bbs_post_locked(host_t *host);
 static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
-static void session_bbs_queue_translation(session_ctx_t *ctx, const bbs_post_t *post);
-static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, const char *notice,
-                                    bool reset_scroll, bool scroll_to_bottom);
+
+
 static bool host_user_data_load_existing(host_t *host, const char *username, const char *ip,
                                         user_data_record_t *record, bool create_if_missing);
-static void host_user_data_build_match_key(const char *username, char *key, size_t length);
-static bool host_user_data_find_profile_picture(host_t *host, const char *alias, user_data_record_t *record);
+
+
 static bool session_bbs_scroll(session_ctx_t *ctx, int direction, size_t step);
 static bool session_bbs_refresh_view(session_ctx_t *ctx);
 static void session_handle_rss(session_ctx_t *ctx, const char *arguments);

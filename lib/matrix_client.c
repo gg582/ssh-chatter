@@ -170,13 +170,17 @@ static bool matrix_copy_trimmed(char *dest, size_t dest_len, const char *src) {
   return true;
 }
 
+static pthread_mutex_t probe_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static bool matrix_probe_homeserver(const char *homeserver) {
   if (homeserver == NULL || homeserver[0] == '\0') {
     return false;
   }
 
+  pthread_mutex_lock(&probe_lock);
   CURL *curl = curl_easy_init();
   if (curl == NULL) {
+    pthread_mutex_unlock(&probe_lock);
     errno = ENOMEM;
     return false;
   }
@@ -185,6 +189,7 @@ static bool matrix_probe_homeserver(const char *homeserver) {
   int written = snprintf(url, sizeof(url), "%s/_matrix/client/versions", homeserver);
   if (written < 0 || (size_t)written >= sizeof(url)) {
     curl_easy_cleanup(curl);
+    pthread_mutex_unlock(&probe_lock);
     errno = ENAMETOOLONG;
     return false;
   }
@@ -212,6 +217,7 @@ static bool matrix_probe_homeserver(const char *homeserver) {
   }
 
   curl_easy_cleanup(curl);
+  pthread_mutex_unlock(&probe_lock);
   matrix_buffer_free(&response);
 
   if (result != CURLE_OK || status < 200 || status >= 300) {
@@ -514,8 +520,11 @@ static bool matrix_client_issue_request(matrix_client_t *client, const char *met
     return false;
   }
 
+  pthread_mutex_lock(&client->http_lock);
+
   CURL *curl = curl_easy_init();
   if (curl == NULL) {
+    pthread_mutex_unlock(&client->http_lock);
     errno = ENOMEM;
     return false;
   }
@@ -561,6 +570,8 @@ static bool matrix_client_issue_request(matrix_client_t *client, const char *met
 
   curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
+
+  pthread_mutex_unlock(&client->http_lock);
 
   if (status_out != NULL) {
     *status_out = status;
@@ -1248,7 +1259,7 @@ matrix_client_t *matrix_client_create(host_t *host, client_manager_t *manager, s
   client->recent_event_count = 0U;
   client->recent_event_head = 0U;
 
-  if (pthread_mutex_init(&client->lock, NULL) != 0) {
+  if (nullptr != 0) {
     OPENSSL_cleanse(client->access_token, sizeof(client->access_token));
     free(client);
     return NULL;

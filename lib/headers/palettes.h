@@ -51,4 +51,16 @@ static inline int ansi_256(char *buffer, size_t buffer_len, unsigned int color_c
   return snprintf(buffer, buffer_len, "\033[38;5;%um", color_code);
 }
 
+static inline int ansi_bg_256(char *buffer, size_t buffer_len, unsigned int color_code) {
+  if (buffer_len == 0) {
+    return 0;
+  }
+  return snprintf(buffer, buffer_len, "\033[48;5;%um", color_code);
+}
+
+#define MONOKAI_BLUE_BACKGROUND_COLOR 235
+#define MONOKAI_BLUE_FOREGROUND_COLOR 252
+#define MONOKAI_BLUE_HIGHLIGHT_COLOR 220
+#define MONOKAI_BLUE_USER_COLOR 117
+
 #endif
