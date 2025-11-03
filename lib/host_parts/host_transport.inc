@@ -857,15 +857,346 @@ typedef struct palette_descriptor {
   bool is_256_color;
 } palette_descriptor_t;
 
-static const l10n_string_t PALETTE_NAME_WINDOWS = {"windows", "윈도우", "ウィンドウズ", "视窗", "Окна"};
-static const l10n_string_t PALETTE_DESC_WINDOWS = {"High contrast palette reminiscent of Windows (ANSI)", "윈도우를 연상시키는 고대비 팔레트 (ANSI)", "ウィンドウズを彷彿とさせるハイコントラストパレット (ANSI)", "让人联想到Windows的高对比度调色板 (ANSI)", "Высококонтрастная палитра, напоминающая Windows (ANSI)"};
-static const l10n_string_t PALETTE_NAME_MONOKAI_BLUE = {"monokai-blue", "모노카이 블루", "モノカイブルー", "摩诺凯蓝", "Монокай синий"};
-static const l10n_string_t PALETTE_DESC_MONOKAI_BLUE = {"A Monokai interpretation with a blue tone (256 colors)", "푸른 색조의 모노카이 테마 (256 colors)", "青を基調としたモノカイの解釈 (256 colors)", "带有蓝色调的Monokai诠释 (256 colors)", "Интерпретация Monokai с синим оттенком (256 colors)"};
+#define L10N_ALL(str) {(str), (str), (str), (str), (str)}
+
+static const l10n_string_t PALETTE_NAME_WINDOWS = L10N_ALL("windows");
+static const l10n_string_t PALETTE_DESC_WINDOWS = L10N_ALL("High contrast palette reminiscent of Windows");
+static const l10n_string_t PALETTE_NAME_GNU_LINUX = L10N_ALL("gnu-linux");
+static const l10n_string_t PALETTE_DESC_GNU_LINUX = L10N_ALL("Modern, elegant, and free. the universal rhythm of your workflow.");
+static const l10n_string_t PALETTE_NAME_MACOS = L10N_ALL("macos");
+static const l10n_string_t PALETTE_DESC_MACOS = L10N_ALL("Precision in silence. Minimalist contemporary unix.");
+static const l10n_string_t PALETTE_NAME_FREEBSD = L10N_ALL("freebsd");
+static const l10n_string_t PALETTE_DESC_FREEBSD = L10N_ALL("Rigid and graceful BSD. The biggest 'True UNIX'");
+static const l10n_string_t PALETTE_NAME_SOLARIS = L10N_ALL("solaris");
+static const l10n_string_t PALETTE_DESC_SOLARIS = L10N_ALL("Ancient sun of enterprise UNIX: Sun, Machine, nostalgia.");
+static const l10n_string_t PALETTE_NAME_OPENBSD_FORTRESS = L10N_ALL("openbsd-fortress");
+static const l10n_string_t PALETTE_DESC_OPENBSD_FORTRESS = L10N_ALL("Security through simplicity. calm blue walls over disciplined darkness.");
+static const l10n_string_t PALETTE_NAME_NETBSD_UNIVERSAL = L10N_ALL("netbsd-universal");
+static const l10n_string_t PALETTE_DESC_NETBSD_UNIVERSAL = L10N_ALL("Runs on anything. Maybe your fridge, too?");
+static const l10n_string_t PALETTE_NAME_MOE = L10N_ALL("moe");
+static const l10n_string_t PALETTE_DESC_MOE = L10N_ALL("Soft magenta accents with playful highlights");
+static const l10n_string_t PALETTE_NAME_NEON_GENESIS_EVANGELION = L10N_ALL("neon-genesis-evangelion");
+static const l10n_string_t PALETTE_DESC_NEON_GENESIS_EVANGELION = L10N_ALL("Sho-nen yo Shin-wa ni nare--");
+static const l10n_string_t PALETTE_NAME_MEGAMI = L10N_ALL("megami");
+static const l10n_string_t PALETTE_DESC_MEGAMI = L10N_ALL("Japanese anime goddess cliché");
+static const l10n_string_t PALETTE_NAME_CLEAN = L10N_ALL("clean");
+static const l10n_string_t PALETTE_DESC_CLEAN = L10N_ALL("Balanced neutral palette");
+static const l10n_string_t PALETTE_NAME_ADWAITA = L10N_ALL("adwaita");
+static const l10n_string_t PALETTE_DESC_ADWAITA = L10N_ALL("Bright background inspired by GNOME Adwaita");
+static const l10n_string_t PALETTE_NAME_80SHACKER = L10N_ALL("80shacker");
+static const l10n_string_t PALETTE_DESC_80SHACKER = L10N_ALL("Bright monochrome green inspired by old CRT");
+static const l10n_string_t PALETTE_NAME_PLATO = L10N_ALL("plato");
+static const l10n_string_t PALETTE_DESC_PLATO = L10N_ALL("Bright monochrome yellow inspired by old Amber CRT");
+static const l10n_string_t PALETTE_NAME_ATARIST = L10N_ALL("atarist");
+static const l10n_string_t PALETTE_DESC_ATARIST = L10N_ALL("Sharp paper-white monochrome for high-res work");
+static const l10n_string_t PALETTE_NAME_WIN95BSOD = L10N_ALL("win95bsod");
+static const l10n_string_t PALETTE_DESC_WIN95BSOD = L10N_ALL("High-contrast blue screen of death style");
+static const l10n_string_t PALETTE_NAME_CHN_HANZI = L10N_ALL("chn-hanzi");
+static const l10n_string_t PALETTE_DESC_CHN_HANZI = L10N_ALL("Bright cyan high-clarity Chinese text terminal");
+static const l10n_string_t PALETTE_NAME_USA_FLAG = L10N_ALL("usa-flag");
+static const l10n_string_t PALETTE_DESC_USA_FLAG = L10N_ALL("Flag blue base with red/white highlights");
+static const l10n_string_t PALETTE_NAME_JPN_FLAG = L10N_ALL("jpn-flag");
+static const l10n_string_t PALETTE_DESC_JPN_FLAG = L10N_ALL("Minimalist white with rising sun red accent");
+static const l10n_string_t PALETTE_NAME_CHN_FLAG = L10N_ALL("chn-flag");
+static const l10n_string_t PALETTE_DESC_CHN_FLAG = L10N_ALL("Star-red background with lucky yellow text");
+static const l10n_string_t PALETTE_NAME_RUS_FLAG = L10N_ALL("rus-flag");
+static const l10n_string_t PALETTE_DESC_RUS_FLAG = L10N_ALL("Tricolor base with strong red emphasis");
+static const l10n_string_t PALETTE_NAME_DE_FLAG = L10N_ALL("de-flag");
+static const l10n_string_t PALETTE_DESC_DE_FLAG = L10N_ALL("Tricolor base with strong red/yellow emphasis");
+static const l10n_string_t PALETTE_NAME_HOLY_LIGHT = L10N_ALL("holy-light");
+static const l10n_string_t PALETTE_DESC_HOLY_LIGHT = L10N_ALL("Christian sacred light on pure white/blue base");
+static const l10n_string_t PALETTE_NAME_ISLAM = L10N_ALL("islam");
+static const l10n_string_t PALETTE_DESC_ISLAM = L10N_ALL("Iconic color of muslim, white/green base");
+static const l10n_string_t PALETTE_NAME_DHARMA_OCHRE = L10N_ALL("dharma-ochre");
+static const l10n_string_t PALETTE_DESC_DHARMA_OCHRE = L10N_ALL("Ochre robes of enlightenment and vitality");
+static const l10n_string_t PALETTE_NAME_YIN_YANG = L10N_ALL("yin-yang");
+static const l10n_string_t PALETTE_DESC_YIN_YANG = L10N_ALL("Balance of Black and White with Jade accent");
+static const l10n_string_t PALETTE_NAME_SOVIET_COLD = L10N_ALL("soviet-cold");
+static const l10n_string_t PALETTE_DESC_SOVIET_COLD = L10N_ALL("Cold blue/white terminal for scientific systems");
+static const l10n_string_t PALETTE_NAME_HI_TEL = L10N_ALL("hi-tel");
+static const l10n_string_t PALETTE_DESC_HI_TEL = L10N_ALL("1990s Korean BBS blue background and text style");
+static const l10n_string_t PALETTE_NAME_AMIGA_CLI = L10N_ALL("amiga-cli");
+static const l10n_string_t PALETTE_DESC_AMIGA_CLI = L10N_ALL("AmigaOS style with cyan/blue");
+static const l10n_string_t PALETTE_NAME_JPN_PC98 = L10N_ALL("jpn-pc98");
+static const l10n_string_t PALETTE_DESC_JPN_PC98 = L10N_ALL("NEC PC-9801 subtle, earthy low-res tones");
+static const l10n_string_t PALETTE_NAME_DEEP_BLUE = L10N_ALL("deep-blue");
+static const l10n_string_t PALETTE_DESC_DEEP_BLUE = L10N_ALL("IBM Supercomputer monitoring interface style");
+static const l10n_string_t PALETTE_NAME_KOREA = L10N_ALL("korea");
+static const l10n_string_t PALETTE_DESC_KOREA = L10N_ALL("Taegeuk-gi inspired black base with red and blue accents");
+static const l10n_string_t PALETTE_NAME_NEO_SEOUL = L10N_ALL("neo-seoul");
+static const l10n_string_t PALETTE_DESC_NEO_SEOUL = L10N_ALL("Neon skyline of Gangnam and Hongdae: glowing magenta and cyan lights on dark asphalt");
+static const l10n_string_t PALETTE_NAME_INCHEON_INDUSTRIAL = L10N_ALL("incheon-industrial");
+static const l10n_string_t PALETTE_DESC_INCHEON_INDUSTRIAL = L10N_ALL("Metallic cranes and sodium streetlights of Incheon docks");
+static const l10n_string_t PALETTE_NAME_GYEONGGI_MODERN = L10N_ALL("gyeonggi-modern");
+static const l10n_string_t PALETTE_DESC_GYEONGGI_MODERN = L10N_ALL("Suburban calm of modern Korea. asphalt gray and warm window light");
+static const l10n_string_t PALETTE_NAME_KOREAN_PALACE = L10N_ALL("korean-palace");
+static const l10n_string_t PALETTE_DESC_KOREAN_PALACE = L10N_ALL("Royal dancheong harmony: jade green, vermilion red, and gold over black lacquer");
+static const l10n_string_t PALETTE_NAME_GYEONGSANGBUKDO = L10N_ALL("gyeongsangbukdo");
+static const l10n_string_t PALETTE_DESC_GYEONGSANGBUKDO = L10N_ALL("Stoic mountains and agricultural spirit. stone, pine, and the quiet gold of temples");
+static const l10n_string_t PALETTE_NAME_DAEGU_SUMMER = L10N_ALL("daegu-summer");
+static const l10n_string_t PALETTE_DESC_DAEGU_SUMMER = L10N_ALL("The biggest, the hottest of north gyeongsang: Blazing red-orange heat and festival gold under night sky");
+static const l10n_string_t PALETTE_NAME_GYEONGJU_HERITAGE = L10N_ALL("gyeongju-heritage");
+static const l10n_string_t PALETTE_DESC_GYEONGJU_HERITAGE = L10N_ALL("Eternal relics and golden crowns: moonlit stone and ancient buddhism with blue flag of shilla military force");
+static const l10n_string_t PALETTE_NAME_KANGWON_WINTER = L10N_ALL("kangwon-winter");
+static const l10n_string_t PALETTE_DESC_KANGWON_WINTER = L10N_ALL("Cold white peaks and blue shadows of Gangwon’s frozen dawn");
+static const l10n_string_t PALETTE_NAME_ULSAN_STEEL = L10N_ALL("ulsan-steel");
+static const l10n_string_t PALETTE_DESC_ULSAN_STEEL = L10N_ALL("Molten metal glow inside heavy industry furnace halls");
+static const l10n_string_t PALETTE_NAME_JEOLLA_SEASIDE = L10N_ALL("jeolla-seaside");
+static const l10n_string_t PALETTE_DESC_JEOLLA_SEASIDE = L10N_ALL("Quiet sea and horizon light of Mokpo and Yeosu nights");
+static const l10n_string_t PALETTE_NAME_GWANGJU_BIENNALE = L10N_ALL("gwangju-biennale");
+static const l10n_string_t PALETTE_DESC_GWANGJU_BIENNALE = L10N_ALL("Experimental art city with a heritage of democracy: violet neon and philosophical blue");
+static const l10n_string_t PALETTE_NAME_JEONJU_HANOK = L10N_ALL("jeonju-hanok");
+static const l10n_string_t PALETTE_DESC_JEONJU_HANOK = L10N_ALL("The symbol of north jeolla. warm roofs and calm golden light");
+static const l10n_string_t PALETTE_NAME_DAEJEON_TECH = L10N_ALL("daejeon-tech");
+static const l10n_string_t PALETTE_DESC_DAEJEON_TECH = L10N_ALL("Futuristic research district glow: clean LED light on steel gray night");
+static const l10n_string_t PALETTE_NAME_SEJONG_NIGHT = L10N_ALL("sejong-night");
+static const l10n_string_t PALETTE_DESC_SEJONG_NIGHT = L10N_ALL("Balanced dark-blue administration city under cool LED light");
+static const l10n_string_t PALETTE_NAME_CHEONGJU_INTELLECT = L10N_ALL("cheongju-intellect");
+static const l10n_string_t PALETTE_DESC_CHEONGJU_INTELLECT = L10N_ALL("Scholarly ink and soft dawn over hills: serene blue clarity");
+static const l10n_string_t PALETTE_NAME_CHUNGCHEONG_FIELD = L10N_ALL("chungcheong-field");
+static const l10n_string_t PALETTE_DESC_CHUNGCHEONG_FIELD = L10N_ALL("Muted greens and dust gold of inland farmlands");
+static const l10n_string_t PALETTE_NAME_JEJU_ROCK = L10N_ALL("jeju-rock");
+static const l10n_string_t PALETTE_DESC_JEJU_ROCK = L10N_ALL("Volcanic basalt, moss green, and deep sea mist of Jeju Island");
+static const l10n_string_t PALETTE_NAME_GYEONGSANGNAMDO = L10N_ALL("gyeongsangnamdo");
+static const l10n_string_t PALETTE_DESC_GYEONGSANGNAMDO = L10N_ALL("Sea breeze and industry — blue steel, orange dusk, and vibrant harbors");
+static const l10n_string_t PALETTE_NAME_BUSAN_HARBOR = L10N_ALL("busan-harbor");
+static const l10n_string_t PALETTE_DESC_BUSAN_HARBOR = L10N_ALL("Night harbor lights and steel-blue waters of Busan Port");
+static const l10n_string_t PALETTE_NAME_HAN = L10N_ALL("han");
+static const l10n_string_t PALETTE_DESC_HAN = L10N_ALL("Deep unresolved sorrow and austere beauty pale blue and gray layers");
+static const l10n_string_t PALETTE_NAME_JEONG = L10N_ALL("jeong");
+static const l10n_string_t PALETTE_DESC_JEONG = L10N_ALL("Warm emotional bonds and communal comfort soft red and gold glow on darkness");
+static const l10n_string_t PALETTE_NAME_HEUNG = L10N_ALL("heung");
+static const l10n_string_t PALETTE_DESC_HEUNG = L10N_ALL("Joyful energy and dynamic spirit: brilliant magenta and yellow over black");
+static const l10n_string_t PALETTE_NAME_NUNCHI = L10N_ALL("nunchi");
+static const l10n_string_t PALETTE_DESC_NUNCHI = L10N_ALL("Subtle perception and quiet adaptation: dim neutral tones with cyan glints");
+static const l10n_string_t PALETTE_NAME_PCBANG_NIGHT = L10N_ALL("pcbang-night");
+static const l10n_string_t PALETTE_DESC_PCBANG_NIGHT = L10N_ALL("Late-night gaming neon: cold blue LEDs, energy drink, and so on");
+static const l10n_string_t PALETTE_NAME_ALCOHOL = L10N_ALL("alcohol");
+static const l10n_string_t PALETTE_DESC_ALCOHOL = L10N_ALL("Soju nights and neon haze: industrial green bottles and pink laughter");
+static const l10n_string_t PALETTE_NAME_KOREAN_HARDCORE = L10N_ALL("korean-hardcore");
+static const l10n_string_t PALETTE_DESC_KOREAN_HARDCORE = L10N_ALL("I don't wanna die yet! neon blood and cold steel over asphalt black");
+static const l10n_string_t PALETTE_NAME_KOREAN_NATIONALISTS = L10N_ALL("korean-nationalists");
+static const l10n_string_t PALETTE_DESC_KOREAN_NATIONALISTS = L10N_ALL("Slightly exclusive types. you know the kind.");
+static const l10n_string_t PALETTE_NAME_MEDIEVAL_KOREA = L10N_ALL("medieval-korea");
+static const l10n_string_t PALETTE_DESC_MEDIEVAL_KOREA = L10N_ALL("Celadon grace and temple gold over aged ink-black lacquer");
+static const l10n_string_t PALETTE_NAME_STONEAGE_KOREA = L10N_ALL("stoneage-korea");
+static const l10n_string_t PALETTE_DESC_STONEAGE_KOREA = L10N_ALL("Primitive contrast of pale clothing and ground stone tools - raw earth and silence");
+static const l10n_string_t PALETTE_NAME_FLAME_AND_BLOOD = L10N_ALL("flame-and-blood");
+static const l10n_string_t PALETTE_DESC_FLAME_AND_BLOOD = L10N_ALL("An East Asian war of 1592–1598. A great conflict akin to a world war, where flame met blood and nothing could be forsaken.");
+static const l10n_string_t PALETTE_NAME_KOREAN_WAR = L10N_ALL("korean-war");
+static const l10n_string_t PALETTE_DESC_KOREAN_WAR = L10N_ALL("The Korean War: an unforgettable sorrow beneath ash, blood, and snow.");
+static const l10n_string_t PALETTE_NAME_INDEPENDENCE_SPIRIT = L10N_ALL("independence-spirit");
+static const l10n_string_t PALETTE_DESC_INDEPENDENCE_SPIRIT = L10N_ALL("The spirit of independence. A soul that we must remember.");
+
+static const l10n_string_t PALETTE_NAME_USA_FLAG_256 = L10N_ALL("usa-flag-256");
+static const l10n_string_t PALETTE_DESC_USA_FLAG_256 = L10N_ALL("256-color reinterpretation of Flag blue base with red/white highlights");
+static const l10n_string_t PALETTE_NAME_JPN_FLAG_256 = L10N_ALL("jpn-flag-256");
+static const l10n_string_t PALETTE_DESC_JPN_FLAG_256 = L10N_ALL("256-color reinterpretation of Minimalist white with rising sun red accent");
+static const l10n_string_t PALETTE_NAME_CHN_FLAG_256 = L10N_ALL("chn-flag-256");
+static const l10n_string_t PALETTE_DESC_CHN_FLAG_256 = L10N_ALL("256-color reinterpretation of Star-red background with lucky yellow text");
+static const l10n_string_t PALETTE_NAME_RUS_FLAG_256 = L10N_ALL("rus-flag-256");
+static const l10n_string_t PALETTE_DESC_RUS_FLAG_256 = L10N_ALL("256-color reinterpretation of Tricolor base with strong red emphasis");
+static const l10n_string_t PALETTE_NAME_DE_FLAG_256 = L10N_ALL("de-flag-256");
+static const l10n_string_t PALETTE_DESC_DE_FLAG_256 = L10N_ALL("256-color reinterpretation of Tricolor base with strong red/yellow emphasis");
+static const l10n_string_t PALETTE_NAME_HOLY_LIGHT_256 = L10N_ALL("holy-light-256");
+static const l10n_string_t PALETTE_DESC_HOLY_LIGHT_256 = L10N_ALL("256-color reinterpretation of Christian sacred light on pure white/blue base");
+static const l10n_string_t PALETTE_NAME_ISLAM_256 = L10N_ALL("islam-256");
+static const l10n_string_t PALETTE_DESC_ISLAM_256 = L10N_ALL("256-color reinterpretation of Iconic color of muslim, white/green base");
+static const l10n_string_t PALETTE_NAME_DHARMA_OCHRE_256 = L10N_ALL("dharma-ochre-256");
+static const l10n_string_t PALETTE_DESC_DHARMA_OCHRE_256 = L10N_ALL("256-color reinterpretation of Ochre robes of enlightenment and vitality");
+static const l10n_string_t PALETTE_NAME_YIN_YANG_256 = L10N_ALL("yin-yang-256");
+static const l10n_string_t PALETTE_DESC_YIN_YANG_256 = L10N_ALL("256-color reinterpretation of Balance of Black and White with Jade accent");
+static const l10n_string_t PALETTE_NAME_SOVIET_COLD_256 = L10N_ALL("soviet-cold-256");
+static const l10n_string_t PALETTE_DESC_SOVIET_COLD_256 = L10N_ALL("256-color reinterpretation of Cold blue/white terminal for scientific systems");
+static const l10n_string_t PALETTE_NAME_HI_TEL_256 = L10N_ALL("hi-tel-256");
+static const l10n_string_t PALETTE_DESC_HI_TEL_256 = L10N_ALL("256-color reinterpretation of 1990s Korean BBS blue background and text style");
+static const l10n_string_t PALETTE_NAME_AMIGA_CLI_256 = L10N_ALL("amiga-cli-256");
+static const l10n_string_t PALETTE_DESC_AMIGA_CLI_256 = L10N_ALL("256-color reinterpretation of AmigaOS style with cyan/blue");
+static const l10n_string_t PALETTE_NAME_JPN_PC98_256 = L10N_ALL("jpn-pc98-256");
+static const l10n_string_t PALETTE_DESC_JPN_PC98_256 = L10N_ALL("256-color reinterpretation of NEC PC-9801 subtle, earthy low-res tones");
+static const l10n_string_t PALETTE_NAME_DEEP_BLUE_256 = L10N_ALL("deep-blue-256");
+static const l10n_string_t PALETTE_DESC_DEEP_BLUE_256 = L10N_ALL("256-color reinterpretation of IBM Supercomputer monitoring interface style");
+static const l10n_string_t PALETTE_NAME_KOREA_256 = L10N_ALL("korea-256");
+static const l10n_string_t PALETTE_DESC_KOREA_256 = L10N_ALL("256-color reinterpretation of Taegeuk-gi inspired black base with red and blue accents");
+static const l10n_string_t PALETTE_NAME_NEO_SEOUL_256 = L10N_ALL("neo-seoul-256");
+static const l10n_string_t PALETTE_DESC_NEO_SEOUL_256 = L10N_ALL("256-color reinterpretation of Neon skyline of Gangnam and Hongdae: glowing magenta and cyan lights on dark asphalt");
+static const l10n_string_t PALETTE_NAME_INCHEON_INDUSTRIAL_256 = L10N_ALL("incheon-industrial-256");
+static const l10n_string_t PALETTE_DESC_INCHEON_INDUSTRIAL_256 = L10N_ALL("256-color reinterpretation of Metallic cranes and sodium streetlights of Incheon docks");
+static const l10n_string_t PALETTE_NAME_GYEONGGI_MODERN_256 = L10N_ALL("gyeonggi-modern-256");
+static const l10n_string_t PALETTE_DESC_GYEONGGI_MODERN_256 = L10N_ALL("256-color reinterpretation of Suburban calm of modern Korea. asphalt gray and warm window light");
+static const l10n_string_t PALETTE_NAME_KOREAN_PALACE_256 = L10N_ALL("korean-palace-256");
+static const l10n_string_t PALETTE_DESC_KOREAN_PALACE_256 = L10N_ALL("256-color reinterpretation of Royal dancheong harmony: jade green, vermilion red, and gold over black lacquer");
+static const l10n_string_t PALETTE_NAME_GYEONGSANGBUKDO_256 = L10N_ALL("gyeongsangbukdo-256");
+static const l10n_string_t PALETTE_DESC_GYEONGSANGBUKDO_256 = L10N_ALL("256-color reinterpretation of Stoic mountains and agricultural spirit. stone, pine, and the quiet gold of temples");
+static const l10n_string_t PALETTE_NAME_DAEGU_SUMMER_256 = L10N_ALL("daegu-summer-256");
+static const l10n_string_t PALETTE_DESC_DAEGU_SUMMER_256 = L10N_ALL("256-color reinterpretation of The biggest, the hottest of north gyeongsang: Blazing red-orange heat and festival gold under night sky");
+static const l10n_string_t PALETTE_NAME_GYEONGJU_HERITAGE_256 = L10N_ALL("gyeongju-heritage-256");
+static const l10n_string_t PALETTE_DESC_GYEONGJU_HERITAGE_256 = L10N_ALL("256-color reinterpretation of Eternal relics and golden crowns: moonlit stone and ancient buddhism with blue flag of shilla military force");
+static const l10n_string_t PALETTE_NAME_KANGWON_WINTER_256 = L10N_ALL("kangwon-winter-256");
+static const l10n_string_t PALETTE_DESC_KANGWON_WINTER_256 = L10N_ALL("256-color reinterpretation of Cold white peaks and blue shadows of Gangwon’s frozen dawn");
+static const l10n_string_t PALETTE_NAME_ULSAN_STEEL_256 = L10N_ALL("ulsan-steel-256");
+static const l10n_string_t PALETTE_DESC_ULSAN_STEEL_256 = L10N_ALL("256-color reinterpretation of Molten metal glow inside heavy industry furnace halls");
+static const l10n_string_t PALETTE_NAME_JEOLLA_SEASIDE_256 = L10N_ALL("jeolla-seaside-256");
+static const l10n_string_t PALETTE_DESC_JEOLLA_SEASIDE_256 = L10N_ALL("256-color reinterpretation of Quiet sea and horizon light of Mokpo and Yeosu nights");
+static const l10n_string_t PALETTE_NAME_GWANGJU_BIENNALE_256 = L10N_ALL("gwangju-biennale-256");
+static const l10n_string_t PALETTE_DESC_GWANGJU_BIENNALE_256 = L10N_ALL("256-color reinterpretation of Experimental art city with a heritage of democracy: violet neon and philosophical blue");
+static const l10n_string_t PALETTE_NAME_JEONJU_HANOK_256 = L10N_ALL("jeonju-hanok-256");
+static const l10n_string_t PALETTE_DESC_JEONJU_HANOK_256 = L10N_ALL("256-color reinterpretation of The symbol of north jeolla. warm roofs and calm golden light");
+static const l10n_string_t PALETTE_NAME_DAEJEON_TECH_256 = L10N_ALL("daejeon-tech-256");
+static const l10n_string_t PALETTE_DESC_DAEJEON_TECH_256 = L10N_ALL("256-color reinterpretation of Futuristic research district glow: clean LED light on steel gray night");
+static const l10n_string_t PALETTE_NAME_SEJONG_NIGHT_256 = L10N_ALL("sejong-night-256");
+static const l10n_string_t PALETTE_DESC_SEJONG_NIGHT_256 = L10N_ALL("256-color reinterpretation of Balanced dark-blue administration city under cool LED light");
+static const l10n_string_t PALETTE_NAME_CHEONGJU_INTELLECT_256 = L10N_ALL("cheongju-intellect-256");
+static const l10n_string_t PALETTE_DESC_CHEONGJU_INTELLECT_256 = L10N_ALL("256-color reinterpretation of Scholarly ink and soft dawn over hills: serene blue clarity");
+static const l10n_string_t PALETTE_NAME_CHUNGCHEONG_FIELD_256 = L10N_ALL("chungcheong-field-256");
+static const l10n_string_t PALETTE_DESC_CHUNGCHEONG_FIELD_256 = L10N_ALL("256-color reinterpretation of Muted greens and dust gold of inland farmlands");
+static const l10n_string_t PALETTE_NAME_JEJU_ROCK_256 = L10N_ALL("jeju-rock-256");
+static const l10n_string_t PALETTE_DESC_JEJU_ROCK_256 = L10N_ALL("256-color reinterpretation of Volcanic basalt, moss green, and deep sea mist of Jeju Island");
+static const l10n_string_t PALETTE_NAME_GYEONGSANGNAMDO_256 = L10N_ALL("gyeongsangnamdo-256");
+static const l10n_string_t PALETTE_DESC_GYEONGSANGNAMDO_256 = L10N_ALL("256-color reinterpretation of Sea breeze and industry — blue steel, orange dusk, and vibrant harbors");
+static const l10n_string_t PALETTE_NAME_BUSAN_HARBOR_256 = L10N_ALL("busan-harbor-256");
+static const l10n_string_t PALETTE_DESC_BUSAN_HARBOR_256 = L10N_ALL("256-color reinterpretation of Night harbor lights and steel-blue waters of Busan Port");
+static const l10n_string_t PALETTE_NAME_HAN_256 = L10N_ALL("han-256");
+static const l10n_string_t PALETTE_DESC_HAN_256 = L10N_ALL("256-color reinterpretation of Deep unresolved sorrow and austere beauty pale blue and gray layers");
+static const l10n_string_t PALETTE_NAME_JEONG_256 = L10N_ALL("jeong-256");
+static const l10n_string_t PALETTE_DESC_JEONG_256 = L10N_ALL("256-color reinterpretation of Warm emotional bonds and communal comfort soft red and gold glow on darkness");
+static const l10n_string_t PALETTE_NAME_HEUNG_256 = L10N_ALL("heung-256");
+static const l10n_string_t PALETTE_DESC_HEUNG_256 = L10N_ALL("256-color reinterpretation of Joyful energy and dynamic spirit: brilliant magenta and yellow over black");
+static const l10n_string_t PALETTE_NAME_NUNCHI_256 = L10N_ALL("nunchi-256");
+static const l10n_string_t PALETTE_DESC_NUNCHI_256 = L10N_ALL("256-color reinterpretation of Subtle perception and quiet adaptation: dim neutral tones with cyan glints");
+static const l10n_string_t PALETTE_NAME_PCBANG_NIGHT_256 = L10N_ALL("pcbang-night-256");
+static const l10n_string_t PALETTE_DESC_PCBANG_NIGHT_256 = L10N_ALL("256-color reinterpretation of Late-night gaming neon: cold blue LEDs, energy drink, and so on");
+static const l10n_string_t PALETTE_NAME_ALCOHOL_256 = L10N_ALL("alcohol-256");
+static const l10n_string_t PALETTE_DESC_ALCOHOL_256 = L10N_ALL("256-color reinterpretation of Soju nights and neon haze: industrial green bottles and pink laughter");
+static const l10n_string_t PALETTE_NAME_KOREAN_HARDCORE_256 = L10N_ALL("korean-hardcore-256");
+static const l10n_string_t PALETTE_DESC_KOREAN_HARDCORE_256 = L10N_ALL("256-color reinterpretation of I don't wanna die yet! neon blood and cold steel over asphalt black");
+static const l10n_string_t PALETTE_NAME_KOREAN_NATIONALISTS_256 = L10N_ALL("korean-nationalists-256");
+static const l10n_string_t PALETTE_DESC_KOREAN_NATIONALISTS_256 = L10N_ALL("256-color reinterpretation of Slightly exclusive types. you know the kind.");
+static const l10n_string_t PALETTE_NAME_MEDIEVAL_KOREA_256 = L10N_ALL("medieval-korea-256");
+static const l10n_string_t PALETTE_DESC_MEDIEVAL_KOREA_256 = L10N_ALL("256-color reinterpretation of Celadon grace and temple gold over aged ink-black lacquer");
+static const l10n_string_t PALETTE_NAME_STONEAGE_KOREA_256 = L10N_ALL("stoneage-korea-256");
+static const l10n_string_t PALETTE_DESC_STONEAGE_KOREA_256 = L10N_ALL("256-color reinterpretation of Primitive contrast of pale clothing and ground stone tools - raw earth and silence");
+static const l10n_string_t PALETTE_NAME_FLAME_AND_BLOOD_256 = L10N_ALL("flame-and-blood-256");
+static const l10n_string_t PALETTE_DESC_FLAME_AND_BLOOD_256 = L10N_ALL("256-color reinterpretation of An East Asian war of 1592–1598. A great conflict akin to a world war, where flame met blood and nothing could be forsaken.");
+static const l10n_string_t PALETTE_NAME_KOREAN_WAR_256 = L10N_ALL("korean-war-256");
+static const l10n_string_t PALETTE_DESC_KOREAN_WAR_256 = L10N_ALL("256-color reinterpretation of The Korean War: an unforgettable sorrow beneath ash, blood, and snow.");
+static const l10n_string_t PALETTE_NAME_INDEPENDENCE_SPIRIT_256 = L10N_ALL("independence-spirit-256");
+static const l10n_string_t PALETTE_DESC_INDEPENDENCE_SPIRIT_256 = L10N_ALL("256-color reinterpretation of The spirit of independence. A soul that we must remember.");
 
 static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
   {"windows", &PALETTE_NAME_WINDOWS, &PALETTE_DESC_WINDOWS, "cyan", "blue", true, "white", "blue", "yellow", true, false},
-  {"monokai-blue", &PALETTE_NAME_MONOKAI_BLUE, &PALETTE_DESC_MONOKAI_BLUE, "bright-blue", "default", false, "white", "bright-black", "yellow", true, true},
+  {"gnu-linux", &PALETTE_NAME_GNU_LINUX, &PALETTE_DESC_GNU_LINUX, "bright-green", "black", true, "blue", "black", "bright-yellow", true, false},
+  {"macos", &PALETTE_NAME_MACOS, &PALETTE_DESC_MACOS, "bright-white", "black", false, "bright-blue", "black", "white", false, false},
+  {"freebsd", &PALETTE_NAME_FREEBSD, &PALETTE_DESC_FREEBSD, "bright-red", "black", false, "red", "black", "bright-white", false, false},
+  {"solaris", &PALETTE_NAME_SOLARIS, &PALETTE_DESC_SOLARIS, "bright-yellow", "black", true, "bright-red", "black", "bright-white", true, false},
+  {"openbsd-fortress", &PALETTE_NAME_OPENBSD_FORTRESS, &PALETTE_DESC_OPENBSD_FORTRESS, "bright-blue", "black", false, "bright-white", "black", "cyan", false, false},
+  {"netbsd-universal", &PALETTE_NAME_NETBSD_UNIVERSAL, &PALETTE_DESC_NETBSD_UNIVERSAL, "bright-cyan", "black", false, "bright-white", "black", "bright-yellow", false, false},
+  {"moe", &PALETTE_NAME_MOE, &PALETTE_DESC_MOE, "bright-magenta", "white", true, "white", "bright-magenta", "cyan", true, false},
+  {"neon-genesis-evangelion", &PALETTE_NAME_NEON_GENESIS_EVANGELION, &PALETTE_DESC_NEON_GENESIS_EVANGELION, "bright-red", "white", true, "white", "bright-magenta", "blue", true, false},
+  {"megami", &PALETTE_NAME_MEGAMI, &PALETTE_DESC_MEGAMI, "bright-white", "black", false, "bright-yellow", "blue", "cyan", false, false},
+  {"clean", &PALETTE_NAME_CLEAN, &PALETTE_DESC_CLEAN, "default", "default", false, "white", "default", "default", false, false},
+  {"adwaita", &PALETTE_NAME_ADWAITA, &PALETTE_DESC_ADWAITA, "blue", "default", false, "blue", "bright-white", "white", true, false},
+  {"80shacker", &PALETTE_NAME_80SHACKER, &PALETTE_DESC_80SHACKER, "bright-green", "default", true, "bright-green", "default", "default", true, false},
+  {"plato", &PALETTE_NAME_PLATO, &PALETTE_DESC_PLATO, "yellow", "default", false, "yellow", "default", "default", false, false},
+  {"atarist", &PALETTE_NAME_ATARIST, &PALETTE_DESC_ATARIST, "bright-white", "black", true, "bright-white", "black", "black", false, false},
+  {"win95bsod", &PALETTE_NAME_WIN95BSOD, &PALETTE_DESC_WIN95BSOD, "bright-white", "blue", true, "bright-white", "blue", "cyan", true, false},
+  {"chn-hanzi", &PALETTE_NAME_CHN_HANZI, &PALETTE_DESC_CHN_HANZI, "bright-cyan", "black", true, "white", "black", "cyan", true, false},
+  {"usa-flag", &PALETTE_NAME_USA_FLAG, &PALETTE_DESC_USA_FLAG, "bright-white", "blue", true, "red", "blue", "bright-white", true, false},
+  {"jpn-flag", &PALETTE_NAME_JPN_FLAG, &PALETTE_DESC_JPN_FLAG, "bright-white", "black", false, "red", "black", "black", true, false},
+  {"chn-flag", &PALETTE_NAME_CHN_FLAG, &PALETTE_DESC_CHN_FLAG, "bright-yellow", "red", true, "white", "red", "white", true, false},
+  {"rus-flag", &PALETTE_NAME_RUS_FLAG, &PALETTE_DESC_RUS_FLAG, "bright-white", "blue", true, "red", "blue", "bright-white", true, false},
+  {"de-flag", &PALETTE_NAME_DE_FLAG, &PALETTE_DESC_DE_FLAG, "bright-black", "black", true, "yellow", "black", "red", true, false},
+  {"holy-light", &PALETTE_NAME_HOLY_LIGHT, &PALETTE_DESC_HOLY_LIGHT, "bright-white", "blue", false, "blue", "black", "yellow", true, false},
+  {"islam", &PALETTE_NAME_ISLAM, &PALETTE_DESC_ISLAM, "bright-white", "green", false, "green", "black", "bright-white", true, false},
+  {"dharma-ochre", &PALETTE_NAME_DHARMA_OCHRE, &PALETTE_DESC_DHARMA_OCHRE, "yellow", "black", true, "red", "black", "yellow", true, false},
+  {"yin-yang", &PALETTE_NAME_YIN_YANG, &PALETTE_DESC_YIN_YANG, "white", "black", false, "green", "black", "white", false, false},
+  {"soviet-cold", &PALETTE_NAME_SOVIET_COLD, &PALETTE_DESC_SOVIET_COLD, "white", "blue", false, "white", "cyan", "blue", true, false},
+  {"hi-tel", &PALETTE_NAME_HI_TEL, &PALETTE_DESC_HI_TEL, "bright-white", "blue", true, "bright-white", "blue", "magenta", true, false},
+  {"amiga-cli", &PALETTE_NAME_AMIGA_CLI, &PALETTE_DESC_AMIGA_CLI, "cyan", "blue", true, "cyan", "blue", "blue", true, false},
+  {"jpn-pc98", &PALETTE_NAME_JPN_PC98, &PALETTE_DESC_JPN_PC98, "yellow", "black", false, "red", "black", "yellow", false, false},
+  {"deep-blue", &PALETTE_NAME_DEEP_BLUE, &PALETTE_DESC_DEEP_BLUE, "white", "blue", true, "cyan", "blue", "white", true, false},
+  {"korea", &PALETTE_NAME_KOREA, &PALETTE_DESC_KOREA, "bright-blue", "blue", true, "bright-white", "blue", "red", true, false},
+  {"neo-seoul", &PALETTE_NAME_NEO_SEOUL, &PALETTE_DESC_NEO_SEOUL, "bright-magenta", "black", true, "bright-cyan", "black", "cyan", true, false},
+  {"incheon-industrial", &PALETTE_NAME_INCHEON_INDUSTRIAL, &PALETTE_DESC_INCHEON_INDUSTRIAL, "bright-yellow", "black", true, "bright-yellow", "black", "bright-red", true, false},
+  {"gyeonggi-modern", &PALETTE_NAME_GYEONGGI_MODERN, &PALETTE_DESC_GYEONGGI_MODERN, "bright-white", "black", false, "bright-yellow", "black", "bright-cyan", false, false},
+  {"korean-palace", &PALETTE_NAME_KOREAN_PALACE, &PALETTE_DESC_KOREAN_PALACE, "bright-yellow", "black", true, "red", "black", "green", false, false},
+  {"gyeongsangbukdo", &PALETTE_NAME_GYEONGSANGBUKDO, &PALETTE_DESC_GYEONGSANGBUKDO, "bright-yellow", "black", false, "bright-green", "black", "bright-white", false, false},
+  {"daegu-summer", &PALETTE_NAME_DAEGU_SUMMER, &PALETTE_DESC_DAEGU_SUMMER, "bright-red", "black", true, "bright-yellow", "black", "yellow", true, false},
+  {"gyeongju-heritage", &PALETTE_NAME_GYEONGJU_HERITAGE, &PALETTE_DESC_GYEONGJU_HERITAGE, "bright-white", "black", false, "bright-yellow", "black", "blue", false, false},
+  {"kangwon-winter", &PALETTE_NAME_KANGWON_WINTER, &PALETTE_DESC_KANGWON_WINTER, "bright-white", "blue", true, "bright-cyan", "blue", "white", true, false},
+  {"ulsan-steel", &PALETTE_NAME_ULSAN_STEEL, &PALETTE_DESC_ULSAN_STEEL, "bright-red", "black", true, "bright-yellow", "black", "red", true, false},
+  {"jeolla-seaside", &PALETTE_NAME_JEOLLA_SEASIDE, &PALETTE_DESC_JEOLLA_SEASIDE, "bright-cyan", "black", false, "cyan", "black", "bright-blue", true, false},
+  {"gwangju-biennale", &PALETTE_NAME_GWANGJU_BIENNALE, &PALETTE_DESC_GWANGJU_BIENNALE, "bright-magenta", "black", true, "bright-blue", "black", "magenta", true, false},
+  {"jeonju-hanok", &PALETTE_NAME_JEONJU_HANOK, &PALETTE_DESC_JEONJU_HANOK, "bright-yellow", "black", false, "yellow", "black", "bright-white", false, false},
+  {"daejeon-tech", &PALETTE_NAME_DAEJEON_TECH, &PALETTE_DESC_DAEJEON_TECH, "white", "black", true, "white", "black", "bright-green", true, false},
+  {"sejong-night", &PALETTE_NAME_SEJONG_NIGHT, &PALETTE_DESC_SEJONG_NIGHT, "bright-white", "blue", true, "bright-cyan", "blue", "white", true, false},
+  {"cheongju-intellect", &PALETTE_NAME_CHEONGJU_INTELLECT, &PALETTE_DESC_CHEONGJU_INTELLECT, "bright-cyan", "black", false, "bright-white", "black", "cyan", false, false},
+  {"chungcheong-field", &PALETTE_NAME_CHUNGCHEONG_FIELD, &PALETTE_DESC_CHUNGCHEONG_FIELD, "yellow", "black", false, "green", "black", "yellow", false, false},
+  {"jeju-rock", &PALETTE_NAME_JEJU_ROCK, &PALETTE_DESC_JEJU_ROCK, "bright-green", "black", false, "bright-cyan", "black", "green", false, false},
+  {"gyeongsangnamdo", &PALETTE_NAME_GYEONGSANGNAMDO, &PALETTE_DESC_GYEONGSANGNAMDO, "bright-blue", "black", true, "bright-yellow", "black", "bright-cyan", true, false},
+  {"busan-harbor", &PALETTE_NAME_BUSAN_HARBOR, &PALETTE_DESC_BUSAN_HARBOR, "bright-blue", "black", true, "cyan", "black", "bright-blue", true, false},
+  {"han", &PALETTE_NAME_HAN, &PALETTE_DESC_HAN, "bright-cyan", "blue", false, "white", "blue", "bright-white", false, false},
+  {"jeong", &PALETTE_NAME_JEONG, &PALETTE_DESC_JEONG, "bright-red", "black", true, "black", "black", "bright-yellow", true, false},
+  {"heung", &PALETTE_NAME_HEUNG, &PALETTE_DESC_HEUNG, "bright-magenta", "black", true, "bright-yellow", "black", "magenta", true, false},
+  {"nunchi", &PALETTE_NAME_NUNCHI, &PALETTE_DESC_NUNCHI, "white", "black", false, "bright-cyan", "black", "cyan", false, false},
+  {"pcbang-night", &PALETTE_NAME_PCBANG_NIGHT, &PALETTE_DESC_PCBANG_NIGHT, "bright-cyan", "black", true, "bright-red", "black", "bright-blue", true, false},
+  {"alcohol", &PALETTE_NAME_ALCOHOL, &PALETTE_DESC_ALCOHOL, "bright-green", "black", true, "bright-magenta", "black", "green", true, false},
+  {"korean-hardcore", &PALETTE_NAME_KOREAN_HARDCORE, &PALETTE_DESC_KOREAN_HARDCORE, "bright-red", "black", true, "bright-blue", "black", "bright-red", true, false},
+  {"korean-nationalists", &PALETTE_NAME_KOREAN_NATIONALISTS, &PALETTE_DESC_KOREAN_NATIONALISTS, "bright-green", "black", true, "bright-blue", "black", "bright-cyan", true, false},
+  {"medieval-korea", &PALETTE_NAME_MEDIEVAL_KOREA, &PALETTE_DESC_MEDIEVAL_KOREA, "bright-cyan", "black", false, "bright-yellow", "black", "cyan", false, false},
+  {"stoneage-korea", &PALETTE_NAME_STONEAGE_KOREA, &PALETTE_DESC_STONEAGE_KOREA, "bright-white", "black", false, "bright-yellow", "black", "white", false, false},
+  {"flame-and-blood", &PALETTE_NAME_FLAME_AND_BLOOD, &PALETTE_DESC_FLAME_AND_BLOOD, "bright-blue", "black", true, "bright-yellow", "black", "red", true, false},
+  {"korean-war", &PALETTE_NAME_KOREAN_WAR, &PALETTE_DESC_KOREAN_WAR, "bright-white", "black", false, "bright-red", "black", "white", false, false},
+  {"independence-spirit", &PALETTE_NAME_INDEPENDENCE_SPIRIT, &PALETTE_DESC_INDEPENDENCE_SPIRIT, "bright-red", "black", true, "blue", "black", "bright-yellow", true, false},
+  {"usa-flag-256", &PALETTE_NAME_USA_FLAG_256, &PALETTE_DESC_USA_FLAG_256, "xterm:231", "xterm-bg:20", true, "xterm:196", "xterm-bg:20", "xterm-bg:231", true, true},
+  {"jpn-flag-256", &PALETTE_NAME_JPN_FLAG_256, &PALETTE_DESC_JPN_FLAG_256, "xterm:231", "xterm-bg:16", false, "xterm:196", "xterm-bg:16", "xterm-bg:16", true, true},
+  {"chn-flag-256", &PALETTE_NAME_CHN_FLAG_256, &PALETTE_DESC_CHN_FLAG_256, "xterm:229", "xterm-bg:196", true, "xterm:15", "xterm-bg:196", "xterm-bg:15", true, true},
+  {"rus-flag-256", &PALETTE_NAME_RUS_FLAG_256, &PALETTE_DESC_RUS_FLAG_256, "xterm:231", "xterm-bg:20", true, "xterm:196", "xterm-bg:20", "xterm-bg:231", true, true},
+  {"de-flag-256", &PALETTE_NAME_DE_FLAG_256, &PALETTE_DESC_DE_FLAG_256, "xterm:238", "xterm-bg:16", true, "xterm:226", "xterm-bg:16", "xterm-bg:196", true, true},
+  {"holy-light-256", &PALETTE_NAME_HOLY_LIGHT_256, &PALETTE_DESC_HOLY_LIGHT_256, "xterm:231", "xterm-bg:20", false, "xterm:20", "xterm-bg:16", "xterm-bg:226", true, true},
+  {"islam-256", &PALETTE_NAME_ISLAM_256, &PALETTE_DESC_ISLAM_256, "xterm:231", "xterm-bg:34", false, "xterm:34", "xterm-bg:16", "xterm-bg:231", true, true},
+  {"dharma-ochre-256", &PALETTE_NAME_DHARMA_OCHRE_256, &PALETTE_DESC_DHARMA_OCHRE_256, "xterm:226", "xterm-bg:16", true, "xterm:196", "xterm-bg:16", "xterm-bg:226", true, true},
+  {"yin-yang-256", &PALETTE_NAME_YIN_YANG_256, &PALETTE_DESC_YIN_YANG_256, "xterm:15", "xterm-bg:16", false, "xterm:34", "xterm-bg:16", "xterm-bg:15", false, true},
+  {"soviet-cold-256", &PALETTE_NAME_SOVIET_COLD_256, &PALETTE_DESC_SOVIET_COLD_256, "xterm:15", "xterm-bg:20", false, "xterm:15", "xterm-bg:51", "xterm-bg:20", true, true},
+  {"hi-tel-256", &PALETTE_NAME_HI_TEL_256, &PALETTE_DESC_HI_TEL_256, "xterm:231", "xterm-bg:20", true, "xterm:231", "xterm-bg:20", "xterm-bg:165", true, true},
+  {"amiga-cli-256", &PALETTE_NAME_AMIGA_CLI_256, &PALETTE_DESC_AMIGA_CLI_256, "xterm:51", "xterm-bg:20", true, "xterm:51", "xterm-bg:20", "xterm-bg:20", true, true},
+  {"jpn-pc98-256", &PALETTE_NAME_JPN_PC98_256, &PALETTE_DESC_JPN_PC98_256, "xterm:226", "xterm-bg:16", false, "xterm:196", "xterm-bg:16", "xterm-bg:226", false, true},
+  {"deep-blue-256", &PALETTE_NAME_DEEP_BLUE_256, &PALETTE_DESC_DEEP_BLUE_256, "xterm:15", "xterm-bg:20", true, "xterm:51", "xterm-bg:20", "xterm-bg:15", true, true},
+  {"korea-256", &PALETTE_NAME_KOREA_256, &PALETTE_DESC_KOREA_256, "xterm:81", "xterm-bg:20", true, "xterm:231", "xterm-bg:20", "xterm-bg:196", true, true},
+  {"neo-seoul-256", &PALETTE_NAME_NEO_SEOUL_256, &PALETTE_DESC_NEO_SEOUL_256, "xterm:207", "xterm-bg:16", true, "xterm:123", "xterm-bg:16", "xterm-bg:51", true, true},
+  {"incheon-industrial-256", &PALETTE_NAME_INCHEON_INDUSTRIAL_256, &PALETTE_DESC_INCHEON_INDUSTRIAL_256, "xterm:229", "xterm-bg:16", true, "xterm:229", "xterm-bg:16", "xterm-bg:203", true, true},
+  {"gyeonggi-modern-256", &PALETTE_NAME_GYEONGGI_MODERN_256, &PALETTE_DESC_GYEONGGI_MODERN_256, "xterm:231", "xterm-bg:16", false, "xterm:229", "xterm-bg:16", "xterm-bg:123", false, true},
+  {"korean-palace-256", &PALETTE_NAME_KOREAN_PALACE_256, &PALETTE_DESC_KOREAN_PALACE_256, "xterm:229", "xterm-bg:16", true, "xterm:196", "xterm-bg:16", "xterm-bg:34", false, true},
+  {"gyeongsangbukdo-256", &PALETTE_NAME_GYEONGSANGBUKDO_256, &PALETTE_DESC_GYEONGSANGBUKDO_256, "xterm:229", "xterm-bg:16", false, "xterm:118", "xterm-bg:16", "xterm-bg:231", false, true},
+  {"daegu-summer-256", &PALETTE_NAME_DAEGU_SUMMER_256, &PALETTE_DESC_DAEGU_SUMMER_256, "xterm:203", "xterm-bg:16", true, "xterm:229", "xterm-bg:16", "xterm-bg:226", true, true},
+  {"gyeongju-heritage-256", &PALETTE_NAME_GYEONGJU_HERITAGE_256, &PALETTE_DESC_GYEONGJU_HERITAGE_256, "xterm:231", "xterm-bg:16", false, "xterm:229", "xterm-bg:16", "xterm-bg:20", false, true},
+  {"kangwon-winter-256", &PALETTE_NAME_KANGWON_WINTER_256, &PALETTE_DESC_KANGWON_WINTER_256, "xterm:231", "xterm-bg:20", true, "xterm:123", "xterm-bg:20", "xterm-bg:15", true, true},
+  {"ulsan-steel-256", &PALETTE_NAME_ULSAN_STEEL_256, &PALETTE_DESC_ULSAN_STEEL_256, "xterm:203", "xterm-bg:16", true, "xterm:229", "xterm-bg:16", "xterm-bg:196", true, true},
+  {"jeolla-seaside-256", &PALETTE_NAME_JEOLLA_SEASIDE_256, &PALETTE_DESC_JEOLLA_SEASIDE_256, "xterm:123", "xterm-bg:16", false, "xterm:51", "xterm-bg:16", "xterm-bg:25", true, true},
+  {"gwangju-biennale-256", &PALETTE_NAME_GWANGJU_BIENNALE_256, &PALETTE_DESC_GWANGJU_BIENNALE_256, "xterm:207", "xterm-bg:16", true, "xterm:81", "xterm-bg:16", "xterm-bg:165", true, true},
+  {"jeonju-hanok-256", &PALETTE_NAME_JEONJU_HANOK_256, &PALETTE_DESC_JEONJU_HANOK_256, "xterm:229", "xterm-bg:16", false, "xterm:226", "xterm-bg:16", "xterm-bg:231", false, true},
+  {"daejeon-tech-256", &PALETTE_NAME_DAEJEON_TECH_256, &PALETTE_DESC_DAEJEON_TECH_256, "xterm:15", "xterm-bg:16", true, "xterm:15", "xterm-bg:16", "xterm-bg:118", true, true},
+  {"sejong-night-256", &PALETTE_NAME_SEJONG_NIGHT_256, &PALETTE_DESC_SEJONG_NIGHT_256, "xterm:231", "xterm-bg:20", true, "xterm:123", "xterm-bg:20", "xterm-bg:15", true, true},
+  {"cheongju-intellect-256", &PALETTE_NAME_CHEONGJU_INTELLECT_256, &PALETTE_DESC_CHEONGJU_INTELLECT_256, "xterm:123", "xterm-bg:16", false, "xterm:231", "xterm-bg:16", "xterm-bg:51", false, true},
+  {"chungcheong-field-256", &PALETTE_NAME_CHUNGCHEONG_FIELD_256, &PALETTE_DESC_CHUNGCHEONG_FIELD_256, "xterm:226", "xterm-bg:16", false, "xterm:34", "xterm-bg:16", "xterm-bg:226", false, true},
+  {"jeju-rock-256", &PALETTE_NAME_JEJU_ROCK_256, &PALETTE_DESC_JEJU_ROCK_256, "xterm:118", "xterm-bg:16", false, "xterm:123", "xterm-bg:16", "xterm-bg:34", false, true},
+  {"gyeongsangnamdo-256", &PALETTE_NAME_GYEONGSANGNAMDO_256, &PALETTE_DESC_GYEONGSANGNAMDO_256, "xterm:81", "xterm-bg:16", true, "xterm:229", "xterm-bg:16", "xterm-bg:123", true, true},
+  {"busan-harbor-256", &PALETTE_NAME_BUSAN_HARBOR_256, &PALETTE_DESC_BUSAN_HARBOR_256, "xterm:81", "xterm-bg:16", true, "xterm:51", "xterm-bg:16", "xterm-bg:25", true, true},
+  {"han-256", &PALETTE_NAME_HAN_256, &PALETTE_DESC_HAN_256, "xterm:123", "xterm-bg:20", false, "xterm:15", "xterm-bg:20", "xterm-bg:231", false, true},
+  {"jeong-256", &PALETTE_NAME_JEONG_256, &PALETTE_DESC_JEONG_256, "xterm:203", "xterm-bg:16", true, "xterm:16", "xterm-bg:16", "xterm-bg:229", true, true},
+  {"heung-256", &PALETTE_NAME_HEUNG_256, &PALETTE_DESC_HEUNG_256, "xterm:207", "xterm-bg:16", true, "xterm:229", "xterm-bg:16", "xterm-bg:165", true, true},
+  {"nunchi-256", &PALETTE_NAME_NUNCHI_256, &PALETTE_DESC_NUNCHI_256, "xterm:15", "xterm-bg:16", false, "xterm:123", "xterm-bg:16", "xterm-bg:51", false, true},
+  {"pcbang-night-256", &PALETTE_NAME_PCBANG_NIGHT_256, &PALETTE_DESC_PCBANG_NIGHT_256, "xterm:123", "xterm-bg:16", true, "xterm:203", "xterm-bg:16", "xterm-bg:25", true, true},
+  {"alcohol-256", &PALETTE_NAME_ALCOHOL_256, &PALETTE_DESC_ALCOHOL_256, "xterm:118", "xterm-bg:16", true, "xterm:207", "xterm-bg:16", "xterm-bg:34", true, true},
+  {"korean-hardcore-256", &PALETTE_NAME_KOREAN_HARDCORE_256, &PALETTE_DESC_KOREAN_HARDCORE_256, "xterm:203", "xterm-bg:16", true, "xterm:81", "xterm-bg:16", "xterm-bg:203", true, true},
+  {"korean-nationalists-256", &PALETTE_NAME_KOREAN_NATIONALISTS_256, &PALETTE_DESC_KOREAN_NATIONALISTS_256, "xterm:118", "xterm-bg:16", true, "xterm:81", "xterm-bg:16", "xterm-bg:123", true, true},
+  {"medieval-korea-256", &PALETTE_NAME_MEDIEVAL_KOREA_256, &PALETTE_DESC_MEDIEVAL_KOREA_256, "xterm:123", "xterm-bg:16", false, "xterm:229", "xterm-bg:16", "xterm-bg:51", false, true},
+  {"stoneage-korea-256", &PALETTE_NAME_STONEAGE_KOREA_256, &PALETTE_DESC_STONEAGE_KOREA_256, "xterm:231", "xterm-bg:16", false, "xterm:229", "xterm-bg:16", "xterm-bg:15", false, true},
+  {"flame-and-blood-256", &PALETTE_NAME_FLAME_AND_BLOOD_256, &PALETTE_DESC_FLAME_AND_BLOOD_256, "xterm:81", "xterm-bg:16", true, "xterm:229", "xterm-bg:16", "xterm-bg:196", true, true},
+  {"korean-war-256", &PALETTE_NAME_KOREAN_WAR_256, &PALETTE_DESC_KOREAN_WAR_256, "xterm:231", "xterm-bg:16", false, "xterm:203", "xterm-bg:16", "xterm-bg:15", false, true},
+  {"independence-spirit-256", &PALETTE_NAME_INDEPENDENCE_SPIRIT_256, &PALETTE_DESC_INDEPENDENCE_SPIRIT_256, "xterm:203", "xterm-bg:16", true, "xterm:20", "xterm-bg:16", "xterm-bg:229", true, true},
 };
+
 
 typedef int (*accept_channel_fn_t)(ssh_message, ssh_channel);
 

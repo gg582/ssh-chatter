@@ -1860,8 +1860,46 @@ static const char *lookup_color_code(const color_entry_t *entries, size_t entry_
     }
   }
 
+#if defined(__STDC_NO_THREADS__)
+  static char fg_cache[8][16];
+  static size_t fg_cache_index = 0U;
+  static char bg_cache[8][16];
+  static size_t bg_cache_index = 0U;
+#else
+  static _Thread_local char fg_cache[8][16];
+  static _Thread_local size_t fg_cache_index = 0U;
+  static _Thread_local char bg_cache[8][16];
+  static _Thread_local size_t bg_cache_index = 0U;
+#endif
+
+  if (strncasecmp(name, "xterm:", 6) == 0) {
+    const char *digits = name + 6;
+    char *endptr = NULL;
+    unsigned long code = strtoul(digits, &endptr, 10);
+    if (endptr != NULL && *endptr == '\0' && code <= 255U) {
+      char (*slot)[16] = &fg_cache[fg_cache_index];
+      fg_cache_index = (fg_cache_index + 1U) % (sizeof(fg_cache) / sizeof(fg_cache[0]));
+      ansi_256(*slot, sizeof(fg_cache[0]), (unsigned int)code);
+      return *slot;
+    }
+  }
+
+  if (strncasecmp(name, "xterm-bg:", 9) == 0) {
+    const char *digits = name + 9;
+    char *endptr = NULL;
+    unsigned long code = strtoul(digits, &endptr, 10);
+    if (endptr != NULL && *endptr == '\0' && code <= 255U) {
+      char (*slot)[16] = &bg_cache[bg_cache_index];
+      bg_cache_index = (bg_cache_index + 1U) % (sizeof(bg_cache) / sizeof(bg_cache[0]));
+      ansi_bg_256(*slot, sizeof(bg_cache[0]), (unsigned int)code);
+      return *slot;
+    }
+  }
+
   return NULL;
 }
+
+
 
 static const palette_descriptor_t *palette_find_descriptor(const char *name) {
   if (name == NULL || name[0] == '\0') {
