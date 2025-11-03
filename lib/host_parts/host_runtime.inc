@@ -4188,12 +4188,12 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
           }
         }
 
+        ssh_free(session);
         if ((fatal_socket_error && bind_error != NULL)
            || string_contains_case_insensitive(bind_error, "kex")) {
             fatal_socket_error = false;
         }
 
-        ssh_free(session);
         if (fatal_socket_error) {
           clock_gettime(CLOCK_MONOTONIC, &host->listener.last_error_time);
           if (host_listener_attempt_recover(host, bind_handle, address, bind_port)) {
