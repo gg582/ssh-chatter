@@ -2669,12 +2669,6 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "选择是否显示蓝底洋红色的快讯提示。",
             "Выбрать показ синих оповещений о срочных новостях.",
         },
-        .label_translations = {
-            [SESSION_UI_LANGUAGE_KO] = "속보 <켜기|끄기>",
-            [SESSION_UI_LANGUAGE_JP] = "速報 <オン|オフ>",
-            [SESSION_UI_LANGUAGE_ZH] = "快讯 <开启|关闭>",
-            [SESSION_UI_LANGUAGE_RU] = "новости <вкл|выкл>",
-        },
         .label_arg_count = 0U,
         .label_args = {},
     },

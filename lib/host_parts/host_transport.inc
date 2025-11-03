@@ -1198,7 +1198,7 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
     {"flame-and-blood-256", &PALETTE_NAME_FLAME_AND_BLOOD_256, &PALETTE_DESC_FLAME_AND_BLOOD_256, "xterm:81", "xterm-bg:16", true, "xterm:229", "xterm-bg:16", "xterm-bg:196", true, true},
     {"korean-war-256", &PALETTE_NAME_KOREAN_WAR_256, &PALETTE_DESC_KOREAN_WAR_256, "xterm:231", "xterm-bg:16", false, "xterm:203", "xterm-bg:16", "xterm-bg:15", false, true},
     {"independence-spirit-256", &PALETTE_NAME_INDEPENDENCE_SPIRIT_256, &PALETTE_DESC_INDEPENDENCE_SPIRIT_256, "xterm:203", "xterm-bg:16", true, "xterm:20", "xterm-bg:16", "xterm-bg:229", true, true},
-    {"monokai", &PALETTE_NAME_MONOKAI, &PALETTE_DESC_MONOKAI, "xterm:118", "xterm-bg:208", true, "xterm:252", "xterm-bg:235", "xterm-bg:81", false, true},
+    {"monokai", &PALETTE_NAME_MONOKAI, &PALETTE_DESC_MONOKAI, "xterm:118", "xterm-bg:235", false, "xterm:255", "xterm-bg:235", "xterm-bg:235", false, true},
 };
 
 
