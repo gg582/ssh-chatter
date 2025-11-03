@@ -14,6 +14,8 @@
 #include <locale.h>
 #include <time.h>
 
+void ssh_init(void);
+
 #define HOST_STABLE_RESET_SECONDS 10.0
 
 static void print_usage(const char *prog_name) {
@@ -61,6 +63,7 @@ static void sleep_before_restart(unsigned int attempts) {
 int main(int argc, char **argv) {
   setlocale(LC_ALL, "");
   GC_INIT();
+  ssh_init(); // Initialize libssh
 
   const char *bind_address = nullptr;
   const char *bind_port = nullptr;
