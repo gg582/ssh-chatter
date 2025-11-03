@@ -940,6 +940,12 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
 
   char prefixed_message[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(prefixed_message, sizeof(prefixed_message), "[system] %s", message);
+
+  if (ctx->game.active && ctx->game.type != SESSION_GAME_LIARGAME) {
+    session_send_raw_text(ctx, prefixed_message);
+    return;
+  }
+
   session_send_bubble_message(ctx, false, prefixed_message);
 }
 
@@ -2728,31 +2734,36 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
     return;
   }
 
-  bool is_user = entry->is_user_message;
-  bool is_continuous = false;
-  if (is_user) {
-    user_preference_t *pref = host_ensure_preference_locked(ctx->owner, ctx->user.name);
-    if (pref != NULL) {
-      is_continuous = pref->show_continuous_messages;
+  if (entry->is_user_message) {
+    char formatted[SSH_CHATTER_MESSAGE_LIMIT * 2U];
+    formatted[0] = '\0';
+
+    char id_block[64];
+    if (entry->message_id > 0U) {
+      snprintf(id_block, sizeof(id_block), "[#%" PRIu64 "] ", entry->message_id);
+    } else {
+      snprintf(id_block, sizeof(id_block), "[#0] ");
     }
+    strncat(formatted, id_block, sizeof(formatted) - strlen(formatted) - 1U);
+
+    const char *color = (entry->user_color_code != NULL) ? entry->user_color_code : "";
+    const char *bold = entry->user_is_bold ? ANSI_BOLD : "";
+
+    char name_block[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(name_block, sizeof(name_block), "%s%s%s%s", color, bold, entry->username, ANSI_RESET);
+    strncat(formatted, name_block, sizeof(formatted) - strlen(formatted) - 1U);
+
+    if (entry->message[0] != '\0') {
+      const bool multiline = strchr(entry->message, '\n') != NULL;
+      strncat(formatted, multiline ? ":\n" : ": ", sizeof(formatted) - strlen(formatted) - 1U);
+      strncat(formatted, entry->message, sizeof(formatted) - strlen(formatted) - 1U);
+    }
+
+    session_send_bubble_message(ctx, true, formatted);
+    return;
   }
 
-  session_draw_bubble_top(ctx, is_user, is_continuous);
-
-  char line[SSH_CHATTER_MESSAGE_LIMIT];
-  if (is_user) {
-    snprintf(line, sizeof(line), "%s%s%s: %s", entry->user_color_code, entry->user_is_bold ? ANSI_BOLD : "", entry->username, entry->message);
-  } else {
-    snprintf(line, sizeof(line), "%s", entry->message);
-  }
-
-  char *p = strtok(line, "\n");
-  while (p != NULL) {
-    session_draw_bubble_middle(ctx, is_user, p);
-    p = strtok(NULL, "\n");
-  }
-
-  session_draw_bubble_bottom(ctx, is_user, is_continuous);
+  session_send_bubble_message(ctx, false, entry->message);
 }
 
 // Present a summary of a poll, optionally showing the label used for named polls.
