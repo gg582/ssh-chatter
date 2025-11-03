@@ -533,6 +533,7 @@ typedef struct session_ctx {
   bool translation_quota_notified;
   session_ui_language_t ui_language;
   pthread_mutex_t translation_mutex;
+  pthread_mutex_t chat_message_count_mutex;
   pthread_mutex_t channel_mutex;
   pthread_cond_t translation_cond;
   pthread_mutex_t output_lock;

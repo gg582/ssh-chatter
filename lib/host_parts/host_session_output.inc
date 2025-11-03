@@ -3729,10 +3729,12 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
   ctx->last_message_time = now;
   ctx->has_last_message_time = true;
 
+  pthread_mutex_lock(&ctx->owner->lock);
   if (session_first_message_is_suspicious(ctx, normalized)) {
     session_handle_suspicious_first_message(ctx, normalized);
     return;
   }
+  pthread_mutex_unlock(&ctx->owner->lock);
 
   if (!translation_bypass && ctx->translation_enabled && ctx->input_translation_enabled &&
       ctx->input_translation_language[0] != '\0') {

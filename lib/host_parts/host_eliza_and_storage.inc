@@ -3971,7 +3971,9 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *mes
   }
 
   if (ctx->chat_message_count < SIZE_MAX) {
+    pthread_mutex_lock(&ctx->chat_message_count_mutex);
     ctx->chat_message_count += 1U;
+    pthread_mutex_unlock(&ctx->chat_message_count_mutex);
   }
 
   session_send_history_entry(ctx, &entry);
