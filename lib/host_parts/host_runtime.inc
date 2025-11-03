@@ -53,10 +53,7 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0' || strcasecmp(working, "list") == 0) {
-    char full_palette_list[SSH_CHATTER_MESSAGE_LIMIT * 4]; // Increased buffer size for multi-line output
-    size_t current_len = 0;
-
-    current_len += (size_t)snprintf(full_palette_list + current_len, sizeof(full_palette_list) - current_len, "Available palettes:\n");
+    session_send_system_line(ctx, "Available palettes:");
 
     for (size_t idx = 0U; idx < sizeof(PALETTE_DEFINITIONS) / sizeof(PALETTE_DEFINITIONS[0]); ++idx) {
       const palette_descriptor_t *descriptor = &PALETTE_DEFINITIONS[idx];
@@ -82,28 +79,15 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
         default:
           break;
       }
-        size_t written_chars;
-        size_t remaining_buffer_size = sizeof(full_palette_list) - current_len;
-
+        char palette_line[SSH_CHATTER_MESSAGE_LIMIT];
         if (descriptor->is_256_color) {
-            written_chars = (size_t)snprintf(full_palette_list + current_len, remaining_buffer_size, "  %s - %s (256-color)\n", name, description);
+            snprintf(palette_line, sizeof(palette_line), "  %s - %s (256-color)", name, description);
         } else {
-            written_chars = (size_t)snprintf(full_palette_list + current_len, remaining_buffer_size, "  %s - %s\n", name, description);
+            snprintf(palette_line, sizeof(palette_line), "  %s - %s", name, description);
         }
-
-        if (written_chars >= remaining_buffer_size) {
-            // The current snprintf call would have overflowed or exactly filled the buffer.
-            // We need to send the current content and then continue.
-            full_palette_list[sizeof(full_palette_list) - 1] = '\0'; // Ensure null termination
-            session_send_system_line(ctx, full_palette_list);
-            current_len = 0; // Reset for the next message
-            continue; // Continue to the next iteration of the loop
-        } else {
-            current_len += written_chars;
-        }
+        session_send_system_line(ctx, palette_line);
     }
-    current_len += (size_t)snprintf(full_palette_list + current_len, sizeof(full_palette_list) - current_len, "Apply a palette with /palette <name>.");
-    session_send_system_line(ctx, full_palette_list);
+    session_send_system_line(ctx, "Apply a palette with /palette <name>.");
     return;
   }
 
