@@ -938,18 +938,9 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
     return;
   }
 
-  session_draw_bubble_top(ctx, false, false);
-
   char prefixed_message[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(prefixed_message, sizeof(prefixed_message), "[system] %s", message);
-
-  char *p = strtok(prefixed_message, "\n");
-  while (p != NULL) {
-    session_draw_bubble_middle(ctx, false, p);
-    p = strtok(NULL, "\n");
-  }
-
-  session_draw_bubble_bottom(ctx, false, false);
+  session_send_bubble_message(ctx, false, prefixed_message);
 }
 
 void session_send_raw_text(session_ctx_t *ctx, const char *text) {
@@ -1116,20 +1107,22 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, 
   localtime_r(&bumped, &bumped_tm);
   strftime(bumped_line, sizeof(bumped_line), "Last activity: %Y-%m-%d %H:%M:%S", &bumped_tm);
 
-  session_draw_bubble_top(ctx, false, false);
-  session_draw_bubble_middle(ctx, false, title_line);
-  session_draw_bubble_middle(ctx, false, author_line);
-  session_draw_bubble_middle(ctx, false, created_line);
-  session_draw_bubble_middle(ctx, false, bumped_line);
-  session_draw_bubble_middle(ctx, false, SSH_CHATTER_BBS_EDITOR_BODY_DIVIDER);
+  char full_post_content[SSH_CHATTER_BBS_BODY_LEN + (5 * SSH_CHATTER_MESSAGE_LIMIT)];
+  full_post_content[0] = '\0';
 
-  char *p = strtok((char *)post->body, "\n");
-  while (p != NULL) {
-    session_draw_bubble_middle(ctx, false, p);
-    p = strtok(NULL, "\n");
-  }
+  strncat(full_post_content, title_line, sizeof(full_post_content) - strlen(full_post_content) - 1);
+  strncat(full_post_content, "\n", sizeof(full_post_content) - strlen(full_post_content) - 1);
+  strncat(full_post_content, author_line, sizeof(full_post_content) - strlen(full_post_content) - 1);
+  strncat(full_post_content, "\n", sizeof(full_post_content) - strlen(full_post_content) - 1);
+  strncat(full_post_content, created_line, sizeof(full_post_content) - strlen(full_post_content) - 1);
+  strncat(full_post_content, "\n", sizeof(full_post_content) - strlen(full_post_content) - 1);
+  strncat(full_post_content, bumped_line, sizeof(full_post_content) - strlen(full_post_content) - 1);
+  strncat(full_post_content, "\n", sizeof(full_post_content) - strlen(full_post_content) - 1);
+  strncat(full_post_content, SSH_CHATTER_BBS_EDITOR_BODY_DIVIDER, sizeof(full_post_content) - strlen(full_post_content) - 1);
+  strncat(full_post_content, "\n", sizeof(full_post_content) - strlen(full_post_content) - 1);
+  strncat(full_post_content, post->body, sizeof(full_post_content) - strlen(full_post_content) - 1);
 
-  session_draw_bubble_bottom(ctx, false, false);
+  session_send_bubble_message(ctx, false, full_post_content);
 
   if (notice != NULL && notice[0] != '\0') {
     session_send_system_line(ctx, notice);
@@ -1422,7 +1415,8 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
   session_bbs_recalculate_line_count(ctx);
   size_t line_count = ctx->pending_bbs_line_count;
 
-  session_draw_bubble_top(ctx, false, false);
+  char full_editor_content[SSH_CHATTER_BBS_BODY_LEN + (10 * SSH_CHATTER_MESSAGE_LIMIT)];
+  full_editor_content[0] = '\0';
 
   if (ascii_mode) {
     const char *target_label =
@@ -1430,7 +1424,8 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
     char title_line[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(title_line, sizeof(title_line), "ASCII art %s draft (%zu/%u lines)", target_label, line_count,
              (unsigned int)SSH_CHATTER_ASCIIART_MAX_LINES);
-    session_draw_bubble_middle(ctx, false, title_line);
+    strncat(full_editor_content, title_line, sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+    strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
   } else {
     char title_line[SSH_CHATTER_MESSAGE_LIMIT];
     if (editing_post) {
@@ -1443,7 +1438,8 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
     } else {
       snprintf(title_line, sizeof(title_line), "Composing '%s'", ctx->pending_bbs_title);
     }
-    session_draw_bubble_middle(ctx, false, title_line);
+    strncat(full_editor_content, title_line, sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+    strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
 
     char tag_buffer[SSH_CHATTER_BBS_MAX_TAGS * (SSH_CHATTER_BBS_TAG_LEN + 2U)];
     tag_buffer[0] = '\0';
@@ -1466,14 +1462,17 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
 
     char tags_line[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(tags_line, sizeof(tags_line), "Tags: %s", tag_buffer[0] != '\0' ? tag_buffer : "(none)");
-    session_draw_bubble_middle(ctx, false, tags_line);
+    strncat(full_editor_content, tags_line, sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+    strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
   }
 
-  session_draw_bubble_middle(ctx, false, SSH_CHATTER_BBS_EDITOR_BODY_DIVIDER);
+  strncat(full_editor_content, SSH_CHATTER_BBS_EDITOR_BODY_DIVIDER, sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+  strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
 
   if (line_count == 0U) {
     const char *prefix = ctx->pending_bbs_editing_line ? "> " : "> ";
-    session_draw_bubble_middle(ctx, false, prefix);
+    strncat(full_editor_content, prefix, sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+    strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
   } else {
     for (size_t idx = 0U; idx < line_count; ++idx) {
       char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
@@ -1486,14 +1485,17 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
       } else {
         snprintf(display, sizeof(display), "%s%s", prefix, line_buffer);
       }
-      session_draw_bubble_middle(ctx, false, display);
+      strncat(full_editor_content, display, sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+      strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
     }
     if (!ctx->pending_bbs_editing_line) {
-      session_draw_bubble_middle(ctx, false, "> ");
+      strncat(full_editor_content, "> ", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+      strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
     }
   }
 
-  session_draw_bubble_middle(ctx, false, SSH_CHATTER_BBS_EDITOR_END_DIVIDER);
+  strncat(full_editor_content, SSH_CHATTER_BBS_EDITOR_END_DIVIDER, sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+  strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
 
   size_t capacity = session_editor_body_capacity(ctx);
   size_t remaining = 0U;
@@ -1502,13 +1504,16 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
   }
   char remaining_line[64];
   snprintf(remaining_line, sizeof(remaining_line), "Remaining bytes: %zu", remaining);
-  session_draw_bubble_middle(ctx, false, remaining_line);
+  strncat(full_editor_content, remaining_line, sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+  strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
 
   const char *terminator = session_editor_terminator(ctx);
   char shortcut_hint[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(shortcut_hint, sizeof(shortcut_hint), "Ctrl+S(or Save) inserts %s. Ctrl+A(or Abort) cancels the draft.", terminator);
-  session_draw_bubble_middle(ctx, false, shortcut_hint);
-  session_draw_bubble_middle(ctx, false, "Use Up/Down arrows to revisit a saved line and press Enter to store changes.");
+  strncat(full_editor_content, shortcut_hint, sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+  strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+  strncat(full_editor_content, "Use Up/Down arrows to revisit a saved line and press Enter to store changes.", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+  strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
   char publish_hint[SSH_CHATTER_MESSAGE_LIMIT];
   if (ascii_mode) {
     snprintf(publish_hint, sizeof(publish_hint), "Typing %s on its own line will finish the artwork.", terminator);
@@ -1517,13 +1522,15 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
   } else {
     snprintf(publish_hint, sizeof(publish_hint), "Typing %s on its own line will publish the post.", terminator);
   }
-  session_draw_bubble_middle(ctx, false, publish_hint);
+  strncat(full_editor_content, publish_hint, sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+  strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
 
   if (ctx->breaking_alerts_enabled && ctx->bbs_breaking_count > 0U && !ascii_mode) {
-    session_draw_bubble_middle(ctx, false, "");
-    session_draw_bubble_middle(ctx, false, "Breaking updates:");
+    strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+    strncat(full_editor_content, "Breaking updates:\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
     for (size_t idx = 0U; idx < ctx->bbs_breaking_count; ++idx) {
-      session_draw_bubble_middle(ctx, false, ctx->bbs_breaking_messages[idx]);
+      strncat(full_editor_content, ctx->bbs_breaking_messages[idx], sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+      strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
     }
   }
 
@@ -1537,7 +1544,8 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
         *newline = '\0';
       }
       if (*cursor != '\0') {
-        session_draw_bubble_middle(ctx, false, cursor);
+        strncat(full_editor_content, cursor, sizeof(full_editor_content) - strlen(full_editor_content) - 1);
+        strncat(full_editor_content, "\n", sizeof(full_editor_content) - strlen(full_editor_content) - 1);
       }
       if (newline == NULL) {
         break;
@@ -1546,7 +1554,7 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
     }
   }
 
-  session_draw_bubble_bottom(ctx, false, false);
+  session_send_bubble_message(ctx, false, full_editor_content);
 
   session_render_prompt(ctx, false);
   ctx->bbs_rendering_editor = false;

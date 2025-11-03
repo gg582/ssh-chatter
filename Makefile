@@ -5,6 +5,8 @@ CFLAGS = -std=c2x -Ofast \
 	-Werror \
         -Ilib/headers \
         -DSSH_CHATTER_USE_GC=$(ENABLE_GC) \
+				-D_DEFAULT_SOURCE \
+				-D_XOPEN_SOURCE=700 \
         -Wall -Wextra -Wshadow -Wformat=2 -Wundef -Wconversion -Wdouble-promotion \
         -fno-omit-frame-pointer -fstack-protector-strong -fno-common \
         -fPIC \
@@ -41,7 +43,7 @@ CFLAGS = -std=c2x -Ofast \
         -MMD -MP \
 
     COMMON_LDFLAGS = \
-        -lpthread -ldl -lcurl -lm -lcrypto \
+        -lpthread -ldl -lcurl -lm -lcrypto -lc \
         -flto=$(shell nproc) -fuse-linker-plugin \
         -Wl,-Ofast \
         -Wl,--sort-common \
