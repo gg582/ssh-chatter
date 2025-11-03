@@ -179,6 +179,16 @@ static void session_copy_lowercase(const char *source, char *dest, size_t dest_l
   dest[write] = '\0';
 }
 
+static bool is_pure_ascii(const char *str) {
+    size_t len = strlen(str);
+    for (size_t i = 0; i < len; i++) {
+        if ((unsigned char)str[i] > 127) {
+            return false;
+        }
+    }
+    return true;
+}
+
 int count_unicode_points(const char *str, utf8_code_count_t **counts_out, size_t *unique_count_out) {
     size_t len = strnlen(str, SSH_CHATTER_MESSAGE_LIMIT);
     size_t unique_count = 0;
@@ -287,14 +297,19 @@ static bool session_token_is_suspicious_command(const char *token) {
   }
 
   static const char *const kExactCommands[] = {
-      "ls",        "pwd",      "whoami",   "uname",    "id",        "ps",        "cd",        "rm",
-      "chmod",     "chown",    "apt",      "apt-get",  "aptitude",  "yum",       "dnf",       "apk",
-      "pacman",    "brew",     "curl",     "wget",     "scp",       "ssh",       "sudo",      "service",
-      "systemctl", "kill",     "tar",      "zip",      "unzip",     "nc",        "netcat",    "bash",
-      "sh",        "shell",    "enable",   "system",   "nconnect",  "busybox",   "python",    "python2",
-      "python3",   "perl",     "php",      "ruby",     "node",      "npm",       "npx",       "pip",
-      "pip3",      "docker",   "kubectl",  "ifconfig", "ipconfig",  "powershell", "cmd",       "dir",
-      "tftp",      "ftpget",   "admin",    "bash",     "su",        "root"};
+    "ls",        "pwd",      "whoami",   "uname",    "id",        "ps",        "cd",        "rm",
+    "chmod",     "chown",    "apt",      "apt-get",  "aptitude",  "yum",       "dnf",       "apk",
+    "pacman",    "brew",     "curl",     "wget",     "scp",       "ssh",       "sudo",      "service",
+    "systemctl", "kill",     "tar",      "zip",      "unzip",     "nc",        "netcat",    "bash",
+    "sh",        "shell",    "enable",   "system",   "nconnect",  "busybox",   "python",    "python2",
+    "python3",   "perl",     "php",      "ruby",     "node",      "npm",       "npx",       "pip",
+    "pip3",      "docker",   "kubectl",  "ifconfig", "ipconfig",  "powershell", "cmd",       "dir",
+    "tftp",      "ftpget",   "admin",    "bash",     "su",        "root"
+  };
+
+  if(is_pure_ascii(token)) {
+    return false;
+  }
 
   if(is_string_random(token)) {
     return true;
