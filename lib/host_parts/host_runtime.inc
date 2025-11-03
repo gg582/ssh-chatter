@@ -86,6 +86,9 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
             snprintf(palette_line, sizeof(palette_line), "  %s - %s", name, description);
         }
         session_send_system_line(ctx, palette_line);
+        if ((idx + 1) % 16 == 0) {
+            session_send_system_line(ctx, ""); // Add a blank line after every 16 entries
+        }
     }
     session_send_system_line(ctx, "Apply a palette with /palette <name>.");
     return;
