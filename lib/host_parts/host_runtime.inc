@@ -82,14 +82,28 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
         default:
           break;
       }
-      if (descriptor->is_256_color) {
-        current_len += (size_t)snprintf(full_palette_list + current_len, sizeof(full_palette_list) - current_len, "  %s - %s (256-color)\n", name, description);
-      } else {
-        current_len += (size_t)snprintf(full_palette_list + current_len, sizeof(full_palette_list) - current_len, "  %s - %s\n", name, description);
-      }
-      if (current_len >= sizeof(full_palette_list) - 1) { // Check for buffer overflow
-          break;
-      }
+        size_t written_chars;
+        size_t remaining_buffer_size = sizeof(full_palette_list) - current_len;
+
+        if (descriptor->is_256_color) {
+            written_chars = (size_t)snprintf(full_palette_list + current_len, remaining_buffer_size, "  %s - %s (256-color)\n", name, description);
+        } else {
+            written_chars = (size_t)snprintf(full_palette_list + current_len, remaining_buffer_size, "  %s - %s\n", name, description);
+        }
+
+        if (written_chars >= remaining_buffer_size) {
+            // The current snprintf call would have overflowed or exactly filled the buffer.
+            // We need to send the current content and then break.
+            full_palette_list[sizeof(full_palette_list) - 1] = '\0'; // Ensure null termination
+            session_send_system_line(ctx, full_palette_list);
+            current_len = 0; // Reset for the next message
+
+            // Add the "Apply a palette..." message and break
+            snprintf(full_palette_list + current_len, sizeof(full_palette_list) - current_len, "Apply a palette with /palette <name>.");
+            break; // Exit the loop
+        } else {
+            current_len += written_chars;
+        }
     }
     current_len += (size_t)snprintf(full_palette_list + current_len, sizeof(full_palette_list) - current_len, "Apply a palette with /palette <name>.");
     session_send_system_line(ctx, full_palette_list);
