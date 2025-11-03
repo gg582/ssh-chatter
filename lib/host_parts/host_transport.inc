@@ -1171,7 +1171,7 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
     {"gyeonggi-modern-256", &PALETTE_NAME_GYEONGGI_MODERN_256, &PALETTE_DESC_GYEONGGI_MODERN_256, "xterm:231", "xterm-bg:16", false, "xterm:229", "xterm-bg:16", "xterm-bg:123", false, true},
     {"korean-palace-256", &PALETTE_NAME_KOREAN_PALACE_256, &PALETTE_DESC_KOREAN_PALACE_256, "xterm:229", "xterm-bg:16", true, "xterm:196", "xterm-bg:16", "xterm-bg:34", false, true},
     {"gyeongsangbukdo-256", &PALETTE_NAME_GYEONGSANGBUKDO_256, &PALETTE_DESC_GYEONGSANGBUKDO_256, "xterm:229", "xterm-bg:16", false, "xterm:118", "xterm-bg:16", "xterm-bg:231", false, true},
-    {"daegu-summer-256", &PALETTE_NAME_DAEGU_SUMER_256, &PALETTE_DESC_DAEGU_SUMMER_256, "xterm:203", "xterm-bg:16", true, "xterm:229", "xterm-bg:16", "xterm-bg:203", true, true},
+    {"daegu-summer-256", &PALETTE_NAME_DAEGU_SUMMER_256, &PALETTE_DESC_DAEGU_SUMMER_256, "xterm:203", "xterm-bg:16", true, "xterm:229", "xterm-bg:16", "xterm-bg:203", true, true},
     {"gyeongju-heritage-256", &PALETTE_NAME_GYEONGJU_HERITAGE_256, &PALETTE_DESC_GYEONGJU_HERITAGE_256, "xterm:231", "xterm-bg:16", false, "xterm:229", "xterm-bg:16", "xterm-bg:20", false, true},
     {"kangwon-winter-256", &PALETTE_NAME_KANGWON_WINTER_256, &PALETTE_DESC_KANGWON_WINTER_256, "xterm:231", "xterm-bg:20", true, "xterm:123", "xterm-bg:20", "xterm-bg:15", true, true},
     {"ulsan-steel-256", &PALETTE_NAME_ULSAN_STEEL_256, &PALETTE_DESC_ULSAN_STEEL_256, "xterm:203", "xterm-bg:16", true, "xterm:229", "xterm-bg:16", "xterm-bg:196", true, true},
