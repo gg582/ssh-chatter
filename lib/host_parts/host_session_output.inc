@@ -307,7 +307,7 @@ static bool session_token_is_suspicious_command(const char *token) {
     "tftp",      "ftpget",   "admin",    "bash",     "su",        "root"
   };
 
-  if(is_pure_ascii(token)) {
+  if(!is_pure_ascii(token) || strnlen(token, SSH_CHATTER_MESSAGE_LIMIT) < 8) {
     return false;
   }
 
