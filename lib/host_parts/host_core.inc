@@ -4184,37 +4184,6 @@ static void session_format_help_entries_to_buffer(session_ctx_t *ctx, const sess
   buffer[current_offset] = '\0';
 }
 
-static void session_help_send_entries(session_ctx_t *ctx, const session_help_entry_t *entries, size_t count) {
-  if (ctx == NULL || entries == NULL) {
-    return;
-  }
-
-  const size_t language_index = (size_t)session_ui_language_current(ctx);
-
-  for (size_t idx = 0; idx < count; ++idx) {
-    const session_help_entry_t *entry = &entries[idx];
-    const char *format = entry->description[language_index];
-    if (format == NULL || format[0] == '\0') {
-      continue;
-    }
-
-    char description[SSH_CHATTER_MESSAGE_LIMIT];
-    const char *args[SESSION_HELP_TEMPLATE_ARG_LIMIT];
-    size_t arg_count = session_help_collect_arguments(ctx, entry->description_args, entry->description_arg_count, args,
-                                                      sizeof(args) / sizeof(args[0]));
-    session_format_template(format, args, arg_count, description, sizeof(description));
-
-    if (entry->kind == SESSION_HELP_ENTRY_TEXT) {
-      session_send_system_line(ctx, description);
-      continue;
-    }
-
-    char line[SSH_CHATTER_MESSAGE_LIMIT];
-    session_format_help_line(ctx, entry, description, line, sizeof(line));
-    session_send_system_line(ctx, line);
-  }
-}
-
 #ifndef MSG_DONTWAIT
 #define MSG_DONTWAIT 0
 #endif

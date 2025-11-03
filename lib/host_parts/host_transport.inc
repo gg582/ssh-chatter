@@ -1460,7 +1460,6 @@ static const char *session_command_prefix(const session_ctx_t *ctx);
 static int session_utf8_display_width(const char *text);
 static void session_format_help_line(session_ctx_t *ctx, const session_help_entry_t *entry, const char *description,
                                      char *buffer, size_t length);
-static void session_help_send_entries(session_ctx_t *ctx, const session_help_entry_t *entries, size_t count);
 static bool session_fetch_weather_summary(const char *region, const char *city, char *summary, size_t summary_len);
 static void session_handle_poll(session_ctx_t *ctx, const char *arguments);
 static void session_handle_vote(session_ctx_t *ctx, size_t option_index);
