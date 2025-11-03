@@ -4138,6 +4138,52 @@ static void session_format_help_line(session_ctx_t *ctx, const session_help_entr
   snprintf(buffer, length, "%s%s- %s", label, padding_buffer, description != NULL ? description : "");
 }
 
+static void session_format_help_entries_to_buffer(session_ctx_t *ctx, const session_help_entry_t *entries,
+                                                  size_t count, char *buffer, size_t buffer_length) {
+  if (ctx == NULL || entries == NULL || buffer == NULL || buffer_length == 0U) {
+    if (buffer != NULL && buffer_length > 0U) {
+      buffer[0] = '\0';
+    }
+    return;
+  }
+
+  buffer[0] = '\0';
+  size_t current_offset = 0U;
+  const size_t language_index = (size_t)session_ui_language_current(ctx);
+
+  for (size_t idx = 0; idx < count; ++idx) {
+    const session_help_entry_t *entry = &entries[idx];
+    const char *format = entry->description[language_index];
+    if (format == NULL || format[0] == '\0') {
+      continue;
+    }
+
+    char description[SSH_CHATTER_MESSAGE_LIMIT];
+    const char *args[SESSION_HELP_TEMPLATE_ARG_LIMIT];
+    size_t arg_count = session_help_collect_arguments(ctx, entry->description_args, entry->description_arg_count, args,
+                                                      sizeof(args) / sizeof(args[0]));
+    session_format_template(format, args, arg_count, description, sizeof(description));
+
+    char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
+    if (entry->kind == SESSION_HELP_ENTRY_TEXT) {
+      snprintf(line_buffer, sizeof(line_buffer), "%s", description);
+    } else {
+      session_format_help_line(ctx, entry, description, line_buffer, sizeof(line_buffer));
+    }
+
+    size_t line_len = strnlen(line_buffer, sizeof(line_buffer));
+    if (current_offset + line_len + 1U < buffer_length) { // +1 for newline
+      memcpy(buffer + current_offset, line_buffer, line_len);
+      current_offset += line_len;
+      buffer[current_offset++] = '\n';
+    } else {
+      // Buffer full, stop adding lines
+      break;
+    }
+  }
+  buffer[current_offset] = '\0';
+}
+
 static void session_help_send_entries(session_ctx_t *ctx, const session_help_entry_t *entries, size_t count) {
   if (ctx == NULL || entries == NULL) {
     return;

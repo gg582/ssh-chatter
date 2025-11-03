@@ -1163,7 +1163,7 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
   {"jpn-pc98-256", &PALETTE_NAME_JPN_PC98_256, &PALETTE_DESC_JPN_PC98_256, "xterm:226", "xterm-bg:16", false, "xterm:196", "xterm-bg:16", "xterm-bg:226", false, true},
   {"deep-blue-256", &PALETTE_NAME_DEEP_BLUE_256, &PALETTE_DESC_DEEP_BLUE_256, "xterm:15", "xterm-bg:20", true, "xterm:51", "xterm-bg:20", "xterm-bg:15", true, true},
   {"korea-256", &PALETTE_NAME_KOREA_256, &PALETTE_DESC_KOREA_256, "xterm:81", "xterm-bg:20", true, "xterm:231", "xterm-bg:20", "xterm-bg:196", true, true},
-  {"neo-seoul-256", &PALETTE_NAME_NEO_SEOUL_256, &PALETTE_DESC_NEO_SEOUL_256, "xterm:207", "xterm-bg:16", true, "xterm:123", "xterm-bg:16", "xterm-bg:51", true, true},
+  {"neo-seoul-256", &PALETTE_NAME_NEO_SEOUL_256, &PALETTE_DESC_NEO_SEOUL_256, "xterm:207", "xterm-bg:16", true, "xterm:117", "xterm-bg:16", "xterm-bg:51", true, true},
   {"incheon-industrial-256", &PALETTE_NAME_INCHEON_INDUSTRIAL_256, &PALETTE_DESC_INCHEON_INDUSTRIAL_256, "xterm:229", "xterm-bg:16", true, "xterm:229", "xterm-bg:16", "xterm-bg:203", true, true},
   {"gyeonggi-modern-256", &PALETTE_NAME_GYEONGGI_MODERN_256, &PALETTE_DESC_GYEONGGI_MODERN_256, "xterm:231", "xterm-bg:16", false, "xterm:229", "xterm-bg:16", "xterm-bg:123", false, true},
   {"korean-palace-256", &PALETTE_NAME_KOREAN_PALACE_256, &PALETTE_DESC_KOREAN_PALACE_256, "xterm:229", "xterm-bg:16", true, "xterm:196", "xterm-bg:16", "xterm-bg:34", false, true},
@@ -1468,6 +1468,8 @@ static void session_handle_named_vote(session_ctx_t *ctx, size_t option_index, c
 static void session_handle_elect_command(session_ctx_t *ctx, const char *arguments);
 static void session_handle_vote_command(session_ctx_t *ctx, const char *arguments, bool allow_multiple);
 static void session_handle_alpha_centauri_landers(session_ctx_t *ctx);
+static void session_format_help_entries_to_buffer(session_ctx_t *ctx, const session_help_entry_t *entries,
+                                                  size_t count, char *buffer, size_t buffer_length);
 static void session_print_help(session_ctx_t *ctx);
 static void session_print_help_extra(session_ctx_t *ctx);
 static void session_handle_set_ui_lang(session_ctx_t *ctx, const char *arguments);

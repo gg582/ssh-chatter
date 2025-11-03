@@ -938,13 +938,13 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
     return;
   }
 
-  char prefixed_message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(prefixed_message, sizeof(prefixed_message), "[system] %s", message);
-
-  if (ctx->game.active && ctx->game.type != SESSION_GAME_LIARGAME) {
-    session_send_raw_text(ctx, prefixed_message);
+  if (ctx->game.active) { // If game is active, send raw text without [system] prefix
+    session_send_raw_text(ctx, message);
     return;
   }
+
+  char prefixed_message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(prefixed_message, sizeof(prefixed_message), "[system] %s", message);
 
   session_send_bubble_message(ctx, false, prefixed_message);
 }
@@ -3482,14 +3482,17 @@ static void session_print_help(session_ctx_t *ctx) {
   const session_ui_locale_t *locale = session_ui_get_locale(ctx);
   const char *prefix = session_command_prefix(ctx);
 
+  char help_buffer[SSH_CHATTER_MESSAGE_LIMIT * 32]; // A large enough buffer for help messages
+  help_buffer[0] = '\0';
+
   if (locale->help_title != NULL && locale->help_title[0] != '\0') {
     session_send_system_line(ctx, locale->help_title);
   }
 
-  session_help_send_entries(ctx, kSessionHelpEssential,
-                            sizeof(kSessionHelpEssential) / sizeof(kSessionHelpEssential[0]));
-
-  session_send_system_line(ctx, "");
+  session_format_help_entries_to_buffer(ctx, kSessionHelpEssential,
+                                        sizeof(kSessionHelpEssential) / sizeof(kSessionHelpEssential[0]),
+                                        help_buffer, sizeof(help_buffer));
+  session_send_raw_text(ctx, help_buffer);
 
   if (locale->help_hint_extra != NULL && locale->help_hint_extra[0] != '\0') {
     const char *args[] = {prefix};
@@ -3515,14 +3518,20 @@ static void session_print_help_extra(session_ctx_t *ctx) {
   const session_ui_locale_t *locale = session_ui_get_locale(ctx);
   const char *prefix = session_command_prefix(ctx);
 
+  char help_buffer[SSH_CHATTER_MESSAGE_LIMIT * 64]; // A large enough buffer for help messages
+  help_buffer[0] = '\0';
+
   if (locale->help_extra_title != NULL && locale->help_extra_title[0] != '\0') {
     session_send_system_line(ctx, locale->help_extra_title);
   }
 
-  session_help_send_entries(ctx, kSessionHelpExtended,
-                            sizeof(kSessionHelpExtended) / sizeof(kSessionHelpExtended[0]));
+  session_format_help_entries_to_buffer(ctx, kSessionHelpExtended,
+                                        sizeof(kSessionHelpExtended) / sizeof(kSessionHelpExtended[0]),
+                                        help_buffer, sizeof(help_buffer));
+  session_send_raw_text(ctx, help_buffer);
 
-  session_send_system_line(ctx, "");
+  // Clear buffer for next section
+  help_buffer[0] = '\0';
 
   if (locale->help_extra_hint != NULL && locale->help_extra_hint[0] != '\0') {
     const char *args[] = {prefix};
@@ -3536,8 +3545,10 @@ static void session_print_help_extra(session_ctx_t *ctx) {
     if (locale->help_operator_title != NULL && locale->help_operator_title[0] != '\0') {
       session_send_system_line(ctx, locale->help_operator_title);
     }
-    session_help_send_entries(ctx, kSessionHelpOperator,
-                              sizeof(kSessionHelpOperator) / sizeof(kSessionHelpOperator[0]));
+    session_format_help_entries_to_buffer(ctx, kSessionHelpOperator,
+                                          sizeof(kSessionHelpOperator) / sizeof(kSessionHelpOperator[0]),
+                                          help_buffer, sizeof(help_buffer));
+    session_send_raw_text(ctx, help_buffer);
   }
 }
 
