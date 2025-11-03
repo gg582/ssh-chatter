@@ -73,7 +73,8 @@ void session_send_bubble_message(session_ctx_t *ctx, bool is_user, const char *m
     for (int i = 0; i < max_width + 2; ++i) {
         strncat(top_border, "─", sizeof(top_border) - strlen(top_border) - 1);
     }
-    strncat(top_border, "╮" ANSI_RESET, sizeof(top_border) - strlen(top_border) - 1);
+    strncat(top_border, "╮", sizeof(top_border) - strlen(top_border) - 1);
+    strncat(top_border, ANSI_RESET, sizeof(top_border) - strlen(top_border) - 1);
     session_send_raw_text(ctx, top_border);
 
     // Middle lines
@@ -84,7 +85,8 @@ void session_send_bubble_message(session_ctx_t *ctx, bool is_user, const char *m
         for (int j = 0; j < max_width - current_width; ++j) {
             strncat(middle_line, " ", sizeof(middle_line) - strlen(middle_line) - 1);
         }
-        strncat(middle_line, " │" ANSI_RESET, sizeof(middle_line) - strlen(middle_line) - 1);
+        strncat(middle_line, " │", sizeof(middle_line) - strlen(middle_line) - 1);
+        strncat(middle_line, ANSI_RESET, sizeof(middle_line) - strlen(middle_line) - 1);
         session_send_raw_text(ctx, middle_line);
     }
 
@@ -94,7 +96,8 @@ void session_send_bubble_message(session_ctx_t *ctx, bool is_user, const char *m
     for (int i = 0; i < max_width + 2; ++i) {
         strncat(bottom_border, "─", sizeof(bottom_border) - strlen(bottom_border) - 1);
     }
-    strncat(bottom_border, "╯" ANSI_RESET, sizeof(bottom_border) - strlen(bottom_border) - 1);
+    strncat(bottom_border, "╯", sizeof(bottom_border) - strlen(bottom_border) - 1);
+    strncat(bottom_border, ANSI_RESET, sizeof(bottom_border) - strlen(bottom_border) - 1);
     session_send_raw_text(ctx, bottom_border);
 }
 

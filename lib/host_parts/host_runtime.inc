@@ -53,10 +53,13 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0' || strcasecmp(working, "list") == 0) {
-    session_send_system_line(ctx, "Available palettes:");
+    char full_palette_list[SSH_CHATTER_MESSAGE_LIMIT * 2]; // Increased buffer size for multi-line output
+    size_t current_len = 0;
+
+    current_len += snprintf(full_palette_list + current_len, sizeof(full_palette_list) - current_len, "Available palettes:\n");
+
     for (size_t idx = 0U; idx < sizeof(PALETTE_DEFINITIONS) / sizeof(PALETTE_DEFINITIONS[0]); ++idx) {
       const palette_descriptor_t *descriptor = &PALETTE_DEFINITIONS[idx];
-      char line[SSH_CHATTER_MESSAGE_LIMIT];
       const char *name = descriptor->name->en;
       const char *description = descriptor->description->en;
       switch (session_ui_language_current(ctx)) {
@@ -79,10 +82,17 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
         default:
           break;
       }
-      snprintf(line, sizeof(line), "  %s - %s", name, description);
-      session_send_system_line(ctx, line);
+      if (descriptor->is_256_color) {
+        current_len += snprintf(full_palette_list + current_len, sizeof(full_palette_list) - current_len, "  %s - %s (256-color)\n", name, description);
+      } else {
+        current_len += snprintf(full_palette_list + current_len, sizeof(full_palette_list) - current_len, "  %s - %s\n", name, description);
+      }
+      if (current_len >= sizeof(full_palette_list) - 1) { // Check for buffer overflow
+          break;
+      }
     }
-    session_send_system_line(ctx, "Apply a palette with /palette <name>.");
+    current_len += snprintf(full_palette_list + current_len, sizeof(full_palette_list) - current_len, "Apply a palette with /palette <name>.");
+    session_send_system_line(ctx, full_palette_list);
     return;
   }
 
