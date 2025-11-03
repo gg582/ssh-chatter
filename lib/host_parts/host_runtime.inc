@@ -53,7 +53,7 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
   trim_whitespace_inplace(working);
 
   if (working[0] == '\0' || strcasecmp(working, "list") == 0) {
-    char full_palette_list[SSH_CHATTER_MESSAGE_LIMIT * 2]; // Increased buffer size for multi-line output
+    char full_palette_list[SSH_CHATTER_MESSAGE_LIMIT * 4]; // Increased buffer size for multi-line output
     size_t current_len = 0;
 
     current_len += (size_t)snprintf(full_palette_list + current_len, sizeof(full_palette_list) - current_len, "Available palettes:\n");
@@ -93,14 +93,11 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments) {
 
         if (written_chars >= remaining_buffer_size) {
             // The current snprintf call would have overflowed or exactly filled the buffer.
-            // We need to send the current content and then break.
+            // We need to send the current content and then continue.
             full_palette_list[sizeof(full_palette_list) - 1] = '\0'; // Ensure null termination
             session_send_system_line(ctx, full_palette_list);
             current_len = 0; // Reset for the next message
-
-            // Add the "Apply a palette..." message and break
-            snprintf(full_palette_list + current_len, sizeof(full_palette_list) - current_len, "Apply a palette with /palette <name>.");
-            break; // Exit the loop
+            continue; // Continue to the next iteration of the loop
         } else {
             current_len += written_chars;
         }
