@@ -793,6 +793,11 @@ typedef struct host {
   struct timespec rss_last_run;
 } host_t;
 
+typedef struct {
+    unsigned int code_point;
+    int count;
+} utf8_code_count_t;
+
 void host_init(host_t *host, auth_profile_t *auth);
 void host_set_motd(host_t *host, const char *motd);
 int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory,

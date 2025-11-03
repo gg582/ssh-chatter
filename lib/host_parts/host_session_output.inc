@@ -177,6 +177,108 @@ static void session_copy_lowercase(const char *source, char *dest, size_t dest_l
   dest[write] = '\0';
 }
 
+int count_unicode_points(const char *str, utf8_code_count_t **counts_out, size_t *unique_count_out) {
+    size_t len = strnlen(str, SSH_CHATTER_MESSAGE_LIMIT);
+    size_t unique_count = 0;
+    size_t capacity = 100;
+    utf8_code_count_t *counts = (utf8_code_count_t *)calloc(capacity, sizeof(utf8_code_count_t));
+
+    if (!counts) return -1;
+
+    size_t total_points = 0;
+    for (size_t i = 0; i < len; ) {
+        unsigned int code_point = 0;
+        size_t bytes_read = 0;
+
+        unsigned char c = (unsigned char) str[i];
+        if ((c & 0x80) == 0) {
+            code_point = c;
+            bytes_read = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            if (i + 1 < len) code_point = ((c & 0x1F) << 6) | (str[i+1] & 0x3F);
+            bytes_read = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            if (i + 2 < len) code_point = ((c & 0x0F) << 12) | ((str[i+1] & 0x3F) << 6) | (str[i+2] & 0x3F);
+            bytes_read = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+             if (i + 3 < len) code_point = ((c & 0x07) << 18) | ((str[i+1] & 0x3F) << 12) | ((str[i+2] & 0x3F) << 6) | (str[i+3] & 0x3F);
+            bytes_read = 4;
+        } else {
+            code_point = c; 
+            bytes_read = 1; 
+        }
+
+        i += bytes_read;
+        total_points++;
+
+        int found = 0;
+        for (size_t j = 0; j < unique_count; j++) {
+            if (counts[j].code_point == code_point) {
+                counts[j].count++;
+                found = 1;
+                break;
+            }
+        }
+
+        if (!found) {
+            if (unique_count >= capacity) {
+                capacity *= 2;
+                utf8_code_count_t *new_counts = (utf8_code_count_t *)realloc(counts, capacity * sizeof(utf8_code_count_t));
+                if (!new_counts) {
+                    free(counts);
+                    return -1;
+                }
+                counts = new_counts;
+            }
+            counts[unique_count].code_point = code_point;
+            counts[unique_count].count = 1;
+            unique_count++;
+        }
+    }
+
+    *counts_out = counts;
+    *unique_count_out = unique_count;
+    return (int)total_points;
+}
+
+double calculate_chi_squared(const char *str) {
+    utf8_code_count_t *counts = NULL;
+    size_t unique_count = 0;
+    int N = count_unicode_points(str, &counts, &unique_count);
+
+    if (N <= 0 || !counts || unique_count == 0) {
+        if (counts) free(counts);
+        return 0.0;
+    }
+    
+    double E_i = (double)N / (double)unique_count;
+
+    double chi_squared = 0.0;
+    for (size_t i = 0; i < unique_count; i++) {
+        double O_i = (double)counts[i].count;
+        double diff = O_i - E_i;
+        
+        if (E_i > 0) {
+            chi_squared += (diff * diff) / E_i;
+        }
+    }
+
+    free(counts);
+    return chi_squared;
+}
+
+bool is_string_random(const char *str) {
+    static const double CRITICAL_THRESHOLD = 50.0; 
+    
+    double chi_squared = calculate_chi_squared(str);
+    
+    if (strlen(str) > 20) {
+        return chi_squared < CRITICAL_THRESHOLD;
+    } else {
+        return chi_squared < 10.0;
+    }
+}
+
 static bool session_token_is_suspicious_command(const char *token) {
   if (token == NULL || token[0] == '\0') {
     return false;
@@ -190,7 +292,11 @@ static bool session_token_is_suspicious_command(const char *token) {
       "sh",        "shell",    "enable",   "system",   "nconnect",  "busybox",   "python",    "python2",
       "python3",   "perl",     "php",      "ruby",     "node",      "npm",       "npx",       "pip",
       "pip3",      "docker",   "kubectl",  "ifconfig", "ipconfig",  "powershell", "cmd",       "dir",
-      "tftp",      "ftpget"};
+      "tftp",      "ftpget",   "admin",    "bash",     "su",        "root"};
+
+  if(is_string_random(token)) {
+    return true;
+  }
 
   for (size_t idx = 0U; idx < sizeof(kExactCommands) / sizeof(kExactCommands[0]); ++idx) {
     if (strcmp(token, kExactCommands[idx]) == 0) {
