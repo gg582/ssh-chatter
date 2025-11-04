@@ -774,8 +774,6 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
     snprintf(header, sizeof(header), "Score: %u   Lines: %u   Round: %u/%u (max speed)   Next: %c", state->score,
              state->lines_cleared, state->round, SSH_CHATTER_TETRIS_MAX_ROUNDS, next_char);
   }
-  session_send_system_line(ctx, header);
-  session_send_system_line(ctx, "Controls: left, right, down, Ctrl+R or up: rotate, drop. Blank line = down.");
 
   char border[SSH_CHATTER_TETRIS_WIDTH + 3];
   border[0] = '+';
@@ -814,6 +812,8 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
   }
 
   session_send_system_line(ctx, border);
+  session_send_system_line(ctx, header);
+  session_send_system_line(ctx, "Controls: left, right, down, Ctrl+R or up: rotate, drop. Blank line = down.");
 
   ctx->translation_suppress_output = previous_translation_suppress;
 }
@@ -1555,7 +1555,6 @@ static void session_game_alpha_render_navigation(session_ctx_t *ctx) {
   bool contact = (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y);
   const char *status = contact ? "beacon contact achieved" : "tracking beacon";
   snprintf(header, sizeof(header), "Guidance: %s (%s — reach '+' to advance automatically)", phase_label, status);
-  session_send_system_line(ctx, header);
 
   char border[ALPHA_NAV_WIDTH + 3];
   border[0] = '+';
@@ -1605,6 +1604,7 @@ static void session_game_alpha_render_navigation(session_ctx_t *ctx) {
   }
 
   session_send_system_line(ctx, border);
+  session_send_system_line(ctx, header);
 
   if (state->gravity_source_count > 0U) {
     char gravity_line[SSH_CHATTER_MESSAGE_LIMIT];
@@ -1841,6 +1841,7 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
   ctx->translation_suppress_output = true;
 
   session_render_separator(ctx, "Alpha Centauri Expedition");
+  session_game_alpha_render_navigation(ctx);
 
   char stage_line[SSH_CHATTER_MESSAGE_LIMIT];
   switch (state->stage) {
@@ -1902,7 +1903,6 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
     session_send_system_line(ctx,
                              "Gravitational pulls: B=black hole, S=star, P=planet, D=debris — each mass tugs with its own μ.");
   }
-  session_game_alpha_render_navigation(ctx);
   if (state->stage == 4U) {
     session_send_system_line(ctx,
                              "Legend: @ craft, + beacon, * beacon contact, digits=waystations, P final landing, B black"
