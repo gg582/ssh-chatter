@@ -3209,7 +3209,7 @@ void host_init(host_t *host, auth_profile_t *auth) {
     humanized_log_error("security", "failed to initialise layered message encryption", errno != 0 ? errno : EIO);
   }
   host_load_lan_operator_credentials(host);
-  const palette_descriptor_t *default_palette = palette_find_descriptor("clean");
+  const palette_descriptor_t *default_palette = palette_find_descriptor("monokai");
   if (default_palette != NULL) {
     host_apply_palette_descriptor(host, default_palette);
   } else {
