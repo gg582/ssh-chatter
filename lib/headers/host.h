@@ -204,6 +204,7 @@ typedef enum chat_attachment_type {
 
 typedef struct chat_history_entry {
   bool is_user_message;
+  bool preserve_whitespace;
   char message[SSH_CHATTER_MESSAGE_LIMIT];
   char username[SSH_CHATTER_USERNAME_LEN];
   const char *user_color_code;

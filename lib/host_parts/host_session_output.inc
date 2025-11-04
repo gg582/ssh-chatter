@@ -946,7 +946,7 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
   char prefixed_message[SSH_CHATTER_MESSAGE_LIMIT];
   snprintf(prefixed_message, sizeof(prefixed_message), "[system] %s", message);
 
-  session_send_bubble_message(ctx, false, prefixed_message);
+  session_send_bubble_message(ctx, false, prefixed_message, true);
 }
 
 void session_send_raw_text(session_ctx_t *ctx, const char *text) {
@@ -1128,7 +1128,7 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post, 
   strncat(full_post_content, "\n", sizeof(full_post_content) - strlen(full_post_content) - 1);
   strncat(full_post_content, post->body, sizeof(full_post_content) - strlen(full_post_content) - 1);
 
-  session_send_bubble_message(ctx, false, full_post_content);
+  session_send_bubble_message(ctx, false, full_post_content, false);
 
   if (notice != NULL && notice[0] != '\0') {
     session_send_system_line(ctx, notice);
@@ -1560,7 +1560,7 @@ static void session_bbs_render_editor(session_ctx_t *ctx, const char *status) {
     }
   }
 
-  session_send_bubble_message(ctx, false, full_editor_content);
+  session_send_bubble_message(ctx, false, full_editor_content, false);
 
   session_render_prompt(ctx, false);
   ctx->bbs_rendering_editor = false;
@@ -1977,7 +1977,7 @@ static void session_local_backspace(session_ctx_t *ctx) {
   }
 }
 
-static void session_clear_input(session_ctx_t *ctx) {
+static void session_clear_input_base(session_ctx_t *ctx, bool render_prompt) {
   if (ctx == NULL) {
     return;
   }
@@ -1987,9 +1987,42 @@ static void session_clear_input(session_ctx_t *ctx) {
   ctx->input_history_position = -1;
   ctx->input_escape_active = false;
   ctx->input_escape_length = 0U;
-  if (!ctx->bracket_paste_active) {
-    session_refresh_input_line(ctx);
+
+  if (ctx->bracket_paste_active) {
+    return;
   }
+
+  if (render_prompt) {
+    session_refresh_input_line(ctx);
+    return;
+  }
+
+  if (!session_transport_active(ctx)) {
+    return;
+  }
+
+  bool locked = session_output_lock(ctx);
+  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
+  if (bg[0] != '\0') {
+    session_channel_write(ctx, bg, strlen(bg));
+  }
+
+  static const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
+  session_channel_write(ctx, clear_sequence, sizeof(clear_sequence) - 1U);
+
+  if (bg[0] != '\0') {
+    session_channel_write(ctx, bg, strlen(bg));
+  }
+
+  if (locked) {
+    session_output_unlock(ctx);
+  }
+}
+
+static void session_clear_input(session_ctx_t *ctx) { session_clear_input_base(ctx, true); }
+
+static void session_clear_input_without_prompt(session_ctx_t *ctx) {
+  session_clear_input_base(ctx, false);
 }
 
 static bool session_try_command_completion(session_ctx_t *ctx) {
@@ -2759,11 +2792,11 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
       strncat(formatted, entry->message, sizeof(formatted) - strlen(formatted) - 1U);
     }
 
-    session_send_bubble_message(ctx, true, formatted);
+    session_send_bubble_message(ctx, true, formatted, !entry->preserve_whitespace);
     return;
   }
 
-  session_send_bubble_message(ctx, false, entry->message);
+  session_send_bubble_message(ctx, false, entry->message, !entry->preserve_whitespace);
 }
 
 // Present a summary of a poll, optionally showing the label used for named polls.

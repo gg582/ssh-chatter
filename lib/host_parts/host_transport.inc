@@ -1314,6 +1314,7 @@ static void session_set_input_text(session_ctx_t *ctx, const char *text);
 static void session_local_echo_char(session_ctx_t *ctx, char ch);
 static void session_local_backspace(session_ctx_t *ctx);
 static void session_clear_input(session_ctx_t *ctx);
+static void session_clear_input_without_prompt(session_ctx_t *ctx);
 static bool session_try_command_completion(session_ctx_t *ctx);
 static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch);
 static session_ctx_t *session_create(void);
@@ -1330,8 +1331,10 @@ static void session_history_navigate(session_ctx_t *ctx, int direction);
 static void session_scrollback_reset_position(session_ctx_t *ctx);
 static void session_scrollback_navigate(session_ctx_t *ctx, int direction);
 static bool session_try_localized_command_forward(session_ctx_t *ctx, const char *line);
-static void chat_history_entry_prepare_user(chat_history_entry_t *entry, const session_ctx_t *from, const char *message);
-static bool host_history_record_user(host_t *host, const session_ctx_t *from, const char *message, chat_history_entry_t *stored_entry);
+static void chat_history_entry_prepare_user(chat_history_entry_t *entry, const session_ctx_t *from, const char *message,
+                                            bool preserve_whitespace);
+static bool host_history_record_user(host_t *host, const session_ctx_t *from, const char *message, bool preserve_whitespace,
+                                     chat_history_entry_t *stored_entry);
 static bool host_history_commit_entry(host_t *host, chat_history_entry_t *entry, chat_history_entry_t *stored_entry);
 static void host_notify_external_clients(host_t *host, const chat_history_entry_t *entry);
 static bool host_history_append_locked(host_t *host, const chat_history_entry_t *entry);
@@ -2974,7 +2977,7 @@ static void chat_room_broadcast(chat_room_t *room, const char *message, const se
 
   chat_history_entry_t entry = {0};
   if (from != NULL) {
-    chat_history_entry_prepare_user(&entry, from, message);
+    chat_history_entry_prepare_user(&entry, from, message, false);
   }
 
   pthread_mutex_lock(&room->lock);
@@ -3298,6 +3301,7 @@ static bool host_state_read_history_entry(FILE *fp, uint32_t version, chat_histo
     } else {
       entry->attachment_type = (chat_attachment_type_t)serialized.attachment_type;
     }
+    entry->preserve_whitespace = serialized.reserved[0] != 0U;
     snprintf(entry->attachment_target, sizeof(entry->attachment_target), "%s", serialized.attachment_target);
     snprintf(entry->attachment_caption, sizeof(entry->attachment_caption), "%s", serialized.attachment_caption);
     memcpy(entry->reaction_counts, serialized.reaction_counts, sizeof(entry->reaction_counts));
@@ -3366,6 +3370,7 @@ static bool host_state_write_history_entry(FILE *fp, const chat_history_entry_t 
   snprintf(serialized.attachment_caption, sizeof(serialized.attachment_caption), "%s", entry->attachment_caption);
   memcpy(serialized.reaction_counts, entry->reaction_counts, sizeof(serialized.reaction_counts));
   memset(serialized.reserved, 0, sizeof(serialized.reserved));
+  serialized.reserved[0] = entry->preserve_whitespace ? 1U : 0U;
 
   return fwrite(&serialized, sizeof(serialized), 1U, fp) == 1U;
 }
@@ -3924,13 +3929,15 @@ static bool host_replies_find_entry_by_id(host_t *host, uint64_t reply_id, chat_
   return found;
 }
 
-static void chat_history_entry_prepare_user(chat_history_entry_t *entry, const session_ctx_t *from, const char *message) {
+static void chat_history_entry_prepare_user(chat_history_entry_t *entry, const session_ctx_t *from, const char *message,
+                                            bool preserve_whitespace) {
   if (entry == NULL || from == NULL) {
     return;
   }
 
   memset(entry, 0, sizeof(*entry));
   entry->is_user_message = true;
+  entry->preserve_whitespace = preserve_whitespace;
   if (message != NULL) {
     snprintf(entry->message, sizeof(entry->message), "%s", message);
   }
@@ -4028,13 +4035,13 @@ static void host_notify_external_clients(host_t *host, const chat_history_entry_
 }
 
 static bool host_history_record_user(host_t *host, const session_ctx_t *from, const char *message,
-                                     chat_history_entry_t *stored_entry) {
+                                     bool preserve_whitespace, chat_history_entry_t *stored_entry) {
   if (host == NULL || from == NULL || message == NULL || message[0] == '\0') {
     return false;
   }
 
   chat_history_entry_t entry;
-  chat_history_entry_prepare_user(&entry, from, message);
+  chat_history_entry_prepare_user(&entry, from, message, preserve_whitespace);
   return host_history_commit_entry(host, &entry, stored_entry);
 }
 

@@ -2823,7 +2823,7 @@ static void *session_thread(void *arg) {
     chat_room_broadcast(&ctx->owner->room, join_message, NULL);
   }
 
-  session_clear_input(ctx);
+  session_clear_input_without_prompt(ctx);
   session_render_prompt(ctx, true);
 
   char buffer[SSH_CHATTER_MAX_INPUT_LEN];
@@ -2973,7 +2973,7 @@ static void *session_thread(void *arg) {
                     : "ASCII art draft canceled.";
             session_asciiart_cancel(ctx, cancel_message);
           }
-          session_clear_input(ctx);
+          session_clear_input_without_prompt(ctx);
           if (ctx->should_exit) {
             break;
           }
@@ -2986,7 +2986,7 @@ static void *session_thread(void *arg) {
         ctx->input_buffer[ctx->input_length] = '\0';
         session_apply_background_fill(ctx);
         session_handle_exit(ctx);
-        session_clear_input(ctx);
+        session_clear_input_without_prompt(ctx);
         if (ctx->should_exit) {
           break;
         }
@@ -2998,7 +2998,7 @@ static void *session_thread(void *arg) {
         ctx->input_buffer[ctx->input_length] = '\0';
         session_apply_background_fill(ctx);
         session_handle_exit(ctx);
-        session_clear_input(ctx);
+        session_clear_input_without_prompt(ctx);
         if (ctx->should_exit) {
           break;
         }
@@ -3011,21 +3011,21 @@ static void *session_thread(void *arg) {
         session_apply_background_fill(ctx);
         if (ctx->in_rss_mode) {
           session_rss_exit(ctx, NULL);
-          session_clear_input(ctx);
+          session_clear_input_without_prompt(ctx);
           if (ctx->should_exit) {
             break;
           }
           session_render_prompt(ctx, false);
         } else if (ctx->game.active) {
           session_game_suspend(ctx, "Game suspended.");
-          session_clear_input(ctx);
+          session_clear_input_without_prompt(ctx);
           if (ctx->should_exit) {
             break;
           }
           session_render_prompt(ctx, false);
         } else {
           session_handle_exit(ctx);
-          session_clear_input(ctx);
+          session_clear_input_without_prompt(ctx);
           if (ctx->should_exit) {
             break;
           }
@@ -3062,7 +3062,7 @@ static void *session_thread(void *arg) {
           } else {
             session_asciiart_capture_line(ctx, terminator);
           }
-          session_clear_input(ctx);
+          session_clear_input_without_prompt(ctx);
           if (ctx->should_exit) {
             break;
           }
@@ -3083,7 +3083,7 @@ static void *session_thread(void *arg) {
         } else if (composing_draft) {
           session_process_line(ctx, "");
         }
-        session_clear_input(ctx);
+        session_clear_input_without_prompt(ctx);
         if (ctx->should_exit) {
           break;
         }
@@ -3121,7 +3121,7 @@ static void *session_thread(void *arg) {
         ctx->input_buffer[sizeof(ctx->input_buffer) - 1U] = '\0';
         session_history_record(ctx, ctx->input_buffer);
         session_process_line(ctx, ctx->input_buffer);
-        session_clear_input(ctx);
+        session_clear_input_without_prompt(ctx);
         if (ctx->should_exit) {
           break;
         }
