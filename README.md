@@ -9,7 +9,7 @@ SSH-Chatter has started from a C reimplementation of the Go [`ssh-chat`](https:/
 > - Chat with the resident Eliza persona using `/pm eliza <message>` for a direct line without the old `/eliza-chat` command.
 > - `/banname <nickname>` lets operators block suspicious login names up front, forcing clients to pick something else before joining.
 > - Follow communities from inside the terminal with the `/rss` reader (`/rss list`, `/rss read <tag>`, operators manage feeds with `/rss add <url> <tag>` and `/rss del <tag>`).
-> - Matrix rooms can now mirror the chat through a triple-layer AES-256-GCM bridge (`CHATTER_MATRIX_*` toggles encrypt every hop in a Tor-style onion before messages leave the server).
+> - (WIP) Matrix rooms can now mirror the chat through a triple-layer AES-256-GCM bridge (`CHATTER_MATRIX_*` toggles encrypt every hop in a Tor-style onion before messages leave the server).
 
 ## Recent enhancements
 
@@ -73,7 +73,7 @@ confirm the build still succeeds before pushing the result.
 - Suspicious submissions that trip the layered filter are now tracked per-IP; repeated hits trigger an automatic kick and ban, while the rapid reconnect detector allows longer recovery windows so unstable network sessions can rejoin without being penalized.
 - Operators can mark trusted ingress points (VPN exits, reverse proxies, localhost) with `CHATTER_PROTECTED_IPS` (comma-separated, defaults to `127.0.0.1,::1,192.168.0.1`) so emergency bans never lock the daemon out of its own control plane.
 
-## Matrix bridge
+## Matrix bridge(WIP, Unusable)
 
 Set these environment variables (either inside `chatter.env` or the systemd unit) to synchronise the room with Matrix while preserving onion-style secrecy:
 
