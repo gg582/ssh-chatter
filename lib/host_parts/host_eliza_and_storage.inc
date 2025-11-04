@@ -3951,7 +3951,7 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx, const char *mes
   }
 
   chat_history_entry_t entry = {0};
-  if (!host_history_record_user(ctx->owner, ctx, message, &entry)) {
+  if (!host_history_record_user(ctx->owner, ctx, message, false, &entry)) {
     return;
   }
 

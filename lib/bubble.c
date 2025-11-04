@@ -5,6 +5,7 @@
 #include <stdlib.h> // For mbstowcs, strdup, free
 #include <locale.h> // For setlocale
 #include <wctype.h> // For iswspace, wcwidth
+#include <stdbool.h>
 
 // Helper function to calculate the display width of a string, ignoring ANSI escape codes
 static int get_display_width(const char *text) {
@@ -131,13 +132,72 @@ static int wrap_text_to_lines(const char *text, int max_width, char *lines[], in
     return line_count;
 }
 
-void session_send_bubble_message(session_ctx_t *ctx, bool is_user, const char *message) {
+static int split_text_preserving_lines(const char *text, char *lines[], int max_lines) {
+    if (text == NULL || lines == NULL || max_lines <= 0) {
+        return 0;
+    }
+
+    int line_count = 0;
+    const char *cursor = text;
+
+    while (*cursor != '\0' && line_count < max_lines) {
+        const char *line_end = cursor;
+        while (*line_end != '\0' && *line_end != '\n' && *line_end != '\r') {
+            ++line_end;
+        }
+
+        size_t segment_len = (size_t)(line_end - cursor);
+        lines[line_count] = (char *)malloc(segment_len + 1U);
+        if (lines[line_count] == NULL) {
+            for (int idx = 0; idx < line_count; ++idx) {
+                free(lines[idx]);
+            }
+            return 0;
+        }
+
+        if (segment_len > 0U) {
+            memcpy(lines[line_count], cursor, segment_len);
+        }
+        lines[line_count][segment_len] = '\0';
+        ++line_count;
+
+        if (*line_end == '\0') {
+            break;
+        }
+
+        if (*line_end == '\r' && line_end[1] == '\n') {
+            cursor = line_end + 2;
+        } else {
+            cursor = line_end + 1;
+        }
+    }
+
+    if (line_count == 0 && *text == '\0') {
+        lines[line_count] = (char *)malloc(1U);
+        if (lines[line_count] == NULL) {
+            return 0;
+        }
+        lines[line_count][0] = '\0';
+        return 1;
+    }
+
+    return line_count;
+}
+
+void session_send_bubble_message(session_ctx_t *ctx, bool is_user, const char *message, bool auto_wrap) {
     if (ctx == NULL || message == NULL) {
         return;
     }
 
     char *wrapped_lines[SSH_CHATTER_MESSAGE_LIMIT / 2]; // Array to hold wrapped lines
-    int line_count = wrap_text_to_lines(message, MAX_BUBBLE_WIDTH, wrapped_lines, sizeof(wrapped_lines) / sizeof(wrapped_lines[0]));
+    int line_count;
+    if (auto_wrap) {
+        line_count = wrap_text_to_lines(message, MAX_BUBBLE_WIDTH, wrapped_lines,
+                                        sizeof(wrapped_lines) / sizeof(wrapped_lines[0]));
+    } else {
+        line_count = split_text_preserving_lines(message, wrapped_lines,
+                                                 sizeof(wrapped_lines) / sizeof(wrapped_lines[0]));
+    }
     int max_width = 0;
 
     for (int i = 0; i < line_count; ++i) {

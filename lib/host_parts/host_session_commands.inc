@@ -178,7 +178,7 @@ static void session_handle_image(session_ctx_t *ctx, const char *arguments) {
   }
 
   chat_history_entry_t entry;
-  chat_history_entry_prepare_user(&entry, ctx, "shared an image");
+  chat_history_entry_prepare_user(&entry, ctx, "shared an image", false);
   entry.attachment_type = CHAT_ATTACHMENT_IMAGE;
   snprintf(entry.attachment_target, sizeof(entry.attachment_target), "%s", url);
   if (caption != NULL) {
@@ -244,7 +244,7 @@ static void session_handle_video(session_ctx_t *ctx, const char *arguments) {
   }
 
   chat_history_entry_t entry;
-  chat_history_entry_prepare_user(&entry, ctx, "shared a video");
+  chat_history_entry_prepare_user(&entry, ctx, "shared a video", false);
   entry.attachment_type = CHAT_ATTACHMENT_VIDEO;
   snprintf(entry.attachment_target, sizeof(entry.attachment_target), "%s", url);
   if (caption != NULL) {
@@ -310,7 +310,7 @@ static void session_handle_audio(session_ctx_t *ctx, const char *arguments) {
   }
 
   chat_history_entry_t entry;
-  chat_history_entry_prepare_user(&entry, ctx, "shared an audio clip");
+  chat_history_entry_prepare_user(&entry, ctx, "shared an audio clip", false);
   entry.attachment_type = CHAT_ATTACHMENT_AUDIO;
   snprintf(entry.attachment_target, sizeof(entry.attachment_target), "%s", url);
   if (caption != NULL) {
@@ -376,7 +376,7 @@ static void session_handle_files(session_ctx_t *ctx, const char *arguments) {
   }
 
   chat_history_entry_t entry;
-  chat_history_entry_prepare_user(&entry, ctx, "shared a file");
+  chat_history_entry_prepare_user(&entry, ctx, "shared a file", false);
   entry.attachment_type = CHAT_ATTACHMENT_FILE;
   snprintf(entry.attachment_target, sizeof(entry.attachment_target), "%s", url);
   if (caption != NULL) {
@@ -3872,7 +3872,7 @@ static void session_asciiart_commit(session_ctx_t *ctx) {
   host_asciiart_register_post(ctx->owner, ctx->client_ip, &now);
 
   chat_history_entry_t entry = {0};
-  if (!host_history_record_user(ctx->owner, ctx, ctx->asciiart_buffer, &entry)) {
+  if (!host_history_record_user(ctx->owner, ctx, ctx->asciiart_buffer, true, &entry)) {
     session_asciiart_reset(ctx);
     return;
   }
