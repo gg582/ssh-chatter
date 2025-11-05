@@ -1,9 +1,9 @@
 ENABLE_GC ?= 0
 
-CC := cc
+CC := gcc
 CFLAGS = -std=c2x -Ofast \
-	-Werror \
-        -DSSH_CHATTER_USE_GC=$(ENABLE_GC) \
+	        -Werror \
+-Wno-error=deprecated-declarations -DSSH_CHATTER_USE_GC=$(ENABLE_GC) -I lib/headers -I/usr/include -I/usr/include/libssh \
 				-D_DEFAULT_SOURCE \
 				-D_XOPEN_SOURCE=700 \
         -Wall -Wextra -Wshadow -Wformat=2 -Wundef -Wconversion -Wdouble-promotion \

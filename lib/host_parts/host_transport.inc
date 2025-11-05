@@ -234,28 +234,8 @@ static bool host_bind_load_key(ssh_bind bind_handle, const host_key_definition_t
   return host_bind_import_key(bind_handle, definition->algorithm, key_path);
 }
 
-static void host_bind_set_optional_string(ssh_bind bind_handle, ssh_bind_options_e option, const char *value,
-                                          const char *label) {
-  if (bind_handle == NULL || value == NULL || value[0] == '\0') {
-    return;
-  }
 
-  errno = 0;
-  if (ssh_bind_options_set(bind_handle, option, value) == SSH_OK) {
-    return;
-  }
 
-  const char *error_message = ssh_get_error(bind_handle);
-  const bool unsupported_option =
-      (error_message != NULL && strstr(error_message, "Unknown ssh option") != NULL) || errno == ENOTSUP;
-  if (unsupported_option) {
-    return;
-  }
-
-  char message[256];
-  snprintf(message, sizeof(message), "%s", label != NULL ? label : "failed to configure listener option");
-  humanized_log_error("host", error_message != NULL ? error_message : message, errno != 0 ? errno : EIO);
-}
 
 static struct timespec timespec_add_ns(const struct timespec *start, long long nanoseconds) {
   struct timespec result = {0, 0};

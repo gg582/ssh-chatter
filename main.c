@@ -3,6 +3,7 @@
 #include "lib/headers/host.h"
 #include "lib/headers/humanized/humanized.h"
 #include "lib/ssh_chatter_sync.h"
+#include <libssh/libssh.h>
 
 #include <errno.h>
 #include <getopt.h>
@@ -64,7 +65,7 @@ static void sleep_before_restart(unsigned int attempts) {
 int main(int argc, char **argv) {
   setlocale(LC_ALL, "");
   GC_INIT();
-  ssh_init(); // Initialize libssh
+
   ssh_chatter_sync_init(); // Initialize SSH Chatter Sync module
 
   const char *bind_address = nullptr;

@@ -4038,20 +4038,16 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
         continue;
       }
 
-      if (attempted_custom && strcmp(key_path, custom_candidate) != 0) {
-        printf("[listener] using fallback %s host key from %s\n", definition->algorithm, key_path);
-      }
-
       if (!host_bind_load_key(bind_handle, definition, key_path)) {
         continue;
       }
 
       if (!key_loaded) {
         snprintf(preferred_algorithm, sizeof(preferred_algorithm), "%s", definition->algorithm);
+        key_loaded = true;
       }
+
       host_bind_append_algorithm(algorithm_buffer, sizeof(algorithm_buffer), &algorithm_length, definition->algorithm);
-      key_loaded = true;
-      printf("[listener] loaded %s host key from %s\n", definition->algorithm, key_path);
     }
 
     if (fatal_key_error) {
@@ -4060,37 +4056,25 @@ int host_serve(host_t *host, const char *bind_addr, const char *port, const char
       continue;
     }
 
-    if (!key_loaded) {
-      humanized_log_error("host", "no usable host keys found", ENOENT);
+    if (algorithm_length == 0U) {
+      humanized_log_error("host", "no host keys configured", 0);
       ssh_bind_free(bind_handle);
       host_sleep_after_error(host);
       continue;
     }
 
-    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_HOSTKEY_ALGORITHMS, algorithm_buffer,
-                                  "failed to configure host key algorithms");
+    ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY_ALGORITHMS, algorithm_buffer);
     if (preferred_algorithm[0] != '\0') {
-      host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, preferred_algorithm,
-                                    "failed to configure preferred host key");
+      ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HOSTKEY, preferred_algorithm);
     }
-    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_KEY_EXCHANGE, SSH_CHATTER_SUPPORTED_KEX_ALGORITHMS,
-                                  "failed to configure key exchange algorithms");
-    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_CIPHERS_C_S, SSH_CHATTER_STRONG_CIPHERS,
-                                  "failed to configure forward cipher suite");
-    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_CIPHERS_S_C, SSH_CHATTER_STRONG_CIPHERS,
-                                  "failed to configure reverse cipher suite");
-    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_HMAC_C_S, SSH_CHATTER_STRONG_MACS,
-                                  "failed to configure forward MAC list");
-    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_HMAC_S_C, SSH_CHATTER_STRONG_MACS,
-                                  "failed to configure reverse MAC list");
-#ifdef SSH_BIND_OPTIONS_COMPRESSION_C_S
-    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_COMPRESSION_C_S, SSH_CHATTER_SECURE_COMPRESSION,
-                                  "failed to restrict forward compression mode");
-#endif
-#ifdef SSH_BIND_OPTIONS_COMPRESSION_S_C
-    host_bind_set_optional_string(bind_handle, SSH_BIND_OPTIONS_COMPRESSION_S_C, SSH_CHATTER_SECURE_COMPRESSION,
-                                  "failed to restrict reverse compression mode");
-#endif
+
+    ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_KEY_EXCHANGE, SSH_CHATTER_SUPPORTED_KEX_ALGORITHMS);
+    ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_CIPHERS_C_S, SSH_CHATTER_STRONG_CIPHERS);
+    ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_CIPHERS_S_C, SSH_CHATTER_STRONG_CIPHERS);
+    ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HMAC_C_S, SSH_CHATTER_STRONG_MACS);
+    ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_HMAC_S_C, SSH_CHATTER_STRONG_MACS);
+    ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_COMPRESSION_C_S, SSH_CHATTER_SECURE_COMPRESSION);
+    ssh_bind_options_set(bind_handle, SSH_BIND_OPTIONS_COMPRESSION_S_C, SSH_CHATTER_SECURE_COMPRESSION);
 
     if (ssh_bind_listen(bind_handle) < 0) {
       humanized_log_error("host", ssh_get_error(bind_handle), EIO);
