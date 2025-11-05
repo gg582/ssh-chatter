@@ -3586,11 +3586,23 @@ static void session_telnet_handle_option(session_ctx_t *ctx, unsigned char comma
       } else if (option == TELNET_OPT_TERMINAL_TYPE) {
         session_telnet_send_option(ctx, TELNET_CMD_DO, option);
         session_telnet_request_terminal_type(ctx);
+      } else if (option == TELNET_OPT_NAWS) {
+        // Client will send NAWS - accept it
+        session_telnet_send_option(ctx, TELNET_CMD_DO, option);
       } else {
         session_telnet_send_option(ctx, TELNET_CMD_DONT, option);
       }
       break;
     case TELNET_CMD_WONT:
+      if (option == TELNET_OPT_NAWS) {
+        // Client won't send NAWS, use defaults
+        if (ctx->terminal_width == 0U) {
+          ctx->terminal_width = 80U;
+        }
+        if (ctx->terminal_height == 0U) {
+          ctx->terminal_height = 24U;
+        }
+      }
       session_telnet_send_option(ctx, TELNET_CMD_DONT, option);
       break;
     default:
@@ -3610,7 +3622,8 @@ static void session_telnet_initialize(session_ctx_t *ctx) {
   session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_STATUS);
   session_telnet_send_option(ctx, TELNET_CMD_DO, TELNET_OPT_TERMINAL_TYPE);
   session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_TERMINAL_SPEED);
-  session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_NAWS);
+  // Request NAWS (Negotiate About Window Size) to get terminal dimensions
+  session_telnet_send_option(ctx, TELNET_CMD_DO, TELNET_OPT_NAWS);
 
   ctx->telnet_negotiated = true;
 }
@@ -3786,6 +3799,92 @@ static int session_telnet_read_byte(session_ctx_t *ctx, unsigned char *out, int 
               }
               snprintf(ctx->terminal_type, sizeof(ctx->terminal_type), "%s", type_buffer);
               session_refresh_output_encoding(ctx);
+            }
+          }
+        } else if (option == TELNET_OPT_NAWS) {
+          // Handle NAWS (Negotiate About Window Size) subnegotiation
+          // Format: IAC SB NAWS WIDTH[1] WIDTH[0] HEIGHT[1] HEIGHT[0] IAC SE
+          unsigned char naws_data[4];
+          size_t naws_idx = 0U;
+          bool naws_finished = false;
+          
+          while (!naws_finished && naws_idx < 4U) {
+            unsigned char chunk = 0U;
+            ssize_t chunk_result = recv(ctx->telnet_fd, &chunk, 1, 0);
+            if (chunk_result < 0) {
+              if (errno == EINTR) {
+                continue;
+              }
+              if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+              }
+              return SSH_ERROR;
+            }
+            if (chunk_result == 0) {
+              ctx->telnet_eof = true;
+              return 0;
+            }
+            
+            if (chunk == TELNET_IAC) {
+              unsigned char next = 0U;
+              ssize_t next_result = recv(ctx->telnet_fd, &next, 1, 0);
+              if (next_result < 0) {
+                if (errno == EINTR) {
+                  continue;
+                }
+                return SSH_ERROR;
+              }
+              if (next_result == 0) {
+                ctx->telnet_eof = true;
+                return 0;
+              }
+              
+              if (next == TELNET_CMD_SE) {
+                naws_finished = true;
+                break;
+              }
+              // IAC IAC means a literal IAC byte (255)
+              if (next == TELNET_IAC) {
+                naws_data[naws_idx++] = TELNET_IAC;
+              }
+              continue;
+            }
+            
+            naws_data[naws_idx++] = chunk;
+          }
+          
+          // Parse NAWS data if we got 4 bytes
+          if (naws_idx == 4U) {
+            unsigned int width = ((unsigned int)naws_data[0] << 8) | (unsigned int)naws_data[1];
+            unsigned int height = ((unsigned int)naws_data[2] << 8) | (unsigned int)naws_data[3];
+            
+            if (width > 0U && width < 1000U && height > 0U && height < 1000U) {
+              ctx->terminal_width = width;
+              ctx->terminal_height = height;
+            }
+          }
+          
+          // Consume remaining bytes until IAC SE if not finished
+          if (!naws_finished) {
+            unsigned char prev = 0U;
+            for (;;) {
+              unsigned char chunk = 0U;
+              ssize_t chunk_result = recv(ctx->telnet_fd, &chunk, 1, 0);
+              if (chunk_result < 0) {
+                if (errno == EINTR) {
+                  continue;
+                }
+                return SSH_ERROR;
+              }
+              if (chunk_result == 0) {
+                ctx->telnet_eof = true;
+                return 0;
+              }
+              
+              if (prev == TELNET_IAC && chunk == TELNET_CMD_SE) {
+                break;
+              }
+              prev = chunk;
             }
           }
         } else {
