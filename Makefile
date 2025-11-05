@@ -3,7 +3,6 @@ ENABLE_GC ?= 0
 CC := cc
 CFLAGS = -std=c2x -Ofast \
 	-Werror \
-        -Ilib/headers \
         -DSSH_CHATTER_USE_GC=$(ENABLE_GC) \
 				-D_DEFAULT_SOURCE \
 				-D_XOPEN_SOURCE=700 \
@@ -65,7 +64,8 @@ TARGET := ssh-chatter
 SHARED_TARGET := libssh_chatter_backend.so
 SRC := main.c lib/host.c lib/client.c lib/webssh_client.c lib/translator.c \
        lib/translation_helpers.c lib/ssh_chatter_backend.c lib/user_data.c \
-       lib/matrix_client.c lib/security_layer.c lib/memory_manager.c lib/bubble.c
+       lib/matrix_client.c lib/security_layer.c lib/memory_manager.c \
+       lib/ssh_chatter_sync.c
 OBJ := $(SRC:.c=.o)
 SHARED_SRC := lib/translator.c lib/translation_helpers.c lib/ssh_chatter_backend.c lib/memory_manager.c
 SHARED_OBJ := $(SHARED_SRC:.c=.o)
