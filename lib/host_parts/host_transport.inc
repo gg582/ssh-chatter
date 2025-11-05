@@ -1482,6 +1482,7 @@ static size_t host_prepare_join_delay(host_t *host, struct timespec *wait_durati
 static host_join_attempt_result_t host_register_join_attempt(host_t *host, const char *username, const char *ip);
 static bool session_run_captcha(session_ctx_t *ctx);
 static bool session_is_captcha_exempt(const session_ctx_t *ctx);
+static void session_check_window_change(session_ctx_t *ctx);
 static void host_store_system_theme(host_t *host, const session_ctx_t *ctx);
 static void host_store_user_os(host_t *host, const session_ctx_t *ctx);
 static void host_store_birthday(host_t *host, const session_ctx_t *ctx, const char *birthday);

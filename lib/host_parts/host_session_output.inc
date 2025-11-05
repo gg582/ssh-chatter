@@ -2967,9 +2967,42 @@ static int session_prepare_shell(session_ctx_t *ctx) {
       const int subtype = ssh_message_subtype(message);
       if (subtype == SSH_CHANNEL_REQUEST_PTY || subtype == SSH_CHANNEL_REQUEST_SHELL) {
         ssh_message_channel_request_reply_success(message);
+        if (subtype == SSH_CHANNEL_REQUEST_PTY) {
+          // Capture terminal dimensions from PTY request
+          // Note: Using deprecated libssh functions as they're still functional
+          #pragma GCC diagnostic push
+          #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+          extern int ssh_message_channel_request_pty_width(ssh_message msg);
+          extern int ssh_message_channel_request_pty_height(ssh_message msg);
+          int width = ssh_message_channel_request_pty_width(message);
+          int height = ssh_message_channel_request_pty_height(message);
+          #pragma GCC diagnostic pop
+          if (width > 0 && height > 0) {
+            ctx->terminal_width = (unsigned int)width;
+            ctx->terminal_height = (unsigned int)height;
+          } else {
+            // Use defaults if dimensions are invalid
+            ctx->terminal_width = 80U;
+            ctx->terminal_height = 24U;
+          }
+        }
         if (subtype == SSH_CHANNEL_REQUEST_SHELL) {
           shell_ready = true;
         }
+      } else if (subtype == SSH_CHANNEL_REQUEST_WINDOW_CHANGE) {
+        // Handle window resize events during initial setup
+        #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+        extern int ssh_message_channel_request_pty_width(ssh_message msg);
+        extern int ssh_message_channel_request_pty_height(ssh_message msg);
+        int width = ssh_message_channel_request_pty_width(message);
+        int height = ssh_message_channel_request_pty_height(message);
+        #pragma GCC diagnostic pop
+        if (width > 0 && height > 0) {
+          ctx->terminal_width = (unsigned int)width;
+          ctx->terminal_height = (unsigned int)height;
+        }
+        ssh_message_channel_request_reply_success(message);
       } else {
         ssh_message_reply_default(message);
       }
@@ -2980,6 +3013,53 @@ static int session_prepare_shell(session_ctx_t *ctx) {
   }
 
   return shell_ready ? 0 : -1;
+}
+
+static void session_check_window_change(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->session == NULL || ctx->transport_kind != SESSION_TRANSPORT_SSH) {
+    return;
+  }
+
+  ssh_message message = NULL;
+  
+  // Non-blocking check for window change messages
+  while ((message = ssh_message_get(ctx->session)) != NULL) {
+    if (ssh_message_type(message) == SSH_REQUEST_CHANNEL) {
+      const int subtype = ssh_message_subtype(message);
+      if (subtype == SSH_CHANNEL_REQUEST_WINDOW_CHANGE) {
+        // Handle window resize
+        #pragma GCC diagnostic push
+        #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+        extern int ssh_message_channel_request_pty_width(ssh_message msg);
+        extern int ssh_message_channel_request_pty_height(ssh_message msg);
+        int width = ssh_message_channel_request_pty_width(message);
+        int height = ssh_message_channel_request_pty_height(message);
+        #pragma GCC diagnostic pop
+        if (width > 0 && height > 0) {
+          unsigned int old_width = ctx->terminal_width;
+          unsigned int old_height = ctx->terminal_height;
+          ctx->terminal_width = (unsigned int)width;
+          ctx->terminal_height = (unsigned int)height;
+          
+          // Only re-render if dimensions actually changed
+          if (old_width != ctx->terminal_width || old_height != ctx->terminal_height) {
+            // Re-render the screen with new dimensions
+            session_apply_background_fill(ctx);
+            if (ctx->has_joined_room) {
+              session_render_separator(ctx, "Chatroom");
+              session_render_prompt(ctx, true);
+            }
+          }
+        }
+        ssh_message_channel_request_reply_success(message);
+      } else {
+        ssh_message_reply_default(message);
+      }
+    } else {
+      ssh_message_reply_default(message);
+    }
+    ssh_message_free(message);
+  }
 }
 
 static const char *session_captcha_question_for_language(const captcha_prompt_t *prompt, captcha_language_t language) {

@@ -3374,17 +3374,43 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
   bool locked = session_output_lock(ctx);
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   const size_t bg_len = strlen(bg);
+  
+  // Get terminal dimensions, use defaults if not set
+  unsigned int width = ctx->terminal_width > 0U ? ctx->terminal_width : 80U;
+  unsigned int height = ctx->terminal_height > 0U ? ctx->terminal_height : 24U;
 
+  // Clear entire screen and move cursor to home position
+  static const char clear_screen[] = "\033[2J\033[H";
+  session_channel_write(ctx, clear_screen, sizeof(clear_screen) - 1U);
+
+  // Apply background color if set
   if (bg_len > 0U) {
     session_channel_write(ctx, bg, bg_len);
   }
 
-  session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
-  session_channel_write(ctx, "\r", 1U);
+  // Fill entire screen with background color
+  // Use spaces to fill each line
+  char line_buffer[256];
+  size_t fill_width = width < sizeof(line_buffer) ? width : sizeof(line_buffer) - 1U;
+  memset(line_buffer, ' ', fill_width);
+  line_buffer[fill_width] = '\0';
 
-  if (bg_len > 0U) {
-    session_channel_write(ctx, bg, bg_len);
+  for (unsigned int row = 0U; row < height; ++row) {
+    // Write background-filled line
+    session_channel_write(ctx, line_buffer, fill_width);
+    
+    // Move to next line (except for last line to avoid scrolling)
+    if (row < height - 1U) {
+      session_channel_write(ctx, "\r\n", 2U);
+    }
   }
+
+  // Reset cursor to home position
+  session_channel_write(ctx, "\033[H", 3U);
+
+  // Reset colors to default
+  static const char reset[] = "\033[0m";
+  session_channel_write(ctx, reset, sizeof(reset) - 1U);
 
   if (locked) {
     session_output_unlock(ctx);
