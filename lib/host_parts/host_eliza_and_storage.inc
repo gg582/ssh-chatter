@@ -3390,7 +3390,8 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
 
   // Fill entire screen with background color
   // Use spaces to fill each line
-  char line_buffer[256];
+  // Support terminals up to 1024 columns wide
+  char line_buffer[1024];
   size_t fill_width = width < sizeof(line_buffer) ? width : sizeof(line_buffer) - 1U;
   memset(line_buffer, ' ', fill_width);
   line_buffer[fill_width] = '\0';
@@ -3858,16 +3859,18 @@ static int session_telnet_read_byte(session_ctx_t *ctx, unsigned char *out, int 
             unsigned int width = ((unsigned int)naws_data[0] << 8) | (unsigned int)naws_data[1];
             unsigned int height = ((unsigned int)naws_data[2] << 8) | (unsigned int)naws_data[3];
             
-            if (width > 0U && width < 1000U && height > 0U && height < 1000U) {
+            if (width > 0U && width < TERMINAL_MAX_WIDTH && height > 0U && height < TERMINAL_MAX_HEIGHT) {
               ctx->terminal_width = width;
               ctx->terminal_height = height;
             }
           }
           
           // Consume remaining bytes until IAC SE if not finished
+          // Limit iterations to prevent infinite loop on malformed data
           if (!naws_finished) {
             unsigned char prev = 0U;
-            for (;;) {
+            size_t safety_limit = 100U;
+            for (size_t iter = 0U; iter < safety_limit; ++iter) {
               unsigned char chunk = 0U;
               ssize_t chunk_result = recv(ctx->telnet_fd, &chunk, 1, 0);
               if (chunk_result < 0) {

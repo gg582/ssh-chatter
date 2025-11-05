@@ -1,5 +1,12 @@
 // Session output, history delivery, and client-facing helpers.
 
+// Deprecated libssh PTY functions - declare once to avoid duplication
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+extern int ssh_message_channel_request_pty_width(ssh_message msg);
+extern int ssh_message_channel_request_pty_height(ssh_message msg);
+#pragma GCC diagnostic pop
+
 static void session_game_show_camouflage(session_ctx_t *ctx);
 
 static void session_send_plain_line(session_ctx_t *ctx, const char *message) {
@@ -2969,14 +2976,8 @@ static int session_prepare_shell(session_ctx_t *ctx) {
         ssh_message_channel_request_reply_success(message);
         if (subtype == SSH_CHANNEL_REQUEST_PTY) {
           // Capture terminal dimensions from PTY request
-          // Note: Using deprecated libssh functions as they're still functional
-          #pragma GCC diagnostic push
-          #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-          extern int ssh_message_channel_request_pty_width(ssh_message msg);
-          extern int ssh_message_channel_request_pty_height(ssh_message msg);
           int width = ssh_message_channel_request_pty_width(message);
           int height = ssh_message_channel_request_pty_height(message);
-          #pragma GCC diagnostic pop
           if (width > 0 && height > 0) {
             ctx->terminal_width = (unsigned int)width;
             ctx->terminal_height = (unsigned int)height;
@@ -2991,13 +2992,8 @@ static int session_prepare_shell(session_ctx_t *ctx) {
         }
       } else if (subtype == SSH_CHANNEL_REQUEST_WINDOW_CHANGE) {
         // Handle window resize events during initial setup
-        #pragma GCC diagnostic push
-        #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-        extern int ssh_message_channel_request_pty_width(ssh_message msg);
-        extern int ssh_message_channel_request_pty_height(ssh_message msg);
         int width = ssh_message_channel_request_pty_width(message);
         int height = ssh_message_channel_request_pty_height(message);
-        #pragma GCC diagnostic pop
         if (width > 0 && height > 0) {
           ctx->terminal_width = (unsigned int)width;
           ctx->terminal_height = (unsigned int)height;
@@ -3028,13 +3024,8 @@ static void session_check_window_change(session_ctx_t *ctx) {
       const int subtype = ssh_message_subtype(message);
       if (subtype == SSH_CHANNEL_REQUEST_WINDOW_CHANGE) {
         // Handle window resize
-        #pragma GCC diagnostic push
-        #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-        extern int ssh_message_channel_request_pty_width(ssh_message msg);
-        extern int ssh_message_channel_request_pty_height(ssh_message msg);
         int width = ssh_message_channel_request_pty_width(message);
         int height = ssh_message_channel_request_pty_height(message);
-        #pragma GCC diagnostic pop
         if (width > 0 && height > 0) {
           unsigned int old_width = ctx->terminal_width;
           unsigned int old_height = ctx->terminal_height;
