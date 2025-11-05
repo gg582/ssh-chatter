@@ -2654,98 +2654,7 @@ static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
   }
 }
 
-static bool session_try_reload_motd_from_candidate_path(host_t *host, const char *candidate,
-                                                        char *resolved_path, size_t resolved_len,
-                                                        bool *path_exists_out, int *error_out) {
-  if (resolved_path != NULL && resolved_len > 0U) {
-    resolved_path[0] = '\0';
-  }
-  if (path_exists_out != NULL) {
-    *path_exists_out = false;
-  }
-  if (error_out != NULL) {
-    *error_out = 0;
-  }
-  if (host == NULL || candidate == NULL) {
-    return false;
-  }
 
-  if (candidate[0] == '\0') {
-    return false;
-  }
-
-  char trimmed[PATH_MAX];
-  int copied = snprintf(trimmed, sizeof(trimmed), "%s", candidate);
-  if (copied <= 0 || (size_t)copied >= sizeof(trimmed)) {
-    return false;
-  }
-
-  trim_whitespace_inplace(trimmed);
-
-  if (trimmed[0] == '\0') {
-    return false;
-  }
-
-  if (strchr(trimmed, '\n') != NULL || strchr(trimmed, '\r') != NULL) {
-    return false;
-  }
-
-  const size_t kMaxPaths = 2U;
-  const char *paths_to_try[2] = {NULL, NULL};
-  size_t path_count = 0U;
-
-  char expanded[PATH_MAX];
-  expanded[0] = '\0';
-  if (trimmed[0] == '~' && (trimmed[1] == '\0' || trimmed[1] == '/')) {
-    const char *home = getenv("HOME");
-    if (home != NULL && home[0] != '\0') {
-      int expanded_written = snprintf(expanded, sizeof(expanded), "%s%s", home, trimmed + 1);
-      if (expanded_written > 0 && (size_t)expanded_written < sizeof(expanded)) {
-        paths_to_try[path_count++] = expanded;
-      }
-    }
-  }
-
-  if (path_count < kMaxPaths) {
-    paths_to_try[path_count++] = trimmed;
-  }
-
-  for (size_t idx = 0U; idx < path_count; ++idx) {
-    const char *path = paths_to_try[idx];
-    if (path == NULL || path[0] == '\0') {
-      continue;
-    }
-
-    if (host_try_load_motd_from_path(host, path)) {
-      if (path_exists_out != NULL) {
-        *path_exists_out = true;
-      }
-      if (resolved_path != NULL && resolved_len > 0U) {
-        snprintf(resolved_path, resolved_len, "%s", path);
-      }
-      return true;
-    }
-
-    if (error_out != NULL && *error_out == 0) {
-      const int load_error = errno;
-      if (load_error != 0) {
-        *error_out = load_error;
-      }
-    }
-
-    struct stat info;
-    if (stat(path, &info) == 0 && S_ISREG(info.st_mode)) {
-      if (path_exists_out != NULL) {
-        *path_exists_out = true;
-      }
-      if (resolved_path != NULL && resolved_len > 0U) {
-        snprintf(resolved_path, resolved_len, "%s", path);
-      }
-    }
-  }
-
-  return false;
-}
 
 static void session_handle_motd(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->owner == NULL) {
@@ -2754,89 +2663,15 @@ static void session_handle_motd(session_ctx_t *ctx) {
 
   host_refresh_motd(ctx->owner);
 
-  char motd[sizeof(ctx->owner->motd)];
-  motd[0] = '\0';
-  bool has_file = false;
-  char configured_path[PATH_MAX];
-  configured_path[0] = '\0';
-
   pthread_mutex_lock(&ctx->owner->lock);
-  snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
-  has_file = ctx->owner->motd_has_file;
-  snprintf(configured_path, sizeof(configured_path), "%s", ctx->owner->motd_path);
+  const char *motd_to_display = ctx->owner->motd;
   pthread_mutex_unlock(&ctx->owner->lock);
 
-  bool config_path_exists = false;
-  int config_error = 0;
-  char resolved_path[PATH_MAX];
-  resolved_path[0] = '\0';
-
-  bool fallback_path_exists = false;
-  int fallback_error = 0;
-  char fallback_path[PATH_MAX];
-  fallback_path[0] = '\0';
-
-  if (!has_file) {
-    if (configured_path[0] != '\0' &&
-        session_try_reload_motd_from_candidate_path(ctx->owner, configured_path, resolved_path,
-                                                    sizeof(resolved_path), &config_path_exists, &config_error)) {
-      pthread_mutex_lock(&ctx->owner->lock);
-      snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
-      has_file = ctx->owner->motd_has_file;
-      pthread_mutex_unlock(&ctx->owner->lock);
-    } else if (resolved_path[0] == '\0' && configured_path[0] != '\0') {
-      snprintf(resolved_path, sizeof(resolved_path), "%s", configured_path);
-    }
-
-    if (!has_file && motd[0] != '\0') {
-      if (session_try_reload_motd_from_candidate_path(ctx->owner, motd, fallback_path, sizeof(fallback_path),
-                                                      &fallback_path_exists, &fallback_error)) {
-        pthread_mutex_lock(&ctx->owner->lock);
-        snprintf(motd, sizeof(motd), "%s", ctx->owner->motd);
-        has_file = ctx->owner->motd_has_file;
-        pthread_mutex_unlock(&ctx->owner->lock);
-      } else if (fallback_path[0] == '\0') {
-        snprintf(fallback_path, sizeof(fallback_path), "%s", motd);
-      }
-    }
+  if (motd_to_display[0] != '\0') {
+    session_send_raw_text(ctx, motd_to_display);
+  } else {
+    session_send_system_line(ctx, "No message of the day configured.");
   }
-
-  if (!has_file && configured_path[0] != '\0') {
-    const char *failing_path = resolved_path[0] != '\0' ? resolved_path : configured_path;
-    const bool any_path_exists = config_path_exists || fallback_path_exists;
-    const int failing_error = config_error != 0 ? config_error : fallback_error;
-    char warning[SSH_CHATTER_MESSAGE_LIMIT];
-    if (failing_error != 0) {
-      snprintf(warning, sizeof(warning), "Failed to load message of the day from %s: %s.", failing_path,
-               strerror(failing_error));
-    } else if (any_path_exists) {
-      snprintf(warning, sizeof(warning), "Failed to load message of the day from %s.", failing_path);
-    } else {
-      snprintf(warning, sizeof(warning), "Message of the day file %s was not found.", failing_path);
-    }
-    session_send_system_line(ctx, warning);
-    return;
-  }
-
-  if (!has_file && configured_path[0] == '\0' && fallback_path_exists) {
-    const char *failing_path = fallback_path[0] != '\0' ? fallback_path : motd;
-    char warning[SSH_CHATTER_MESSAGE_LIMIT];
-    if (fallback_error != 0) {
-      snprintf(warning, sizeof(warning), "Failed to load message of the day from %s: %s.", failing_path,
-               strerror(fallback_error));
-    } else {
-      snprintf(warning, sizeof(warning), "Failed to load message of the day from %s.", failing_path);
-    }
-    session_send_system_line(ctx, warning);
-    return;
-  }
-
-  if (motd[0] == '\0') {
-    session_send_system_line(ctx, "No message of the day is configured.");
-    return;
-  }
-
-  session_send_raw_text_bulk(ctx, motd);
 }
 
 static void session_handle_system_color(session_ctx_t *ctx, const char *arguments) {

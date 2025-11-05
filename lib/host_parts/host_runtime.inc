@@ -3582,80 +3582,69 @@ static bool host_try_load_motd_from_path(host_t *host, const char *path) {
     return false;
   }
 
-  FILE *motd_file = fopen(path, "rb");
+  FILE *motd_file = fopen(path, "r");
   if (motd_file == NULL) {
     return false;
   }
 
-  struct stat file_info;
+  struct stat info;
   bool have_info = false;
   struct timespec modified = {0, 0};
-  int descriptor = fileno(motd_file);
-  if (descriptor >= 0 && fstat(descriptor, &file_info) == 0) {
-    modified = host_stat_mtime(&file_info);
-    have_info = true;
-  } else {
-    time_t now = time(NULL);
-    if (now != (time_t)-1) {
-      modified.tv_sec = now;
-      modified.tv_nsec = 0L;
+  if (fstat(fileno(motd_file), &info) == 0) {
+    modified = host_stat_mtime(&info);
+    if (modified.tv_sec != 0 || modified.tv_nsec != 0) {
       have_info = true;
     }
   }
 
   char motd_buffer[sizeof(host->motd)];
-  size_t total_read = 0U;
-  // TODO: Extract a shared helper (e.g. host_read_text_file) so these buffered
-  // reads share the same error handling path as other file loaders.
-  while (total_read < sizeof(motd_buffer) - 1U) {
-    const size_t bytes_to_read = sizeof(motd_buffer) - 1U - total_read;
-    const size_t chunk = fread(motd_buffer + total_read, 1U, bytes_to_read, motd_file);
-    if (chunk == 0U) {
-      if (ferror(motd_file)) {
-        const int read_error = errno;
-        const int close_result = fclose(motd_file);
-        if (close_result != 0) {
-          const int close_error = errno;
-          humanized_log_error("host", "failed to close motd file", close_error);
-        }
-        humanized_log_error("host", "failed to read motd file", read_error);
-        return false;
-      }
-      break;
-    }
-    total_read += chunk;
-    if (feof(motd_file)) {
-      break;
-    }
-  }
+  motd_buffer[0] = '\0';
+  size_t current_motd_len = 0U;
+  char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
 
-  motd_buffer[total_read] = '\0';
+  while (fgets(line_buffer, sizeof(line_buffer), motd_file) != NULL) {
+    size_t line_len = strlen(line_buffer);
+    while (line_len > 0U && (line_buffer[line_len - 1U] == '\n' || line_buffer[line_len - 1U] == '\r')) {
+      line_buffer[--line_len] = '\0';
+    }
+
+    // Prepend [200~ and append [201~ for bracketed paste mode
+    const char *start_paste = "\033[200~";
+    const char *end_paste = "\033[201~";
+    size_t start_paste_len = strlen(start_paste);
+    size_t end_paste_len = strlen(end_paste);
+
+    size_t required_len = start_paste_len + line_len + end_paste_len + 1U; // +1 for newline
+
+    if (current_motd_len + required_len + 1U >= sizeof(motd_buffer)) { // +1 for null terminator
+      // MOTD buffer is full, stop reading
+      break;
+    }
+
+    // Append start_paste
+    memcpy(motd_buffer + current_motd_len, start_paste, start_paste_len);
+    current_motd_len += start_paste_len;
+
+    // Append line content
+    memcpy(motd_buffer + current_motd_len, line_buffer, line_len);
+    current_motd_len += line_len;
+
+    // Append end_paste
+    memcpy(motd_buffer + current_motd_len, end_paste, end_paste_len);
+    current_motd_len += end_paste_len;
+
+    // Append newline
+    motd_buffer[current_motd_len++] = '\n';
+    motd_buffer[current_motd_len] = '\0';
+  }
 
   if (fclose(motd_file) != 0) {
     const int close_error = errno;
     humanized_log_error("host", "failed to close motd file", close_error);
   }
 
-  session_normalize_newlines(motd_buffer);
-
   pthread_mutex_lock(&host->lock);
-  char motd_clean[4096];
-  motd_clean[0] = '\0';
-  size_t offset = 0U;
-  char *next_line;
-  char *motd_line = strtok_r(motd_buffer, "\n", &next_line);
-  while (motd_line != NULL && offset < sizeof(motd_clean)) {
-    const int written =
-        snprintf(motd_clean + offset, sizeof(motd_clean) - offset, "%s\n", motd_line);
-    if (written < 0 || (size_t)written >= sizeof(motd_clean) - offset) {
-      offset = sizeof(motd_clean) - 1U;
-      break;
-    }
-    offset += (size_t)written;
-    motd_line = strtok_r(NULL, "\n", &next_line);
-  }
-  motd_clean[sizeof(motd_clean) - 1U] = '\0';
-  snprintf(host->motd_base, sizeof(host->motd_base), "%s", motd_clean);
+  snprintf(host->motd_base, sizeof(host->motd_base), "%s", motd_buffer);
   snprintf(host->motd_path, sizeof(host->motd_path), "%s", path);
   host->motd_has_file = true;
   if (have_info) {

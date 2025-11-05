@@ -71,12 +71,8 @@ static void session_send_reply_tree(session_ctx_t *ctx, uint64_t parent_message_
     memset(indent, ' ', indent_len);
     indent[indent_len] = '\0';
 
-    const char *target_prefix = (reply->parent_reply_id == 0U) ? "#" : "r#";
-    uint64_t target_id = (reply->parent_reply_id == 0U) ? reply->parent_message_id : reply->parent_reply_id;
-
     char line[SSH_CHATTER_MESSAGE_LIMIT + 160];
-    snprintf(line, sizeof(line), "%s↳ [r#%" PRIu64 " → %s%" PRIu64 "] %s: %s", indent, reply->reply_id, target_prefix,
-             target_id, reply->username, reply->message);
+    snprintf(line, sizeof(line), "%s(r#%" PRIu64 ") %s", indent, reply->reply_id, reply->message);
     session_send_plain_line(ctx, line);
 
     session_send_reply_tree(ctx, parent_message_id, reply->reply_id, depth + 1U);
@@ -942,7 +938,7 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message) {
   }
 
   char prefixed_message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(prefixed_message, sizeof(prefixed_message), "[system] %s", message);
+  snprintf(prefixed_message, sizeof(prefixed_message), "+ %s", message);
 
   session_send_plain_line(ctx, prefixed_message);
 }
@@ -980,31 +976,7 @@ void session_send_raw_text(session_ctx_t *ctx, const char *text) {
   }
 }
 
-static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text) {
-  if (ctx == NULL || text == NULL) {
-    return;
-  }
 
-  const bool scope_allows_translation =
-      (!translator_should_limit_to_chat_bbs() || ctx->translation_manual_scope_override);
-  const bool translation_ready = scope_allows_translation && ctx->translation_enabled &&
-                                 ctx->output_translation_enabled && ctx->output_translation_language[0] != '\0' &&
-                                 !ctx->in_bbs_mode && !ctx->in_rss_mode;
-
-  bool previous_suppress = ctx->translation_suppress_output;
-  if (translation_ready && !ctx->translation_suppress_output) {
-    ctx->translation_suppress_output = true;
-  }
-
-  session_send_raw_text(ctx, text);
-
-  ctx->translation_suppress_output = previous_suppress;
-
-  if (translation_ready && !previous_suppress && text[0] != '\0') {
-    session_translation_queue_block(ctx, text);
-    session_translation_flush_ready(ctx);
-  }
-}
 
 static void session_format_separator_line(session_ctx_t *ctx, const char *label, char *out, size_t length) {
   if (out == NULL || length == 0U) {
@@ -1625,95 +1597,18 @@ static void session_bbs_move_cursor(session_ctx_t *ctx, int direction) {
   session_bbs_render_editor(ctx, status);
 }
 
-static bool session_render_external_banner(session_ctx_t *ctx) {
-  if (ctx == NULL) {
-    return false;
-  }
 
-  static const char kExternalBannerPath[] = "/var/lib/ssh-chatter/banner";
-
-  struct stat banner_info;
-  if (stat(kExternalBannerPath, &banner_info) != 0 || !S_ISREG(banner_info.st_mode)) {
-    return false;
-  }
-
-  FILE *banner_file = fopen(kExternalBannerPath, "r");
-  if (banner_file == NULL) {
-    return false;
-  }
-
-  char line[SSH_CHATTER_MESSAGE_LIMIT];
-  bool rendered = false;
-  while (fgets(line, sizeof(line), banner_file) != NULL) {
-    size_t length = strlen(line);
-    while (length > 0U && (line[length - 1U] == '\n' || line[length - 1U] == '\r')) {
-      line[--length] = '\0';
-    }
-
-    session_send_plain_line(ctx, line);
-    rendered = true;
-  }
-
-  fclose(banner_file);
-  return rendered;
-}
 
 static void session_render_banner_ascii(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return;
   }
 
-  static const char *kBanner[] = {
-      "\033[38;5;117m+===================================================================+\033[0m",
-      "\033[38;5;117m|  \033[1;38;5;252m██████╗██╗  ██╗ █████╗ ████████╗████████╗███████╗██████╗         \033[38;5;117m|\033[0m",
-      "\033[38;5;117m| \033[1;38;5;252m██╔════╝██║  ██║██╔══██╗╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗        \033[38;5;117m|\033[0m",
-      "\033[38;5;117m| \033[1;38;5;252m██║     ███████║███████║   ██║      ██║   █████╗  ██████╔╝        \033[38;5;117m|\033[0m",
-      "\033[38;5;117m| \033[1;38;5;252m██║     ██╔══██║██╔══██║   ██║      ██║   ██╔══╝  ██╔══██╗        \033[38;5;117m|\033[0m",
-      "\033[38;5;117m| \033[1;38;5;252m╚██████╗██║  ██║██║  ██║   ██║      ██║   ███████╗██║  ██║        \033[38;5;117m|\033[0m",
-      "\033[38;5;117m|  \033[1;38;5;252m╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝      ╚═╝   ╚══════╝╚═╝  ╚═╝        \033[38;5;117m|\033[0m",
-      "\033[38;5;117m+===================================================================+\033[0m",
-      "\033[38;5;117m|        \033[1;38;5;220m*** Welcome to CHATTER (2025) ***                          \033[38;5;117m|\033[0m",
-      "\033[38;5;117m|   \033[38;5;252mCute and tiny SSH chat written in C.                            \033[38;5;117m|\033[0m",
-      "\033[38;5;117m|   \033[38;5;252mType \033[1;38;5;220m/help\033[38;5;252m to see available commands.                           \033[38;5;117m|\033[0m",
-      "\033[38;5;117m|   \033[38;5;252mType \033[1;38;5;220m/mode\033[38;5;252m to switch input modes.                               \033[38;5;117m|\033[0m",
-      "\033[38;5;117m+===================================================================+\033[0m",
-  };
-
-  for (size_t idx = 0; idx < sizeof(kBanner) / sizeof(kBanner[0]); ++idx) {
-    session_send_system_line(ctx, kBanner[idx]);
-  }
+  session_send_system_line(ctx, "Welcome to CHATTER!");
 }
 
 
-static void session_render_prelogin_language_prompt(session_ctx_t *ctx) {
-  if (ctx == NULL || session_client_geo_language(ctx) != SESSION_UI_LANGUAGE_KO) {
-    return;
-  }
 
-  session_send_system_line(ctx, "기본 UI 언어는 한국어입니다. 로그인 전에 원하는 언어를 선택하세요.");
-  session_send_system_line(ctx, "Default UI language is Korean. Choose one before logging in:");
-
-  const char *prefix = session_command_prefix(ctx);
-  static const struct {
-    const char *code;
-    const char *label;
-  } kLanguagePrompts[] = {
-      {"en", "English"},
-      {"jp", "日本語 / Japanese"},
-      {"zh", "中文 / Chinese"},
-      {"ru", "Русский / Russian"},
-  };
-
-  for (size_t idx = 0; idx < sizeof(kLanguagePrompts) / sizeof(kLanguagePrompts[0]); ++idx) {
-    char line[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(line, sizeof(line), "  %sset-ui-lang %s  → %s", prefix, kLanguagePrompts[idx].code,
-             kLanguagePrompts[idx].label);
-    session_send_system_line(ctx, line);
-  }
-
-  session_send_system_line(ctx, "명령을 입력하면 해당 언어로 전환되고, Enter를 누르면 한국어가 유지됩니다.");
-  session_send_system_line(ctx, "Run one of the commands above to switch, or press Enter to keep Korean.");
-}
 
 static void session_render_prelogin_banner(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->prelogin_banner_rendered) {
@@ -1722,15 +1617,10 @@ static void session_render_prelogin_banner(session_ctx_t *ctx) {
 
   session_apply_background_fill(ctx);
 
-  bool has_external_banner = session_render_external_banner(ctx);
-  if (!has_external_banner) {
-    session_render_banner_ascii(ctx);
-  }
+  session_render_banner_ascii(ctx);
 
-  session_send_plain_line(ctx, "\033[37mConnection established.\033[0m");
-  session_send_plain_line(ctx, "\033[37mAuthenticate or choose a nickname to continue.\033[0m");
-
-  session_render_prelogin_language_prompt(ctx);
+  session_send_plain_line(ctx, "Connection established.");
+  session_send_plain_line(ctx, "Authenticate or choose a nickname to continue.");
 
   ctx->prelogin_banner_rendered = true;
 }
@@ -1743,59 +1633,10 @@ static void session_render_banner(session_ctx_t *ctx) {
   session_apply_background_fill(ctx);
 
   bool show_graphics = !ctx->prelogin_banner_rendered;
-  bool has_external_banner = false;
   if (show_graphics) {
-    has_external_banner = session_render_external_banner(ctx);
-    if (!has_external_banner) {
-      session_render_banner_ascii(ctx);
-    }
+    session_render_banner_ascii(ctx);
   }
 
-  char welcome[SSH_CHATTER_MESSAGE_LIMIT];
-  size_t name_len = 0;
-  if (ctx->user.name[0] != '\0')
-    name_len = strlen(ctx->user.name);
-  int welcome_padding = 55 - (int)name_len;
-  if (welcome_padding < 0) {
-    welcome_padding = 0;
-  }
-
-  snprintf(welcome, sizeof(welcome), "\033[1;32m|  Welcome, %s!%*s|\033[0m", ctx->user.name, welcome_padding, "");
-  session_send_system_line(ctx, welcome);
-
-  char version_line[SSH_CHATTER_MESSAGE_LIMIT];
-  size_t version_len = strlen(ctx->owner->version);
-  int version_padding = 65 - (int)version_len;
-  if (version_padding < 0) {
-    version_padding = 0;
-  }
-  snprintf(version_line, sizeof(version_line), "\033[1;32m|  %s%*s|\033[0m", ctx->owner->version, version_padding, "");
-  session_send_system_line(ctx, version_line);
-
-  if (show_graphics && !has_external_banner) {
-    session_send_system_line(ctx, "\033[1;32m+===================================================================+\033[0m");
-  }
-
-  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
-  const char *prefix = session_command_prefix(ctx);
-
-  if (locale->welcome_help_hint != NULL && locale->welcome_help_hint[0] != '\0') {
-    const char *args[] = {prefix};
-    char hint[SSH_CHATTER_MESSAGE_LIMIT];
-    session_format_template(locale->welcome_help_hint, args, sizeof(args) / sizeof(args[0]), hint, sizeof(hint));
-    char line[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(line, sizeof(line), "\033[37m%s\033[0m", hint);
-    session_send_plain_line(ctx, line);
-  }
-
-  if (locale->welcome_motd_hint != NULL && locale->welcome_motd_hint[0] != '\0') {
-    const char *args[] = {prefix};
-    char hint[SSH_CHATTER_MESSAGE_LIMIT];
-    session_format_template(locale->welcome_motd_hint, args, sizeof(args) / sizeof(args[0]), hint, sizeof(hint));
-    char highlighted[SSH_CHATTER_MESSAGE_LIMIT];
-    session_apply_motd_highlight(ctx, hint, highlighted, sizeof(highlighted));
-    session_send_plain_line(ctx, highlighted);
-  }
   session_render_separator(ctx, "Chatroom");
 }
 
@@ -1812,7 +1653,7 @@ static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
   const char *fg = ctx->system_fg_code != NULL ? ctx->system_fg_code : "";
   const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
-  const char *mode_prompt = ctx->input_mode == SESSION_INPUT_MODE_COMMAND ? "│ cmd> " : "│ > ";
+  const char *mode_prompt = "> ";
 
   char prompt[128];
   size_t offset = 0U;
@@ -2765,14 +2606,6 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
   if (entry->is_user_message) {
     char formatted[SSH_CHATTER_MESSAGE_LIMIT * 2U];
     formatted[0] = '\0';
-
-    char id_block[64];
-    if (entry->message_id > 0U) {
-      snprintf(id_block, sizeof(id_block), "[#%" PRIu64 "] ", entry->message_id);
-    } else {
-      snprintf(id_block, sizeof(id_block), "[#0] ");
-    }
-    strncat(formatted, id_block, sizeof(formatted) - strlen(formatted) - 1U);
 
     const char *color = (entry->user_color_code != NULL) ? entry->user_color_code : "";
     const char *bold = entry->user_is_bold ? ANSI_BOLD : "";

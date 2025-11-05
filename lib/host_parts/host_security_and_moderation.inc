@@ -3821,7 +3821,15 @@ static void *host_rss_backend(void *arg) {
 
           printf("%s\n", notice);
           host_history_record_system(host, notice);
-          chat_room_broadcast(&host->room, notice, NULL);
+          // Iterate through all active sessions and send the notice only to those with breaking_alerts_enabled
+          pthread_mutex_lock(&host->room.lock);
+          for (size_t i = 0; i < host->room.member_count; ++i) {
+            session_ctx_t *member = host->room.members[i];
+            if (member != NULL && member->breaking_alerts_enabled) {
+              session_send_system_line(member, notice);
+            }
+          }
+          pthread_mutex_unlock(&host->room.lock);
         }
       }
     }

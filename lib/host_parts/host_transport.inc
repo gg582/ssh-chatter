@@ -1263,12 +1263,8 @@ static void session_send_line(session_ctx_t *ctx, const char *message);
 static void session_send_plain_line(session_ctx_t *ctx, const char *message);
 static void session_send_system_line(session_ctx_t *ctx, const char *message);
 void session_send_raw_text(session_ctx_t *ctx, const char *text);
-static void session_send_raw_text_bulk(session_ctx_t *ctx, const char *text);
-static bool session_render_external_banner(session_ctx_t *ctx);
-static void session_render_banner_ascii(session_ctx_t *ctx);
-static void session_render_prelogin_banner(session_ctx_t *ctx);
-static session_ui_language_t session_client_geo_language(const session_ctx_t *ctx);
-static void session_render_prelogin_language_prompt(session_ctx_t *ctx);
+
+
 static void session_render_banner(session_ctx_t *ctx);
 static const char *session_editor_terminator(const session_ctx_t *ctx);
 static bool session_editor_matches_terminator(const session_ctx_t *ctx, const char *line);
@@ -1431,7 +1427,7 @@ static void session_translation_clear_queue(session_ctx_t *ctx);
 static bool session_translation_worker_ensure(session_ctx_t *ctx);
 static void session_translation_worker_shutdown(session_ctx_t *ctx);
 static void *session_translation_worker(void *arg);
-static void session_translation_queue_block(session_ctx_t *ctx, const char *text);
+
 static bool session_translation_queue_private_message(session_ctx_t *ctx, session_ctx_t *target, const char *message);
 static void session_translation_normalize_output(char *text);
 static void host_handle_translation_quota_exhausted(host_t *host);

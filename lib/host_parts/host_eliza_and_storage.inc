@@ -1859,17 +1859,7 @@ static void session_translation_pop_scope_override(session_ctx_t *ctx, bool prev
   ctx->translation_manual_scope_override = previous;
 }
 
-static void session_translation_queue_block(session_ctx_t *ctx, const char *text) {
-  if (ctx == NULL || text == NULL || text[0] == '\0') {
-    return;
-  }
 
-  if (translator_should_limit_to_chat_bbs() && !ctx->translation_manual_scope_override) {
-    return;
-  }
-
-  (void)session_translation_queue_caption(ctx, text, 0U);
-}
 
 static bool session_translation_queue_private_message(session_ctx_t *ctx, session_ctx_t *target, const char *message) {
   if (ctx == NULL || target == NULL || message == NULL) {
@@ -4095,54 +4085,4 @@ static size_t session_append_fragment(char *dest, size_t dest_size, size_t offse
   return offset;
 }
 
-static void session_apply_motd_highlight(const session_ctx_t *ctx, const char *input, char *output, size_t length) {
-  if (output == NULL || length == 0U) {
-    return;
-  }
 
-  output[0] = '\0';
-  if (ctx == NULL || input == NULL) {
-    return;
-  }
-
-  const char *prefix = session_command_prefix(ctx);
-  if (prefix == NULL || prefix[0] == '\0') {
-    prefix = "/";
-  }
-
-  char command[32];
-  snprintf(command, sizeof(command), "%smotd", prefix);
-
-  size_t offset = 0U;
-  offset = session_append_fragment(output, length, offset, "\033[37m");
-
-  const char *cursor = input;
-  const size_t command_len = strlen(command);
-  while (*cursor != '\0' && offset < length - 1U) {
-    const char *match = strstr(cursor, command);
-    if (match == NULL) {
-      offset = session_append_fragment(output, length, offset, cursor);
-      break;
-    }
-
-    if (match > cursor) {
-      size_t chunk_len = (size_t)(match - cursor);
-      if (chunk_len > 0U) {
-        char chunk[SSH_CHATTER_MESSAGE_LIMIT];
-        if (chunk_len >= sizeof(chunk)) {
-          chunk_len = sizeof(chunk) - 1U;
-        }
-        memcpy(chunk, cursor, chunk_len);
-        chunk[chunk_len] = '\0';
-        offset = session_append_fragment(output, length, offset, chunk);
-      }
-    }
-
-    offset = session_append_fragment(output, length, offset, "\033[1;30;43m");
-    offset = session_append_fragment(output, length, offset, command);
-    offset = session_append_fragment(output, length, offset, "\033[0;37m");
-    cursor = match + command_len;
-  }
-
-  offset = session_append_fragment(output, length, offset, "\033[0m");
-}
