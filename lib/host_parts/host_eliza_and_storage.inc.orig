@@ -3393,48 +3393,6 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
 
 static size_t session_append_fragment(char *dest, size_t dest_size, size_t offset, const char *fragment);
 
-size_t normalize_output(session_ctx_t *ctx, char *buf, size_t buf_size) {
-    (void)buf_size;
-
-    unsigned width = ctx->terminal_width > 0 ? ctx->terminal_width : 80;
-    const char *bg = ctx->system_bg_code ? ctx->system_bg_code : "";
-    const char *fg = ctx->system_fg_code ? ctx->system_fg_code : "";
-    const char *reset = "\033[0m";
-
-    char out[SSH_CHATTER_BBS_BODY_LEN];
-    out[0] = '\0';
-
-    char *line = buf;
-    while (*line) {
-        char *e = strchrnul(line, '\n');
-        size_t len = (size_t)(e - line);
-
-        /* copy line as-is (no sanitization) */
-        char raw[4096];
-        if (len >= sizeof(raw)) len = sizeof(raw) - 1;
-        memcpy(raw, line, len);
-        raw[len] = '\0';
-
-        /* measure visible length simply = strlen (we assume no width calc) */
-        size_t vis = strlen(raw);
-        size_t pad = (vis < width) ? (width - vis) : 0;
-
-        /* write: bg fg raw + spaces + reset + newline */
-        snprintf(out + strlen(out), sizeof(out) - strlen(out),
-                 "%s%s%s%*s%s\n",
-                 bg, fg, raw, (int)pad, "", reset);
-
-        if (*e == '\0')
-            break;
-        line = e + 1;
-    }
-
-    strncpy(buf, out, buf_size - 1);
-    buf[buf_size - 1] = '\0';
-
-    return strlen(buf);
-}
-
 static void session_write_rendered_line(session_ctx_t *ctx, const char *render_source) {
   if (ctx == NULL || render_source == NULL || !session_transport_active(ctx)) {
     return;
@@ -3461,7 +3419,7 @@ static void session_write_rendered_line(session_ctx_t *ctx, const char *render_s
   offset = session_append_fragment(buffer, sizeof(buffer), offset, fg);
   offset = session_append_fragment(buffer, sizeof(buffer), offset, bold);
   offset = session_append_fragment(buffer, sizeof(buffer), offset, message);
-  offset = normalize_output(ctx, buffer, sizeof(buffer));
+  offset = session_append_fragment(buffer, sizeof(buffer), offset, ANSI_RESET);
 
   session_channel_write(ctx, buffer, offset); // Write the actual message
 

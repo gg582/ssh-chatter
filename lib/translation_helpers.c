@@ -291,9 +291,15 @@ char **wrap_text_to_width(const char *text, int max_width, size_t *line_count) {
         size_t last_word_len = 0;
 
         // Add active ANSI codes to the beginning of the new line
+        // Prepend a reset code to ensure consistent styling for each new line
         if (strlen(active_ansi_codes) > 0) {
+            const char *reset_code = "\033[0m";
+            size_t reset_len = strlen(reset_code);
             size_t ansi_len = strlen(active_ansi_codes);
-            if (current_line_len + ansi_len < sizeof(current_line_buffer)) {
+
+            if (current_line_len + reset_len + ansi_len < sizeof(current_line_buffer)) {
+                memcpy(current_line_buffer + current_line_len, reset_code, reset_len);
+                current_line_len += reset_len;
                 memcpy(current_line_buffer + current_line_len, active_ansi_codes, ansi_len);
                 current_line_len += ansi_len;
             }
