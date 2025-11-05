@@ -2842,9 +2842,15 @@ static bool session_telnet_write_block(session_ctx_t *ctx, const unsigned char *
   return true;
 }
 
+#define SSH_CHATTER_MAX_WRITE_TIMEOUT_MS 100
+
 static bool session_channel_wait_writable(session_ctx_t *ctx, int timeout_ms) {
   if (ctx == NULL) {
     return false;
+  }
+
+  if (timeout_ms > SSH_CHATTER_MAX_WRITE_TIMEOUT_MS) {
+    timeout_ms = SSH_CHATTER_MAX_WRITE_TIMEOUT_MS;
   }
 
   if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
@@ -2898,6 +2904,10 @@ static bool session_channel_wait_writable(session_ctx_t *ctx, int timeout_ms) {
       .events = POLLOUT,
       .revents = 0,
   };
+
+  if (timeout_ms > SSH_CHATTER_MAX_WRITE_TIMEOUT_MS) {
+    timeout_ms = SSH_CHATTER_MAX_WRITE_TIMEOUT_MS;
+  }
 
   for (;;) {
     int result = poll(&pfd, 1, timeout_ms);
