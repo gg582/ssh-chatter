@@ -25,6 +25,10 @@
 #error "SSH_CHATTER_USERNAME_LEN must be defined before including user_data.h"
 #endif
 
+#ifndef SSH_CHAT_SERVER_URL_LEN
+#define SSH_CHAT_SERVER_URL_LEN 256U
+#endif
+
 typedef struct user_data_mail_entry {
   uint64_t timestamp;
   char sender[SSH_CHATTER_USERNAME_LEN];
@@ -58,6 +62,8 @@ typedef struct user_data_record {
   uint32_t flag_history_count;
   uint64_t flag_history[USER_DATA_FLAG_HISTORY_LIMIT];
   uint64_t last_updated;
+  char ssh_chat_server_url[SSH_CHAT_SERVER_URL_LEN];
+  uint16_t ssh_chat_server_port;
   uint8_t reserved[64];
 } user_data_record_t;
 
@@ -69,5 +75,7 @@ bool user_data_init(user_data_record_t *record, const char *username, const char
 bool user_data_load(const char *root, const char *username, const char *ip, user_data_record_t *record);
 bool user_data_save(const char *root, const user_data_record_t *record, const char *ip);
 bool user_data_ensure_exists(const char *root, const char *username, const char *ip, user_data_record_t *record);
+void user_data_set_ssh_chat_server_config(user_data_record_t *record, const char *url, uint16_t port);
+void user_data_get_ssh_chat_server_config(const user_data_record_t *record, char *url, size_t url_len, uint16_t *port);
 
 #endif /* SSH_CHATTER_USER_DATA_H */

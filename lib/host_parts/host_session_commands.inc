@@ -1996,6 +1996,74 @@ static void session_handle_vote_command(session_ctx_t *ctx, const char *argument
   session_send_poll_summary_generic(ctx, &snapshot.poll, snapshot.label);
 }
 
+static void session_handle_advanced(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
+    session_send_system_line(ctx, "Only operators may use the /advanced command.");
+    return;
+  }
+
+  static const char *kUsage = "Usage: /advanced ssh-chat-server <url> <port>";
+
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/advanced", kUsage, usage, sizeof(usage));
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  char *saveptr = NULL;
+  char *subcommand = strtok_r(working, " \t", &saveptr);
+
+  if (subcommand == NULL || strcasecmp(subcommand, "ssh-chat-server") != 0) {
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  char *url_str = strtok_r(NULL, " \t", &saveptr);
+  char *port_str = strtok_r(NULL, " \t", &saveptr);
+
+  if (url_str == NULL || port_str == NULL) {
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  uint16_t port = (uint16_t)atoi(port_str);
+  if (port == 0) {
+    session_send_system_line(ctx, "Invalid port number.");
+    return;
+  }
+
+  if (!session_user_data_load(ctx)) {
+    session_send_system_line(ctx, "Failed to load user data.");
+    return;
+  }
+
+  user_data_set_ssh_chat_server_config(&ctx->user_data, url_str, port);
+
+  if (!session_user_data_commit(ctx)) {
+    session_send_system_line(ctx, "Failed to save ssh-chat server configuration.");
+    return;
+  }
+
+  char message[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(message, sizeof(message), "ssh-chat server configured: URL='%s', Port=%hu", url_str, port);
+  session_send_system_line(ctx, message);
+}
+
 // Format a timestamp for BBS displays in a compact form.
 static void bbs_format_time(time_t value, char *buffer, size_t length) {
   if (buffer == NULL || length == 0U) {

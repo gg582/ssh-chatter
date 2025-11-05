@@ -1533,6 +1533,40 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
   session_force_dark_mode_foreground(ctx);
 }
 
+bool session_user_data_load(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return false;
+  }
+
+  if (ctx->user_data_loaded) {
+    return true;
+  }
+
+  // Use a placeholder IP for loading if ctx->client_ip is not available or empty
+  const char *ip_to_use = ctx->client_ip[0] != '\0' ? ctx->client_ip : NULL;
+
+  if (!user_data_load(ctx->owner->user_data_root, ctx->user.name, ip_to_use, &ctx->user_data)) {
+    // If loading fails, try to ensure it exists (create new)
+    if (!user_data_ensure_exists(ctx->owner->user_data_root, ctx->user.name, ip_to_use, &ctx->user_data)) {
+      return false;
+    }
+  }
+
+  ctx->user_data_loaded = true;
+  return true;
+}
+
+bool session_user_data_commit(session_ctx_t *ctx) {
+  if (ctx == NULL || ctx->owner == NULL || !ctx->user_data_loaded) {
+    return false;
+  }
+
+  // Use a placeholder IP for saving if ctx->client_ip is not available or empty
+  const char *ip_to_use = ctx->client_ip[0] != '\0' ? ctx->client_ip : NULL;
+
+  return user_data_save(ctx->owner->user_data_root, &ctx->user_data, ip_to_use);
+}
+
 static bool session_argument_is_disable(const char *token) {
   if (token == NULL) {
     return false;

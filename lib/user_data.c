@@ -810,3 +810,36 @@ bool user_data_ensure_exists(const char *root, const char *username, const char 
   }
   return true;
 }
+
+void user_data_set_ssh_chat_server_config(user_data_record_t *record, const char *url, uint16_t port) {
+  if (record == NULL) {
+    return;
+  }
+  if (url != NULL) {
+    strncpy(record->ssh_chat_server_url, url, sizeof(record->ssh_chat_server_url) - 1);
+    record->ssh_chat_server_url[sizeof(record->ssh_chat_server_url) - 1] = '\0';
+  } else {
+    record->ssh_chat_server_url[0] = '\0';
+  }
+  record->ssh_chat_server_port = port;
+}
+
+void user_data_get_ssh_chat_server_config(const user_data_record_t *record, char *url, size_t url_len, uint16_t *port) {
+  if (record == NULL) {
+    if (url != NULL && url_len > 0) {
+      url[0] = '\0';
+    }
+    if (port != NULL) {
+      *port = 0;
+    }
+    return;
+  }
+
+  if (url != NULL && url_len > 0) {
+    strncpy(url, record->ssh_chat_server_url, url_len - 1);
+    url[url_len - 1] = '\0';
+  }
+  if (port != NULL) {
+    *port = record->ssh_chat_server_port;
+  }
+}

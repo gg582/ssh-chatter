@@ -797,7 +797,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
   }
 
   else if (session_parse_command_any(ctx, "/advanced", effective_line, &args)) {
-    session_print_help_extra(ctx);
+    session_handle_advanced(ctx, args);
     return;
   }
 
