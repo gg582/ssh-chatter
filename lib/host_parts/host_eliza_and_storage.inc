@@ -3423,7 +3423,7 @@ static size_t session_append_fragment(char *dest, size_t dest_size, size_t offse
 size_t normalize_output(session_ctx_t *ctx, char *buf, size_t buf_size) {
     (void)buf_size;
 
-    unsigned width = ctx->terminal_width > 0 ? ctx->terminal_width : 80;
+    unsigned int width = ctx->terminal_width > 0U ? ctx->terminal_width : 80U;
     const char *bg = ctx->system_bg_code ? ctx->system_bg_code : "";
     const char *fg = ctx->system_fg_code ? ctx->system_fg_code : "";
     const char *reset = "\033[0m";

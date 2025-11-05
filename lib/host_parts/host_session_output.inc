@@ -2992,6 +2992,7 @@ static int session_prepare_shell(session_ctx_t *ctx) {
         }
       } else if (subtype == SSH_CHANNEL_REQUEST_WINDOW_CHANGE) {
         // Handle window resize events during initial setup
+        // Note: SSH window-change uses same data format as PTY, so we use the same accessor functions
         int width = ssh_message_channel_request_pty_width(message);
         int height = ssh_message_channel_request_pty_height(message);
         if (width > 0 && height > 0) {
@@ -3024,6 +3025,7 @@ static void session_check_window_change(session_ctx_t *ctx) {
       const int subtype = ssh_message_subtype(message);
       if (subtype == SSH_CHANNEL_REQUEST_WINDOW_CHANGE) {
         // Handle window resize
+        // Note: SSH window-change uses same data format as PTY, so we use the same accessor functions
         int width = ssh_message_channel_request_pty_width(message);
         int height = ssh_message_channel_request_pty_height(message);
         if (width > 0 && height > 0) {
