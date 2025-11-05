@@ -611,6 +611,17 @@ static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch) {
   }
 
   switch (lowered) {
+    case 't':
+      if (ctx->game.is_camouflaged) {
+        ctx->game.is_camouflaged = false;
+        ctx->game.tetris = ctx->game.saved_tetris_state;
+        session_game_tetris_render(ctx);
+      } else {
+        ctx->game.is_camouflaged = true;
+        ctx->game.saved_tetris_state = ctx->game.tetris;
+        session_game_show_camouflage(ctx);
+      }
+      return true;
     case 'a':
       session_game_tetris_process_action(ctx, TETRIS_INPUT_MOVE_LEFT);
       return true;
@@ -750,6 +761,36 @@ static void session_game_tetris_lock_piece(session_ctx_t *ctx) {
   }
 }
 
+static void session_game_show_camouflage(session_ctx_t *ctx) {
+  if (ctx == NULL) {
+    return;
+  }
+
+  session_clear_screen(ctx);
+  session_apply_background_fill(ctx);
+
+  char file_path_buffer[256];
+  snprintf(file_path_buffer, sizeof(file_path_buffer), "/var/lib/ssh-chatter/%s.txt", ctx->game.chosen_camouflage_language);
+  FILE *fp = fopen(file_path_buffer, "r");
+  if (fp == NULL) {
+    session_send_system_line(ctx, "Error: Could not load camouflage code snippet.");
+    return;
+  }
+
+  char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
+  while (fgets(line_buffer, sizeof(line_buffer), fp) != NULL) {
+    // Remove newline character if present
+    size_t len = strlen(line_buffer);
+    if (len > 0 && line_buffer[len - 1] == '\n') {
+      line_buffer[len - 1] = '\0';
+    }
+    session_send_system_line(ctx, line_buffer);
+  }
+
+  fclose(fp);
+  session_render_prompt(ctx, false);
+}
+
 static void session_game_tetris_render(session_ctx_t *ctx) {
   if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
     return;
@@ -869,8 +910,55 @@ cleanup:
 }
 
 static void session_game_start_tetris(session_ctx_t *ctx) {
-  if (ctx == NULL) {
-    return;
+  session_send_system_line(ctx, "CHOOSE YOUR LOCKSCREEN LANGUAGE TO HIDE THE SCREEN ON YOUR OFFICE! (c, cpp, java, go, js, ts, rust)");
+  char language_choice[16];
+  size_t length = 0U;
+  while (length + 1U < sizeof(language_choice)) {
+    char ch = '\0';
+    const int read_result = session_transport_read(ctx, &ch, 1, -1);
+    if (read_result <= 0) {
+      ctx->game.active = false;
+      ctx->game.type = SESSION_GAME_NONE;
+      return;
+    }
+
+    if (ch == '\r' || ch == '\n') {
+      session_local_echo_char(ctx, '\n');
+      break;
+    }
+
+    if (ch == '\b' || (unsigned char)ch == 0x7fU) {
+      if (length > 0U) {
+        --length;
+        session_send_raw_text(ctx, "\b \b");
+      }
+      continue;
+    }
+
+    if ((unsigned char)ch < 0x20U) {
+      continue;
+    }
+
+    language_choice[length++] = ch;
+    session_local_echo_char(ctx, ch);
+  }
+  language_choice[length] = '\0';
+  trim_whitespace_inplace(language_choice);
+  for (size_t idx = 0U; language_choice[idx] != '\0'; ++idx) {
+    language_choice[idx] = (char)tolower((unsigned char)language_choice[idx]);
+  }
+
+  if (language_choice[0] == '\0') {
+    session_send_system_line(ctx, "No language chosen. Defaulting to C.");
+    snprintf(ctx->game.chosen_camouflage_language, sizeof(ctx->game.chosen_camouflage_language), "c");
+  } else if (strcmp(language_choice, "c") == 0 || strcmp(language_choice, "cpp") == 0 ||
+             strcmp(language_choice, "java") == 0 || strcmp(language_choice, "go") == 0 ||
+             strcmp(language_choice, "js") == 0 || strcmp(language_choice, "ts") == 0 ||
+             strcmp(language_choice, "rust") == 0) {
+    snprintf(ctx->game.chosen_camouflage_language, sizeof(ctx->game.chosen_camouflage_language), "%s", language_choice);
+  } else {
+    session_send_system_line(ctx, "Invalid language. Defaulting to C.");
+    snprintf(ctx->game.chosen_camouflage_language, sizeof(ctx->game.chosen_camouflage_language), "c");
   }
 
   session_game_tetris_reset(&ctx->game.tetris);

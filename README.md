@@ -252,6 +252,11 @@ Supported environment variables include:
 - `CHATTER_CLAMAV` – Set to `off`/`false`/`0` to disable ClamAV scanning (enabled by default when `clamscan` is available).
 - `CHATTER_CLAMAV_COMMAND` – Override the command used to feed payloads into ClamAV (default `clamscan --no-summary --stdout -`).
 
+**Camouflage Code Snippets:**
+For the Tetris camouflage feature, you need to manually create code snippet files in `/var/lib/ssh-chatter/`.
+Create files named `c.txt`, `cpp.txt`, `java.txt`, `go.txt`, `js.txt`, `ts.txt`, and `rust.txt` in this directory.
+Each file should contain the code you wish to display when the camouflage screen is active.
+
 Translation support now relies on the Google Gemini API.  Set the following in `chatter.env` (or the environment) to enable it:
 
 - `GEMINI_API_KEY` – Secret API key used to authenticate translation requests.

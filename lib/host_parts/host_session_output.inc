@@ -1,5 +1,7 @@
 // Session output, history delivery, and client-facing helpers.
 
+static void session_game_show_camouflage(session_ctx_t *ctx);
+
 static void session_send_plain_line(session_ctx_t *ctx, const char *message) {
   if (ctx == NULL || !session_transport_active(ctx) || message == NULL) {
     return;
@@ -3479,6 +3481,33 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
   if (ctx->game.active) {
     if (strcmp(normalized, "/suspend!") == 0) {
       session_game_suspend(ctx, "Game suspended.");
+      return;
+    }
+
+    if (normalized[0] == 't' && normalized[1] == '\0') {
+      if (ctx->game.is_camouflaged) {
+        ctx->game.is_camouflaged = false;
+        if (ctx->game.type == SESSION_GAME_TETRIS) {
+          ctx->game.tetris = ctx->game.saved_tetris_state;
+          session_game_tetris_render(ctx);
+        } else if (ctx->game.type == SESSION_GAME_LIARGAME) {
+          ctx->game.liar = ctx->game.saved_liar_state;
+          session_game_liar_present_round(ctx);
+        } else if (ctx->game.type == SESSION_GAME_ALPHA) {
+          ctx->game.alpha = ctx->game.saved_alpha_state;
+          session_game_alpha_present_stage(ctx);
+        }
+      } else {
+        ctx->game.is_camouflaged = true;
+        if (ctx->game.type == SESSION_GAME_TETRIS) {
+          ctx->game.saved_tetris_state = ctx->game.tetris;
+        } else if (ctx->game.type == SESSION_GAME_LIARGAME) {
+          ctx->game.saved_liar_state = ctx->game.liar;
+        } else if (ctx->game.type == SESSION_GAME_ALPHA) {
+          ctx->game.saved_alpha_state = ctx->game.alpha;
+        }
+        session_game_show_camouflage(ctx);
+      }
       return;
     }
 

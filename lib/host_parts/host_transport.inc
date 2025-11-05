@@ -1400,6 +1400,7 @@ static void session_handle_video(session_ctx_t *ctx, const char *arguments);
 static void session_handle_audio(session_ctx_t *ctx, const char *arguments);
 static void session_handle_files(session_ctx_t *ctx, const char *arguments);
 static void session_handle_reaction(session_ctx_t *ctx, size_t reaction_index, const char *arguments);
+static void session_handle_gameopt(session_ctx_t *ctx, const char *arguments);
 static void session_handle_mail(session_ctx_t *ctx, const char *arguments);
 static void session_handle_profile_picture(session_ctx_t *ctx, const char *arguments);
 static void session_handle_today(session_ctx_t *ctx);
@@ -4167,6 +4168,7 @@ static user_preference_t *host_ensure_preference_locked(host_t *host, const char
     memset(pref, 0, sizeof(*pref));
     pref->in_use = true;
     pref->last_poll_choice = -1;
+    snprintf(pref->camouflage_language, sizeof(pref->camouflage_language), "c");
     snprintf(pref->username, sizeof(pref->username), "%s", username);
     if (host->preference_count < SSH_CHATTER_MAX_PREFERENCES) {
       ++host->preference_count;

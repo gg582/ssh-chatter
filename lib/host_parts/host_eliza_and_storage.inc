@@ -1526,7 +1526,8 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
     ctx->input_translation_enabled = snapshot.input_translation_enabled;
     snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s",
              snapshot.input_translation_language);
-    ctx->breaking_alerts_enabled = snapshot.breaking_alerts_enabled;
+  ctx->breaking_alerts_enabled = pref->breaking_alerts_enabled;
+  snprintf(ctx->game.chosen_camouflage_language, sizeof(ctx->game.chosen_camouflage_language), "%s", pref->camouflage_language);
   }
 
   (void)session_user_data_load(ctx);
@@ -3390,6 +3391,8 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
   }
 }
 
+static size_t session_append_fragment(char *dest, size_t dest_size, size_t offset, const char *fragment);
+
 static void session_write_rendered_line(session_ctx_t *ctx, const char *render_source) {
   if (ctx == NULL || render_source == NULL || !session_transport_active(ctx)) {
     return;
@@ -3406,7 +3409,19 @@ static void session_write_rendered_line(session_ctx_t *ctx, const char *render_s
   }
   session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U); // Clear entire line
 
-  session_channel_write(ctx, render_source, strlen(render_source)); // Write the actual message
+  const char *fg = ctx->system_fg_code != NULL ? ctx->system_fg_code : "";
+  const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
+  const char *message = render_source; // Declare message here
+
+  char buffer[SSH_CHATTER_MESSAGE_LIMIT * 2];
+  size_t offset = 0U;
+  offset = session_append_fragment(buffer, sizeof(buffer), offset, bg);
+  offset = session_append_fragment(buffer, sizeof(buffer), offset, fg);
+  offset = session_append_fragment(buffer, sizeof(buffer), offset, bold);
+  offset = session_append_fragment(buffer, sizeof(buffer), offset, message);
+  offset = session_append_fragment(buffer, sizeof(buffer), offset, ANSI_RESET);
+
+  session_channel_write(ctx, buffer, offset); // Write the actual message
 
   session_channel_write(ctx, ANSI_RESET, sizeof(ANSI_RESET) - 1U); // Reset colors
   session_channel_write(ctx, "\r\n", 2U); // Add newline

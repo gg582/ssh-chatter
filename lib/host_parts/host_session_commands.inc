@@ -1997,6 +1997,48 @@ static void session_handle_vote_command(session_ctx_t *ctx, const char *argument
   session_send_poll_summary_generic(ctx, &snapshot.poll, snapshot.label);
 }
 
+static void __attribute__((unused)) session_handle_gameopt(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  static const char *kUsage = "Usage: /gameopt <reset>";
+
+  char usage[SSH_CHATTER_MESSAGE_LIMIT];
+  session_command_format_usage(ctx, "/gameopt", kUsage, usage, sizeof(usage));
+
+  if (arguments == NULL) {
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  char working[SSH_CHATTER_MESSAGE_LIMIT];
+  snprintf(working, sizeof(working), "%s", arguments);
+  trim_whitespace_inplace(working);
+
+  if (working[0] == '\0') {
+    session_send_system_line(ctx, usage);
+    return;
+  }
+
+  if (strcasecmp(working, "reset") == 0) {
+    snprintf(ctx->game.chosen_camouflage_language, sizeof(ctx->game.chosen_camouflage_language), "c");
+    if (ctx->owner != NULL) {
+      pthread_mutex_lock(&ctx->owner->lock);
+      user_preference_t *pref = host_ensure_preference_locked(ctx->owner, ctx->user.name);
+      if (pref != NULL) {
+        snprintf(pref->camouflage_language, sizeof(pref->camouflage_language), "c");
+        host_state_save_locked(ctx->owner);
+      }
+      pthread_mutex_unlock(&ctx->owner->lock);
+    }
+    session_send_system_line(ctx, "Game options reset. Camouflage language set to default (C).");
+    return;
+  }
+
+  session_send_system_line(ctx, usage);
+}
+
 static void session_handle_sync_trigger(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;

@@ -79,7 +79,7 @@
 #define SSH_CHATTER_ASCIIART_BUFFER_LEN SSH_CHATTER_BBS_BODY_LEN
 #define SSH_CHATTER_ASCIIART_COOLDOWN_SECONDS 600
 #define SSH_CHATTER_ELIZA_MEMORY_MAX 128
-#define SSH_CHATTER_TETRIS_WIDTH 10
+#define SSH_CHATTER_TETRIS_WIDTH 15
 #define SSH_CHATTER_TETRIS_HEIGHT 20
 #define SSH_CHATTER_TETRIS_GRAVITY_THRESHOLD 5U
 #define SSH_CHATTER_TETRIS_GRAVITY_RATE 1U
@@ -376,6 +376,11 @@ typedef struct session_game_state {
   bool active;
   session_game_type_t type;
   tetris_game_state_t tetris;
+  bool is_camouflaged;
+  tetris_game_state_t saved_tetris_state;
+  liar_game_state_t saved_liar_state;
+  alpha_centauri_game_state_t saved_alpha_state;
+  char chosen_camouflage_language[16];
   liar_game_state_t liar;
   alpha_centauri_game_state_t alpha;
   uint64_t rng_state;
@@ -599,6 +604,7 @@ typedef struct user_preference {
   char input_translation_language[SSH_CHATTER_LANG_NAME_LEN];
   char ui_language[SSH_CHATTER_LANG_NAME_LEN];
   bool breaking_alerts_enabled;
+  char camouflage_language[16];
   bool show_continuous_messages;
   struct {
     char label[SSH_CHATTER_POLL_LABEL_LEN];

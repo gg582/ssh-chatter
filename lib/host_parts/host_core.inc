@@ -1284,6 +1284,7 @@ static const char *const kSessionCommandNames[] = {
     "translate",
     "translate-scope","unblock",    "users",        "video",        "vote",
     "vote-single",   "weather",
+  "gameopt",
 };
 #define SSH_CHATTER_COMMAND_COUNT (sizeof(kSessionCommandNames) / sizeof(kSessionCommandNames[0]))
 
@@ -2357,6 +2358,23 @@ static const session_help_entry_t kSessionHelpEssential[] = {
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "game tetris",
+        .description = {
+            "Start a game of Tetris.",
+            "테트리스 게임을 시작합니다.",
+            "テトリスゲームを開始します。",
+            "开始俄罗斯方块游戏。",
+            "Начать игру в Тетрис.",
+        },
+        .label_translations = {
+            [SESSION_UI_LANGUAGE_KO] = "게임 테트리스",
+            [SESSION_UI_LANGUAGE_JP] = "ゲーム テトリス",
+            [SESSION_UI_LANGUAGE_ZH] = "游戏 俄罗斯方块",
+            [SESSION_UI_LANGUAGE_RU] = "игра тетрис",
+        },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
         .label = "mode <chat|command|toggle>",
         .description = {
             "Switch between chat mode and command mode.",
@@ -2475,6 +2493,7 @@ static const session_help_entry_t kSessionHelpExtended[] = {
         .label_arg_count = 0U,
         .label_args = {},
     },
+
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
         .label = "mail [inbox|send <user> <message>|clear]",
@@ -2528,25 +2547,6 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             [SESSION_UI_LANGUAGE_JP] = "アスキーアート",
             [SESSION_UI_LANGUAGE_ZH] = "艺术",
             [SESSION_UI_LANGUAGE_RU] = "ASCIIарт",
-        },
-        .label_arg_count = 0U,
-        .label_args = {},
-    },
-    {
-        .kind = SESSION_HELP_ENTRY_COMMAND,
-        .label = "game <tetris|liargame|alpha>",
-        .description = {
-            "Start a minigame in chat (use %ssuspend! or Ctrl+Z to exit).",
-            "채팅에서 미니게임을 시작합니다 (%ssuspend! 또는 Ctrl+Z로 종료).",
-            "チャットでミニゲームを開始します（終了は %ssuspend! か Ctrl+Z）。",
-            "在聊天中启动小游戏（使用 %ssuspend! 或 Ctrl+Z 退出）。",
-            "Запустить мини-игру в чате (выход — %ssuspend! или Ctrl+Z).",
-        },
-        .label_translations = {
-            [SESSION_UI_LANGUAGE_KO] = "게임 <테트리스|라이어게임|알파>",
-            [SESSION_UI_LANGUAGE_JP] = "ゲーム <テトリス|ライアーゲーム|アルファ>",
-            [SESSION_UI_LANGUAGE_ZH] = "游戏 <俄罗斯方块|谎言游戏|阿尔法>",
-            [SESSION_UI_LANGUAGE_RU] = "игра <тетрис|лжец|альфа>",
         },
         .label_arg_count = 0U,
         .label_args = {},
