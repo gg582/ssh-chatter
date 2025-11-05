@@ -2754,8 +2754,8 @@ static void *session_thread(void *arg) {
       SESSION_THREAD_RETURN(NULL);
     }
 
-    (void)host_try_load_motd_from_path(ctx->owner, "/etc/ssh-chatter/motd");
     session_send_system_line(ctx, "Wait for a moment...");
+    session_send_system_line(ctx, "For TELNET users: type /motd and follow the guide.");
     struct timespec wait_time = {0, 0};
     size_t progress = host_prepare_join_delay(ctx->owner, &wait_time);
     if (progress == 0U) {
@@ -2784,9 +2784,6 @@ static void *session_thread(void *arg) {
     session_render_banner(ctx);
     ctx->history_scroll_position = 0U;
     host_refresh_motd(ctx->owner);
-    if (ctx->owner->motd[0] != '\0') {
-      session_send_system_line(ctx, ctx->owner->motd);
-    }
     const session_ui_locale_t *locale = session_ui_get_locale(ctx);
     const char *prefix = session_command_prefix(ctx);
 
