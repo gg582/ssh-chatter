@@ -3399,50 +3399,17 @@ static void session_write_rendered_line(session_ctx_t *ctx, const char *render_s
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   const size_t bg_len = strlen(bg);
 
-  if (bg_len == 0U) {
-    session_channel_write(ctx, render_source, strlen(render_source));
-    session_channel_write(ctx, "\r\n", 2U);
-    if (locked) {
-      session_output_unlock(ctx);
-    }
-    return;
+  // Move cursor to beginning of line, apply background, clear line, then write content
+  session_channel_write(ctx, "\r", 1U); // Move to column 0
+  if (bg_len > 0U) {
+    session_channel_write(ctx, bg, bg_len); // Apply background color
   }
+  session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U); // Clear entire line
 
-  session_channel_write(ctx, bg, bg_len);
-  session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
-  session_channel_write(ctx, "\r", 1U);
+  session_channel_write(ctx, render_source, strlen(render_source)); // Write the actual message
 
-  char expanded[SSH_CHATTER_TRANSLATION_WORKING_LEN + SSH_CHATTER_MESSAGE_LIMIT];
-  size_t out_idx = 0U;
-  const size_t length = strlen(render_source);
-
-  for (size_t idx = 0U; idx < length && out_idx + 1U < sizeof(expanded);) {
-    if (render_source[idx] == '\033' && idx + 3U < length && render_source[idx + 1U] == '[' &&
-        render_source[idx + 2U] == '0' && render_source[idx + 3U] == 'm') {
-      if (out_idx + 4U >= sizeof(expanded)) {
-        break;
-      }
-
-      memcpy(expanded + out_idx, render_source + idx, 4U);
-      out_idx += 4U;
-      idx += 4U;
-
-      if (out_idx + bg_len >= sizeof(expanded)) {
-        break;
-      }
-      memcpy(expanded + out_idx, bg, bg_len);
-      out_idx += bg_len;
-      continue;
-    }
-
-    expanded[out_idx++] = render_source[idx++];
-  }
-
-  expanded[out_idx] = '\0';
-
-  session_channel_write(ctx, expanded, out_idx);
-  session_channel_write(ctx, "\r\n", 2U);
-  session_channel_write(ctx, bg, bg_len);
+  session_channel_write(ctx, ANSI_RESET, sizeof(ANSI_RESET) - 1U); // Reset colors
+  session_channel_write(ctx, "\r\n", 2U); // Add newline
 
   if (locked) {
     session_output_unlock(ctx);
