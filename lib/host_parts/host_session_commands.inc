@@ -2124,21 +2124,21 @@ static bool session_parse_ssh_url(const char *input, char *host_out, size_t host
   return true;
 }
 
-static void session_handle_advanced(session_ctx_t *ctx, const char *arguments) {
+static void session_handle_ssh_chat_server(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
 
   if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
-    session_send_system_line(ctx, "Only operators may use the /advanced command.");
+    session_send_system_line(ctx, "Only operators may configure the /ssh-chat-server integration.");
     return;
   }
 
   static const char *kUsage =
-      "Usage: /advanced ssh-chat-server <set|port|credentials|enable|disable|status|trigger|stop> ...";
+      "Usage: /ssh-chat-server <set|port|credentials|enable|disable|status|trigger|stop> ...";
 
   char usage[SSH_CHATTER_MESSAGE_LIMIT];
-  session_command_format_usage(ctx, "/advanced", kUsage, usage, sizeof(usage));
+  session_command_format_usage(ctx, "/ssh-chat-server", kUsage, usage, sizeof(usage));
 
   if (arguments == NULL) {
     session_send_system_line(ctx, usage);
@@ -2155,14 +2155,7 @@ static void session_handle_advanced(session_ctx_t *ctx, const char *arguments) {
   }
 
   char *saveptr = NULL;
-  char *subcommand = strtok_r(working, " \t", &saveptr);
-
-  if (subcommand == NULL || strcasecmp(subcommand, "ssh-chat-server") != 0) {
-    session_send_system_line(ctx, usage);
-    return;
-  }
-
-  char *action = strtok_r(NULL, " \t", &saveptr);
+  char *action = strtok_r(working, " 	", &saveptr);
 
   if (action == NULL) {
     session_send_system_line(ctx, usage);
@@ -2170,8 +2163,8 @@ static void session_handle_advanced(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (strcasecmp(action, "set") == 0 || strcasecmp(action, "host") == 0) {
-    char *url_str = strtok_r(NULL, " \t", &saveptr);
-    char *port_str = strtok_r(NULL, " \t", &saveptr);
+    char *url_str = strtok_r(NULL, " 	", &saveptr);
+    char *port_str = strtok_r(NULL, " 	", &saveptr);
 
     if (url_str == NULL) {
       session_send_system_line(ctx, usage);
@@ -2212,19 +2205,21 @@ static void session_handle_advanced(session_ctx_t *ctx, const char *arguments) {
     sync_settings_t settings = ssh_chatter_sync_get_settings();
     const char *username = settings.go_chat_username[0] != '\0' ? settings.go_chat_username : "chatter_sync";
     const char *password = settings.go_chat_password[0] != '\0' ? settings.go_chat_password : "password";
+
     ssh_chatter_sync_set_connection_details(host, (int)port, username, password);
 
     char message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(message, sizeof(message), "ssh-chat server configured: URL='ssh://%s', Port=%hu", host, port);
     session_send_system_line(ctx, message);
-    session_send_system_line(ctx, "Use /advanced ssh-chat-server trigger to reconnect with the new settings.");
+    session_send_system_line(ctx, "Use /ssh-chat-server trigger to reconnect with the new settings.");
     return;
   }
 
   if (strcasecmp(action, "port") == 0) {
-    char *port_str = strtok_r(NULL, " \t", &saveptr);
+    char *port_str = strtok_r(NULL, " 	", &saveptr);
+
     if (port_str == NULL) {
-      session_send_system_line(ctx, "Port value is required.");
+      session_send_system_line(ctx, usage);
       return;
     }
 
@@ -2261,13 +2256,13 @@ static void session_handle_advanced(session_ctx_t *ctx, const char *arguments) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(message, sizeof(message), "ssh-chat server port updated: Port=%hu", port);
     session_send_system_line(ctx, message);
-    session_send_system_line(ctx, "Use /advanced ssh-chat-server trigger to reconnect with the new settings.");
+    session_send_system_line(ctx, "Use /ssh-chat-server trigger to reconnect with the new settings.");
     return;
   }
 
   if (strcasecmp(action, "credentials") == 0) {
-    char *username = strtok_r(NULL, " \t", &saveptr);
-    char *password = strtok_r(NULL, " \t", &saveptr);
+    char *username = strtok_r(NULL, " 	", &saveptr);
+    char *password = strtok_r(NULL, " 	", &saveptr);
 
     if (username == NULL || password == NULL) {
       session_send_system_line(ctx, "Username and password are required.");
@@ -2281,13 +2276,13 @@ static void session_handle_advanced(session_ctx_t *ctx, const char *arguments) {
     ssh_chatter_sync_set_connection_details(host, port, username, password);
 
     session_send_system_line(ctx, "ssh-chat synchronization credentials updated.");
-    session_send_system_line(ctx, "Use /advanced ssh-chat-server trigger to reconnect with the new settings.");
+    session_send_system_line(ctx, "Use /ssh-chat-server trigger to reconnect with the new settings.");
     return;
   }
 
   if (strcasecmp(action, "enable") == 0 || strcasecmp(action, "disable") == 0) {
     bool enable = (strcasecmp(action, "enable") == 0);
-    char *direction = strtok_r(NULL, " \t", &saveptr);
+    char *direction = strtok_r(NULL, " 	", &saveptr);
 
     bool toggle_in = false;
     bool toggle_out = false;
@@ -2351,6 +2346,101 @@ static void session_handle_advanced(session_ctx_t *ctx, const char *arguments) {
   }
 
   session_send_system_line(ctx, usage);
+}
+
+static void session_handle_advanced(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  bool is_operator = ctx->user.is_operator || ctx->user.is_lan_operator;
+
+  char delegated_buffer[SSH_CHATTER_MESSAGE_LIMIT];
+  if (arguments != NULL) {
+    snprintf(delegated_buffer, sizeof(delegated_buffer), "%s", arguments);
+    trim_whitespace_inplace(delegated_buffer);
+
+    if (delegated_buffer[0] != '\0') {
+      char token[64];
+      const char *remaining = session_consume_token(delegated_buffer, token, sizeof(token));
+      if (strcasecmp(token, "ssh-chat-server") == 0) {
+        char forwarded[SSH_CHATTER_MESSAGE_LIMIT];
+        if (remaining != NULL) {
+          snprintf(forwarded, sizeof(forwarded), "%s", remaining);
+          trim_whitespace_inplace(forwarded);
+        } else {
+          forwarded[0] = '\0';
+        }
+
+        session_send_system_line(ctx, "Tip: use /ssh-chat-server directly for integration controls.");
+        session_handle_ssh_chat_server(ctx, forwarded[0] != '\0' ? forwarded : NULL);
+        return;
+      }
+
+      session_send_system_line(ctx, "Unknown advanced topic. Showing available commands instead.");
+    }
+  }
+
+  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
+  const char *prefix = session_command_prefix(ctx);
+  char help_buffer[SSH_CHATTER_MESSAGE_LIMIT * 32];
+
+  if (locale != NULL && locale->help_extra_title != NULL && locale->help_extra_title[0] != '\0') {
+    session_send_system_line(ctx, locale->help_extra_title);
+  }
+
+  help_buffer[0] = '\0';
+  session_format_help_entries_to_buffer(ctx, kSessionHelpExtended,
+                                        sizeof(kSessionHelpExtended) / sizeof(kSessionHelpExtended[0]), help_buffer,
+                                        sizeof(help_buffer));
+  session_send_raw_text(ctx, help_buffer);
+
+  if (locale != NULL && locale->help_extra_hint != NULL && locale->help_extra_hint[0] != '\0') {
+    const char *args[] = {prefix};
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    session_format_template(locale->help_extra_hint, args, sizeof(args) / sizeof(args[0]), line, sizeof(line));
+    session_send_system_line(ctx, line);
+  }
+
+  if (is_operator) {
+    if (locale != NULL && locale->help_operator_title != NULL && locale->help_operator_title[0] != '\0') {
+      session_send_system_line(ctx, locale->help_operator_title);
+    }
+
+    help_buffer[0] = '\0';
+    session_format_help_entries_to_buffer(ctx, kSessionHelpOperator,
+                                          sizeof(kSessionHelpOperator) / sizeof(kSessionHelpOperator[0]), help_buffer,
+                                          sizeof(help_buffer));
+    session_send_raw_text(ctx, help_buffer);
+
+    const char *ssh_command = session_command_alias_preferred_by_canonical(ctx, "/ssh-chat-server");
+    if (ssh_command == NULL || ssh_command[0] == '\0') {
+      ssh_command = "/ssh-chat-server";
+    }
+
+    session_send_system_line(ctx, "Integration controls (operator only):");
+
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(line, sizeof(line), "  %s set <ssh://host[:port]> [port] - Configure the upstream server.", ssh_command);
+    session_send_system_line(ctx, line);
+
+    snprintf(line, sizeof(line), "  %s port <port> - Update the saved port.", ssh_command);
+    session_send_system_line(ctx, line);
+
+    snprintf(line, sizeof(line), "  %s credentials <user> <pass> - Adjust bridge credentials.", ssh_command);
+    session_send_system_line(ctx, line);
+
+    snprintf(line, sizeof(line), "  %s enable|disable <in|out|both> - Toggle sync directions.", ssh_command);
+    session_send_system_line(ctx, line);
+
+    snprintf(line, sizeof(line), "  %s status - Review connection details.", ssh_command);
+    session_send_system_line(ctx, line);
+
+    snprintf(line, sizeof(line), "  %s trigger|stop - Control live synchronization.", ssh_command);
+    session_send_system_line(ctx, line);
+  } else {
+    session_send_system_line(ctx, "Operator-only integrations are hidden. Request access if needed.");
+  }
 }
 
 // Format a timestamp for BBS displays in a compact form.

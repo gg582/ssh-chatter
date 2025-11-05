@@ -796,6 +796,11 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line) {
     return;
   }
 
+  else if (session_parse_command_any(ctx, "/ssh-chat-server", effective_line, &args)) {
+    session_handle_ssh_chat_server(ctx, args);
+    return;
+  }
+
   else if (session_parse_command_any(ctx, "/advanced", effective_line, &args)) {
     session_handle_advanced(ctx, args);
     return;
