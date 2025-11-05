@@ -1694,7 +1694,7 @@ static void session_refresh_input_line(session_ctx_t *ctx) {
     session_channel_write(ctx, bg, strlen(bg));
   }
 
-  static const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
+  static const char clear_sequence[] = ANSI_CURSOR_HOME ANSI_CLEAR_LINE;
   session_channel_write(ctx, clear_sequence, sizeof(clear_sequence) - 1U);
 
   session_render_prompt(ctx, false);
@@ -1845,7 +1845,7 @@ static void session_clear_input_base(session_ctx_t *ctx, bool render_prompt) {
     session_channel_write(ctx, bg, strlen(bg));
   }
 
-  static const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
+  static const char clear_sequence[] = ANSI_CURSOR_HOME ANSI_CLEAR_LINE;
   session_channel_write(ctx, clear_sequence, sizeof(clear_sequence) - 1U);
 
   if (bg[0] != '\0') {
@@ -2225,7 +2225,7 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction) {
     ctx->history_oldest_notified = false;
   }
 
-  const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
+  const char clear_sequence[] = ANSI_CURSOR_HOME ANSI_CLEAR_LINE;
   session_channel_write(ctx, clear_sequence, sizeof(clear_sequence) - 1U);
   session_channel_write(ctx, "\r\n", 2U);
 

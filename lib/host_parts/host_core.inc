@@ -83,6 +83,7 @@ static const session_ops_t telnet_session_ops = {
 
 #define ANSI_CLEAR_LINE "\033[2K"
 #define ANSI_INSERT_LINE "\033[1L"
+#define ANSI_CURSOR_HOME "\033[G"
 
 #define SSH_CHATTER_MESSAGE_BOX_MAX_LINES 32U
 #define SSH_CHATTER_MESSAGE_BOX_PADDING 2U

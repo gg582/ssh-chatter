@@ -3380,7 +3380,7 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
   }
 
   session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
-  session_channel_write(ctx, "\r", 1U);
+  session_channel_write(ctx, ANSI_CURSOR_HOME, sizeof(ANSI_CURSOR_HOME) - 1U);
 
   if (bg_len > 0U) {
     session_channel_write(ctx, bg, bg_len);
@@ -3445,7 +3445,7 @@ static void session_write_rendered_line(session_ctx_t *ctx, const char *render_s
   const size_t bg_len = strlen(bg);
 
   // Move cursor to beginning of line, apply background, clear line, then write content
-  session_channel_write(ctx, "\r", 1U); // Move to column 0
+  session_channel_write(ctx, ANSI_CURSOR_HOME, sizeof(ANSI_CURSOR_HOME) - 1U); // Move to column 0
   if (bg_len > 0U) {
     session_channel_write(ctx, bg, bg_len); // Apply background color
   }
@@ -3479,7 +3479,7 @@ static void session_send_caption_line(session_ctx_t *ctx, const char *message) {
   }
 
   bool locked = session_output_lock(ctx);
-  session_channel_write(ctx, "\r", 1U);
+  session_channel_write(ctx, ANSI_CURSOR_HOME, sizeof(ANSI_CURSOR_HOME) - 1U);
   session_channel_write(ctx, ANSI_INSERT_LINE, sizeof(ANSI_INSERT_LINE) - 1U);
 
   session_write_rendered_line(ctx, message);
@@ -3508,7 +3508,7 @@ static void session_render_caption_with_offset(session_ctx_t *ctx, const char *m
     session_channel_write(ctx, command, (size_t)written);
   }
 
-  session_channel_write(ctx, "\r", 1U);
+  session_channel_write(ctx, ANSI_CURSOR_HOME, sizeof(ANSI_CURSOR_HOME) - 1U);
   session_write_rendered_line(ctx, message);
   session_channel_write(ctx, "\033[u", 3U);
 
