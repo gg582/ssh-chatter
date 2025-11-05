@@ -3379,8 +3379,8 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
     session_channel_write(ctx, bg, bg_len);
   }
 
-  session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
   session_channel_write(ctx, ANSI_CURSOR_HOME, sizeof(ANSI_CURSOR_HOME) - 1U);
+  session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
 
   if (bg_len > 0U) {
     session_channel_write(ctx, bg, bg_len);
