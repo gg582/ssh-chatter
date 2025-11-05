@@ -7,10 +7,7 @@
 #include <pthread.h>
 #include <unistd.h> // For sleep
 
-#define GO_CHAT_HOST "127.0.0.1"
-#define GO_CHAT_PORT 2022
-#define GO_CHAT_USERNAME "chatter_sync"
-#define GO_CHAT_PASSWORD "password" // Placeholder, use secure storage in real app
+
 
 static ssh_session session = NULL;
 static ssh_channel channel = NULL;
@@ -32,8 +29,7 @@ static pthread_mutex_t history_mutex = PTHREAD_MUTEX_INITIALIZER;
 static sync_settings_t current_settings = {
     .sync_in_enabled = true,
     .sync_out_enabled = true,
-    .last_sync_attempt = {0, 0}, // Initialize timespec
-    .go_chat_port = GO_CHAT_PORT
+    .last_sync_attempt = {0, 0} // Initialize timespec
 };
 
 // Forward declarations
@@ -156,16 +152,6 @@ void ssh_chatter_sync_init() {
     pthread_mutex_init(&history_mutex, NULL); // Initialize history mutex
     // Load settings on init
     ssh_chatter_sync_load_settings();
-    // Copy default host/username/password if not loaded from settings
-    if (strlen(current_settings.go_chat_host) == 0) {
-        strncpy(current_settings.go_chat_host, GO_CHAT_HOST, sizeof(current_settings.go_chat_host) - 1);
-    }
-    if (strlen(current_settings.go_chat_username) == 0) {
-        strncpy(current_settings.go_chat_username, GO_CHAT_USERNAME, sizeof(current_settings.go_chat_username) - 1);
-    }
-    if (strlen(current_settings.go_chat_password) == 0) {
-        strncpy(current_settings.go_chat_password, GO_CHAT_PASSWORD, sizeof(current_settings.go_chat_password) - 1);
-    }
     // Start retry thread initially to handle potential immediate connection failures
     if (pthread_create(&retry_thread, NULL, retry_connection_thread, NULL) != 0) {
         fprintf(stderr, "[SSH_SYNC] Failed to create initial retry thread.\n\n");
@@ -369,6 +355,7 @@ void ssh_chatter_sync_load_settings() {
             memset(current_settings.go_chat_host, 0, sizeof(current_settings.go_chat_host));
             memset(current_settings.go_chat_username, 0, sizeof(current_settings.go_chat_username));
             memset(current_settings.go_chat_password, 0, sizeof(current_settings.go_chat_password));
+            current_settings.go_chat_port = 2022; // Default port
         }
         fclose(fp);
         fprintf(stderr, "[SSH_SYNC] Settings loaded.\n\n");
@@ -379,12 +366,12 @@ void ssh_chatter_sync_load_settings() {
         current_settings.sync_out_enabled = true;
         current_settings.last_sync_attempt.tv_sec = 0; // Initialize tv_sec
         current_settings.last_sync_attempt.tv_nsec = 0; // Initialize tv_nsec
-        strncpy(current_settings.go_chat_host, GO_CHAT_HOST, sizeof(current_settings.go_chat_host) - 1);
+        strncpy(current_settings.go_chat_host, "127.0.0.1", sizeof(current_settings.go_chat_host) - 1);
         current_settings.go_chat_host[sizeof(current_settings.go_chat_host) - 1] = '\0';
-        current_settings.go_chat_port = GO_CHAT_PORT;
-        strncpy(current_settings.go_chat_username, GO_CHAT_USERNAME, sizeof(current_settings.go_chat_username) - 1);
+        current_settings.go_chat_port = 2022;
+        strncpy(current_settings.go_chat_username, "chatter_sync", sizeof(current_settings.go_chat_username) - 1);
         current_settings.go_chat_username[sizeof(current_settings.go_chat_username) - 1] = '\0';
-        strncpy(current_settings.go_chat_password, GO_CHAT_PASSWORD, sizeof(current_settings.go_chat_password) - 1);
+        strncpy(current_settings.go_chat_password, "password", sizeof(current_settings.go_chat_password) - 1);
         current_settings.go_chat_password[sizeof(current_settings.go_chat_password) - 1] = '\0';
     }
 }
@@ -509,4 +496,22 @@ static int authenticate_ssh_session(ssh_session sess) {
     // We will simply return SSH_OK to bypass authentication.
     (void)sess; // Suppress unused parameter warning
     return SSH_OK;
+}
+
+void ssh_chatter_sync_set_connection_details(const char* host, int port, const char* username, const char* password) {
+    if (host) {
+        strncpy(current_settings.go_chat_host, host, sizeof(current_settings.go_chat_host) - 1);
+        current_settings.go_chat_host[sizeof(current_settings.go_chat_host) - 1] = '\0';
+    }
+    current_settings.go_chat_port = port;
+    if (username) {
+        strncpy(current_settings.go_chat_username, username, sizeof(current_settings.go_chat_username) - 1);
+        current_settings.go_chat_username[sizeof(current_settings.go_chat_username) - 1] = '\0';
+    }
+    if (password) {
+        strncpy(current_settings.go_chat_password, password, sizeof(current_settings.go_chat_password) - 1);
+        current_settings.go_chat_password[sizeof(current_settings.go_chat_password) - 1] = '\0';
+    }
+    ssh_chatter_sync_save_settings();
+    fprintf(stderr, "[SSH_SYNC] Connection details updated and saved.\n\n");
 }

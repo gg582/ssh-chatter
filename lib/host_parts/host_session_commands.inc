@@ -1,3 +1,4 @@
+#include "../ssh_chatter_sync.h"
 // Command handlers for chat interactions, media, and user utilities.
 
 static void session_handle_reply(session_ctx_t *ctx, const char *arguments) {
@@ -1994,6 +1995,23 @@ static void session_handle_vote_command(session_ctx_t *ctx, const char *argument
 
   session_send_system_line(ctx, "Named poll created successfully.");
   session_send_poll_summary_generic(ctx, &snapshot.poll, snapshot.label);
+}
+
+static void session_handle_sync_trigger(session_ctx_t *ctx, const char *arguments) {
+  if (ctx == NULL || ctx->owner == NULL) {
+    return;
+  }
+
+  if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
+    session_send_system_line(ctx, "Only operators may trigger SSH synchronization.");
+    return;
+  }
+
+  (void)arguments; // Suppress unused parameter warning
+
+  session_send_system_line(ctx, "Attempting to manually trigger SSH synchronization...");
+  ssh_chatter_sync_manual_trigger();
+  session_send_system_line(ctx, "SSH synchronization trigger initiated.");
 }
 
 static void session_handle_advanced(session_ctx_t *ctx, const char *arguments) {

@@ -46,13 +46,9 @@ static void print_usage(const char *prog_name) {
 
   fprintf(stderr,
 
-          "Usage: %s [-a address] [-p port] [-m motd_file] [-k host_key_dir] [-T telnet_port|off] [-U ssh_chat_url] [-P ssh_chat_port]\n"
+                    "Usage: %s [-a address] [-p port] [-m motd_file] [-k host_key_dir] [-T telnet_port|off]\n",
 
-          "       %s [-h]\n"
-
-          "       %s [-V]\n",
-
-          prog_name, prog_name, prog_name);
+                    prog_name);
 
 }
 
@@ -160,15 +156,13 @@ int main(int argc, char **argv) {
 
   telnet_port_storage[0] = '\0';
 
-  const char *ssh_chat_url_arg = nullptr;
 
-  const char *ssh_chat_port_arg = nullptr;
 
 
 
   int opt = 0;
 
-  while ((opt = getopt(argc, argv, "a:p:m:k:T:hVU:P:")) != -1) {
+  while ((opt = getopt(argc, argv, "a:p:m:k:T:hV")) != -1) {
 
     switch (opt) {
 
@@ -318,17 +312,7 @@ int main(int argc, char **argv) {
 
         return EXIT_SUCCESS;
 
-      case 'U':
 
-        ssh_chat_url_arg = optarg;
-
-        break;
-
-      case 'P':
-
-        ssh_chat_port_arg = optarg;
-
-        break;
 
       default:
 
@@ -340,49 +324,6 @@ int main(int argc, char **argv) {
 
   }
 
-
-
-  if (ssh_chat_url_arg != nullptr && ssh_chat_port_arg != nullptr) {
-
-    const char *user_data_root = "/tmp/ssh_chatter_config";
-
-    const char *config_username = "admin_config";
-
-    uint16_t port = (uint16_t)atoi(ssh_chat_port_arg);
-
-
-
-    user_data_record_t config_record;
-
-    if (!user_data_ensure_exists(user_data_root, config_username, nullptr, &config_record)) {
-
-      fprintf(stderr, "Error: Failed to ensure user data exists for configuration.\n");
-
-      return EXIT_FAILURE;
-
-    }
-
-
-
-    user_data_set_ssh_chat_server_config(&config_record, ssh_chat_url_arg, port);
-
-
-
-    if (!user_data_save(user_data_root, &config_record, nullptr)) {
-
-      fprintf(stderr, "Error: Failed to save ssh-chat server configuration.\n");
-
-      return EXIT_FAILURE;
-
-    }
-
-
-
-    printf("ssh-chat server configured: URL='%s', Port=%hu\n", ssh_chat_url_arg, port);
-
-    return EXIT_SUCCESS;
-
-  }
 
 
 

@@ -1280,7 +1280,7 @@ static const char *const kSessionCommandNames[] = {
     "pm",
     "poke",          "poll",        "reply",       "revoke",       "rss",
     "search",        "set-target-lang","set-trans-lang","set-ui-lang","showstatus",
-    "soulmate",      "status",      "suspend!",    "systemcolor",  "today",
+    "soulmate",      "status",      "suspend!",    "sync-trigger",  "systemcolor",  "today",
     "translate",
     "translate-scope","unblock",    "users",        "video",        "vote",
     "vote-single",   "weather",
@@ -2061,10 +2061,16 @@ static const session_command_alias_t kSessionCommandAliases[] = {
         },
     },
     {
-        .canonical = "/unblock",
+        .canonical = "/advanced",
         .localized = {
-            [SESSION_UI_LANGUAGE_KO] = "/차단해제",
+            [SESSION_UI_LANGUAGE_KO] = "/advanced",
         },
+    },
+    {
+        .canonical = "/sync-trigger",
+    },
+    {
+        .canonical = "/set-sync-url",
     },
 };
 

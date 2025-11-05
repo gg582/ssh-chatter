@@ -182,34 +182,6 @@ Common examples:
 ./ssh-chatter -a 127.0.0.1 -m /etc/ssh-chatter/motd
 ```
 
-### Configuring SSH-Chat Server
-
-You can configure the `ssh-chatter` server to connect to an external `ssh-chat` instance. This can be done either via command-line arguments when starting `ssh-chatter` or through an in-session `/advanced` command.
-
-**Command-line Configuration:**
-
-Use the `-U` and `-P` flags when starting `ssh-chatter` to set the `ssh-chat` server URL and port. This will save the configuration and exit.
-
-```bash
-./ssh-chatter -U "ssh://your.ssh.chat.server" -P 2222
-```
-
-Replace `"ssh://your.ssh.chat.server"` with the actual SSH address of your `ssh-chat` server and `2222` with its port.
-
-**In-session Configuration (for operators):**
-
-Operators can also configure the `ssh-chat` server from within an active session using the `/advanced` command:
-
-```
-/advanced ssh-chat-server <ssh_address> <port>
-```
-
-Example:
-```
-/advanced ssh-chat-server ssh://my.chat.server 2222
-```
-
-This command will update the `ssh-chat` server configuration for the current `ssh-chatter` instance.
 
 The host key directory must contain an `ssh_host_rsa_key` file (and optional `.pub`).  Generate one with `ssh-keygen -t rsa -b 4096 -f /path/to/dir/ssh_host_rsa_key` if you do not want to reuse your system SSH host keys.  Additional host keys named `ssh_host_ed25519_key` and `ssh_host_ecdsa_key` are loaded automatically when present so the server can offer modern algorithms during key exchange.
 

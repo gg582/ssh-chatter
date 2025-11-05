@@ -67,4 +67,7 @@ void ssh_chatter_sync_send_message(const char* message);
 typedef void (*message_received_callback_t)(const chat_message_t* message);
 void ssh_chatter_sync_set_message_received_callback(message_received_callback_t callback);
 
+// Function to set SSH connection details at runtime
+void ssh_chatter_sync_set_connection_details(const char* host, int port, const char* username, const char* password);
+
 #endif // SSH_CHATTER_SYNC_H
