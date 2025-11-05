@@ -3538,48 +3538,6 @@ static void session_print_help(session_ctx_t *ctx) {
   }
 }
 
-static void session_print_help_extra(session_ctx_t *ctx) {
-  if (ctx == NULL) {
-    return;
-  }
-
-  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
-  const char *prefix = session_command_prefix(ctx);
-
-  char help_buffer[SSH_CHATTER_MESSAGE_LIMIT * 64]; // A large enough buffer for help messages
-  help_buffer[0] = '\0';
-
-  if (locale->help_extra_title != NULL && locale->help_extra_title[0] != '\0') {
-    session_send_system_line(ctx, locale->help_extra_title);
-  }
-
-  session_format_help_entries_to_buffer(ctx, kSessionHelpExtended,
-                                        sizeof(kSessionHelpExtended) / sizeof(kSessionHelpExtended[0]),
-                                        help_buffer, sizeof(help_buffer));
-  session_send_raw_text(ctx, help_buffer);
-
-  // Clear buffer for next section
-  help_buffer[0] = '\0';
-
-  if (locale->help_extra_hint != NULL && locale->help_extra_hint[0] != '\0') {
-    const char *args[] = {prefix};
-    char line[SSH_CHATTER_MESSAGE_LIMIT];
-    session_format_template(locale->help_extra_hint, args, sizeof(args) / sizeof(args[0]), line, sizeof(line));
-    session_send_system_line(ctx, line);
-  }
-
-  if (ctx->user.is_operator || ctx->user.is_lan_operator) {
-    session_send_system_line(ctx, "");
-    if (locale->help_operator_title != NULL && locale->help_operator_title[0] != '\0') {
-      session_send_system_line(ctx, locale->help_operator_title);
-    }
-    session_format_help_entries_to_buffer(ctx, kSessionHelpOperator,
-                                          sizeof(kSessionHelpOperator) / sizeof(kSessionHelpOperator[0]),
-                                          help_buffer, sizeof(help_buffer));
-    session_send_raw_text(ctx, help_buffer);
-  }
-}
-
 static bool session_line_is_exit_command(const char *line) {
   if (line == NULL) {
     return false;

@@ -810,7 +810,4 @@ bool host_post_client_message(host_t *host, const char *username, const char *me
 void host_shutdown(host_t *host);
 bool host_snapshot_last_captcha(host_t *host, char *question, size_t question_length, char *answer,
                                size_t answer_length, struct timespec *timestamp);
-bool session_user_data_load(struct session_ctx *ctx);
-bool session_user_data_commit(struct session_ctx *ctx);
-
 #endif

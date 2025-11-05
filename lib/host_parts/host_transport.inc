@@ -1458,7 +1458,6 @@ static void session_handle_alpha_centauri_landers(session_ctx_t *ctx);
 static void session_format_help_entries_to_buffer(session_ctx_t *ctx, const session_help_entry_t *entries,
                                                   size_t count, char *buffer, size_t buffer_length);
 static void session_print_help(session_ctx_t *ctx);
-static void session_print_help_extra(session_ctx_t *ctx);
 static void session_handle_set_ui_lang(session_ctx_t *ctx, const char *arguments);
 static bool session_line_is_exit_command(const char *line);
 static void session_handle_username_conflict_input(session_ctx_t *ctx, const char *line);
@@ -1466,7 +1465,6 @@ static const char *session_consume_token(const char *input, char *token, size_t 
 static bool session_user_data_available(session_ctx_t *ctx);
 static bool session_user_data_load(session_ctx_t *ctx);
 static bool session_user_data_commit(session_ctx_t *ctx);
-static void session_user_data_touch(session_ctx_t *ctx);
 static bool host_user_data_send_mail(host_t *host, const char *recipient, const char *recipient_ip,
                                     const char *sender, const char *message, char *error, size_t error_length);
 static bool host_user_data_load_existing(host_t *host, const char *username, const char *ip,

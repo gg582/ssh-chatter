@@ -1262,22 +1262,6 @@ static bool session_user_data_available(session_ctx_t *ctx) {
   return true;
 }
 
-static void session_user_data_touch(session_ctx_t *ctx) {
-  if (ctx == NULL || !ctx->user_data_loaded) {
-    return;
-  }
-
-  time_t now = time(NULL);
-  if (now == (time_t)-1) {
-    now = 0;
-  }
-  ctx->user_data.last_updated = (uint64_t)now;
-}
-
-
-
-
-
 static bool host_user_data_load_existing(host_t *host, const char *username, const char *ip,
                                         user_data_record_t *record, bool create_if_missing) {
   if (host == NULL || username == NULL || username[0] == '\0') {
@@ -1330,50 +1314,6 @@ static bool host_lookup_last_ip(host_t *host, const char *username, char *ip, si
 
   snprintf(ip, length, "%s", record.last_ip);
   return true;
-}
-
-static bool session_user_data_load(session_ctx_t *ctx) {
-  if (!session_user_data_available(ctx)) {
-    return false;
-  }
-
-  if (ctx->user_data_loaded) {
-    return true;
-  }
-
-  user_data_record_t record;
-  if (!host_user_data_load_existing(ctx->owner, ctx->user.name, ctx->client_ip, &record, true)) {
-    return false;
-  }
-
-  ctx->user_data = record;
-  ctx->user_data_loaded = true;
-  return true;
-}
-
-static bool session_user_data_commit(session_ctx_t *ctx) {
-  if (!session_user_data_available(ctx) || !ctx->user_data_loaded) {
-    return false;
-  }
-
-  session_user_data_touch(ctx);
-
-  host_t *host = ctx->owner;
-  bool success = false;
-  if (host->user_data_lock_initialized) {
-    pthread_mutex_lock(&host->user_data_lock);
-  }
-  snprintf(ctx->user_data.last_ip, sizeof(ctx->user_data.last_ip), "%s", ctx->client_ip);
-  success = user_data_save(host->user_data_root, &ctx->user_data, ctx->client_ip);
-  if (host->user_data_lock_initialized) {
-    pthread_mutex_unlock(&host->user_data_lock);
-  }
-
-  if (!success) {
-    humanized_log_error("mailbox", "failed to persist user data", errno != 0 ? errno : EIO);
-  }
-
-  return success;
 }
 
 static bool host_user_data_send_mail(host_t *host, const char *recipient, const char *recipient_ip,
