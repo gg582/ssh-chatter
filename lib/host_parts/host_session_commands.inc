@@ -2014,6 +2014,116 @@ static void session_handle_sync_trigger(session_ctx_t *ctx, const char *argument
   session_send_system_line(ctx, "SSH synchronization trigger initiated.");
 }
 
+static bool session_parse_port_token(const char *token, uint16_t *out) {
+  if (token == NULL || out == NULL) {
+    return false;
+  }
+
+  char *endptr = NULL;
+  long value = strtol(token, &endptr, 10);
+  if (endptr == NULL || *endptr != '\0' || value <= 0 || value > UINT16_MAX) {
+    return false;
+  }
+
+  *out = (uint16_t)value;
+  return true;
+}
+
+static bool session_parse_ssh_url(const char *input, char *host_out, size_t host_len,
+                                  uint16_t *port_out) {
+  if (input == NULL || host_out == NULL || host_len == 0U) {
+    return false;
+  }
+
+  const char kScheme[] = "ssh://";
+  size_t scheme_len = sizeof(kScheme) - 1U;
+  if (strncasecmp(input, kScheme, scheme_len) != 0) {
+    return false;
+  }
+
+  const char *cursor = input + scheme_len;
+  if (*cursor == '\0') {
+    return false;
+  }
+
+  char host_buffer[SSH_CHATTER_MESSAGE_LIMIT];
+  size_t host_size = 0U;
+
+  if (*cursor == '[') {
+    ++cursor;
+    const char *closing = strchr(cursor, ']');
+    if (closing == NULL || closing == cursor) {
+      return false;
+    }
+    host_size = (size_t)(closing - cursor);
+    if (host_size >= sizeof(host_buffer)) {
+      return false;
+    }
+    memcpy(host_buffer, cursor, host_size);
+    host_buffer[host_size] = '\0';
+    cursor = closing + 1;
+  } else {
+    const char *start = cursor;
+    while (*cursor != '\0' && *cursor != ':' && *cursor != '/' && *cursor != '?' && *cursor != '#') {
+      ++cursor;
+    }
+    if (cursor == start) {
+      return false;
+    }
+    host_size = (size_t)(cursor - start);
+    if (host_size >= sizeof(host_buffer)) {
+      return false;
+    }
+    memcpy(host_buffer, start, host_size);
+    host_buffer[host_size] = '\0';
+  }
+
+  uint16_t parsed_port = 0U;
+  if (*cursor == ':') {
+    ++cursor;
+    if (*cursor == '\0') {
+      return false;
+    }
+    const char *port_start = cursor;
+    while (*cursor != '\0' && isdigit((unsigned char)*cursor)) {
+      ++cursor;
+    }
+    if (cursor == port_start) {
+      return false;
+    }
+    if (*cursor != '\0' && *cursor != '/' && *cursor != '?' && *cursor != '#') {
+      return false;
+    }
+
+    char port_buffer[8];
+    size_t port_length = (size_t)(cursor - port_start);
+    if (port_length >= sizeof(port_buffer)) {
+      return false;
+    }
+    memcpy(port_buffer, port_start, port_length);
+    port_buffer[port_length] = '\0';
+
+    if (!session_parse_port_token(port_buffer, &parsed_port)) {
+      return false;
+    }
+  }
+
+  if (*cursor != '\0' && !(*cursor == '/' && cursor[1] == '\0')) {
+    return false;
+  }
+
+  if (host_size + 1U > host_len) {
+    return false;
+  }
+
+  memcpy(host_out, host_buffer, host_size + 1U);
+  if (port_out != NULL) {
+    *port_out = parsed_port;
+  }
+
+  return true;
+}
+
 static void session_handle_advanced(session_ctx_t *ctx, const char *arguments) {
   if (ctx == NULL || ctx->owner == NULL) {
     return;
@@ -2024,7 +2134,8 @@ static void session_handle_advanced(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  static const char *kUsage = "Usage: /advanced ssh-chat-server <url> <port>";
+  static const char *kUsage =
+      "Usage: /advanced ssh-chat-server <set|port|credentials|enable|disable|status|trigger|stop> ...";
 
   char usage[SSH_CHATTER_MESSAGE_LIMIT];
   session_command_format_usage(ctx, "/advanced", kUsage, usage, sizeof(usage));
@@ -2051,35 +2162,195 @@ static void session_handle_advanced(session_ctx_t *ctx, const char *arguments) {
     return;
   }
 
-  char *url_str = strtok_r(NULL, " \t", &saveptr);
-  char *port_str = strtok_r(NULL, " \t", &saveptr);
+  char *action = strtok_r(NULL, " \t", &saveptr);
 
-  if (url_str == NULL || port_str == NULL) {
+  if (action == NULL) {
     session_send_system_line(ctx, usage);
     return;
   }
 
-  uint16_t port = (uint16_t)atoi(port_str);
-  if (port == 0) {
-    session_send_system_line(ctx, "Invalid port number.");
+  if (strcasecmp(action, "set") == 0 || strcasecmp(action, "host") == 0) {
+    char *url_str = strtok_r(NULL, " \t", &saveptr);
+    char *port_str = strtok_r(NULL, " \t", &saveptr);
+
+    if (url_str == NULL) {
+      session_send_system_line(ctx, usage);
+      return;
+    }
+
+    char host[SSH_CHATTER_MESSAGE_LIMIT];
+    uint16_t url_port = 0U;
+    if (!session_parse_ssh_url(url_str, host, sizeof(host), &url_port)) {
+      session_send_system_line(ctx, "Invalid ssh:// URL.");
+      return;
+    }
+
+    uint16_t port = url_port;
+    if (port_str != NULL) {
+      if (!session_parse_port_token(port_str, &port)) {
+        session_send_system_line(ctx, "Invalid port number.");
+        return;
+      }
+    }
+
+    if (port == 0U) {
+      port = 22U;
+    }
+
+    if (!session_user_data_load(ctx)) {
+      session_send_system_line(ctx, "Failed to load user data.");
+      return;
+    }
+
+    user_data_set_ssh_chat_server_config(&ctx->user_data, host, port);
+
+    if (!session_user_data_commit(ctx)) {
+      session_send_system_line(ctx, "Failed to save ssh-chat server configuration.");
+      return;
+    }
+
+    sync_settings_t settings = ssh_chatter_sync_get_settings();
+    const char *username = settings.go_chat_username[0] != '\0' ? settings.go_chat_username : "chatter_sync";
+    const char *password = settings.go_chat_password[0] != '\0' ? settings.go_chat_password : "password";
+    ssh_chatter_sync_set_connection_details(host, (int)port, username, password);
+
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "ssh-chat server configured: URL='ssh://%s', Port=%hu", host, port);
+    session_send_system_line(ctx, message);
+    session_send_system_line(ctx, "Use /advanced ssh-chat-server trigger to reconnect with the new settings.");
     return;
   }
 
-  if (!session_user_data_load(ctx)) {
-    session_send_system_line(ctx, "Failed to load user data.");
+  if (strcasecmp(action, "port") == 0) {
+    char *port_str = strtok_r(NULL, " \t", &saveptr);
+    if (port_str == NULL) {
+      session_send_system_line(ctx, "Port value is required.");
+      return;
+    }
+
+    uint16_t port = 0U;
+    if (!session_parse_port_token(port_str, &port)) {
+      session_send_system_line(ctx, "Invalid port number.");
+      return;
+    }
+
+    if (!session_user_data_load(ctx)) {
+      session_send_system_line(ctx, "Failed to load user data.");
+      return;
+    }
+
+    sync_settings_t settings = ssh_chatter_sync_get_settings();
+    const char *host = settings.go_chat_host[0] != '\0' ? settings.go_chat_host : ctx->user_data.ssh_chat_server_url;
+    const char *username = settings.go_chat_username[0] != '\0' ? settings.go_chat_username : "chatter_sync";
+    const char *password = settings.go_chat_password[0] != '\0' ? settings.go_chat_password : "password";
+
+    if (host == NULL || host[0] == '\0') {
+      session_send_system_line(ctx, "Set a server URL before adjusting the port.");
+      return;
+    }
+
+    user_data_set_ssh_chat_server_config(&ctx->user_data, host, port);
+
+    if (!session_user_data_commit(ctx)) {
+      session_send_system_line(ctx, "Failed to save ssh-chat server configuration.");
+      return;
+    }
+
+    ssh_chatter_sync_set_connection_details(host, (int)port, username, password);
+
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "ssh-chat server port updated: Port=%hu", port);
+    session_send_system_line(ctx, message);
+    session_send_system_line(ctx, "Use /advanced ssh-chat-server trigger to reconnect with the new settings.");
     return;
   }
 
-  user_data_set_ssh_chat_server_config(&ctx->user_data, url_str, port);
+  if (strcasecmp(action, "credentials") == 0) {
+    char *username = strtok_r(NULL, " \t", &saveptr);
+    char *password = strtok_r(NULL, " \t", &saveptr);
 
-  if (!session_user_data_commit(ctx)) {
-    session_send_system_line(ctx, "Failed to save ssh-chat server configuration.");
+    if (username == NULL || password == NULL) {
+      session_send_system_line(ctx, "Username and password are required.");
+      return;
+    }
+
+    sync_settings_t settings = ssh_chatter_sync_get_settings();
+    const char *host = settings.go_chat_host[0] != '\0' ? settings.go_chat_host : "127.0.0.1";
+    int port = settings.go_chat_port > 0 ? settings.go_chat_port : 22;
+
+    ssh_chatter_sync_set_connection_details(host, port, username, password);
+
+    session_send_system_line(ctx, "ssh-chat synchronization credentials updated.");
+    session_send_system_line(ctx, "Use /advanced ssh-chat-server trigger to reconnect with the new settings.");
     return;
   }
 
-  char message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(message, sizeof(message), "ssh-chat server configured: URL='%s', Port=%hu", url_str, port);
-  session_send_system_line(ctx, message);
+  if (strcasecmp(action, "enable") == 0 || strcasecmp(action, "disable") == 0) {
+    bool enable = (strcasecmp(action, "enable") == 0);
+    char *direction = strtok_r(NULL, " \t", &saveptr);
+
+    bool toggle_in = false;
+    bool toggle_out = false;
+
+    if (direction == NULL || strcasecmp(direction, "both") == 0 || strcasecmp(direction, "all") == 0) {
+      toggle_in = true;
+      toggle_out = true;
+    } else if (strcasecmp(direction, "in") == 0 || strcasecmp(direction, "incoming") == 0) {
+      toggle_in = true;
+    } else if (strcasecmp(direction, "out") == 0 || strcasecmp(direction, "outgoing") == 0) {
+      toggle_out = true;
+    } else {
+      session_send_system_line(ctx, "Unknown sync direction. Use in, out, or both.");
+      return;
+    }
+
+    if (toggle_in) {
+      ssh_chatter_sync_set_in_enabled(enable);
+      session_send_system_line(ctx, enable ? "Incoming synchronization enabled." : "Incoming synchronization disabled.");
+    }
+
+    if (toggle_out) {
+      ssh_chatter_sync_set_out_enabled(enable);
+      session_send_system_line(ctx, enable ? "Outgoing synchronization enabled." : "Outgoing synchronization disabled.");
+    }
+
+    return;
+  }
+
+  if (strcasecmp(action, "status") == 0) {
+    sync_settings_t settings = ssh_chatter_sync_get_settings();
+
+    session_send_system_line(ctx, "ssh-chat synchronization status:");
+
+    char connection[SSH_CHATTER_MESSAGE_LIMIT];
+    const char *host = settings.go_chat_host[0] != '\0' ? settings.go_chat_host : "(not set)";
+    snprintf(connection, sizeof(connection), "  Server: ssh://%s:%d", host, settings.go_chat_port);
+    session_send_system_line(ctx, connection);
+
+    char auth_line[SSH_CHATTER_MESSAGE_LIMIT];
+    const char *username = settings.go_chat_username[0] != '\0' ? settings.go_chat_username : "(not set)";
+    snprintf(auth_line, sizeof(auth_line), "  Username: %s", username);
+    session_send_system_line(ctx, auth_line);
+
+    session_send_system_line(ctx, settings.sync_in_enabled ? "  Incoming sync: enabled" : "  Incoming sync: disabled");
+    session_send_system_line(ctx, settings.sync_out_enabled ? "  Outgoing sync: enabled" : "  Outgoing sync: disabled");
+    return;
+  }
+
+  if (strcasecmp(action, "trigger") == 0 || strcasecmp(action, "start") == 0) {
+    session_send_system_line(ctx, "Attempting to reconnect ssh-chat synchronization...");
+    ssh_chatter_sync_manual_trigger();
+    session_send_system_line(ctx, "Synchronization trigger initiated.");
+    return;
+  }
+
+  if (strcasecmp(action, "stop") == 0) {
+    ssh_chatter_sync_stop();
+    session_send_system_line(ctx, "ssh-chat synchronization stopped.");
+    return;
+  }
+
+  session_send_system_line(ctx, usage);
 }
 
 // Format a timestamp for BBS displays in a compact form.
