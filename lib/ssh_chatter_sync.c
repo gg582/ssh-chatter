@@ -440,7 +440,7 @@ static void *read_channel_thread(void *arg) {
                 }
 
                 if (strlen(trimmed_line) > 0) {
-                    fprintf(stderr, "[SSH_SYNC] Received line: %s\n\n", trimmed_line);
+                    fprintf(stderr, "\033[G[SSH_SYNC] Received line: %s\n\n", trimmed_line);
 
                     // Attempt to parse as a chat message "username: message_body"
                     char *colon_pos = strstr(trimmed_line, ": ");
@@ -460,14 +460,14 @@ static void *read_channel_thread(void *arg) {
                     } else {
                         // Not a standard chat message, could be a system message or join/leave
                         // For now, just log it and don't add to history as a chat message
-                        fprintf(stderr, "[SSH_SYNC] Non-chat message: %s\n\n", trimmed_line);
+                        fprintf(stderr, "\033[G[SSH_SYNC] Non-chat message: %s\n\n", trimmed_line);
                     }
                 }
                 line = next_line + 1; // Move to the next line
             }
             // Handle any remaining part of the buffer that doesn't end with a newline
             if (strlen(line) > 0) {
-                fprintf(stderr, "[SSH_SYNC] Received partial line: %s\n\n", line);
+                fprintf(stderr, "\033[G[SSH_SYNC] Received partial line: %s\n\n", line);
                 // This partial line will be prepended to the next buffer read
                 // For now, we'll just ignore it for parsing purposes
             }
