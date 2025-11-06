@@ -1071,7 +1071,7 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
         line_buffer[SSH_CHATTER_TETRIS_WIDTH + 1] = '|';
         line_buffer[SSH_CHATTER_TETRIS_WIDTH + 2] = '\0';
         
-        buffer_pos += snprintf(update_buffer + buffer_pos, sizeof(update_buffer) - (size_t)buffer_pos, "\r%s", line_buffer);
+        buffer_pos += snprintf(update_buffer + buffer_pos, sizeof(update_buffer) - (size_t)buffer_pos, "\r%s\033[K", line_buffer);
         if (row < max_row) {
           buffer_pos += snprintf(update_buffer + buffer_pos, sizeof(update_buffer) - (size_t)buffer_pos, "\033[1B");
         }
