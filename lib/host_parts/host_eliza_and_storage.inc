@@ -1485,6 +1485,10 @@ static void session_apply_saved_preferences(session_ctx_t *ctx) {
 
         ctx->system_fg_code = fg_code;
         ctx->system_bg_code = bg_code;
+        ctx->background_fill_applied = false;
+        ctx->background_fill_width = 0U;
+        ctx->background_fill_height = 0U;
+        ctx->background_fill_hash = 0U;
         ctx->system_highlight_code = highlight_code;
         ctx->system_is_bold = snapshot.system_is_bold;
         snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", snapshot.system_fg_name);
@@ -3375,24 +3379,34 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   const size_t bg_len = strlen(bg);
 
+  unsigned int width = ctx->terminal_width > 0U ? ctx->terminal_width : 80U;
+  unsigned int height = ctx->terminal_height > 0U ? ctx->terminal_height : 24U;
+  if (width == 0U) {
+    width = 80U;
+  }
+  if (height == 0U) {
+    height = 24U;
+  }
+
+  uint32_t bg_hash = 0U;
+  for (size_t idx = 0U; idx < bg_len; ++idx) {
+    bg_hash = (bg_hash * 131U) + (uint32_t)(unsigned char)bg[idx];
+  }
+
+  bool need_full_fill = false;
   if (bg_len > 0U) {
-    unsigned int width = ctx->terminal_width > 0U ? ctx->terminal_width : 80U;
-    unsigned int height = ctx->terminal_height > 0U ? ctx->terminal_height : 24U;
-
-    if (width == 0U) {
-      width = 80U;
+    if (!ctx->background_fill_applied || ctx->background_fill_width != width ||
+        ctx->background_fill_height != height || ctx->background_fill_hash != bg_hash) {
+      need_full_fill = true;
     }
-    if (height == 0U) {
-      height = 24U;
-    }
+  } else {
+    ctx->background_fill_applied = false;
+    ctx->background_fill_width = 0U;
+    ctx->background_fill_height = 0U;
+    ctx->background_fill_hash = 0U;
+  }
 
-    char line_buffer[1024];
-    size_t fill_width = width > 0U ? (size_t)width : (size_t)80U;
-    if (fill_width > sizeof(line_buffer)) {
-      fill_width = sizeof(line_buffer);
-    }
-    memset(line_buffer, ' ', fill_width);
-
+  if (need_full_fill) {
     static const char save_cursor[] = "\033[s";
     static const char restore_cursor[] = "\033[u";
     static const char move_home[] = "\033[H";
@@ -3401,8 +3415,17 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
     session_channel_write(ctx, move_home, sizeof(move_home) - 1U);
     session_channel_write(ctx, bg, bg_len);
 
+    char space_chunk[128];
+    memset(space_chunk, ' ', sizeof(space_chunk));
+
     for (unsigned int row = 0U; row < height; ++row) {
-      session_channel_write(ctx, line_buffer, fill_width);
+      unsigned int remaining = width;
+      while (remaining > 0U) {
+        size_t to_write = remaining < (unsigned int)sizeof(space_chunk) ? remaining : sizeof(space_chunk);
+        session_channel_write(ctx, space_chunk, to_write);
+        remaining -= (unsigned int)to_write;
+      }
+
       if (row + 1U < height) {
         session_channel_write(ctx, "\r\n", 2U);
         session_channel_write(ctx, bg, bg_len);
@@ -3411,6 +3434,11 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
 
     session_channel_write(ctx, ANSI_RESET, sizeof(ANSI_RESET) - 1U);
     session_channel_write(ctx, restore_cursor, sizeof(restore_cursor) - 1U);
+
+    ctx->background_fill_applied = true;
+    ctx->background_fill_width = width;
+    ctx->background_fill_height = height;
+    ctx->background_fill_hash = bg_hash;
   }
 
   if (bg_len > 0U) {
@@ -3473,7 +3501,7 @@ static void session_send_caption_line(session_ctx_t *ctx, const char *message) {
   }
 
   bool locked = session_output_lock(ctx);
-  session_channel_write(ctx, ANSI_CURSOR_HOME, sizeof(ANSI_CURSOR_HOME) - 1U);
+  session_channel_write(ctx, "\r", 1U);
   session_channel_write(ctx, ANSI_INSERT_LINE, sizeof(ANSI_INSERT_LINE) - 1U);
 
   session_write_rendered_line(ctx, message);

@@ -4105,6 +4105,10 @@ static void session_apply_system_theme_defaults(session_ctx_t *ctx) {
 
   ctx->system_fg_code = host->system_theme.foregroundColor;
   ctx->system_bg_code = host->system_theme.backgroundColor;
+  ctx->background_fill_applied = false;
+  ctx->background_fill_width = 0U;
+  ctx->background_fill_height = 0U;
+  ctx->background_fill_hash = 0U;
   ctx->system_highlight_code = host->system_theme.highlightColor;
   ctx->system_is_bold = host->system_theme.isBold;
   snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", host->default_system_fg_name);

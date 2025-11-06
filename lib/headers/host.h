@@ -486,6 +486,10 @@ typedef struct session_ctx {
   char system_fg_name[SSH_CHATTER_COLOR_NAME_LEN];
   char system_bg_name[SSH_CHATTER_COLOR_NAME_LEN];
   char system_highlight_name[SSH_CHATTER_COLOR_NAME_LEN];
+  bool background_fill_applied;
+  unsigned int background_fill_width;
+  unsigned int background_fill_height;
+  uint32_t background_fill_hash;
   unsigned int terminal_width;
   unsigned int terminal_height;
   int exit_status;

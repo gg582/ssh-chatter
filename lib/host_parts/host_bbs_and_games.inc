@@ -2880,6 +2880,10 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
 
   ctx->system_fg_code = fg_code;
   ctx->system_bg_code = bg_code;
+  ctx->background_fill_applied = false;
+  ctx->background_fill_width = 0U;
+  ctx->background_fill_height = 0U;
+  ctx->background_fill_hash = 0U;
   ctx->system_highlight_code = highlight_code;
   ctx->system_is_bold = is_bold;
   snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", tokens[0]);

@@ -1965,6 +1965,10 @@ static bool palette_apply_to_session(session_ctx_t *ctx, const palette_descripto
 
   ctx->system_fg_code = system_fg_code;
   ctx->system_bg_code = system_bg_code;
+  ctx->background_fill_applied = false;
+  ctx->background_fill_width = 0U;
+  ctx->background_fill_height = 0U;
+  ctx->background_fill_hash = 0U;
   ctx->system_highlight_code = system_highlight_code;
   ctx->system_is_bold = descriptor->system_is_bold;
   snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", descriptor->system_fg_name);
