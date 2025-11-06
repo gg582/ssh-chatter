@@ -1186,6 +1186,10 @@ session_should_hide_entry (session_ctx_t *ctx,
   }
 
   if (!entry->is_user_message) {
+    if (!ctx->breaking_alerts_enabled
+        && session_message_contains_breaking (entry->message)) {
+      return true;
+    }
     return false;
   }
 
