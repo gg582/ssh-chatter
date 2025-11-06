@@ -137,6 +137,30 @@ void ssh_channel_free(ssh_channel channel) {
   free(channel);
 }
 
+unsigned int ssh_message_channel_request_pty_width(ssh_message message) {
+  (void)message;
+  return 0U;
+}
+
+unsigned int ssh_message_channel_request_pty_height(ssh_message message) {
+  (void)message;
+  return 0U;
+}
+
+#if defined(LIBSSH_VERSION_INT) && defined(SSH_VERSION_INT)
+#if LIBSSH_VERSION_INT >= SSH_VERSION_INT(0, 9, 0)
+unsigned int ssh_message_channel_request_window_change_width(ssh_message message) {
+  (void)message;
+  return 0U;
+}
+
+unsigned int ssh_message_channel_request_window_change_height(ssh_message message) {
+  (void)message;
+  return 0U;
+}
+#endif
+#endif
+
 int ssh_disconnect(ssh_session session) {
   (void)session;
   return SSH_OK;

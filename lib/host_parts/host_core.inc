@@ -2366,12 +2366,6 @@ static const session_help_entry_t kSessionHelpEssential[] = {
             "开始俄罗斯方块游戏。",
             "Начать игру в Тетрис.",
         },
-        .label_translations = {
-            [SESSION_UI_LANGUAGE_KO] = "게임 테트리스",
-            [SESSION_UI_LANGUAGE_JP] = "ゲーム テトリス",
-            [SESSION_UI_LANGUAGE_ZH] = "游戏 俄罗斯方块",
-            [SESSION_UI_LANGUAGE_RU] = "игра тетрис",
-        },
     },
     {
         .kind = SESSION_HELP_ENTRY_COMMAND,
@@ -3135,12 +3129,6 @@ static const session_help_entry_t kSessionHelpExtended[] = {
             "進行中のゲームを一時停止します（プレイ中に Ctrl+Z）。",
             "暂停正在进行的游戏（游戏中按 Ctrl+Z）。",
             "Приостановить активную игру (Ctrl+Z во время игры).",
-        },
-        .label_translations = {
-            [SESSION_UI_LANGUAGE_KO] = "일시중지!",
-            [SESSION_UI_LANGUAGE_JP] = "一時停止!",
-            [SESSION_UI_LANGUAGE_ZH] = "暂停!",
-            [SESSION_UI_LANGUAGE_RU] = "приостановить!",
         },
         .label_arg_count = 0U,
         .label_args = {},
