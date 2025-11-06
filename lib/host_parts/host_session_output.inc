@@ -2626,7 +2626,7 @@ static void session_send_multiline_message(session_ctx_t *ctx, const char *messa
     return;
   }
 
-  char *message_copy = GC_MALLOC(message_len + 1U);
+  char *message_copy = GC_CALLOC(1U, message_len + 1U);
   if (message_copy == NULL) {
     // If allocation fails, split inline without copying
     // This is a fallback path that still preserves the line-by-line behavior
@@ -2637,10 +2637,11 @@ static void session_send_multiline_message(session_ctx_t *ctx, const char *messa
       // Calculate line length
       size_t line_len = (size_t)(newline_pos - line_start);
       
-      // Create a temporary buffer for this line
+      // Create a temporary buffer for this line (reserve 1 byte for null terminator)
       char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
-      if (line_len >= sizeof(line_buffer)) {
-        line_len = sizeof(line_buffer) - 1U;
+      const size_t max_line_len = sizeof(line_buffer) - 1U;
+      if (line_len > max_line_len) {
+        line_len = max_line_len;
       }
       
       memcpy(line_buffer, line_start, line_len);
@@ -2660,7 +2661,6 @@ static void session_send_multiline_message(session_ctx_t *ctx, const char *messa
   }
 
   memcpy(message_copy, message, message_len);
-  message_copy[message_len] = '\0';
 
   // Split by newlines and send each line individually
   char *line_start = message_copy;
