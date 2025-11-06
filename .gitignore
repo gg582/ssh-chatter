@@ -3,3 +3,8 @@
 ./lib/host.o
 ./ssh_host_rsa_key
 ./ssh_host_rsa_key.pub
+*.o
+*.d
+*.so
+ssh-chatter
+libssh_chatter_backend.so

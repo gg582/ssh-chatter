@@ -2614,6 +2614,75 @@ static void session_send_private_message_line(session_ctx_t *ctx, const session_
   }
 }
 
+// Helper function to send a message line-by-line with cursor reset for each line
+static void session_send_multiline_message(session_ctx_t *ctx, const char *message) {
+  if (ctx == NULL || message == NULL || !session_transport_active(ctx)) {
+    return;
+  }
+
+  // Make a copy of the message since we'll be modifying it
+  size_t message_len = strlen(message);
+  if (message_len == 0U) {
+    return;
+  }
+
+  char *message_copy = GC_CALLOC(1U, message_len + 1U);
+  if (message_copy == NULL) {
+    // If allocation fails, split inline without copying
+    // This is a fallback path that still preserves the line-by-line behavior
+    const char *line_start = message;
+    const char *newline_pos = NULL;
+    
+    while ((newline_pos = strchr(line_start, '\n')) != NULL) {
+      // Calculate line length
+      size_t line_len = (size_t)(newline_pos - line_start);
+      
+      // Create a temporary buffer for this line (reserve 1 byte for null terminator)
+      char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
+      const size_t max_line_len = sizeof(line_buffer) - 1U;
+      if (line_len > max_line_len) {
+        line_len = max_line_len;
+      }
+      
+      memcpy(line_buffer, line_start, line_len);
+      line_buffer[line_len] = '\0';
+      
+      session_send_plain_line(ctx, line_buffer);
+      
+      // Move to the next line
+      line_start = newline_pos + 1;
+    }
+    
+    // Send any remaining text after the last newline
+    if (line_start[0] != '\0') {
+      session_send_plain_line(ctx, line_start);
+    }
+    return;
+  }
+
+  memcpy(message_copy, message, message_len);
+
+  // Split by newlines and send each line individually
+  char *line_start = message_copy;
+  char *newline_pos = NULL;
+
+  while ((newline_pos = strchr(line_start, '\n')) != NULL) {
+    // Temporarily null-terminate at the newline
+    *newline_pos = '\0';
+    
+    // Send this line with cursor reset
+    session_send_plain_line(ctx, line_start);
+    
+    // Move to the next line
+    line_start = newline_pos + 1;
+  }
+
+  // Send any remaining text after the last newline
+  if (line_start[0] != '\0') {
+    session_send_plain_line(ctx, line_start);
+  }
+}
+
 static void session_send_history_entry(session_ctx_t *ctx, const chat_history_entry_t *entry) {
   if (ctx == NULL || !session_transport_active(ctx) || entry == NULL) {
     return;
@@ -2636,15 +2705,30 @@ static void session_send_history_entry(session_ctx_t *ctx, const chat_history_en
 
     if (entry->message[0] != '\0') {
       const bool multiline = strchr(entry->message, '\n') != NULL;
-      strncat(formatted, multiline ? ":\n" : ": ", sizeof(formatted) - strlen(formatted) - 1U);
-      strncat(formatted, entry->message, sizeof(formatted) - strlen(formatted) - 1U);
+      if (multiline) {
+        // For multiline messages, send the username first, then each line separately
+        strncat(formatted, ":", sizeof(formatted) - strlen(formatted) - 1U);
+        session_send_plain_line(ctx, formatted);
+        session_send_multiline_message(ctx, entry->message);
+      } else {
+        // For single-line messages, send as before
+        strncat(formatted, ": ", sizeof(formatted) - strlen(formatted) - 1U);
+        strncat(formatted, entry->message, sizeof(formatted) - strlen(formatted) - 1U);
+        session_send_plain_line(ctx, formatted);
+      }
+    } else {
+      session_send_plain_line(ctx, formatted);
     }
-
-    session_send_plain_line(ctx, formatted);
     return;
   }
 
-  session_send_plain_line(ctx, entry->message);
+  // For non-user messages, check if multiline and send accordingly
+  const bool multiline = strchr(entry->message, '\n') != NULL;
+  if (multiline) {
+    session_send_multiline_message(ctx, entry->message);
+  } else {
+    session_send_plain_line(ctx, entry->message);
+  }
 }
 
 // Present a summary of a poll, optionally showing the label used for named polls.
