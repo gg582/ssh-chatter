@@ -29,7 +29,8 @@
 #endif
 
 #ifndef SSH_CHATTER_TRANSLATION_BATCH_BUFFER
-#define SSH_CHATTER_TRANSLATION_BATCH_BUFFER (SSH_CHATTER_TRANSLATION_WORKING_LEN * SSH_CHATTER_TRANSLATION_BATCH_MAX)
+#define SSH_CHATTER_TRANSLATION_BATCH_BUFFER                                   \
+  (SSH_CHATTER_TRANSLATION_WORKING_LEN * SSH_CHATTER_TRANSLATION_BATCH_MAX)
 #endif
 
 #ifndef SSH_CHATTER_LANG_NAME_LEN
@@ -41,12 +42,17 @@ typedef struct translation_placeholder {
   char sequence[SSH_CHATTER_PLACEHOLDER_SEQUENCE_LEN];
 } translation_placeholder_t;
 
-bool translation_prepare_text(const char *message, char *sanitized, size_t sanitized_len,
-                              translation_placeholder_t *placeholders, size_t *placeholder_count);
+bool translation_prepare_text (const char *message, char *sanitized,
+                               size_t sanitized_len,
+                               translation_placeholder_t *placeholders,
+                               size_t *placeholder_count);
 
-bool translation_restore_text(const char *translated, char *output, size_t output_len,
-                              const translation_placeholder_t *placeholders, size_t placeholder_count);
+bool translation_restore_text (const char *translated, char *output,
+                               size_t output_len,
+                               const translation_placeholder_t *placeholders,
+                               size_t placeholder_count);
 
-bool translation_strip_no_translate_prefix(const char *message, char *stripped, size_t stripped_len);
+bool translation_strip_no_translate_prefix (const char *message, char *stripped,
+                                            size_t stripped_len);
 
 #endif

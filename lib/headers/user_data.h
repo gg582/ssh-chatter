@@ -67,15 +67,23 @@ typedef struct user_data_record {
   uint8_t reserved[64];
 } user_data_record_t;
 
-bool user_data_sanitize_username(const char *username, char *sanitized, size_t length);
-bool user_data_path_for(const char *root, const char *username, const char *ip, bool create_if_missing,
-                        char *path, size_t length);
-bool user_data_ensure_root(const char *root);
-bool user_data_init(user_data_record_t *record, const char *username, const char *ip);
-bool user_data_load(const char *root, const char *username, const char *ip, user_data_record_t *record);
-bool user_data_save(const char *root, const user_data_record_t *record, const char *ip);
-bool user_data_ensure_exists(const char *root, const char *username, const char *ip, user_data_record_t *record);
-void user_data_set_ssh_chat_server_config(user_data_record_t *record, const char *url, uint16_t port);
-void user_data_get_ssh_chat_server_config(const user_data_record_t *record, char *url, size_t url_len, uint16_t *port);
+bool user_data_sanitize_username (const char *username, char *sanitized,
+                                  size_t length);
+bool user_data_path_for (const char *root, const char *username, const char *ip,
+                         bool create_if_missing, char *path, size_t length);
+bool user_data_ensure_root (const char *root);
+bool user_data_init (user_data_record_t *record, const char *username,
+                     const char *ip);
+bool user_data_load (const char *root, const char *username, const char *ip,
+                     user_data_record_t *record);
+bool user_data_save (const char *root, const user_data_record_t *record,
+                     const char *ip);
+bool user_data_ensure_exists (const char *root, const char *username,
+                              const char *ip, user_data_record_t *record);
+void user_data_set_ssh_chat_server_config (user_data_record_t *record,
+                                           const char *url, uint16_t port);
+void user_data_get_ssh_chat_server_config (const user_data_record_t *record,
+                                           char *url, size_t url_len,
+                                           uint16_t *port);
 
 #endif /* SSH_CHATTER_USER_DATA_H */

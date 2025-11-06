@@ -1,0 +1,23 @@
+BasedOnStyle: GNU
+IndentWidth: 2
+PointerAlignment: Right
+BreakBeforeBraces: Linux
+AllowShortFunctionsOnASingleLine: None
+IndentCaseLabels: false
+ColumnLimit: 80
+
+SortIncludes: false
+ReflowComments: false
+KeepEmptyLinesAtTheStartOfBlocks: true
+
+AlignEscapedNewlines: Right
+AlignConsecutiveMacros: false
+
+# Additional minimal-change options
+UseTab: Never
+SpacesBeforeTrailingComments: 1
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowAllArgumentsOnNextLine: false
+AllowShortIfStatementsOnASingleLine: false
+FixNamespaceComments: false
+

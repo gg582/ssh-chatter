@@ -106,12 +106,11 @@ struct translation_result;
 struct session_ctx;
 
 typedef struct session_ops {
-    void (*dispatch_command)(struct session_ctx *ctx, const char *line);
-    void (*handle_mode)(struct session_ctx *ctx, const char *arguments);
-    void (*handle_nick)(struct session_ctx *ctx, const char *arguments);
-    void (*handle_exit)(struct session_ctx *ctx);
+  void (*dispatch_command) (struct session_ctx *ctx, const char *line);
+  void (*handle_mode) (struct session_ctx *ctx, const char *arguments);
+  void (*handle_nick) (struct session_ctx *ctx, const char *arguments);
+  void (*handle_exit) (struct session_ctx *ctx);
 } session_ops_t;
-
 
 typedef struct join_activity_entry {
   char ip[SSH_CHATTER_IP_LEN];
@@ -460,7 +459,8 @@ typedef struct session_ctx {
   struct host *owner;
   char input_buffer[SSH_CHATTER_MAX_INPUT_LEN];
   size_t input_length;
-  char input_history[SSH_CHATTER_INPUT_HISTORY_LIMIT][SSH_CHATTER_MAX_INPUT_LEN];
+  char input_history[SSH_CHATTER_INPUT_HISTORY_LIMIT]
+                    [SSH_CHATTER_MAX_INPUT_LEN];
   bool input_history_is_command[SSH_CHATTER_INPUT_HISTORY_LIMIT];
   size_t input_history_count;
   int input_history_position;
@@ -523,7 +523,8 @@ typedef struct session_ctx {
   bool bbs_view_notice_pending;
   char bbs_view_notice[SSH_CHATTER_MESSAGE_LIMIT];
   bool bbs_rendering_editor;
-  char bbs_breaking_messages[SSH_CHATTER_BBS_BREAKING_MAX][SSH_CHATTER_MESSAGE_LIMIT];
+  char bbs_breaking_messages[SSH_CHATTER_BBS_BREAKING_MAX]
+                            [SSH_CHATTER_MESSAGE_LIMIT];
   size_t bbs_breaking_count;
   bool breaking_alerts_enabled;
   bool prefer_utf16_output;
@@ -804,18 +805,22 @@ typedef struct host {
 } host_t;
 
 typedef struct {
-    unsigned int code_point;
-    int count;
+  unsigned int code_point;
+  int count;
 } utf8_code_count_t;
 
-void session_send_raw_text(session_ctx_t *ctx, const char *text);
-void host_init(host_t *host, auth_profile_t *auth);
-void host_set_motd(host_t *host, const char *motd);
-int host_serve(host_t *host, const char *bind_addr, const char *port, const char *key_directory,
-               const char *telnet_bind_addr, const char *telnet_port);
-bool host_post_client_message(host_t *host, const char *username, const char *message, const char *color_name,
-                             const char *highlight_name, bool is_bold);
-void host_shutdown(host_t *host);
-bool host_snapshot_last_captcha(host_t *host, char *question, size_t question_length, char *answer,
-                               size_t answer_length, struct timespec *timestamp);
+void session_send_raw_text (session_ctx_t *ctx, const char *text);
+void host_init (host_t *host, auth_profile_t *auth);
+void host_set_motd (host_t *host, const char *motd);
+int host_serve (host_t *host, const char *bind_addr, const char *port,
+                const char *key_directory, const char *telnet_bind_addr,
+                const char *telnet_port);
+bool host_post_client_message (host_t *host, const char *username,
+                               const char *message, const char *color_name,
+                               const char *highlight_name, bool is_bold);
+void host_shutdown (host_t *host);
+bool host_snapshot_last_captcha (host_t *host, char *question,
+                                 size_t question_length, char *answer,
+                                 size_t answer_length,
+                                 struct timespec *timestamp);
 #endif

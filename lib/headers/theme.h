@@ -14,7 +14,7 @@ typedef struct UserTheme {
 typedef struct SystemTheme {
   const char *backgroundColor;
   const char *foregroundColor; // Text Color
-  const char *highlightColor; //Highlight with <hl></hl>
+  const char *highlightColor;  //Highlight with <hl></hl>
   bool isBold;
 } SystemTheme;
 

@@ -22,20 +22,24 @@ typedef struct client_connection {
   char identifier[CLIENT_IDENTIFIER_LEN];
   bool receive_system_messages;
   bool active;
-  void (*on_message)(struct client_connection *connection, const struct chat_history_entry *entry);
-  void (*on_detach)(struct client_connection *connection);
+  void (*on_message) (struct client_connection *connection,
+                      const struct chat_history_entry *entry);
+  void (*on_detach) (struct client_connection *connection);
   void *user_data;
   client_manager_t *owner;
 } client_connection_t;
 
-client_manager_t *client_manager_create(struct host *host);
-void client_manager_destroy(client_manager_t *manager);
+client_manager_t *client_manager_create (struct host *host);
+void client_manager_destroy (client_manager_t *manager);
 
-bool client_manager_register(client_manager_t *manager, client_connection_t *connection);
-void client_manager_unregister(client_manager_t *manager, client_connection_t *connection);
+bool client_manager_register (client_manager_t *manager,
+                              client_connection_t *connection);
+void client_manager_unregister (client_manager_t *manager,
+                                client_connection_t *connection);
 
-void client_manager_notify_history(client_manager_t *manager, const struct chat_history_entry *entry);
+void client_manager_notify_history (client_manager_t *manager,
+                                    const struct chat_history_entry *entry);
 
-struct host *client_manager_host(client_manager_t *manager);
+struct host *client_manager_host (client_manager_t *manager);
 
 #endif

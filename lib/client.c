@@ -18,34 +18,39 @@ struct client_manager {
   size_t connection_count;
 };
 
-client_manager_t *client_manager_create(struct host *host) {
-  client_manager_t *manager = (client_manager_t *)calloc(1U, sizeof(client_manager_t));
+client_manager_t *
+client_manager_create (struct host *host)
+{
+  client_manager_t *manager
+      = (client_manager_t *)calloc (1U, sizeof (client_manager_t));
   if (manager == nullptr) {
     return nullptr;
   }
 
   manager->host = host;
-  if (pthread_mutex_init(&manager->lock, nullptr) != 0) {
-    free(manager);
+  if (pthread_mutex_init (&manager->lock, nullptr) != 0) {
+    free (manager);
     return nullptr;
   }
   manager->lock_initialized = true;
   manager->connection_count = 0U;
-  memset(manager->connections, 0, sizeof(manager->connections));
+  memset (manager->connections, 0, sizeof (manager->connections));
   return manager;
 }
 
-void client_manager_destroy(client_manager_t *manager) {
+void
+client_manager_destroy (client_manager_t *manager)
+{
   if (manager == nullptr) {
     return;
   }
 
   if (!manager->lock_initialized) {
-    free(manager);
+    free (manager);
     return;
   }
 
-  pthread_mutex_lock(&manager->lock);
+  pthread_mutex_lock (&manager->lock);
   client_connection_t *connections[CLIENT_MANAGER_MAX_CONNECTIONS];
   size_t connection_count = manager->connection_count;
   for (size_t idx = 0U; idx < connection_count; ++idx) {
@@ -53,7 +58,7 @@ void client_manager_destroy(client_manager_t *manager) {
     manager->connections[idx] = nullptr;
   }
   manager->connection_count = 0U;
-  pthread_mutex_unlock(&manager->lock);
+  pthread_mutex_unlock (&manager->lock);
 
   for (size_t idx = 0U; idx < connection_count; ++idx) {
     client_connection_t *connection = connections[idx];
@@ -63,22 +68,26 @@ void client_manager_destroy(client_manager_t *manager) {
     connection->active = false;
     connection->owner = nullptr;
     if (connection->on_detach != nullptr) {
-      connection->on_detach(connection);
+      connection->on_detach (connection);
     }
   }
 
-  pthread_mutex_destroy(&manager->lock);
+  pthread_mutex_destroy (&manager->lock);
   manager->lock_initialized = false;
-  free(manager);
+  free (manager);
 }
 
-bool client_manager_register(client_manager_t *manager, client_connection_t *connection) {
-  if (manager == nullptr || !manager->lock_initialized || connection == nullptr || connection->on_message == nullptr) {
+bool
+client_manager_register (client_manager_t *manager,
+                         client_connection_t *connection)
+{
+  if (manager == nullptr || !manager->lock_initialized || connection == nullptr
+      || connection->on_message == nullptr) {
     return false;
   }
 
   bool registered = false;
-  pthread_mutex_lock(&manager->lock);
+  pthread_mutex_lock (&manager->lock);
   if (connection->owner != nullptr) {
     if (connection->owner == manager) {
       registered = true;
@@ -89,18 +98,22 @@ bool client_manager_register(client_manager_t *manager, client_connection_t *con
     connection->active = true;
     registered = true;
   }
-  pthread_mutex_unlock(&manager->lock);
+  pthread_mutex_unlock (&manager->lock);
 
   return registered;
 }
 
-void client_manager_unregister(client_manager_t *manager, client_connection_t *connection) {
-  if (manager == nullptr || !manager->lock_initialized || connection == nullptr) {
+void
+client_manager_unregister (client_manager_t *manager,
+                           client_connection_t *connection)
+{
+  if (manager == nullptr || !manager->lock_initialized
+      || connection == nullptr) {
     return;
   }
 
   bool had_entry = false;
-  pthread_mutex_lock(&manager->lock);
+  pthread_mutex_lock (&manager->lock);
   for (size_t idx = 0U; idx < manager->connection_count; ++idx) {
     if (manager->connections[idx] != connection) {
       continue;
@@ -113,18 +126,21 @@ void client_manager_unregister(client_manager_t *manager, client_connection_t *c
     had_entry = true;
     break;
   }
-  pthread_mutex_unlock(&manager->lock);
+  pthread_mutex_unlock (&manager->lock);
 
   if (had_entry) {
     connection->active = false;
     connection->owner = nullptr;
     if (connection->on_detach != nullptr) {
-      connection->on_detach(connection);
+      connection->on_detach (connection);
     }
   }
 }
 
-void client_manager_notify_history(client_manager_t *manager, const struct chat_history_entry *entry) {
+void
+client_manager_notify_history (client_manager_t *manager,
+                               const struct chat_history_entry *entry)
+{
   if (manager == nullptr || !manager->lock_initialized || entry == nullptr) {
     return;
   }
@@ -132,7 +148,7 @@ void client_manager_notify_history(client_manager_t *manager, const struct chat_
   client_connection_t *connections[CLIENT_MANAGER_MAX_CONNECTIONS];
   size_t connection_count = 0U;
 
-  pthread_mutex_lock(&manager->lock);
+  pthread_mutex_lock (&manager->lock);
   for (size_t idx = 0U; idx < manager->connection_count; ++idx) {
     client_connection_t *connection = manager->connections[idx];
     if (connection == nullptr || !connection->active) {
@@ -143,17 +159,19 @@ void client_manager_notify_history(client_manager_t *manager, const struct chat_
     }
     connections[connection_count++] = connection;
   }
-  pthread_mutex_unlock(&manager->lock);
+  pthread_mutex_unlock (&manager->lock);
 
   for (size_t idx = 0U; idx < connection_count; ++idx) {
     client_connection_t *connection = connections[idx];
     if (connection->on_message != nullptr) {
-      connection->on_message(connection, entry);
+      connection->on_message (connection, entry);
     }
   }
 }
 
-struct host *client_manager_host(client_manager_t *manager) {
+struct host *
+client_manager_host (client_manager_t *manager)
+{
   if (manager == nullptr) {
     return nullptr;
   }

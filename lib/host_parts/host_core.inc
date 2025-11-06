@@ -52,26 +52,24 @@
 
 #include "humanized/humanized.h"
 
-static void session_dispatch_command(session_ctx_t *ctx, const char *line);
-static void session_handle_mode(session_ctx_t *ctx, const char *arguments);
-static void session_handle_nick(session_ctx_t *ctx, const char *arguments);
-static void session_handle_exit(session_ctx_t *ctx);
+static void session_dispatch_command (session_ctx_t *ctx, const char *line);
+static void session_handle_mode (session_ctx_t *ctx, const char *arguments);
+static void session_handle_nick (session_ctx_t *ctx, const char *arguments);
+static void session_handle_exit (session_ctx_t *ctx);
 
 static const session_ops_t ssh_session_ops = {
-    .dispatch_command = session_dispatch_command,
-    .handle_mode = session_handle_mode,
-    .handle_nick = session_handle_nick,
-    .handle_exit = session_handle_exit,
+  .dispatch_command = session_dispatch_command,
+  .handle_mode = session_handle_mode,
+  .handle_nick = session_handle_nick,
+  .handle_exit = session_handle_exit,
 };
 
 static const session_ops_t telnet_session_ops = {
-    .dispatch_command = session_dispatch_command,
-    .handle_mode = session_handle_mode,
-    .handle_nick = session_handle_nick,
-    .handle_exit = session_handle_exit,
+  .dispatch_command = session_dispatch_command,
+  .handle_mode = session_handle_mode,
+  .handle_nick = session_handle_nick,
+  .handle_exit = session_handle_exit,
 };
-
-
 
 #ifndef NI_MAXHOST
 #define NI_MAXHOST 1025
@@ -100,13 +98,16 @@ static const session_ops_t telnet_session_ops = {
 #define SSH_CHATTER_RSS_BREAKING_PREFIX "[BREAKING NEWS]"
 #define SSH_CHATTER_TETROMINO_SIZE 4
 #define SSH_CHATTER_HANDSHAKE_RETRY_LIMIT ((unsigned int)INT_MAX)
-#define SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_DISPLAY \
+#define SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_DISPLAY                        \
   "rsa-sha2-512, rsa-sha2-256, ssh-rsa, ssh-ed25519, ecdsa-sha2-nistp256"
-#define SSH_CHATTER_SUPPORTED_KEX_ALGORITHMS                                                     \
-  "curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,"       \
-  "ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256,"      \
+#define SSH_CHATTER_SUPPORTED_KEX_ALGORITHMS                                   \
+  "curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-"    \
+  "sha2-nistp384,"                                                             \
+  "ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-"    \
+  "group14-sha256,"                                                            \
   "diffie-hellman-group14-sha1"
-#define SSH_CHATTER_STRONG_CIPHERS "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes256-ctr"
+#define SSH_CHATTER_STRONG_CIPHERS                                             \
+  "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes256-ctr"
 #define SSH_CHATTER_STRONG_MACS "hmac-sha2-512,hmac-sha2-256"
 #define SSH_CHATTER_SECURE_COMPRESSION "none"
 #define SSH_CHATTER_BIRTHDAY_WINDOW_SECONDS (7 * 24 * 60 * 60)
@@ -120,7 +121,9 @@ typedef struct alpha_lander_entry {
   uint64_t last_flag_timestamp;
 } alpha_lander_entry_t;
 
-static int alpha_lander_entry_compare(const void *lhs, const void *rhs) {
+static int
+alpha_lander_entry_compare (const void *lhs, const void *rhs)
+{
   const alpha_lander_entry_t *left = (const alpha_lander_entry_t *)lhs;
   const alpha_lander_entry_t *right = (const alpha_lander_entry_t *)rhs;
 
@@ -136,15 +139,12 @@ static int alpha_lander_entry_compare(const void *lhs, const void *rhs) {
   if (left->last_flag_timestamp > right->last_flag_timestamp) {
     return -1;
   }
-  return strcasecmp(left->username, right->username);
+  return strcasecmp (left->username, right->username);
 }
 
 static const char *const SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS[] = {
-    "rsa-sha2-512",
-    "rsa-sha2-256",
-    "ssh-rsa",
-    "ssh-ed25519",
-    "ecdsa-sha2-nistp256",
+  "rsa-sha2-512", "rsa-sha2-256",        "ssh-rsa",
+  "ssh-ed25519",  "ecdsa-sha2-nistp256",
 };
 
 typedef struct host_key_definition {
@@ -154,9 +154,9 @@ typedef struct host_key_definition {
   bool requires_import;
 } host_key_definition_t;
 
-static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT =
-    sizeof(SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS) /
-    sizeof(SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS[0]);
+static const size_t SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS_COUNT
+    = sizeof (SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS)
+      / sizeof (SSH_CHATTER_REQUIRED_HOSTKEY_ALGORITHMS[0]);
 #define SESSION_CHANNEL_TIMEOUT (-2)
 
 typedef struct lan_operator_env_pair {
@@ -165,25 +165,24 @@ typedef struct lan_operator_env_pair {
 } lan_operator_env_pair_t;
 
 static const lan_operator_env_pair_t LAN_OPERATOR_ENV_PAIRS[] = {
-    {"ADMIN1", "ADMIN1PW"},
-    {"ADMIN2", "ADMIN2PW"},
-    {"ADMIN3", "ADMIN3PW"},
-    {"ADMIN4", "ADMIN4PW"},
-    {"BACKUP", "BACKUPPW"},
+  { "ADMIN1", "ADMIN1PW" }, { "ADMIN2", "ADMIN2PW" }, { "ADMIN3", "ADMIN3PW" },
+  { "ADMIN4", "ADMIN4PW" }, { "BACKUP", "BACKUPPW" },
 };
 
-static const size_t LAN_OPERATOR_ENV_PAIR_COUNT =
-    sizeof(LAN_OPERATOR_ENV_PAIRS) / sizeof(LAN_OPERATOR_ENV_PAIRS[0]);
+static const size_t LAN_OPERATOR_ENV_PAIR_COUNT
+    = sizeof (LAN_OPERATOR_ENV_PAIRS) / sizeof (LAN_OPERATOR_ENV_PAIRS[0]);
 
-static void host_sleep_uninterruptible(const struct timespec *duration) {
+static void
+host_sleep_uninterruptible (const struct timespec *duration)
+{
   if (duration == NULL) {
     return;
   }
 
   struct timespec request = *duration;
-  struct timespec remaining = {0};
+  struct timespec remaining = { 0 };
 
-  while (nanosleep(&request, &remaining) != 0) {
+  while (nanosleep (&request, &remaining) != 0) {
     if (errno != EINTR) {
       break;
     }
@@ -191,7 +190,9 @@ static void host_sleep_uninterruptible(const struct timespec *duration) {
   }
 }
 
-static bool host_address_is_wildcard(const char *address) {
+static bool
+host_address_is_wildcard (const char *address)
+{
   if (address == NULL) {
     return true;
   }
@@ -200,8 +201,8 @@ static bool host_address_is_wildcard(const char *address) {
     return true;
   }
 
-  if (strcmp(address, "*") == 0 || strcmp(address, "0.0.0.0") == 0 || strcmp(address, "::") == 0 ||
-      strcmp(address, "::0") == 0) {
+  if (strcmp (address, "*") == 0 || strcmp (address, "0.0.0.0") == 0
+      || strcmp (address, "::") == 0 || strcmp (address, "::0") == 0) {
     return true;
   }
 
@@ -219,13 +220,17 @@ static bool host_address_is_wildcard(const char *address) {
   return all_zero;
 }
 
-static bool host_is_protected_ip_unlocked(const host_t *host, const char *ip) {
+static bool
+host_is_protected_ip_unlocked (const host_t *host, const char *ip)
+{
   if (host == NULL || ip == NULL || ip[0] == '\0') {
     return false;
   }
 
-  for (size_t idx = 0; idx < host->protected_ip_count && idx < SSH_CHATTER_MAX_PROTECTED_IPS; ++idx) {
-    if (strncmp(host->protected_ips[idx], ip, SSH_CHATTER_IP_LEN) == 0) {
+  for (size_t idx = 0;
+       idx < host->protected_ip_count && idx < SSH_CHATTER_MAX_PROTECTED_IPS;
+       ++idx) {
+    if (strncmp (host->protected_ips[idx], ip, SSH_CHATTER_IP_LEN) == 0) {
       return true;
     }
   }
@@ -233,19 +238,21 @@ static bool host_is_protected_ip_unlocked(const host_t *host, const char *ip) {
   return false;
 }
 
-static bool host_protected_ip_add_unlocked(host_t *host, const char *ip) {
+static bool
+host_protected_ip_add_unlocked (host_t *host, const char *ip)
+{
   if (host == NULL || ip == NULL) {
     return false;
   }
 
   char normalized[SSH_CHATTER_IP_LEN];
-  size_t length = strnlen(ip, sizeof(normalized));
+  size_t length = strnlen (ip, sizeof (normalized));
   size_t start = 0U;
-  while (start < length && isspace((unsigned char)ip[start]) != 0) {
+  while (start < length && isspace ((unsigned char)ip[start]) != 0) {
     ++start;
   }
   size_t end = length;
-  while (end > start && isspace((unsigned char)ip[end - 1U]) != 0) {
+  while (end > start && isspace ((unsigned char)ip[end - 1U]) != 0) {
     --end;
   }
 
@@ -254,17 +261,17 @@ static bool host_protected_ip_add_unlocked(host_t *host, const char *ip) {
   }
 
   size_t normalized_length = end - start;
-  if (normalized_length >= sizeof(normalized)) {
-    normalized_length = sizeof(normalized) - 1U;
+  if (normalized_length >= sizeof (normalized)) {
+    normalized_length = sizeof (normalized) - 1U;
   }
-  memcpy(normalized, ip + start, normalized_length);
+  memcpy (normalized, ip + start, normalized_length);
   normalized[normalized_length] = '\0';
 
-  if (host_address_is_wildcard(normalized)) {
+  if (host_address_is_wildcard (normalized)) {
     return false;
   }
 
-  if (host_is_protected_ip_unlocked(host, normalized)) {
+  if (host_is_protected_ip_unlocked (host, normalized)) {
     return true;
   }
 
@@ -272,118 +279,131 @@ static bool host_protected_ip_add_unlocked(host_t *host, const char *ip) {
     return false;
   }
 
-  snprintf(host->protected_ips[host->protected_ip_count], SSH_CHATTER_IP_LEN, "%s", normalized);
+  snprintf (host->protected_ips[host->protected_ip_count], SSH_CHATTER_IP_LEN,
+            "%s", normalized);
   ++host->protected_ip_count;
   return true;
 }
 
-static bool host_protected_ip_add(host_t *host, const char *ip) {
+static bool
+host_protected_ip_add (host_t *host, const char *ip)
+{
   if (host == NULL || ip == NULL) {
     return false;
   }
 
   bool added = false;
-  pthread_mutex_lock(&host->lock);
-  added = host_protected_ip_add_unlocked(host, ip);
-  pthread_mutex_unlock(&host->lock);
+  pthread_mutex_lock (&host->lock);
+  added = host_protected_ip_add_unlocked (host, ip);
+  pthread_mutex_unlock (&host->lock);
   return added;
 }
 
-static void host_protected_ips_load_from_env(host_t *host) {
+static void
+host_protected_ips_load_from_env (host_t *host)
+{
   if (host == NULL) {
     return;
   }
 
-  const char *env = getenv("CHATTER_PROTECTED_IPS");
+  const char *env = getenv ("CHATTER_PROTECTED_IPS");
   if (env == NULL || env[0] == '\0') {
     return;
   }
 
-  size_t env_length = strlen(env);
-  char *copy = (char *)malloc(env_length + 1U);
+  size_t env_length = strlen (env);
+  char *copy = (char *)malloc (env_length + 1U);
   if (copy == NULL) {
-    humanized_log_error("host", "failed to allocate protected ip buffer", errno != 0 ? errno : ENOMEM);
+    humanized_log_error ("host", "failed to allocate protected ip buffer",
+                         errno != 0 ? errno : ENOMEM);
     return;
   }
-  memcpy(copy, env, env_length + 1U);
+  memcpy (copy, env, env_length + 1U);
 
   char *save_ptr = NULL;
-  for (char *token = strtok_r(copy, ",", &save_ptr); token != NULL; token = strtok_r(NULL, ",", &save_ptr)) {
+  for (char *token = strtok_r (copy, ",", &save_ptr); token != NULL;
+       token = strtok_r (NULL, ",", &save_ptr)) {
     char working[SSH_CHATTER_IP_LEN];
-    size_t token_length = strnlen(token, sizeof(working));
-    if (token_length >= sizeof(working)) {
-      token_length = sizeof(working) - 1U;
+    size_t token_length = strnlen (token, sizeof (working));
+    if (token_length >= sizeof (working)) {
+      token_length = sizeof (working) - 1U;
     }
-    memcpy(working, token, token_length);
+    memcpy (working, token, token_length);
     working[token_length] = '\0';
 
     // Trim leading and trailing whitespace inside the buffer before adding it.
-    size_t local_length = strnlen(working, sizeof(working));
+    size_t local_length = strnlen (working, sizeof (working));
     size_t local_start = 0U;
-    while (local_start < local_length && isspace((unsigned char)working[local_start]) != 0) {
+    while (local_start < local_length
+           && isspace ((unsigned char)working[local_start]) != 0) {
       ++local_start;
     }
     size_t local_end = local_length;
-    while (local_end > local_start && isspace((unsigned char)working[local_end - 1U]) != 0) {
+    while (local_end > local_start
+           && isspace ((unsigned char)working[local_end - 1U]) != 0) {
       --local_end;
     }
     if (local_end <= local_start) {
       continue;
     }
     size_t trimmed_length = local_end - local_start;
-    if (trimmed_length >= sizeof(working)) {
-      trimmed_length = sizeof(working) - 1U;
+    if (trimmed_length >= sizeof (working)) {
+      trimmed_length = sizeof (working) - 1U;
     }
-    memmove(working, working + local_start, trimmed_length);
+    memmove (working, working + local_start, trimmed_length);
     working[trimmed_length] = '\0';
 
     if (working[0] == '\0') {
       continue;
     }
 
-    (void)host_protected_ip_add(host, working);
+    (void)host_protected_ip_add (host, working);
   }
 
-  free(copy);
+  free (copy);
 }
 
-static void host_protected_ips_bootstrap(host_t *host) {
+static void
+host_protected_ips_bootstrap (host_t *host)
+{
   if (host == NULL) {
     return;
   }
 
-  const char *defaults[] = {"127.0.0.1", "::1", "192.168.0.1"};
+  const char *defaults[] = { "127.0.0.1", "::1", "192.168.0.1" };
 
-  pthread_mutex_lock(&host->lock);
-  for (size_t idx = 0; idx < sizeof(defaults) / sizeof(defaults[0]); ++idx) {
-    (void)host_protected_ip_add_unlocked(host, defaults[idx]);
+  pthread_mutex_lock (&host->lock);
+  for (size_t idx = 0; idx < sizeof (defaults) / sizeof (defaults[0]); ++idx) {
+    (void)host_protected_ip_add_unlocked (host, defaults[idx]);
   }
-  pthread_mutex_unlock(&host->lock);
+  pthread_mutex_unlock (&host->lock);
 
-  host_protected_ips_load_from_env(host);
+  host_protected_ips_load_from_env (host);
 }
 
-static void host_register_protected_bind_address(host_t *host, const char *address) {
+static void
+host_register_protected_bind_address (host_t *host, const char *address)
+{
   if (host == NULL || address == NULL || address[0] == '\0') {
     return;
   }
 
-  if (host_address_is_wildcard(address)) {
+  if (host_address_is_wildcard (address)) {
     return;
   }
 
   struct addrinfo hints;
-  memset(&hints, 0, sizeof(hints));
+  memset (&hints, 0, sizeof (hints));
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_flags = AI_PASSIVE;
 
   struct addrinfo *result = NULL;
-  int rc = getaddrinfo(address, NULL, &hints, &result);
+  int rc = getaddrinfo (address, NULL, &hints, &result);
   if (rc != 0 || result == NULL) {
-    (void)host_protected_ip_add(host, address);
+    (void)host_protected_ip_add (host, address);
     if (result != NULL) {
-      freeaddrinfo(result);
+      freeaddrinfo (result);
     }
     return;
   }
@@ -402,26 +422,30 @@ static void host_register_protected_bind_address(host_t *host, const char *addre
       continue;
     }
 
-    if (inet_ntop(family, addr_ptr, ip_buffer, sizeof(ip_buffer)) == NULL) {
+    if (inet_ntop (family, addr_ptr, ip_buffer, sizeof (ip_buffer)) == NULL) {
       continue;
     }
 
-    (void)host_protected_ip_add(host, ip_buffer);
+    (void)host_protected_ip_add (host, ip_buffer);
   }
 
-  freeaddrinfo(result);
+  freeaddrinfo (result);
 }
 
-static void host_clear_lan_operator_credentials(host_t *host) {
+static void
+host_clear_lan_operator_credentials (host_t *host)
+{
   if (host == NULL) {
     return;
   }
 
   host->lan_ops.count = 0U;
-  memset(host->lan_ops.entries, 0, sizeof(host->lan_ops.entries));
+  memset (host->lan_ops.entries, 0, sizeof (host->lan_ops.entries));
 }
 
-static lan_operator_credential_t *host_find_lan_operator_credential(host_t *host, const char *username) {
+static lan_operator_credential_t *
+host_find_lan_operator_credential (host_t *host, const char *username)
+{
   if (host == NULL || username == NULL || username[0] == '\0') {
     return NULL;
   }
@@ -436,7 +460,7 @@ static lan_operator_credential_t *host_find_lan_operator_credential(host_t *host
     if (!credential->active) {
       continue;
     }
-    if (strcasecmp(credential->nickname, username) == 0) {
+    if (strcasecmp (credential->nickname, username) == 0) {
       return credential;
     }
   }
@@ -444,20 +468,24 @@ static lan_operator_credential_t *host_find_lan_operator_credential(host_t *host
   return NULL;
 }
 
-static bool host_is_lan_operator_username(host_t *host, const char *username) {
-  return host_find_lan_operator_credential(host, username) != NULL;
+static bool
+host_is_lan_operator_username (host_t *host, const char *username)
+{
+  return host_find_lan_operator_credential (host, username) != NULL;
 }
 
-static void host_load_lan_operator_credentials(host_t *host) {
-  host_clear_lan_operator_credentials(host);
+static void
+host_load_lan_operator_credentials (host_t *host)
+{
+  host_clear_lan_operator_credentials (host);
   if (host == NULL) {
     return;
   }
 
   for (size_t idx = 0U; idx < LAN_OPERATOR_ENV_PAIR_COUNT; ++idx) {
     const lan_operator_env_pair_t *pair = &LAN_OPERATOR_ENV_PAIRS[idx];
-    const char *username = getenv(pair->name_var);
-    const char *password = getenv(pair->password_var);
+    const char *username = getenv (pair->name_var);
+    const char *password = getenv (pair->password_var);
     if (username == NULL || username[0] == '\0') {
       continue;
     }
@@ -465,11 +493,14 @@ static void host_load_lan_operator_credentials(host_t *host) {
       continue;
     }
 
-    lan_operator_credential_t *existing = host_find_lan_operator_credential(host, username);
+    lan_operator_credential_t *existing
+        = host_find_lan_operator_credential (host, username);
     if (existing != NULL) {
       existing->active = true;
-      snprintf(existing->nickname, sizeof(existing->nickname), "%s", username);
-      snprintf(existing->password, sizeof(existing->password), "%s", password);
+      snprintf (existing->nickname, sizeof (existing->nickname), "%s",
+                username);
+      snprintf (existing->password, sizeof (existing->password), "%s",
+                password);
       continue;
     }
 
@@ -477,11 +508,14 @@ static void host_load_lan_operator_credentials(host_t *host) {
       continue;
     }
 
-    lan_operator_credential_t *credential = &host->lan_ops.entries[host->lan_ops.count++];
-    memset(credential, 0, sizeof(*credential));
+    lan_operator_credential_t *credential
+        = &host->lan_ops.entries[host->lan_ops.count++];
+    memset (credential, 0, sizeof (*credential));
     credential->active = true;
-    snprintf(credential->nickname, sizeof(credential->nickname), "%s", username);
-    snprintf(credential->password, sizeof(credential->password), "%s", password);
+    snprintf (credential->nickname, sizeof (credential->nickname), "%s",
+              username);
+    snprintf (credential->password, sizeof (credential->password), "%s",
+              password);
   }
 }
 
@@ -559,11 +593,12 @@ typedef struct {
 #define SSH_CHATTER_ELIZA_HISTORY_WINDOW 12U
 #define SSH_CHATTER_ELIZA_BBS_CONTEXT_LIMIT 3U
 #define SSH_CHATTER_ELIZA_BBS_PREVIEW_LEN 160U
-#define SSH_CHATTER_ELIZA_PROMPT_BUFFER ((SSH_CHATTER_ELIZA_CONTEXT_BUFFER * 2U) + (SSH_CHATTER_MESSAGE_LIMIT * 3U))
+#define SSH_CHATTER_ELIZA_PROMPT_BUFFER                                        \
+  ((SSH_CHATTER_ELIZA_CONTEXT_BUFFER * 2U) + (SSH_CHATTER_MESSAGE_LIMIT * 3U))
 #define SSH_CHATTER_ELIZA_TOKEN_LIMIT 16U
 
-static size_t host_column_reset_sequence_length(const char *text);
-static void host_strip_column_reset(char *text);
+static size_t host_column_reset_sequence_length (const char *text);
+static void host_strip_column_reset (char *text);
 
 #define ALPHA_TOTAL_DISTANCE_LY 4.24
 #define ALPHA_LY_TO_KM 9460730472580.8
@@ -585,10 +620,10 @@ static void host_strip_column_reset(char *text);
 #define ALPHA_MIN_WAYPOINTS 3U
 
 static const char *const kAlphaWaystationNames[] = {
-    "Relay Lyra",
-    "Depot Carina",
-    "Refuel Vesper",
-    "Outpost Helion",
+  "Relay Lyra",
+  "Depot Carina",
+  "Refuel Vesper",
+  "Outpost Helion",
 };
 
 #define TELNET_IAC 255
@@ -626,92 +661,94 @@ typedef struct version_ip_ban_seed {
 } version_ip_ban_seed_t;
 
 static const version_ip_ban_seed_t kVersionIpBanSeeds[] = {
-    {"SSH-2.0-Go*", "34.80.0.0/12", ""},
-    {"SSH-2.0-Go*", "34.96.0.0/14", ""},
-    {"SSH-2.0-paramiko_*", "52.78.0.0/15", ""},
-    {"SSH-2.0-AsyncSSH_*", "20.214.0.0/15", ""},
-    {"SSH-2.0-libssh*", "54.0.0.0/7", ""},
-    {"SSH-2.0-libssh2*", "40.0.0.0/6", ""},
-    {"SSH-2.0-libssh_0.4*", "0.0.0.0/0", ""},
-    {"SSH-2.0-libssh_0.5*", "0.0.0.0/0", ""},
-    {"SSH-2.0-libssh_0.6*", "0.0.0.0/0", ""},
-    {"SSH-2.0-libssh_0.7*", "0.0.0.0/0", ""},
-    {"SSH-2.0-libssh_0.8*", "0.0.0.0/0", ""},
-    {"SSH-2.0-libssh_0.9*", "0.0.0.0/0", ""},
-    {"SSH-2.0-paramiko*", "3.0.0.0/8", ""},
-    {"SSH-2.0-paramiko_1.*", "0.0.0.0/0", ""},
-    {"SSH-2.0-paramiko_2.*", "44.0.0.0/8", ""},
-    {"SSH-2.0-JSch*", "35.0.0.0/8", ""},
-    {"SSH-2.0-JSch_0.1.55", "0.0.0.0/0", ""},
-    {"SSH-2.0-JSch_0.1.53", "0.0.0.0/0", ""},
-    {"SSH-2.0-JSch_0.1.54", "0.0.0.0/0", ""},
-    {"SSH-2.0-PuTTY*", "23.0.0.0/8", ""},
-    {"SSH-2.0-PuTTY_Release_0.6*", "52.0.0.0/8", ""},
-    {"SSH-2.0-PuTTY_Release_0.7*", "104.0.0.0/8", ""},
-    {"SSH-2.0-masscan*", "0.0.0.0/0", ""},
-    {"SSH-2.0-Nmap*", "0.0.0.0/0", ""},
-    {"SSH-2.0-Go-SSH*", "0.0.0.0/0", ""},
-    {"SSH-2.0-Python-requests*", "0.0.0.0/0", ""},
-    {"SSH-2.0-PHPSecLib*", "0.0.0.0/0", ""},
-    {"SSH-2.0-Dropbear*", "0.0.0.0/0", ""},
-    {"SSH-2.0-BlackRose*", "0.0.0.0/0", ""},
-    {"SSH-2.0-PumaBot*", "0.0.0.0/0", ""},
-    {"SSH-2.0-SSH-Client-v1.*", "0.0.0.0/0", ""},
-    {"SSH-2.0-sshj*", "0.0.0.0/0", ""},
-    {"SSH-2.0-Java*", "13.0.0.0/8", ""},
-    {"SSH-2.0-Python*", "104.0.0.0/8", ""},
-    {"SSH-2.0-Curl*", "172.0.0.0/8", ""},
-    {"SSH-2.0-Ruby*", "18.0.0.0/8", ""},
-    {"SSH-2.0-SSH*", "134.0.0.0/8", ""},
-    {"SSH-1.99*", "0.0.0.0/0", ""},
-    {"SSH-2.0-", "0.0.0.0/0", ""},
-    {"", "0.0.0.0/0", ""},
-    {"SSH-2.0-OpenSSH_3.*", "52.0.0.0/8", ""},
-    {"SSH-2.0-OpenSSH_4.*", "20.0.0.0/8", ""},
-    {"SSH-2.0-OpenSSH_5.*", "34.0.0.0/8", ""},
-    {"SSH-2.0-Go*", "147.0.0.0/8", ""},
-    {"SSH-2.0-Python*", "13.0.0.0/8", ""},
-    {"SSH-2.0-libssh*", "192.0.0.0/8", ""},
-    {"SSH-2.0-paramiko*", "172.0.0.0/8", ""},
-    {"SSH-2.0-JSch*", "10.0.0.0/8", ""},
-    {"SSH-2.0-Curl*", "103.0.0.0/8", ""},
-    {"SSH-2.0-Go*", "167.0.0.0/8", ""},
-    {"SSH-2.0-paramiko*", "69.0.0.0/8", ""},
-    {"SSH-2.0-libssh*", "173.0.0.0/8", ""},
-    {"SSH-2.0-JSch*", "216.0.0.0/8", ""},
-    {"SSH-2.0-Python*", "185.0.0.0/8", ""},
-    {"SSH-2.0-SSH-2.0-libssh*", "0.0.0.0/0", ""},
-    {"SSH-2.0-paramiko_paramiko*", "0.0.0.0/0", ""},
-    {"SSH-2.0-Jakarta*", "0.0.0.0/0", ""},
-    {"SSH-2.0-ssh.net*", "0.0.0.0/0", ""},
-    {"SSH-2.0-Mina*", "0.0.0.0/0", ""},
-    {"SSH-2.0-Tectia*", "0.0.0.0/0", ""},
-    {"SSH-2.0-Ganymed*", "0.0.0.0/0", ""},
-    {"SSH-2.0-NSSHS*", "0.0.0.0/0", ""},
-    {"SSH-2.0-F-Secure*", "0.0.0.0/0", ""},
-    {"SSH-2.0-SecureCRT*", "0.0.0.0/0", ""},
-    {"SSH-2.0-Unknown*", "0.0.0.0/0", ""},
-    {"SSH-2.0-SshTunnel*", "0.0.0.0/0", ""},
-    {"SSH-2.0-libssh*", "139.59.0.0/16", ""},
-    {"SSH-2.0-libssh*", "178.62.0.0/16", ""},
-    {"SSH-2.0-libssh*", "144.76.0.0/16", ""},
-    {"SSH-2.0-libssh*", "199.0.0.0/8", ""},
-    {"SSH-2.0-libssh*", "207.0.0.0/8", ""},
-    {"SSH-2.0-paramiko*", "199.0.0.0/8", ""},
-    {"SSH-2.0-paramiko*", "207.0.0.0/8", ""},
-    {"SSH-2.0-paramiko*", "85.0.0.0/8", ""},
-    {"SSH-2.0-Python*", "199.0.0.0/8", ""},
-    {"SSH-2.0-Go*", "199.0.0.0/8", ""},
-    {"SSH-2.0-Java*", "199.0.0.0/8", ""},
-    {"SSH-2.0-Go*", "85.0.0.0/8", ""},
-    {"SSH-2.0-Python*", "85.0.0.0/8", ""},
+  { "SSH-2.0-Go*", "34.80.0.0/12", "" },
+  { "SSH-2.0-Go*", "34.96.0.0/14", "" },
+  { "SSH-2.0-paramiko_*", "52.78.0.0/15", "" },
+  { "SSH-2.0-AsyncSSH_*", "20.214.0.0/15", "" },
+  { "SSH-2.0-libssh*", "54.0.0.0/7", "" },
+  { "SSH-2.0-libssh2*", "40.0.0.0/6", "" },
+  { "SSH-2.0-libssh_0.4*", "0.0.0.0/0", "" },
+  { "SSH-2.0-libssh_0.5*", "0.0.0.0/0", "" },
+  { "SSH-2.0-libssh_0.6*", "0.0.0.0/0", "" },
+  { "SSH-2.0-libssh_0.7*", "0.0.0.0/0", "" },
+  { "SSH-2.0-libssh_0.8*", "0.0.0.0/0", "" },
+  { "SSH-2.0-libssh_0.9*", "0.0.0.0/0", "" },
+  { "SSH-2.0-paramiko*", "3.0.0.0/8", "" },
+  { "SSH-2.0-paramiko_1.*", "0.0.0.0/0", "" },
+  { "SSH-2.0-paramiko_2.*", "44.0.0.0/8", "" },
+  { "SSH-2.0-JSch*", "35.0.0.0/8", "" },
+  { "SSH-2.0-JSch_0.1.55", "0.0.0.0/0", "" },
+  { "SSH-2.0-JSch_0.1.53", "0.0.0.0/0", "" },
+  { "SSH-2.0-JSch_0.1.54", "0.0.0.0/0", "" },
+  { "SSH-2.0-PuTTY*", "23.0.0.0/8", "" },
+  { "SSH-2.0-PuTTY_Release_0.6*", "52.0.0.0/8", "" },
+  { "SSH-2.0-PuTTY_Release_0.7*", "104.0.0.0/8", "" },
+  { "SSH-2.0-masscan*", "0.0.0.0/0", "" },
+  { "SSH-2.0-Nmap*", "0.0.0.0/0", "" },
+  { "SSH-2.0-Go-SSH*", "0.0.0.0/0", "" },
+  { "SSH-2.0-Python-requests*", "0.0.0.0/0", "" },
+  { "SSH-2.0-PHPSecLib*", "0.0.0.0/0", "" },
+  { "SSH-2.0-Dropbear*", "0.0.0.0/0", "" },
+  { "SSH-2.0-BlackRose*", "0.0.0.0/0", "" },
+  { "SSH-2.0-PumaBot*", "0.0.0.0/0", "" },
+  { "SSH-2.0-SSH-Client-v1.*", "0.0.0.0/0", "" },
+  { "SSH-2.0-sshj*", "0.0.0.0/0", "" },
+  { "SSH-2.0-Java*", "13.0.0.0/8", "" },
+  { "SSH-2.0-Python*", "104.0.0.0/8", "" },
+  { "SSH-2.0-Curl*", "172.0.0.0/8", "" },
+  { "SSH-2.0-Ruby*", "18.0.0.0/8", "" },
+  { "SSH-2.0-SSH*", "134.0.0.0/8", "" },
+  { "SSH-1.99*", "0.0.0.0/0", "" },
+  { "SSH-2.0-", "0.0.0.0/0", "" },
+  { "", "0.0.0.0/0", "" },
+  { "SSH-2.0-OpenSSH_3.*", "52.0.0.0/8", "" },
+  { "SSH-2.0-OpenSSH_4.*", "20.0.0.0/8", "" },
+  { "SSH-2.0-OpenSSH_5.*", "34.0.0.0/8", "" },
+  { "SSH-2.0-Go*", "147.0.0.0/8", "" },
+  { "SSH-2.0-Python*", "13.0.0.0/8", "" },
+  { "SSH-2.0-libssh*", "192.0.0.0/8", "" },
+  { "SSH-2.0-paramiko*", "172.0.0.0/8", "" },
+  { "SSH-2.0-JSch*", "10.0.0.0/8", "" },
+  { "SSH-2.0-Curl*", "103.0.0.0/8", "" },
+  { "SSH-2.0-Go*", "167.0.0.0/8", "" },
+  { "SSH-2.0-paramiko*", "69.0.0.0/8", "" },
+  { "SSH-2.0-libssh*", "173.0.0.0/8", "" },
+  { "SSH-2.0-JSch*", "216.0.0.0/8", "" },
+  { "SSH-2.0-Python*", "185.0.0.0/8", "" },
+  { "SSH-2.0-SSH-2.0-libssh*", "0.0.0.0/0", "" },
+  { "SSH-2.0-paramiko_paramiko*", "0.0.0.0/0", "" },
+  { "SSH-2.0-Jakarta*", "0.0.0.0/0", "" },
+  { "SSH-2.0-ssh.net*", "0.0.0.0/0", "" },
+  { "SSH-2.0-Mina*", "0.0.0.0/0", "" },
+  { "SSH-2.0-Tectia*", "0.0.0.0/0", "" },
+  { "SSH-2.0-Ganymed*", "0.0.0.0/0", "" },
+  { "SSH-2.0-NSSHS*", "0.0.0.0/0", "" },
+  { "SSH-2.0-F-Secure*", "0.0.0.0/0", "" },
+  { "SSH-2.0-SecureCRT*", "0.0.0.0/0", "" },
+  { "SSH-2.0-Unknown*", "0.0.0.0/0", "" },
+  { "SSH-2.0-SshTunnel*", "0.0.0.0/0", "" },
+  { "SSH-2.0-libssh*", "139.59.0.0/16", "" },
+  { "SSH-2.0-libssh*", "178.62.0.0/16", "" },
+  { "SSH-2.0-libssh*", "144.76.0.0/16", "" },
+  { "SSH-2.0-libssh*", "199.0.0.0/8", "" },
+  { "SSH-2.0-libssh*", "207.0.0.0/8", "" },
+  { "SSH-2.0-paramiko*", "199.0.0.0/8", "" },
+  { "SSH-2.0-paramiko*", "207.0.0.0/8", "" },
+  { "SSH-2.0-paramiko*", "85.0.0.0/8", "" },
+  { "SSH-2.0-Python*", "199.0.0.0/8", "" },
+  { "SSH-2.0-Go*", "199.0.0.0/8", "" },
+  { "SSH-2.0-Java*", "199.0.0.0/8", "" },
+  { "SSH-2.0-Go*", "85.0.0.0/8", "" },
+  { "SSH-2.0-Python*", "85.0.0.0/8", "" },
 };
-static char *host_trim_whitespace(char *text) {
+static char *
+host_trim_whitespace (char *text)
+{
   if (text == NULL) {
     return NULL;
   }
 
-  while (*text != '\0' && isspace((unsigned char)*text)) {
+  while (*text != '\0' && isspace ((unsigned char)*text)) {
     ++text;
   }
 
@@ -719,8 +756,8 @@ static char *host_trim_whitespace(char *text) {
     return text;
   }
 
-  char *end = text + strlen(text) - 1U;
-  while (end > text && isspace((unsigned char)*end)) {
+  char *end = text + strlen (text) - 1U;
+  while (end > text && isspace ((unsigned char)*end)) {
     *end = '\0';
     --end;
   }
@@ -728,26 +765,32 @@ static char *host_trim_whitespace(char *text) {
   return text;
 }
 
-static bool host_version_ip_parse_pattern(const char *pattern, char *normalized, size_t normalized_len,
-                                          char *original, size_t original_len, version_pattern_match_t *mode) {
+static bool
+host_version_ip_parse_pattern (const char *pattern, char *normalized,
+                               size_t normalized_len, char *original,
+                               size_t original_len,
+                               version_pattern_match_t *mode)
+{
   if (normalized == NULL || original == NULL || mode == NULL) {
     return false;
   }
 
   char working[SSH_CHATTER_VERSION_PATTERN_LEN];
-  int written = snprintf(working, sizeof(working), "%s", pattern != NULL ? pattern : "");
-  if (written < 0 || (size_t)written >= sizeof(working)) {
+  int written = snprintf (working, sizeof (working), "%s",
+                          pattern != NULL ? pattern : "");
+  if (written < 0 || (size_t)written >= sizeof (working)) {
     return false;
   }
 
-  char *trimmed = host_trim_whitespace(working);
+  char *trimmed = host_trim_whitespace (working);
   if (trimmed == NULL) {
     return false;
   }
 
   char trimmed_copy[SSH_CHATTER_VERSION_PATTERN_LEN];
-  int copy_written = snprintf(trimmed_copy, sizeof(trimmed_copy), "%s", trimmed);
-  if (copy_written < 0 || (size_t)copy_written >= sizeof(trimmed_copy)) {
+  int copy_written
+      = snprintf (trimmed_copy, sizeof (trimmed_copy), "%s", trimmed);
+  if (copy_written < 0 || (size_t)copy_written >= sizeof (trimmed_copy)) {
     return false;
   }
 
@@ -755,7 +798,7 @@ static bool host_version_ip_parse_pattern(const char *pattern, char *normalized,
     return false;
   }
 
-  size_t length = strlen(trimmed);
+  size_t length = strlen (trimmed);
   bool leading_star = trimmed[0] == '*';
   bool trailing_star = (length > 0U && trimmed[length - 1U] == '*');
 
@@ -765,7 +808,7 @@ static bool host_version_ip_parse_pattern(const char *pattern, char *normalized,
       if (orig_len >= original_len) {
         orig_len = original_len - 1U;
       }
-      memcpy(original, trimmed_copy, orig_len);
+      memcpy (original, trimmed_copy, orig_len);
       original[orig_len] = '\0';
     }
     if (normalized_len > 0U) {
@@ -782,7 +825,7 @@ static bool host_version_ip_parse_pattern(const char *pattern, char *normalized,
 
   if (leading_star) {
     ++trimmed;
-    length = strlen(trimmed);
+    length = strlen (trimmed);
   }
 
   if (length == 0U) {
@@ -791,7 +834,7 @@ static bool host_version_ip_parse_pattern(const char *pattern, char *normalized,
       if (orig_len >= original_len) {
         orig_len = original_len - 1U;
       }
-      memcpy(original, trimmed_copy, orig_len);
+      memcpy (original, trimmed_copy, orig_len);
       original[orig_len] = '\0';
     }
     if (normalized_len > 0U) {
@@ -815,7 +858,7 @@ static bool host_version_ip_parse_pattern(const char *pattern, char *normalized,
   if (normalized_length >= normalized_len) {
     normalized_length = normalized_len - 1U;
   }
-  memcpy(normalized, trimmed, normalized_length);
+  memcpy (normalized, trimmed, normalized_length);
   normalized[normalized_length] = '\0';
 
   if (original_len > 0U) {
@@ -823,7 +866,7 @@ static bool host_version_ip_parse_pattern(const char *pattern, char *normalized,
     if (orig_len >= original_len) {
       orig_len = original_len - 1U;
     }
-    memcpy(original, trimmed_copy, orig_len);
+    memcpy (original, trimmed_copy, orig_len);
     original[orig_len] = '\0';
   }
 
@@ -840,18 +883,21 @@ static bool host_version_ip_parse_pattern(const char *pattern, char *normalized,
   return true;
 }
 
-static bool host_parse_ipv4_cidr(const char *cidr, uint32_t *network_out, uint32_t *mask_out) {
+static bool
+host_parse_ipv4_cidr (const char *cidr, uint32_t *network_out,
+                      uint32_t *mask_out)
+{
   if (cidr == NULL) {
     return false;
   }
 
   char buffer[SSH_CHATTER_CIDR_TEXT_LEN];
-  int written = snprintf(buffer, sizeof(buffer), "%s", cidr);
-  if (written < 0 || (size_t)written >= sizeof(buffer)) {
+  int written = snprintf (buffer, sizeof (buffer), "%s", cidr);
+  if (written < 0 || (size_t)written >= sizeof (buffer)) {
     return false;
   }
 
-  char *slash = strchr(buffer, '/');
+  char *slash = strchr (buffer, '/');
   if (slash == NULL) {
     return false;
   }
@@ -859,19 +905,19 @@ static bool host_parse_ipv4_cidr(const char *cidr, uint32_t *network_out, uint32
 
   char *prefix_str = slash + 1;
   char *prefix_end = NULL;
-  long prefix_long = strtol(prefix_str, &prefix_end, 10);
+  long prefix_long = strtol (prefix_str, &prefix_end, 10);
   if (prefix_str == prefix_end || prefix_long < 0L || prefix_long > 32L) {
     return false;
   }
 
-  struct in_addr address = {0};
-  if (inet_pton(AF_INET, buffer, &address) != 1) {
+  struct in_addr address = { 0 };
+  if (inet_pton (AF_INET, buffer, &address) != 1) {
     return false;
   }
 
   uint32_t prefix = (uint32_t)prefix_long;
   uint32_t mask = prefix == 0U ? 0U : (uint32_t)(0xFFFFFFFFu << (32U - prefix));
-  uint32_t network = ntohl(address.s_addr) & mask;
+  uint32_t network = ntohl (address.s_addr) & mask;
 
   if (network_out != NULL) {
     *network_out = network;
@@ -883,18 +929,21 @@ static bool host_parse_ipv4_cidr(const char *cidr, uint32_t *network_out, uint32
   return true;
 }
 
-static bool host_parse_ipv6_cidr(const char *cidr, struct in6_addr *network_out, struct in6_addr *mask_out) {
+static bool
+host_parse_ipv6_cidr (const char *cidr, struct in6_addr *network_out,
+                      struct in6_addr *mask_out)
+{
   if (cidr == NULL) {
     return false;
   }
 
   char buffer[SSH_CHATTER_CIDR_TEXT_LEN];
-  int written = snprintf(buffer, sizeof(buffer), "%s", cidr);
-  if (written < 0 || (size_t)written >= sizeof(buffer)) {
+  int written = snprintf (buffer, sizeof (buffer), "%s", cidr);
+  if (written < 0 || (size_t)written >= sizeof (buffer)) {
     return false;
   }
 
-  char *slash = strchr(buffer, '/');
+  char *slash = strchr (buffer, '/');
   if (slash == NULL) {
     return false;
   }
@@ -902,21 +951,21 @@ static bool host_parse_ipv6_cidr(const char *cidr, struct in6_addr *network_out,
 
   char *prefix_str = slash + 1;
   char *prefix_end = NULL;
-  long prefix_long = strtol(prefix_str, &prefix_end, 10);
+  long prefix_long = strtol (prefix_str, &prefix_end, 10);
   if (prefix_str == prefix_end || prefix_long < 0L || prefix_long > 128L) {
     return false;
   }
 
   struct in6_addr address;
-  memset(&address, 0, sizeof(address));
-  if (inet_pton(AF_INET6, buffer, &address) != 1) {
+  memset (&address, 0, sizeof (address));
+  if (inet_pton (AF_INET6, buffer, &address) != 1) {
     return false;
   }
 
   struct in6_addr mask;
-  memset(&mask, 0, sizeof(mask));
+  memset (&mask, 0, sizeof (mask));
   int remaining = (int)prefix_long;
-  for (size_t idx = 0U; idx < sizeof(mask.s6_addr); ++idx) {
+  for (size_t idx = 0U; idx < sizeof (mask.s6_addr); ++idx) {
     uint8_t value = 0U;
     if (remaining >= 8) {
       value = 0xFFU;
@@ -929,8 +978,8 @@ static bool host_parse_ipv6_cidr(const char *cidr, struct in6_addr *network_out,
   }
 
   struct in6_addr network;
-  memset(&network, 0, sizeof(network));
-  for (size_t idx = 0U; idx < sizeof(network.s6_addr); ++idx) {
+  memset (&network, 0, sizeof (network));
+  for (size_t idx = 0U; idx < sizeof (network.s6_addr); ++idx) {
     network.s6_addr[idx] = address.s6_addr[idx] & mask.s6_addr[idx];
   }
 
@@ -944,37 +993,40 @@ static bool host_parse_ipv6_cidr(const char *cidr, struct in6_addr *network_out,
   return true;
 }
 
-static bool host_cidr_contains_ip(const char *cidr_text, const char *ip) {
+static bool
+host_cidr_contains_ip (const char *cidr_text, const char *ip)
+{
   if (cidr_text == NULL || ip == NULL || ip[0] == '\0') {
     return false;
   }
 
   uint32_t ipv4_network = 0U;
   uint32_t ipv4_mask = 0U;
-  if (host_parse_ipv4_cidr(cidr_text, &ipv4_network, &ipv4_mask)) {
-    struct in_addr address = {0};
-    if (inet_pton(AF_INET, ip, &address) != 1) {
+  if (host_parse_ipv4_cidr (cidr_text, &ipv4_network, &ipv4_mask)) {
+    struct in_addr address = { 0 };
+    if (inet_pton (AF_INET, ip, &address) != 1) {
       return false;
     }
 
-    uint32_t ip_value = ntohl(address.s_addr);
+    uint32_t ip_value = ntohl (address.s_addr);
     return (ip_value & ipv4_mask) == ipv4_network;
   }
 
   struct in6_addr ipv6_network;
   struct in6_addr ipv6_mask;
-  memset(&ipv6_network, 0, sizeof(ipv6_network));
-  memset(&ipv6_mask, 0, sizeof(ipv6_mask));
+  memset (&ipv6_network, 0, sizeof (ipv6_network));
+  memset (&ipv6_mask, 0, sizeof (ipv6_mask));
 
-  if (host_parse_ipv6_cidr(cidr_text, &ipv6_network, &ipv6_mask)) {
+  if (host_parse_ipv6_cidr (cidr_text, &ipv6_network, &ipv6_mask)) {
     struct in6_addr address6;
-    memset(&address6, 0, sizeof(address6));
-    if (inet_pton(AF_INET6, ip, &address6) != 1) {
+    memset (&address6, 0, sizeof (address6));
+    if (inet_pton (AF_INET6, ip, &address6) != 1) {
       return false;
     }
 
-    for (size_t idx = 0U; idx < sizeof(address6.s6_addr); ++idx) {
-      if ((address6.s6_addr[idx] & ipv6_mask.s6_addr[idx]) != ipv6_network.s6_addr[idx]) {
+    for (size_t idx = 0U; idx < sizeof (address6.s6_addr); ++idx) {
+      if ((address6.s6_addr[idx] & ipv6_mask.s6_addr[idx])
+          != ipv6_network.s6_addr[idx]) {
         return false;
       }
     }
@@ -985,44 +1037,53 @@ static bool host_cidr_contains_ip(const char *cidr_text, const char *ip) {
   return false;
 }
 
-static bool host_version_ip_rule_matches(const version_ip_ban_rule_t *rule, const char *version, const char *ip) {
+static bool
+host_version_ip_rule_matches (const version_ip_ban_rule_t *rule,
+                              const char *version, const char *ip)
+{
   if (rule == NULL || !rule->in_use || ip == NULL || ip[0] == '\0') {
     return false;
   }
 
   bool version_match = false;
   switch (rule->match_mode) {
-    case VERSION_PATTERN_MATCH_ANY:
-      version_match = true;
-      break;
-    case VERSION_PATTERN_MATCH_EXACT:
-      if (version != NULL) {
-        version_match = strcmp(version, rule->normalized_pattern) == 0;
+  case VERSION_PATTERN_MATCH_ANY:
+    version_match = true;
+    break;
+  case VERSION_PATTERN_MATCH_EXACT:
+    if (version != NULL) {
+      version_match = strcmp (version, rule->normalized_pattern) == 0;
+    }
+    break;
+  case VERSION_PATTERN_MATCH_PREFIX:
+    if (version != NULL) {
+      size_t prefix_len = strnlen (rule->normalized_pattern,
+                                   sizeof (rule->normalized_pattern));
+      version_match
+          = (prefix_len > 0U
+             && strncmp (version, rule->normalized_pattern, prefix_len) == 0);
+    }
+    break;
+  case VERSION_PATTERN_MATCH_SUFFIX:
+    if (version != NULL) {
+      size_t suffix_len = strnlen (rule->normalized_pattern,
+                                   sizeof (rule->normalized_pattern));
+      size_t version_len = strlen (version);
+      if (suffix_len > 0U && version_len >= suffix_len) {
+        version_match = strncmp (version + (version_len - suffix_len),
+                                 rule->normalized_pattern, suffix_len)
+                        == 0;
       }
-      break;
-    case VERSION_PATTERN_MATCH_PREFIX:
-      if (version != NULL) {
-        size_t prefix_len = strnlen(rule->normalized_pattern, sizeof(rule->normalized_pattern));
-        version_match = (prefix_len > 0U && strncmp(version, rule->normalized_pattern, prefix_len) == 0);
-      }
-      break;
-    case VERSION_PATTERN_MATCH_SUFFIX:
-      if (version != NULL) {
-        size_t suffix_len = strnlen(rule->normalized_pattern, sizeof(rule->normalized_pattern));
-        size_t version_len = strlen(version);
-        if (suffix_len > 0U && version_len >= suffix_len) {
-          version_match = strncmp(version + (version_len - suffix_len), rule->normalized_pattern, suffix_len) == 0;
-        }
-      }
-      break;
-    case VERSION_PATTERN_MATCH_SUBSTRING:
-      if (version != NULL && rule->normalized_pattern[0] != '\0') {
-        version_match = strstr(version, rule->normalized_pattern) != NULL;
-      }
-      break;
-    default:
-      version_match = false;
-      break;
+    }
+    break;
+  case VERSION_PATTERN_MATCH_SUBSTRING:
+    if (version != NULL && rule->normalized_pattern[0] != '\0') {
+      version_match = strstr (version, rule->normalized_pattern) != NULL;
+    }
+    break;
+  default:
+    version_match = false;
+    break;
   }
 
   if (!version_match) {
@@ -1030,22 +1091,23 @@ static bool host_version_ip_rule_matches(const version_ip_ban_rule_t *rule, cons
   }
 
   if (!rule->is_ipv6) {
-    struct in_addr address = {0};
-    if (inet_pton(AF_INET, ip, &address) != 1) {
+    struct in_addr address = { 0 };
+    if (inet_pton (AF_INET, ip, &address) != 1) {
       return false;
     }
-    uint32_t ip_value = ntohl(address.s_addr);
+    uint32_t ip_value = ntohl (address.s_addr);
     return (ip_value & rule->ipv4_mask) == rule->ipv4_network;
   }
 
   struct in6_addr address6;
-  memset(&address6, 0, sizeof(address6));
-  if (inet_pton(AF_INET6, ip, &address6) != 1) {
+  memset (&address6, 0, sizeof (address6));
+  if (inet_pton (AF_INET6, ip, &address6) != 1) {
     return false;
   }
 
-  for (size_t idx = 0U; idx < sizeof(address6.s6_addr); ++idx) {
-    if ((address6.s6_addr[idx] & rule->ipv6_mask.s6_addr[idx]) != rule->ipv6_network.s6_addr[idx]) {
+  for (size_t idx = 0U; idx < sizeof (address6.s6_addr); ++idx) {
+    if ((address6.s6_addr[idx] & rule->ipv6_mask.s6_addr[idx])
+        != rule->ipv6_network.s6_addr[idx]) {
       return false;
     }
   }
@@ -1053,34 +1115,40 @@ static bool host_version_ip_rule_matches(const version_ip_ban_rule_t *rule, cons
   return true;
 }
 
-static bool host_version_ip_rule_add(host_t *host, const char *pattern, const char *cidr, const char *note) {
+static bool
+host_version_ip_rule_add (host_t *host, const char *pattern, const char *cidr,
+                          const char *note)
+{
   if (host == NULL || pattern == NULL || cidr == NULL) {
     return false;
   }
 
   if (host->version_ip_ban_rule_count >= SSH_CHATTER_MAX_VERSION_IP_BANS) {
-    printf("[security] version/IP rule capacity reached; skipping %s @ %s\n", pattern, cidr);
+    printf ("[security] version/IP rule capacity reached; skipping %s @ %s\n",
+            pattern, cidr);
     return false;
   }
 
   char normalized[SSH_CHATTER_VERSION_PATTERN_LEN];
   char original[SSH_CHATTER_VERSION_PATTERN_LEN];
   version_pattern_match_t match_mode = VERSION_PATTERN_MATCH_EXACT;
-  if (!host_version_ip_parse_pattern(pattern, normalized, sizeof(normalized), original, sizeof(original), &match_mode)) {
-    printf("[security] invalid version pattern '%s'\n", pattern);
+  if (!host_version_ip_parse_pattern (pattern, normalized, sizeof (normalized),
+                                      original, sizeof (original),
+                                      &match_mode)) {
+    printf ("[security] invalid version pattern '%s'\n", pattern);
     return false;
   }
 
   char cidr_copy[SSH_CHATTER_CIDR_TEXT_LEN];
-  int cidr_written = snprintf(cidr_copy, sizeof(cidr_copy), "%s", cidr);
-  if (cidr_written < 0 || (size_t)cidr_written >= sizeof(cidr_copy)) {
-    printf("[security] invalid CIDR '%s'\n", cidr);
+  int cidr_written = snprintf (cidr_copy, sizeof (cidr_copy), "%s", cidr);
+  if (cidr_written < 0 || (size_t)cidr_written >= sizeof (cidr_copy)) {
+    printf ("[security] invalid CIDR '%s'\n", cidr);
     return false;
   }
 
-  char *cidr_trimmed = host_trim_whitespace(cidr_copy);
+  char *cidr_trimmed = host_trim_whitespace (cidr_copy);
   if (cidr_trimmed == NULL || cidr_trimmed[0] == '\0') {
-    printf("[security] CIDR '%s' empty after trimming\n", cidr);
+    printf ("[security] CIDR '%s' empty after trimming\n", cidr);
     return false;
   }
 
@@ -1088,16 +1156,16 @@ static bool host_version_ip_rule_add(host_t *host, const char *pattern, const ch
   uint32_t ipv4_mask = 0U;
   struct in6_addr ipv6_network;
   struct in6_addr ipv6_mask;
-  memset(&ipv6_network, 0, sizeof(ipv6_network));
-  memset(&ipv6_mask, 0, sizeof(ipv6_mask));
+  memset (&ipv6_network, 0, sizeof (ipv6_network));
+  memset (&ipv6_mask, 0, sizeof (ipv6_mask));
   bool is_ipv6 = false;
 
-  if (host_parse_ipv4_cidr(cidr_trimmed, &ipv4_network, &ipv4_mask)) {
+  if (host_parse_ipv4_cidr (cidr_trimmed, &ipv4_network, &ipv4_mask)) {
     is_ipv6 = false;
-  } else if (host_parse_ipv6_cidr(cidr_trimmed, &ipv6_network, &ipv6_mask)) {
+  } else if (host_parse_ipv6_cidr (cidr_trimmed, &ipv6_network, &ipv6_mask)) {
     is_ipv6 = true;
   } else {
-    printf("[security] failed to parse CIDR '%s'\n", cidr_trimmed);
+    printf ("[security] failed to parse CIDR '%s'\n", cidr_trimmed);
     return false;
   }
 
@@ -1109,7 +1177,9 @@ static bool host_version_ip_rule_add(host_t *host, const char *pattern, const ch
     if (existing->match_mode != match_mode) {
       continue;
     }
-    if (strncmp(existing->normalized_pattern, normalized, sizeof(existing->normalized_pattern)) != 0) {
+    if (strncmp (existing->normalized_pattern, normalized,
+                 sizeof (existing->normalized_pattern))
+        != 0) {
       continue;
     }
     if (existing->is_ipv6 != is_ipv6) {
@@ -1117,28 +1187,37 @@ static bool host_version_ip_rule_add(host_t *host, const char *pattern, const ch
     }
     bool network_match = false;
     if (!is_ipv6) {
-      network_match = (existing->ipv4_network == ipv4_network && existing->ipv4_mask == ipv4_mask);
+      network_match = (existing->ipv4_network == ipv4_network
+                       && existing->ipv4_mask == ipv4_mask);
     } else {
-      network_match = (memcmp(existing->ipv6_network.s6_addr, ipv6_network.s6_addr, sizeof(ipv6_network.s6_addr)) == 0) &&
-                      (memcmp(existing->ipv6_mask.s6_addr, ipv6_mask.s6_addr, sizeof(ipv6_mask.s6_addr)) == 0);
+      network_match
+          = (memcmp (existing->ipv6_network.s6_addr, ipv6_network.s6_addr,
+                     sizeof (ipv6_network.s6_addr))
+             == 0)
+            && (memcmp (existing->ipv6_mask.s6_addr, ipv6_mask.s6_addr,
+                        sizeof (ipv6_mask.s6_addr))
+                == 0);
     }
     if (network_match) {
       if (note != NULL && note[0] != '\0') {
-        size_t note_len = strnlen(note, SSH_CHATTER_VERSION_NOTE_LEN - 1U);
-        memcpy(existing->note, note, note_len);
+        size_t note_len = strnlen (note, SSH_CHATTER_VERSION_NOTE_LEN - 1U);
+        memcpy (existing->note, note, note_len);
         existing->note[note_len] = '\0';
       }
       return true;
     }
   }
 
-  version_ip_ban_rule_t *rule = &host->version_ip_ban_rules[host->version_ip_ban_rule_count];
-  memset(rule, 0, sizeof(*rule));
+  version_ip_ban_rule_t *rule
+      = &host->version_ip_ban_rules[host->version_ip_ban_rule_count];
+  memset (rule, 0, sizeof (*rule));
   rule->in_use = true;
   rule->match_mode = match_mode;
-  snprintf(rule->original_pattern, sizeof(rule->original_pattern), "%s", original);
-  snprintf(rule->normalized_pattern, sizeof(rule->normalized_pattern), "%s", normalized);
-  snprintf(rule->cidr_text, sizeof(rule->cidr_text), "%s", cidr_trimmed);
+  snprintf (rule->original_pattern, sizeof (rule->original_pattern), "%s",
+            original);
+  snprintf (rule->normalized_pattern, sizeof (rule->normalized_pattern), "%s",
+            normalized);
+  snprintf (rule->cidr_text, sizeof (rule->cidr_text), "%s", cidr_trimmed);
   rule->is_ipv6 = is_ipv6;
   if (!is_ipv6) {
     rule->ipv4_network = ipv4_network;
@@ -1149,8 +1228,8 @@ static bool host_version_ip_rule_add(host_t *host, const char *pattern, const ch
   }
 
   if (note != NULL && note[0] != '\0') {
-    size_t note_len = strnlen(note, SSH_CHATTER_VERSION_NOTE_LEN - 1U);
-    memcpy(rule->note, note, note_len);
+    size_t note_len = strnlen (note, SSH_CHATTER_VERSION_NOTE_LEN - 1U);
+    memcpy (rule->note, note, note_len);
     rule->note[note_len] = '\0';
   } else {
     rule->note[0] = '\0';
@@ -1158,67 +1237,79 @@ static bool host_version_ip_rule_add(host_t *host, const char *pattern, const ch
 
   host->version_ip_ban_rule_count += 1U;
 
-  const char *note_display = rule->note[0] != '\0' ? rule->note : "version/IP policy";
-  const char *pattern_display = rule->original_pattern[0] != '\0' ? rule->original_pattern : "*";
-  printf("[security] loaded version/IP ban rule: %s @ %s (%s)\n", pattern_display, rule->cidr_text, note_display);
+  const char *note_display
+      = rule->note[0] != '\0' ? rule->note : "version/IP policy";
+  const char *pattern_display
+      = rule->original_pattern[0] != '\0' ? rule->original_pattern : "*";
+  printf ("[security] loaded version/IP ban rule: %s @ %s (%s)\n",
+          pattern_display, rule->cidr_text, note_display);
 
   return true;
 }
 
-static void host_version_ip_rules_load_env(host_t *host) {
+static void
+host_version_ip_rules_load_env (host_t *host)
+{
   if (host == NULL) {
     return;
   }
 
-  const char *env = getenv("CHATTER_VERSION_IP_BANS");
+  const char *env = getenv ("CHATTER_VERSION_IP_BANS");
   if (env == NULL || env[0] == '\0') {
     return;
   }
 
-  char *copy = strdup(env);
+  char *copy = strdup (env);
   if (copy == NULL) {
     return;
   }
 
   char *context = NULL;
-  for (char *token = strtok_r(copy, VERSION_IP_RULE_SEPARATOR, &context); token != NULL;
-       token = strtok_r(NULL, VERSION_IP_RULE_SEPARATOR, &context)) {
-    char *trimmed = host_trim_whitespace(token);
+  for (char *token = strtok_r (copy, VERSION_IP_RULE_SEPARATOR, &context);
+       token != NULL;
+       token = strtok_r (NULL, VERSION_IP_RULE_SEPARATOR, &context)) {
+    char *trimmed = host_trim_whitespace (token);
     if (trimmed == NULL || trimmed[0] == '\0') {
       continue;
     }
 
     char *note_part = NULL;
-    char *hash = strchr(trimmed, '#');
+    char *hash = strchr (trimmed, '#');
     if (hash != NULL) {
       *hash = '\0';
-      note_part = host_trim_whitespace(hash + 1);
+      note_part = host_trim_whitespace (hash + 1);
     }
 
-    char *separator = strchr(trimmed, '@');
+    char *separator = strchr (trimmed, '@');
     if (separator == NULL) {
-      printf("[security] ignoring malformed version/IP rule '%s'\n", trimmed);
+      printf ("[security] ignoring malformed version/IP rule '%s'\n", trimmed);
       continue;
     }
 
     *separator = '\0';
-    char *pattern = host_trim_whitespace(trimmed);
-    char *cidr = host_trim_whitespace(separator + 1);
-    if (pattern == NULL || cidr == NULL || pattern[0] == '\0' || cidr[0] == '\0') {
-      printf("[security] ignoring malformed version/IP rule entry\n");
+    char *pattern = host_trim_whitespace (trimmed);
+    char *cidr = host_trim_whitespace (separator + 1);
+    if (pattern == NULL || cidr == NULL || pattern[0] == '\0'
+        || cidr[0] == '\0') {
+      printf ("[security] ignoring malformed version/IP rule entry\n");
       continue;
     }
 
-    const char *note = (note_part != NULL && note_part[0] != '\0') ? note_part : "custom rule";
-    if (!host_version_ip_rule_add(host, pattern, cidr, note)) {
-      printf("[security] failed to register version/IP rule from environment: %s @ %s\n", pattern, cidr);
+    const char *note = (note_part != NULL && note_part[0] != '\0')
+                           ? note_part
+                           : "custom rule";
+    if (!host_version_ip_rule_add (host, pattern, cidr, note)) {
+      printf ("[security] failed to register version/IP rule from environment: "
+              "%s @ %s\n",
+              pattern, cidr);
     }
   }
-
 }
 
-static bool host_version_ip_should_ban(host_t *host, const char *version, const char *ip,
-                                       const version_ip_ban_rule_t **matched_rule) {
+static bool
+host_version_ip_should_ban (host_t *host, const char *version, const char *ip,
+                            const version_ip_ban_rule_t **matched_rule)
+{
   if (matched_rule != NULL) {
     *matched_rule = NULL;
   }
@@ -1232,7 +1323,7 @@ static bool host_version_ip_should_ban(host_t *host, const char *version, const 
     if (!rule->in_use) {
       continue;
     }
-    if (host_version_ip_rule_matches(rule, version, ip)) {
+    if (host_version_ip_rule_matches (rule, version, ip)) {
       if (matched_rule != NULL) {
         *matched_rule = rule;
       }
@@ -1243,50 +1334,106 @@ static bool host_version_ip_should_ban(host_t *host, const char *version, const 
   return false;
 }
 
-static void host_version_ip_rules_init(host_t *host) {
+static void
+host_version_ip_rules_init (host_t *host)
+{
   if (host == NULL) {
     return;
   }
 
   host->version_ip_ban_rule_count = 0U;
-  memset(host->version_ip_ban_rules, 0, sizeof(host->version_ip_ban_rules));
+  memset (host->version_ip_ban_rules, 0, sizeof (host->version_ip_ban_rules));
 
-  for (size_t idx = 0U; idx < (sizeof(kVersionIpBanSeeds) / sizeof(kVersionIpBanSeeds[0])); ++idx) {
+  for (size_t idx = 0U;
+       idx < (sizeof (kVersionIpBanSeeds) / sizeof (kVersionIpBanSeeds[0]));
+       ++idx) {
     const version_ip_ban_seed_t *seed = &kVersionIpBanSeeds[idx];
-    (void)host_version_ip_rule_add(host, seed->pattern, seed->cidr, seed->note);
+    (void)host_version_ip_rule_add (host, seed->pattern, seed->cidr,
+                                    seed->note);
   }
 
-  host_version_ip_rules_load_env(host);
+  host_version_ip_rules_load_env (host);
 }
 
 #ifndef O_NOFOLLOW
 #define O_NOFOLLOW 0
 #endif
 
-static const char kTranslationQuotaNotice[] =
-    "⚠️ Translation quota exhausted. Translation features are temporarily disabled.";
-static const char kTranslationQuotaSystemMessage[] =
-    "Translation quota exhausted. Translation has been disabled. Try again later.";
+static const char kTranslationQuotaNotice[]
+    = "⚠️ Translation quota exhausted. Translation features are temporarily "
+      "disabled.";
+static const char kTranslationQuotaSystemMessage[]
+    = "Translation quota exhausted. Translation has been disabled. Try again "
+      "later.";
 
 static const char *const kSessionCommandNames[] = {
-    "asciiart",      "audio",       "ban",          "banlist",     "bbs",
-    "birthday",      "block",       "breaking",     "captcha",      "chat",         "chat-spacing",
-    "color",         "connected",   "date",         "delete-msg",   "elect",
-    "eliza",         "eliza-chat",  "exit",         "files",        "game",
-    "gemini",        "gemini-unfreeze","getos",      "grant",        "help",
-    "history",
-    "advanced",      "ssh-chat-server", "image",       "kick",        "mode",         "motd",
-    "nick",          "os",          "pair",        "palette",     "pardon",
-    "pm",
-    "poke",          "poll",        "reply",       "revoke",       "rss",
-    "search",        "set-target-lang","set-trans-lang","set-ui-lang","showstatus",
-    "soulmate",      "status",      "suspend!",    "sync-trigger",  "systemcolor",  "today",
-    "translate",
-    "translate-scope","unblock",    "users",        "video",        "vote",
-    "vote-single",   "weather",
+  "asciiart",
+  "audio",
+  "ban",
+  "banlist",
+  "bbs",
+  "birthday",
+  "block",
+  "breaking",
+  "captcha",
+  "chat",
+  "chat-spacing",
+  "color",
+  "connected",
+  "date",
+  "delete-msg",
+  "elect",
+  "eliza",
+  "eliza-chat",
+  "exit",
+  "files",
+  "game",
+  "gemini",
+  "gemini-unfreeze",
+  "getos",
+  "grant",
+  "help",
+  "history",
+  "advanced",
+  "ssh-chat-server",
+  "image",
+  "kick",
+  "mode",
+  "motd",
+  "nick",
+  "os",
+  "pair",
+  "palette",
+  "pardon",
+  "pm",
+  "poke",
+  "poll",
+  "reply",
+  "revoke",
+  "rss",
+  "search",
+  "set-target-lang",
+  "set-trans-lang",
+  "set-ui-lang",
+  "showstatus",
+  "soulmate",
+  "status",
+  "suspend!",
+  "sync-trigger",
+  "systemcolor",
+  "today",
+  "translate",
+  "translate-scope",
+  "unblock",
+  "users",
+  "video",
+  "vote",
+  "vote-single",
+  "weather",
   "gameopt",
 };
-#define SSH_CHATTER_COMMAND_COUNT (sizeof(kSessionCommandNames) / sizeof(kSessionCommandNames[0]))
+#define SSH_CHATTER_COMMAND_COUNT                                              \
+  (sizeof (kSessionCommandNames) / sizeof (kSessionCommandNames[0]))
 
 typedef enum session_help_entry_kind {
   SESSION_HELP_ENTRY_COMMAND = 0,
@@ -1319,7 +1466,8 @@ typedef struct session_help_entry {
   size_t label_arg_count;
   session_help_template_arg_kind_t label_args[SESSION_HELP_TEMPLATE_ARG_LIMIT];
   size_t description_arg_count;
-  session_help_template_arg_kind_t description_args[SESSION_HELP_TEMPLATE_ARG_LIMIT];
+  session_help_template_arg_kind_t
+      description_args[SESSION_HELP_TEMPLATE_ARG_LIMIT];
 } session_help_entry_t;
 
 typedef struct session_command_alias {
@@ -1361,208 +1509,275 @@ typedef struct session_ui_locale {
 } session_ui_locale_t;
 
 static const char *const kSessionUiLanguageCodes[SESSION_UI_LANGUAGE_COUNT] = {
-    "en",
-    "ko",
-    "jp",
-    "zh",
-    "ru",
+  "en", "ko", "jp", "zh", "ru",
 };
 
-static const char *const kSessionUiLanguageNames[SESSION_UI_LANGUAGE_COUNT][SESSION_UI_LANGUAGE_COUNT] = {
-    [SESSION_UI_LANGUAGE_EN] = {"English", "Korean", "Japanese", "Chinese", "Russian"},
-    [SESSION_UI_LANGUAGE_KO] = {"영어", "한국어", "일본어", "중국어", "러시아어"},
-    [SESSION_UI_LANGUAGE_JP] = {"英語", "韓国語", "日本語", "中国語", "ロシア語"},
-    [SESSION_UI_LANGUAGE_ZH] = {"英语", "韩语", "日语", "中文", "俄语"},
-    [SESSION_UI_LANGUAGE_RU] = {"английский", "корейский", "японский", "китайский", "русский"},
-};
+static const char *const kSessionUiLanguageNames[SESSION_UI_LANGUAGE_COUNT]
+                                                [SESSION_UI_LANGUAGE_COUNT]
+    = {
+        [SESSION_UI_LANGUAGE_EN]
+        = { "English", "Korean", "Japanese", "Chinese", "Russian" },
+        [SESSION_UI_LANGUAGE_KO]
+        = { "영어", "한국어", "일본어", "중국어", "러시아어" },
+        [SESSION_UI_LANGUAGE_JP]
+        = { "英語", "韓国語", "日本語", "中国語", "ロシア語" },
+        [SESSION_UI_LANGUAGE_ZH] = { "英语", "韩语", "日语", "中文", "俄语" },
+        [SESSION_UI_LANGUAGE_RU]
+        = { "английский", "корейский", "японский", "китайский", "русский" },
+      };
 
-static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT] = {
-    {
-        .language = SESSION_UI_LANGUAGE_EN,
-        .code = "en",
-        .help_title = "Essential commands:",
-        .help_hint_extra = "See %sadvanced for optional commands.",
-        .help_scroll_hint = "Use Up/Down arrows to scroll chat or command history.",
-        .help_regular_hint = "Regular messages are shared with everyone.",
-        .help_extra_title = "Extended commands:",
-        .help_extra_hint = "Return to %shelp for essentials.",
-        .help_operator_title = "Operator commands:",
-        .welcome_help_hint = "Use %shelp to view the manual.",
-        .welcome_motd_hint = "Use %smotd to read the information.",
-        .welcome_history_hint = "Previous messages are hidden. Use Up/Down arrows to browse older chat.",
-        .chat_spacing_usage = "Usage: %schat-spacing <0-5>",
-        .chat_spacing_immediate =
-            "Translation captions will appear immediately without reserving extra blank lines.",
-        .chat_spacing_single =
-            "Translation captions will reserve 1 blank line before appearing in chat threads.",
-        .chat_spacing_multiple =
-            "Translation captions will reserve %s blank lines before appearing in chat threads.",
-        .set_ui_lang_usage = "Usage: %sset-ui-lang <ko|en|jp|zh|ru>",
-        .set_ui_lang_success = "UI language set to %s. Use %shelp to review commands.",
-        .set_ui_lang_invalid = "Unsupported language. Use one of: ko, en, jp, zh, ru.",
-        .mode_status_format = "Current input mode: %s.",
-        .mode_label_chat = "chat",
-        .mode_label_command = "command",
-        .mode_explain_chat = "Chat mode: send messages normally. Prefix commands with %s.",
-        .mode_explain_command =
-            "Command mode: type commands without a prefix, use UpArrow/DownArrow for history, Tab for completion.",
-        .mode_already_chat = "Already in chat mode. Commands require the %s prefix.",
-        .mode_already_command =
-            "Command mode already active. Enter commands without a prefix, use UpArrow/DownArrow for history, Tab to autocomplete.",
-        .mode_enabled_chat = "Chat mode enabled. Commands once again require the %s prefix.",
-        .mode_enabled_command =
-            "Command mode enabled. Enter commands without a prefix; use UpArrow/DownArrow for history and Tab for completion.",
-        .mode_usage = "Usage: %smode <chat|command|toggle>",
-        .unknown_command = "Unknown command. Type %shelp for help.",
-    },
-    {
-        .language = SESSION_UI_LANGUAGE_KO,
-        .code = "ko",
-        .help_title = "필수 명령:",
-        .help_hint_extra = "%sadvanced에서 선택 및 운영자 명령을 확인합니다.",
-        .help_scroll_hint = "위/아래 화살표로 채팅이나 명령 기록을 살펴볼 수 있습니다.",
-        .help_regular_hint = "일반 메시지는 모두에게 공유됩니다.",
-        .help_extra_title = "확장 명령:",
-        .help_extra_hint = "핵심 목록은 %shelp에서 다시 볼 수 있습니다.",
-        .help_operator_title = "운영자 명령:",
-        .welcome_help_hint = "%shelp 명령으로 도움말을 확인하세요.",
-        .welcome_motd_hint = "%smotd 명령으로 안내를 읽을 수 있습니다.",
-        .welcome_history_hint = "이전 메시지는 숨겨져 있습니다. 위/아래 화살표로 지난 채팅을 살펴보세요.",
-        .chat_spacing_usage = "사용법: %schat-spacing <0-5>",
-        .chat_spacing_immediate = "번역 자막이 빈 줄을 예약하지 않고 즉시 표시됩니다.",
-        .chat_spacing_single = "번역 자막이 표시되기 전에 빈 줄 1줄을 예약합니다.",
-        .chat_spacing_multiple = "번역 자막이 표시되기 전에 빈 줄 %s줄을 예약합니다.",
-        .set_ui_lang_usage = "사용법: %sset-ui-lang <ko|en|jp|zh|ru>",
-        .set_ui_lang_success = "UI 언어를 %s로 설정했습니다. %shelp 명령으로 목록을 다시 확인하세요.",
-        .set_ui_lang_invalid = "지원하지 않는 언어입니다. ko, en, jp, zh, ru 중에서 선택하세요.",
-        .mode_status_format = "현재 입력 모드: %s.",
-        .mode_label_chat = "채팅",
-        .mode_label_command = "명령",
-        .mode_explain_chat = "채팅 모드: 일반 메시지를 보내고, 명령은 %s 접두사를 붙여 입력하세요.",
-        .mode_explain_command =
-            "명령 모드: 접두사 없이 명령을 입력하고, 위/아래 화살표로 기록을 탐색하며 Tab으로 자동완성하세요.",
-        .mode_already_chat = "이미 채팅 모드입니다. 명령은 %s 접두사가 필요합니다.",
-        .mode_already_command = "이미 명령 모드입니다. 접두사 없이 입력하고, 위/아래 화살표와 Tab을 활용하세요.",
-        .mode_enabled_chat = "채팅 모드가 활성화되었습니다. 명령은 다시 %s 접두사가 필요합니다.",
-        .mode_enabled_command = "명령 모드가 활성화되었습니다. 접두사 없이 입력하고, 위/아래 화살표와 Tab을 사용하세요.",
-        .mode_usage = "사용법: %smode <chat|command|toggle>",
-        .unknown_command = "알 수 없는 명령입니다. 도움말은 %shelp에서 확인하세요.",
-    },
-    {
-        .language = SESSION_UI_LANGUAGE_JP,
-        .code = "jp",
-        .help_title = "基本コマンド:",
-        .help_hint_extra = "追加コマンドは %sadvanced で確認できます。",
-        .help_scroll_hint = "上下の矢印でチャットやコマンド履歴をたどれます。",
-        .help_regular_hint = "通常のメッセージは全員に共有されます。",
-        .help_extra_title = "拡張コマンド:",
-        .help_extra_hint = "基本一覧に戻るには %shelp を実行してください。",
-        .help_operator_title = "オペレーター用コマンド:",
-        .welcome_help_hint = "%shelp でヘルプを表示できます。",
-        .welcome_motd_hint = "%smotd でお知らせを確認できます。",
-        .welcome_history_hint = "以前のメッセージは非表示です。上下の矢印で過去のチャットを確認できます。",
-        .chat_spacing_usage = "使い方: %schat-spacing <0-5>",
-        .chat_spacing_immediate = "翻訳字幕は空行を確保せずすぐに表示されます。",
-        .chat_spacing_single = "翻訳字幕は表示前に空行を 1 行確保します。",
-        .chat_spacing_multiple = "翻訳字幕は表示前に空行を %s 行確保します。",
-        .set_ui_lang_usage = "使い方: %sset-ui-lang <ko|en|jp|zh|ru>",
-        .set_ui_lang_success = "UI 言語を %s に設定しました。%shelp でコマンドを再確認してください。",
-        .set_ui_lang_invalid = "対応していない言語です。ko, en, jp, zh, ru から選んでください。",
-        .mode_status_format = "現在の入力モード: %s。",
-        .mode_label_chat = "チャット",
-        .mode_label_command = "コマンド",
-        .mode_explain_chat = "チャットモード: 通常通りメッセージを送り、コマンドは %s を付けて入力します。",
-        .mode_explain_command =
-            "コマンドモード: 接頭辞なしで入力し、上下矢印で履歴を、Tab で補完を利用できます。",
-        .mode_already_chat = "すでにチャットモードです。コマンドには %s を付けてください。",
-        .mode_already_command = "すでにコマンドモードです。接頭辞なしで入力し、上下矢印と Tab を使ってください。",
-        .mode_enabled_chat = "チャットモードを有効にしました。コマンドには再び %s が必要です。",
-        .mode_enabled_command = "コマンドモードを有効にしました。接頭辞なしで入力し、上下矢印と Tab を使ってください。",
-        .mode_usage = "使い方: %smode <chat|command|toggle>",
-        .unknown_command = "不明なコマンドです。%shelp で確認してください。",
-    },
-    {
-        .language = SESSION_UI_LANGUAGE_ZH,
-        .code = "zh",
-        .help_title = "核心命令：",
-        .help_hint_extra = "更多命令请查看 %sadvanced。",
-        .help_scroll_hint = "使用上下方向键查看聊天或命令历史。",
-        .help_regular_hint = "普通消息会分享给所有人。",
-        .help_extra_title = "扩展命令：",
-        .help_extra_hint = "返回核心列表请使用 %shelp。",
-        .help_operator_title = "管理员命令：",
-        .welcome_help_hint = "使用 %shelp 查看帮助。",
-        .welcome_motd_hint = "使用 %smotd 阅读公告。",
-        .welcome_history_hint = "之前的消息已隐藏。使用上下方向键查看较早的聊天。",
-        .chat_spacing_usage = "用法：%schat-spacing <0-5>",
-        .chat_spacing_immediate = "翻译字幕会立即显示，不再预留空行。",
-        .chat_spacing_single = "翻译字幕在显示前会预留 1 行空白。",
-        .chat_spacing_multiple = "翻译字幕在显示前会预留 %s 行空白。",
-        .set_ui_lang_usage = "用法：%sset-ui-lang <ko|en|jp|zh|ru>",
-        .set_ui_lang_success = "界面语言已切换为 %s。可用 %shelp 重新查看命令。",
-        .set_ui_lang_invalid = "不支持的语言，请选择 ko、en、jp、zh、ru。",
-        .mode_status_format = "当前输入模式：%s。",
-        .mode_label_chat = "聊天",
-        .mode_label_command = "命令",
-        .mode_explain_chat = "聊天模式：正常发送消息，命令需加上 %s 前缀。",
-        .mode_explain_command =
-            "命令模式：直接输入命令，不需要前缀；用上下方向键查看历史，Tab 自动补全。",
-        .mode_already_chat = "已经是聊天模式。命令需要 %s 前缀。",
-        .mode_already_command = "已经是命令模式。无需前缀，使用上下方向键和 Tab。",
-        .mode_enabled_chat = "聊天模式已启用。命令重新需要 %s 前缀。",
-        .mode_enabled_command = "命令模式已启用。无需前缀，可用上下方向键和 Tab。",
-        .mode_usage = "用法：%smode <chat|command|toggle>",
-        .unknown_command = "未知命令。请使用 %shelp 查看帮助。",
-    },
-    {
-        .language = SESSION_UI_LANGUAGE_RU,
-        .code = "ru",
-        .help_title = "Основные команды:",
-        .help_hint_extra = "Дополнительные команды смотрите в %sadvanced.",
-        .help_scroll_hint = "Стрелки вверх/вниз листают чат или историю команд.",
-        .help_regular_hint = "Обычные сообщения видны всем.",
-        .help_extra_title = "Дополнительные команды:",
-        .help_extra_hint = "К основному списку вернёт %shelp.",
-        .help_operator_title = "Команды оператора:",
-        .welcome_help_hint = "Команду %shelp используйте для справки.",
-        .welcome_motd_hint = "%smotd покажет объявление.",
-        .welcome_history_hint = "Предыдущие сообщения скрыты. Используйте стрелки вверх/вниз, чтобы просмотреть старый чат.",
-        .chat_spacing_usage = "Использование: %schat-spacing <0-5>",
-        .chat_spacing_immediate = "Подписи перевода будут появляться сразу, без запасных пустых строк.",
-        .chat_spacing_single = "Подписи перевода перед выводом резервируют 1 пустую строку.",
-        .chat_spacing_multiple = "Подписи перевода перед выводом резервируют %s пустых строк.",
-        .set_ui_lang_usage = "Использование: %sset-ui-lang <ko|en|jp|zh|ru>",
-        .set_ui_lang_success = "Язык интерфейса переключён на %s. Команды можно пересмотреть через %shelp.",
-        .set_ui_lang_invalid = "Этот язык не поддерживается. Выберите один из: ko, en, jp, zh, ru.",
-        .mode_status_format = "Текущий режим ввода: %s.",
-        .mode_label_chat = "чат",
-        .mode_label_command = "команды",
-        .mode_explain_chat = "Режим чата: отправляйте сообщения, а команды вводите с префиксом %s.",
-        .mode_explain_command =
-            "Режим команд: вводите без префикса, используйте стрелки вверх/вниз для истории и Tab для автодополнения.",
-        .mode_already_chat = "Вы уже в режиме чата. Командам нужен префикс %s.",
-        .mode_already_command = "Режим команд уже активен. Вводите без префикса, пользуйтесь стрелками и Tab.",
-        .mode_enabled_chat = "Включён режим чата. Командам снова требуется префикс %s.",
-        .mode_enabled_command = "Включён режим команд. Вводите без префикса, применяйте стрелки и Tab.",
-        .mode_usage = "Использование: %smode <chat|command|toggle>",
-        .unknown_command = "Неизвестная команда. Подсказка — %shelp.",
-    },
-};
+static const session_ui_locale_t kSessionUiLocales[SESSION_UI_LANGUAGE_COUNT]
+    = {
+        {
+            .language = SESSION_UI_LANGUAGE_EN,
+            .code = "en",
+            .help_title = "Essential commands:",
+            .help_hint_extra = "See %sadvanced for optional commands.",
+            .help_scroll_hint
+            = "Use Up/Down arrows to scroll chat or command history.",
+            .help_regular_hint = "Regular messages are shared with everyone.",
+            .help_extra_title = "Extended commands:",
+            .help_extra_hint = "Return to %shelp for essentials.",
+            .help_operator_title = "Operator commands:",
+            .welcome_help_hint = "Use %shelp to view the manual.",
+            .welcome_motd_hint = "Use %smotd to read the information.",
+            .welcome_history_hint = "Previous messages are hidden. Use Up/Down "
+                                    "arrows to browse older chat.",
+            .chat_spacing_usage = "Usage: %schat-spacing <0-5>",
+            .chat_spacing_immediate
+            = "Translation captions will appear immediately without reserving "
+              "extra blank lines.",
+            .chat_spacing_single = "Translation captions will reserve 1 blank "
+                                   "line before appearing in chat threads.",
+            .chat_spacing_multiple
+            = "Translation captions will reserve %s blank lines before "
+              "appearing in chat threads.",
+            .set_ui_lang_usage = "Usage: %sset-ui-lang <ko|en|jp|zh|ru>",
+            .set_ui_lang_success
+            = "UI language set to %s. Use %shelp to review commands.",
+            .set_ui_lang_invalid
+            = "Unsupported language. Use one of: ko, en, jp, zh, ru.",
+            .mode_status_format = "Current input mode: %s.",
+            .mode_label_chat = "chat",
+            .mode_label_command = "command",
+            .mode_explain_chat
+            = "Chat mode: send messages normally. Prefix commands with %s.",
+            .mode_explain_command
+            = "Command mode: type commands without a prefix, use "
+              "UpArrow/DownArrow for history, Tab for completion.",
+            .mode_already_chat
+            = "Already in chat mode. Commands require the %s prefix.",
+            .mode_already_command
+            = "Command mode already active. Enter commands without a prefix, "
+              "use UpArrow/DownArrow for history, Tab to autocomplete.",
+            .mode_enabled_chat
+            = "Chat mode enabled. Commands once again require the %s prefix.",
+            .mode_enabled_command
+            = "Command mode enabled. Enter commands without a prefix; use "
+              "UpArrow/DownArrow for history and Tab for completion.",
+            .mode_usage = "Usage: %smode <chat|command|toggle>",
+            .unknown_command = "Unknown command. Type %shelp for help.",
+        },
+        {
+            .language = SESSION_UI_LANGUAGE_KO,
+            .code = "ko",
+            .help_title = "필수 명령:",
+            .help_hint_extra
+            = "%sadvanced에서 선택 및 운영자 명령을 확인합니다.",
+            .help_scroll_hint
+            = "위/아래 화살표로 채팅이나 명령 기록을 살펴볼 수 있습니다.",
+            .help_regular_hint = "일반 메시지는 모두에게 공유됩니다.",
+            .help_extra_title = "확장 명령:",
+            .help_extra_hint = "핵심 목록은 %shelp에서 다시 볼 수 있습니다.",
+            .help_operator_title = "운영자 명령:",
+            .welcome_help_hint = "%shelp 명령으로 도움말을 확인하세요.",
+            .welcome_motd_hint = "%smotd 명령으로 안내를 읽을 수 있습니다.",
+            .welcome_history_hint = "이전 메시지는 숨겨져 있습니다. 위/아래 "
+                                    "화살표로 지난 채팅을 살펴보세요.",
+            .chat_spacing_usage = "사용법: %schat-spacing <0-5>",
+            .chat_spacing_immediate
+            = "번역 자막이 빈 줄을 예약하지 않고 즉시 표시됩니다.",
+            .chat_spacing_single
+            = "번역 자막이 표시되기 전에 빈 줄 1줄을 예약합니다.",
+            .chat_spacing_multiple
+            = "번역 자막이 표시되기 전에 빈 줄 %s줄을 예약합니다.",
+            .set_ui_lang_usage = "사용법: %sset-ui-lang <ko|en|jp|zh|ru>",
+            .set_ui_lang_success = "UI 언어를 %s로 설정했습니다. %shelp "
+                                   "명령으로 목록을 다시 확인하세요.",
+            .set_ui_lang_invalid
+            = "지원하지 않는 언어입니다. ko, en, jp, zh, ru 중에서 선택하세요.",
+            .mode_status_format = "현재 입력 모드: %s.",
+            .mode_label_chat = "채팅",
+            .mode_label_command = "명령",
+            .mode_explain_chat = "채팅 모드: 일반 메시지를 보내고, 명령은 %s "
+                                 "접두사를 붙여 입력하세요.",
+            .mode_explain_command
+            = "명령 모드: 접두사 없이 명령을 입력하고, 위/아래 화살표로 기록을 "
+              "탐색하며 Tab으로 자동완성하세요.",
+            .mode_already_chat
+            = "이미 채팅 모드입니다. 명령은 %s 접두사가 필요합니다.",
+            .mode_already_command
+            = "이미 명령 모드입니다. 접두사 없이 입력하고, 위/아래 화살표와 "
+              "Tab을 활용하세요.",
+            .mode_enabled_chat = "채팅 모드가 활성화되었습니다. 명령은 다시 %s "
+                                 "접두사가 필요합니다.",
+            .mode_enabled_command
+            = "명령 모드가 활성화되었습니다. 접두사 없이 입력하고, 위/아래 "
+              "화살표와 Tab을 사용하세요.",
+            .mode_usage = "사용법: %smode <chat|command|toggle>",
+            .unknown_command
+            = "알 수 없는 명령입니다. 도움말은 %shelp에서 확인하세요.",
+        },
+        {
+            .language = SESSION_UI_LANGUAGE_JP,
+            .code = "jp",
+            .help_title = "基本コマンド:",
+            .help_hint_extra = "追加コマンドは %sadvanced で確認できます。",
+            .help_scroll_hint
+            = "上下の矢印でチャットやコマンド履歴をたどれます。",
+            .help_regular_hint = "通常のメッセージは全員に共有されます。",
+            .help_extra_title = "拡張コマンド:",
+            .help_extra_hint = "基本一覧に戻るには %shelp を実行してください。",
+            .help_operator_title = "オペレーター用コマンド:",
+            .welcome_help_hint = "%shelp でヘルプを表示できます。",
+            .welcome_motd_hint = "%smotd でお知らせを確認できます。",
+            .welcome_history_hint = "以前のメッセージは非表示です。上下の矢印で"
+                                    "過去のチャットを確認できます。",
+            .chat_spacing_usage = "使い方: %schat-spacing <0-5>",
+            .chat_spacing_immediate
+            = "翻訳字幕は空行を確保せずすぐに表示されます。",
+            .chat_spacing_single = "翻訳字幕は表示前に空行を 1 行確保します。",
+            .chat_spacing_multiple
+            = "翻訳字幕は表示前に空行を %s 行確保します。",
+            .set_ui_lang_usage = "使い方: %sset-ui-lang <ko|en|jp|zh|ru>",
+            .set_ui_lang_success = "UI 言語を %s に設定しました。%shelp "
+                                   "でコマンドを再確認してください。",
+            .set_ui_lang_invalid
+            = "対応していない言語です。ko, en, jp, zh, ru から選んでください。",
+            .mode_status_format = "現在の入力モード: %s。",
+            .mode_label_chat = "チャット",
+            .mode_label_command = "コマンド",
+            .mode_explain_chat
+            = "チャットモード: 通常通りメッセージを送り、コマンドは %s "
+              "を付けて入力します。",
+            .mode_explain_command
+            = "コマンドモード: 接頭辞なしで入力し、上下矢印で履歴を、Tab "
+              "で補完を利用できます。",
+            .mode_already_chat
+            = "すでにチャットモードです。コマンドには %s を付けてください。",
+            .mode_already_command = "すでにコマンドモードです。接頭辞なしで入力"
+                                    "し、上下矢印と Tab を使ってください。",
+            .mode_enabled_chat = "チャットモードを有効にしました。コマンドには"
+                                 "再び %s が必要です。",
+            .mode_enabled_command
+            = "コマンドモードを有効にしました。接頭辞なしで入力し、上下矢印と "
+              "Tab を使ってください。",
+            .mode_usage = "使い方: %smode <chat|command|toggle>",
+            .unknown_command
+            = "不明なコマンドです。%shelp で確認してください。",
+        },
+        {
+            .language = SESSION_UI_LANGUAGE_ZH,
+            .code = "zh",
+            .help_title = "核心命令：",
+            .help_hint_extra = "更多命令请查看 %sadvanced。",
+            .help_scroll_hint = "使用上下方向键查看聊天或命令历史。",
+            .help_regular_hint = "普通消息会分享给所有人。",
+            .help_extra_title = "扩展命令：",
+            .help_extra_hint = "返回核心列表请使用 %shelp。",
+            .help_operator_title = "管理员命令：",
+            .welcome_help_hint = "使用 %shelp 查看帮助。",
+            .welcome_motd_hint = "使用 %smotd 阅读公告。",
+            .welcome_history_hint
+            = "之前的消息已隐藏。使用上下方向键查看较早的聊天。",
+            .chat_spacing_usage = "用法：%schat-spacing <0-5>",
+            .chat_spacing_immediate = "翻译字幕会立即显示，不再预留空行。",
+            .chat_spacing_single = "翻译字幕在显示前会预留 1 行空白。",
+            .chat_spacing_multiple = "翻译字幕在显示前会预留 %s 行空白。",
+            .set_ui_lang_usage = "用法：%sset-ui-lang <ko|en|jp|zh|ru>",
+            .set_ui_lang_success
+            = "界面语言已切换为 %s。可用 %shelp 重新查看命令。",
+            .set_ui_lang_invalid = "不支持的语言，请选择 ko、en、jp、zh、ru。",
+            .mode_status_format = "当前输入模式：%s。",
+            .mode_label_chat = "聊天",
+            .mode_label_command = "命令",
+            .mode_explain_chat = "聊天模式：正常发送消息，命令需加上 %s 前缀。",
+            .mode_explain_command = "命令模式：直接输入命令，不需要前缀；用上下"
+                                    "方向键查看历史，Tab 自动补全。",
+            .mode_already_chat = "已经是聊天模式。命令需要 %s 前缀。",
+            .mode_already_command
+            = "已经是命令模式。无需前缀，使用上下方向键和 Tab。",
+            .mode_enabled_chat = "聊天模式已启用。命令重新需要 %s 前缀。",
+            .mode_enabled_command
+            = "命令模式已启用。无需前缀，可用上下方向键和 Tab。",
+            .mode_usage = "用法：%smode <chat|command|toggle>",
+            .unknown_command = "未知命令。请使用 %shelp 查看帮助。",
+        },
+        {
+            .language = SESSION_UI_LANGUAGE_RU,
+            .code = "ru",
+            .help_title = "Основные команды:",
+            .help_hint_extra = "Дополнительные команды смотрите в %sadvanced.",
+            .help_scroll_hint
+            = "Стрелки вверх/вниз листают чат или историю команд.",
+            .help_regular_hint = "Обычные сообщения видны всем.",
+            .help_extra_title = "Дополнительные команды:",
+            .help_extra_hint = "К основному списку вернёт %shelp.",
+            .help_operator_title = "Команды оператора:",
+            .welcome_help_hint = "Команду %shelp используйте для справки.",
+            .welcome_motd_hint = "%smotd покажет объявление.",
+            .welcome_history_hint
+            = "Предыдущие сообщения скрыты. Используйте стрелки вверх/вниз, "
+              "чтобы просмотреть старый чат.",
+            .chat_spacing_usage = "Использование: %schat-spacing <0-5>",
+            .chat_spacing_immediate = "Подписи перевода будут появляться "
+                                      "сразу, без запасных пустых строк.",
+            .chat_spacing_single
+            = "Подписи перевода перед выводом резервируют 1 пустую строку.",
+            .chat_spacing_multiple
+            = "Подписи перевода перед выводом резервируют %s пустых строк.",
+            .set_ui_lang_usage
+            = "Использование: %sset-ui-lang <ko|en|jp|zh|ru>",
+            .set_ui_lang_success = "Язык интерфейса переключён на %s. Команды "
+                                   "можно пересмотреть через %shelp.",
+            .set_ui_lang_invalid = "Этот язык не поддерживается. Выберите один "
+                                   "из: ko, en, jp, zh, ru.",
+            .mode_status_format = "Текущий режим ввода: %s.",
+            .mode_label_chat = "чат",
+            .mode_label_command = "команды",
+            .mode_explain_chat = "Режим чата: отправляйте сообщения, а команды "
+                                 "вводите с префиксом %s.",
+            .mode_explain_command
+            = "Режим команд: вводите без префикса, используйте стрелки "
+              "вверх/вниз для истории и Tab для автодополнения.",
+            .mode_already_chat
+            = "Вы уже в режиме чата. Командам нужен префикс %s.",
+            .mode_already_command = "Режим команд уже активен. Вводите без "
+                                    "префикса, пользуйтесь стрелками и Tab.",
+            .mode_enabled_chat
+            = "Включён режим чата. Командам снова требуется префикс %s.",
+            .mode_enabled_command = "Включён режим команд. Вводите без "
+                                    "префикса, применяйте стрелки и Tab.",
+            .mode_usage = "Использование: %smode <chat|command|toggle>",
+            .unknown_command = "Неизвестная команда. Подсказка — %shelp.",
+        },
+      };
 
-static const char *const kSessionAsciiartTerminators[SESSION_UI_LANGUAGE_COUNT] = {
-    [SESSION_UI_LANGUAGE_EN] = SSH_CHATTER_ASCIIART_TERMINATOR_EN,
-    [SESSION_UI_LANGUAGE_KO] = ">/__그림_끝>",
-    [SESSION_UI_LANGUAGE_JP] = ">/__アート_終了>",
-    [SESSION_UI_LANGUAGE_ZH] = ">/__图像_结束>",
-    [SESSION_UI_LANGUAGE_RU] = ">/__АРТ_КОНЕЦ>",
-};
+static const char *const kSessionAsciiartTerminators[SESSION_UI_LANGUAGE_COUNT]
+    = {
+        [SESSION_UI_LANGUAGE_EN] = SSH_CHATTER_ASCIIART_TERMINATOR_EN,
+        [SESSION_UI_LANGUAGE_KO] = ">/__그림_끝>",
+        [SESSION_UI_LANGUAGE_JP] = ">/__アート_終了>",
+        [SESSION_UI_LANGUAGE_ZH] = ">/__图像_结束>",
+        [SESSION_UI_LANGUAGE_RU] = ">/__АРТ_КОНЕЦ>",
+      };
 
 static const char *const kSessionBbsTerminators[SESSION_UI_LANGUAGE_COUNT] = {
-    [SESSION_UI_LANGUAGE_EN] = SSH_CHATTER_BBS_TERMINATOR_EN,
-    [SESSION_UI_LANGUAGE_KO] = ">/__게시판_끝>",
-    [SESSION_UI_LANGUAGE_JP] = ">/__掲示板_終了>",
-    [SESSION_UI_LANGUAGE_ZH] = ">/__公告板_结束>",
-    [SESSION_UI_LANGUAGE_RU] = ">/__ДОСКА_КОНЕЦ>",
+  [SESSION_UI_LANGUAGE_EN] = SSH_CHATTER_BBS_TERMINATOR_EN,
+  [SESSION_UI_LANGUAGE_KO] = ">/__게시판_끝>",
+  [SESSION_UI_LANGUAGE_JP] = ">/__掲示板_終了>",
+  [SESSION_UI_LANGUAGE_ZH] = ">/__公告板_结束>",
+  [SESSION_UI_LANGUAGE_RU] = ">/__ДОСКА_КОНЕЦ>",
 };
 
 static const session_command_alias_t kSessionCommandAliases[] = {
@@ -2075,8 +2290,8 @@ static const session_command_alias_t kSessionCommandAliases[] = {
     },
 };
 
-static const size_t kSessionCommandAliasCount =
-    sizeof(kSessionCommandAliases) / sizeof(kSessionCommandAliases[0]);
+static const size_t kSessionCommandAliasCount
+    = sizeof (kSessionCommandAliases) / sizeof (kSessionCommandAliases[0]);
 
 typedef struct session_bbs_subcommand_alias {
   const char *canonical;
@@ -2166,8 +2381,8 @@ static const session_bbs_subcommand_alias_t kSessionBbsSubcommands[] = {
     },
 };
 
-static const size_t kSessionBbsSubcommandCount =
-    sizeof(kSessionBbsSubcommands) / sizeof(kSessionBbsSubcommands[0]);
+static const size_t kSessionBbsSubcommandCount
+    = sizeof (kSessionBbsSubcommands) / sizeof (kSessionBbsSubcommands[0]);
 
 static const session_help_entry_t kSessionHelpEssential[] = {
     {
@@ -3455,13 +3670,15 @@ static const session_help_entry_t kSessionHelpOperator[] = {
 
 static const int kSessionHelpLabelWidth = 26;
 
-static session_ui_language_t session_ui_language_from_code(const char *code) {
+static session_ui_language_t
+session_ui_language_from_code (const char *code)
+{
   if (code == NULL || code[0] == '\0') {
     return SESSION_UI_LANGUAGE_COUNT;
   }
 
   for (size_t idx = 0; idx < SESSION_UI_LANGUAGE_COUNT; ++idx) {
-    if (strcasecmp(code, kSessionUiLanguageCodes[idx]) == 0) {
+    if (strcasecmp (code, kSessionUiLanguageCodes[idx]) == 0) {
       return (session_ui_language_t)idx;
     }
   }
@@ -3469,14 +3686,19 @@ static session_ui_language_t session_ui_language_from_code(const char *code) {
   return SESSION_UI_LANGUAGE_COUNT;
 }
 
-static const char *session_ui_language_code(session_ui_language_t language) {
+static const char *
+session_ui_language_code (session_ui_language_t language)
+{
   if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
     language = SESSION_UI_LANGUAGE_KO;
   }
   return kSessionUiLanguageCodes[language];
 }
 
-static const char *session_ui_language_name(session_ui_language_t language, session_ui_language_t locale) {
+static const char *
+session_ui_language_name (session_ui_language_t language,
+                          session_ui_language_t locale)
+{
   if (locale < 0 || locale >= SESSION_UI_LANGUAGE_COUNT) {
     locale = SESSION_UI_LANGUAGE_KO;
   }
@@ -3486,7 +3708,9 @@ static const char *session_ui_language_name(session_ui_language_t language, sess
   return kSessionUiLanguageNames[locale][language];
 }
 
-static const session_ui_locale_t *session_ui_get_locale(const session_ctx_t *ctx) {
+static const session_ui_locale_t *
+session_ui_get_locale (const session_ctx_t *ctx)
+{
   session_ui_language_t language = SESSION_UI_LANGUAGE_KO;
   if (ctx != NULL) {
     language = ctx->ui_language;
@@ -3504,34 +3728,40 @@ static const session_ui_locale_t *session_ui_get_locale(const session_ctx_t *ctx
   return &kSessionUiLocales[SESSION_UI_LANGUAGE_KO];
 }
 
-static void session_dispatch_command(session_ctx_t *ctx, const char *line);
-static void session_handle_mode(session_ctx_t *ctx, const char *arguments);
+static void session_dispatch_command (session_ctx_t *ctx, const char *line);
+static void session_handle_mode (session_ctx_t *ctx, const char *arguments);
 
-static const char *session_command_prefix(const session_ctx_t *ctx) {
+static const char *
+session_command_prefix (const session_ctx_t *ctx)
+{
   if (ctx == NULL) {
     return "/";
   }
   return ctx->input_mode == SESSION_INPUT_MODE_COMMAND ? "" : "/";
 }
 
-static bool session_try_localized_command_forward(session_ctx_t *ctx, const char *line) {
+static bool
+session_try_localized_command_forward (session_ctx_t *ctx, const char *line)
+{
   if (ctx == NULL || line == NULL) {
     return false;
   }
 
-  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
-  const char *command_label =
-      (locale != NULL && locale->mode_label_command != NULL && locale->mode_label_command[0] != '\0')
-          ? locale->mode_label_command
-          : "command";
+  const session_ui_locale_t *locale = session_ui_get_locale (ctx);
+  const char *command_label
+      = (locale != NULL && locale->mode_label_command != NULL
+         && locale->mode_label_command[0] != '\0')
+            ? locale->mode_label_command
+            : "command";
 
   char localized_prefix[128];
-  int prefix_len = snprintf(localized_prefix, sizeof(localized_prefix), "/%s", command_label);
-  if (prefix_len <= 0 || (size_t)prefix_len >= sizeof(localized_prefix)) {
+  int prefix_len = snprintf (localized_prefix, sizeof (localized_prefix), "/%s",
+                             command_label);
+  if (prefix_len <= 0 || (size_t)prefix_len >= sizeof (localized_prefix)) {
     return false;
   }
 
-  if (strncmp(line, localized_prefix, (size_t)prefix_len) != 0) {
+  if (strncmp (line, localized_prefix, (size_t)prefix_len) != 0) {
     return false;
   }
 
@@ -3541,25 +3771,27 @@ static bool session_try_localized_command_forward(session_ctx_t *ctx, const char
   }
 
   if (*remainder == '\0') {
-    ctx->ops->handle_mode(ctx, command_label);
+    ctx->ops->handle_mode (ctx, command_label);
     return true;
   }
 
   if (*remainder == '/') {
-    ctx->ops->dispatch_command(ctx, remainder);
+    ctx->ops->dispatch_command (ctx, remainder);
     return true;
   }
 
   char forwarded[SSH_CHATTER_MAX_INPUT_LEN];
   forwarded[0] = '/';
-  size_t copy_len = strnlen(remainder, sizeof(forwarded) - 2U);
-  memcpy(&forwarded[1], remainder, copy_len);
+  size_t copy_len = strnlen (remainder, sizeof (forwarded) - 2U);
+  memcpy (&forwarded[1], remainder, copy_len);
   forwarded[copy_len + 1U] = '\0';
-  ctx->ops->dispatch_command(ctx, forwarded);
+  ctx->ops->dispatch_command (ctx, forwarded);
   return true;
 }
 
-static session_ui_language_t session_ui_language_current(const session_ctx_t *ctx) {
+static session_ui_language_t
+session_ui_language_current (const session_ctx_t *ctx)
+{
   if (ctx == NULL) {
     return SESSION_UI_LANGUAGE_KO;
   }
@@ -3570,7 +3802,9 @@ static session_ui_language_t session_ui_language_current(const session_ctx_t *ct
   return language;
 }
 
-static const char *session_asciiart_terminator_for_language(session_ui_language_t language) {
+static const char *
+session_asciiart_terminator_for_language (session_ui_language_t language)
+{
   if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
     language = SESSION_UI_LANGUAGE_KO;
   }
@@ -3579,10 +3813,14 @@ static const char *session_asciiart_terminator_for_language(session_ui_language_
     return terminator;
   }
   const char *fallback = kSessionAsciiartTerminators[SESSION_UI_LANGUAGE_KO];
-  return (fallback != NULL && fallback[0] != '\0') ? fallback : SSH_CHATTER_ASCIIART_TERMINATOR_EN;
+  return (fallback != NULL && fallback[0] != '\0')
+             ? fallback
+             : SSH_CHATTER_ASCIIART_TERMINATOR_EN;
 }
 
-static const char *session_bbs_terminator_for_language(session_ui_language_t language) {
+static const char *
+session_bbs_terminator_for_language (session_ui_language_t language)
+{
   if (language < 0 || language >= SESSION_UI_LANGUAGE_COUNT) {
     language = SESSION_UI_LANGUAGE_KO;
   }
@@ -3591,72 +3829,94 @@ static const char *session_bbs_terminator_for_language(session_ui_language_t lan
     return terminator;
   }
   const char *fallback = kSessionBbsTerminators[SESSION_UI_LANGUAGE_KO];
-  return (fallback != NULL && fallback[0] != '\0') ? fallback : SSH_CHATTER_BBS_TERMINATOR_EN;
+  return (fallback != NULL && fallback[0] != '\0')
+             ? fallback
+             : SSH_CHATTER_BBS_TERMINATOR_EN;
 }
 
-static const char *session_asciiart_terminator(const session_ctx_t *ctx) {
-  return session_asciiart_terminator_for_language(session_ui_language_current(ctx));
+static const char *
+session_asciiart_terminator (const session_ctx_t *ctx)
+{
+  return session_asciiart_terminator_for_language (
+      session_ui_language_current (ctx));
 }
 
-static const char *session_bbs_terminator(const session_ctx_t *ctx) {
-  return session_bbs_terminator_for_language(session_ui_language_current(ctx));
+static const char *
+session_bbs_terminator (const session_ctx_t *ctx)
+{
+  return session_bbs_terminator_for_language (
+      session_ui_language_current (ctx));
 }
 
-static const char *session_editor_terminator(const session_ctx_t *ctx) {
+static const char *
+session_editor_terminator (const session_ctx_t *ctx)
+{
   if (ctx == NULL) {
     return SSH_CHATTER_BBS_TERMINATOR_EN;
   }
 
   if (ctx->editor_mode == SESSION_EDITOR_MODE_ASCIIART) {
-    return session_asciiart_terminator(ctx);
+    return session_asciiart_terminator (ctx);
   }
 
-  return session_bbs_terminator(ctx);
+  return session_bbs_terminator (ctx);
 }
 
-static bool session_asciiart_matches_terminator(const char *line) {
+static bool
+session_asciiart_matches_terminator (const char *line)
+{
   if (line == NULL) {
     return false;
   }
   for (size_t idx = 0; idx < SESSION_UI_LANGUAGE_COUNT; ++idx) {
-    const char *terminator = session_asciiart_terminator_for_language((session_ui_language_t)idx);
-    if (terminator != NULL && strcmp(line, terminator) == 0) {
+    const char *terminator
+        = session_asciiart_terminator_for_language ((session_ui_language_t)idx);
+    if (terminator != NULL && strcmp (line, terminator) == 0) {
       return true;
     }
   }
   return false;
 }
 
-static bool session_bbs_matches_terminator(const char *line) {
+static bool
+session_bbs_matches_terminator (const char *line)
+{
   if (line == NULL) {
     return false;
   }
   for (size_t idx = 0; idx < SESSION_UI_LANGUAGE_COUNT; ++idx) {
-    const char *terminator = session_bbs_terminator_for_language((session_ui_language_t)idx);
-    if (terminator != NULL && strcmp(line, terminator) == 0) {
+    const char *terminator
+        = session_bbs_terminator_for_language ((session_ui_language_t)idx);
+    if (terminator != NULL && strcmp (line, terminator) == 0) {
       return true;
     }
   }
   return false;
 }
 
-static const char *session_command_alias_preferred_by_canonical(const session_ctx_t *ctx, const char *canonical);
-static void session_send_system_line(session_ctx_t *ctx, const char *message);
+static const char *
+session_command_alias_preferred_by_canonical (const session_ctx_t *ctx,
+                                              const char *canonical);
+static void session_send_system_line (session_ctx_t *ctx, const char *message);
 
-static const session_bbs_subcommand_alias_t *session_bbs_subcommand_lookup(const char *canonical) {
+static const session_bbs_subcommand_alias_t *
+session_bbs_subcommand_lookup (const char *canonical)
+{
   if (canonical == NULL || canonical[0] == '\0') {
     return NULL;
   }
   for (size_t idx = 0; idx < kSessionBbsSubcommandCount; ++idx) {
-    if (strcmp(kSessionBbsSubcommands[idx].canonical, canonical) == 0) {
+    if (strcmp (kSessionBbsSubcommands[idx].canonical, canonical) == 0) {
       return &kSessionBbsSubcommands[idx];
     }
   }
   return NULL;
 }
 
-static const char *session_bbs_subcommand_localized(const session_bbs_subcommand_alias_t *alias,
-                                                    session_ui_language_t language) {
+static const char *
+session_bbs_subcommand_localized (const session_bbs_subcommand_alias_t *alias,
+                                  session_ui_language_t language)
+{
   if (alias == NULL) {
     return NULL;
   }
@@ -3670,42 +3930,51 @@ static const char *session_bbs_subcommand_localized(const session_bbs_subcommand
   return NULL;
 }
 
-static const char *session_bbs_subcommand_preferred(const session_ctx_t *ctx, const char *canonical) {
-  const session_bbs_subcommand_alias_t *alias = session_bbs_subcommand_lookup(canonical);
+static const char *
+session_bbs_subcommand_preferred (const session_ctx_t *ctx,
+                                  const char *canonical)
+{
+  const session_bbs_subcommand_alias_t *alias
+      = session_bbs_subcommand_lookup (canonical);
   if (alias == NULL) {
     return canonical;
   }
-  const char *localized = session_bbs_subcommand_localized(alias, session_ui_language_current(ctx));
+  const char *localized = session_bbs_subcommand_localized (
+      alias, session_ui_language_current (ctx));
   if (localized != NULL) {
     return localized;
   }
   return alias->canonical;
 }
 
-static const char *session_bbs_subcommand_canonicalize(const session_ctx_t *ctx, const char *command) {
+static const char *
+session_bbs_subcommand_canonicalize (const session_ctx_t *ctx,
+                                     const char *command)
+{
   if (command == NULL || command[0] == '\0') {
     return NULL;
   }
 
   for (size_t idx = 0; idx < kSessionBbsSubcommandCount; ++idx) {
-    if (strcmp(command, kSessionBbsSubcommands[idx].canonical) == 0) {
+    if (strcmp (command, kSessionBbsSubcommands[idx].canonical) == 0) {
       return kSessionBbsSubcommands[idx].canonical;
     }
   }
 
-  session_ui_language_t language = session_ui_language_current(ctx);
+  session_ui_language_t language = session_ui_language_current (ctx);
   for (size_t idx = 0; idx < kSessionBbsSubcommandCount; ++idx) {
-    const char *localized = session_bbs_subcommand_localized(&kSessionBbsSubcommands[idx], language);
-    if (localized != NULL && strcmp(command, localized) == 0) {
+    const char *localized = session_bbs_subcommand_localized (
+        &kSessionBbsSubcommands[idx], language);
+    if (localized != NULL && strcmp (command, localized) == 0) {
       return kSessionBbsSubcommands[idx].canonical;
     }
   }
 
   for (size_t idx = 0; idx < kSessionBbsSubcommandCount; ++idx) {
     for (size_t lang = 0; lang < SESSION_UI_LANGUAGE_COUNT; ++lang) {
-      const char *localized =
-          session_bbs_subcommand_localized(&kSessionBbsSubcommands[idx], (session_ui_language_t)lang);
-      if (localized != NULL && strcmp(command, localized) == 0) {
+      const char *localized = session_bbs_subcommand_localized (
+          &kSessionBbsSubcommands[idx], (session_ui_language_t)lang);
+      if (localized != NULL && strcmp (command, localized) == 0) {
         return kSessionBbsSubcommands[idx].canonical;
       }
     }
@@ -3714,19 +3983,24 @@ static const char *session_bbs_subcommand_canonicalize(const session_ctx_t *ctx,
   return NULL;
 }
 
-static void session_bbs_format_usage(session_ctx_t *ctx, const char *canonical, const char *arguments,
-                                     char *buffer, size_t length) {
+static void
+session_bbs_format_usage (session_ctx_t *ctx, const char *canonical,
+                          const char *arguments, char *buffer, size_t length)
+{
   if (buffer == NULL || length == 0U) {
     return;
   }
 
   buffer[0] = '\0';
-  const char *bbs_command = session_command_alias_preferred_by_canonical(ctx, "/bbs");
+  const char *bbs_command
+      = session_command_alias_preferred_by_canonical (ctx, "/bbs");
   if (bbs_command == NULL || bbs_command[0] == '\0') {
     bbs_command = "/bbs";
   }
 
-  const char *subcommand = canonical != NULL ? session_bbs_subcommand_preferred(ctx, canonical) : NULL;
+  const char *subcommand
+      = canonical != NULL ? session_bbs_subcommand_preferred (ctx, canonical)
+                          : NULL;
   if (subcommand == NULL || subcommand[0] == '\0') {
     subcommand = canonical != NULL ? canonical : "";
   }
@@ -3734,29 +4008,37 @@ static void session_bbs_format_usage(session_ctx_t *ctx, const char *canonical, 
   const char *args = arguments != NULL ? arguments : "";
   const char *separator = args[0] != '\0' ? " " : "";
 
-  snprintf(buffer, length, "Usage: %s %s%s%s", bbs_command, subcommand, separator, args);
+  snprintf (buffer, length, "Usage: %s %s%s%s", bbs_command, subcommand,
+            separator, args);
 }
 
-static void session_bbs_send_usage(session_ctx_t *ctx, const char *canonical, const char *arguments) {
+static void
+session_bbs_send_usage (session_ctx_t *ctx, const char *canonical,
+                        const char *arguments)
+{
   char usage[SSH_CHATTER_MESSAGE_LIMIT];
-  session_bbs_format_usage(ctx, canonical, arguments, usage, sizeof(usage));
-  session_send_system_line(ctx, usage);
+  session_bbs_format_usage (ctx, canonical, arguments, usage, sizeof (usage));
+  session_send_system_line (ctx, usage);
 }
 
-static const session_command_alias_t *session_command_alias_lookup(const char *canonical) {
+static const session_command_alias_t *
+session_command_alias_lookup (const char *canonical)
+{
   if (canonical == NULL || canonical[0] == '\0') {
     return NULL;
   }
   for (size_t idx = 0; idx < kSessionCommandAliasCount; ++idx) {
-    if (strcmp(kSessionCommandAliases[idx].canonical, canonical) == 0) {
+    if (strcmp (kSessionCommandAliases[idx].canonical, canonical) == 0) {
       return &kSessionCommandAliases[idx];
     }
   }
   return NULL;
 }
 
-static const char *session_command_alias_for_language(const session_command_alias_t *alias,
-                                                      session_ui_language_t language) {
+static const char *
+session_command_alias_for_language (const session_command_alias_t *alias,
+                                    session_ui_language_t language)
+{
   if (alias == NULL) {
     return NULL;
   }
@@ -3770,51 +4052,68 @@ static const char *session_command_alias_for_language(const session_command_alia
   return alias->canonical;
 }
 
-static const char *session_command_alias_preferred(const session_ctx_t *ctx,
-                                                   const session_command_alias_t *alias) {
-  return session_command_alias_for_language(alias, session_ui_language_current(ctx));
+static const char *
+session_command_alias_preferred (const session_ctx_t *ctx,
+                                 const session_command_alias_t *alias)
+{
+  return session_command_alias_for_language (alias,
+                                             session_ui_language_current (ctx));
 }
 
-static const char *session_command_alias_preferred_by_canonical(const session_ctx_t *ctx,
-                                                                const char *canonical) {
-  const session_command_alias_t *alias = session_command_alias_lookup(canonical);
+static const char *
+session_command_alias_preferred_by_canonical (const session_ctx_t *ctx,
+                                              const char *canonical)
+{
+  const session_command_alias_t *alias
+      = session_command_alias_lookup (canonical);
   if (alias == NULL) {
     return canonical;
   }
-  return session_command_alias_preferred(ctx, alias);
+  return session_command_alias_preferred (ctx, alias);
 }
 
-static bool session_parse_command(const char *line, const char *command, const char **arguments);
-static bool session_parse_localized_command(session_ctx_t *ctx, const session_command_alias_t *alias, const char *line,
-                                            const char **arguments);
+static bool session_parse_command (const char *line, const char *command,
+                                   const char **arguments);
+static bool
+session_parse_localized_command (session_ctx_t *ctx,
+                                 const session_command_alias_t *alias,
+                                 const char *line, const char **arguments);
 
-static bool session_parse_command_any(session_ctx_t *ctx, const char *canonical, const char *line,
-                                      const char **arguments) {
+static bool
+session_parse_command_any (session_ctx_t *ctx, const char *canonical,
+                           const char *line, const char **arguments)
+{
   if (canonical == NULL) {
     return false;
   }
-  const session_command_alias_t *alias = session_command_alias_lookup(canonical);
+  const session_command_alias_t *alias
+      = session_command_alias_lookup (canonical);
   if (alias != NULL) {
-    return session_parse_localized_command(ctx, alias, line, arguments);
+    return session_parse_localized_command (ctx, alias, line, arguments);
   }
-  return session_parse_command(line, canonical, arguments);
+  return session_parse_command (line, canonical, arguments);
 }
 
-static void session_command_collect_localized_matches(session_ctx_t *ctx, const char *prefix,
-                                                      const char **matches, size_t *match_count, size_t max_count) {
+static void
+session_command_collect_localized_matches (session_ctx_t *ctx,
+                                           const char *prefix,
+                                           const char **matches,
+                                           size_t *match_count,
+                                           size_t max_count)
+{
   if (ctx == NULL || matches == NULL || match_count == NULL) {
     return;
   }
 
-  size_t prefix_len = prefix != NULL ? strlen(prefix) : 0U;
+  size_t prefix_len = prefix != NULL ? strlen (prefix) : 0U;
 
   for (size_t idx = 0; idx < kSessionCommandAliasCount; ++idx) {
     const session_command_alias_t *alias = &kSessionCommandAliases[idx];
-    const char *localized = session_command_alias_preferred(ctx, alias);
+    const char *localized = session_command_alias_preferred (ctx, alias);
     if (localized == NULL || localized[0] == '\0') {
       continue;
     }
-    if (strcmp(localized, alias->canonical) == 0) {
+    if (strcmp (localized, alias->canonical) == 0) {
       continue;
     }
 
@@ -3823,13 +4122,13 @@ static void session_command_collect_localized_matches(session_ctx_t *ctx, const 
       continue;
     }
 
-    if (prefix_len > 0U && strncasecmp(name, prefix, prefix_len) != 0) {
+    if (prefix_len > 0U && strncasecmp (name, prefix, prefix_len) != 0) {
       continue;
     }
 
     bool duplicate = false;
     for (size_t existing = 0; existing < *match_count; ++existing) {
-      if (strcmp(matches[existing], name) == 0) {
+      if (strcmp (matches[existing], name) == 0) {
         duplicate = true;
         break;
       }
@@ -3845,8 +4144,10 @@ static void session_command_collect_localized_matches(session_ctx_t *ctx, const 
   }
 }
 
-static void session_command_format_usage(session_ctx_t *ctx, const char *canonical, const char *fallback,
-                                         char *buffer, size_t length) {
+static void
+session_command_format_usage (session_ctx_t *ctx, const char *canonical,
+                              const char *fallback, char *buffer, size_t length)
+{
   if (buffer == NULL || length == 0U) {
     return;
   }
@@ -3857,16 +4158,17 @@ static void session_command_format_usage(session_ctx_t *ctx, const char *canonic
   }
 
   if (canonical == NULL || canonical[0] == '\0') {
-    snprintf(buffer, length, "%s", fallback);
+    snprintf (buffer, length, "%s", fallback);
     return;
   }
 
-  const char *alias = session_command_alias_preferred_by_canonical(ctx, canonical);
+  const char *alias
+      = session_command_alias_preferred_by_canonical (ctx, canonical);
   if (alias == NULL || alias[0] == '\0') {
     alias = canonical;
   }
 
-  const char *prefix = session_command_prefix(ctx);
+  const char *prefix = session_command_prefix (ctx);
   if (prefix == NULL) {
     prefix = "";
   }
@@ -3886,17 +4188,19 @@ static void session_command_format_usage(session_ctx_t *ctx, const char *canonic
   }
 
   char replacement[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(replacement, sizeof(replacement), "%s%s", prefix, alias_body != NULL ? alias_body : "");
+  snprintf (replacement, sizeof (replacement), "%s%s", prefix,
+            alias_body != NULL ? alias_body : "");
 
   const char *source = fallback;
-  size_t canonical_len = strlen(canonical);
+  size_t canonical_len = strlen (canonical);
   size_t out_index = 0U;
   bool replaced = false;
 
   for (size_t idx = 0U; source[idx] != '\0' && out_index + 1U < length;) {
-    if (canonical_len > 0U && strncmp(source + idx, canonical, canonical_len) == 0) {
-      size_t repl_len = strnlen(replacement, length - out_index - 1U);
-      memcpy(buffer + out_index, replacement, repl_len);
+    if (canonical_len > 0U
+        && strncmp (source + idx, canonical, canonical_len) == 0) {
+      size_t repl_len = strnlen (replacement, length - out_index - 1U);
+      memcpy (buffer + out_index, replacement, repl_len);
       out_index += repl_len;
       idx += canonical_len;
       replaced = true;
@@ -3910,18 +4214,18 @@ static void session_command_format_usage(session_ctx_t *ctx, const char *canonic
     return;
   }
 
-  size_t body_len = canonical_body != NULL ? strlen(canonical_body) : 0U;
+  size_t body_len = canonical_body != NULL ? strlen (canonical_body) : 0U;
   if (body_len == 0U) {
-    snprintf(buffer, length, "%s", fallback);
+    snprintf (buffer, length, "%s", fallback);
     return;
   }
 
   out_index = 0U;
   bool body_replaced = false;
   for (size_t idx = 0U; source[idx] != '\0' && out_index + 1U < length;) {
-    if (strncmp(source + idx, canonical_body, body_len) == 0) {
-      size_t repl_len = strnlen(replacement, length - out_index - 1U);
-      memcpy(buffer + out_index, replacement, repl_len);
+    if (strncmp (source + idx, canonical_body, body_len) == 0) {
+      size_t repl_len = strnlen (replacement, length - out_index - 1U);
+      memcpy (buffer + out_index, replacement, repl_len);
       out_index += repl_len;
       idx += body_len;
       body_replaced = true;
@@ -3932,28 +4236,30 @@ static void session_command_format_usage(session_ctx_t *ctx, const char *canonic
   buffer[out_index] = '\0';
 
   if (!body_replaced) {
-    snprintf(buffer, length, "%s", fallback);
+    snprintf (buffer, length, "%s", fallback);
   }
 }
 
-static int session_utf8_display_width(const char *text) {
+static int
+session_utf8_display_width (const char *text)
+{
   if (text == NULL) {
     return 0;
   }
 
   mbstate_t state;
-  memset(&state, 0, sizeof(state));
+  memset (&state, 0, sizeof (state));
 
   int width = 0;
   const char *cursor = text;
-  size_t remaining = strlen(text);
+  size_t remaining = strlen (text);
   while (remaining > 0U) {
     wchar_t wc;
-    size_t consumed = mbrtowc(&wc, cursor, remaining, &state);
+    size_t consumed = mbrtowc (&wc, cursor, remaining, &state);
     if (consumed == (size_t)-1 || consumed == (size_t)-2) {
       ++cursor;
       --remaining;
-      memset(&state, 0, sizeof(state));
+      memset (&state, 0, sizeof (state));
       width += 1;
       continue;
     }
@@ -3961,7 +4267,7 @@ static int session_utf8_display_width(const char *text) {
       break;
     }
 
-    int char_width = wcwidth(wc);
+    int char_width = wcwidth (wc);
     if (char_width < 0) {
       char_width = 1;
     }
@@ -3973,10 +4279,12 @@ static int session_utf8_display_width(const char *text) {
   return width;
 }
 
-static void session_send_system_line(session_ctx_t *ctx, const char *message);
+static void session_send_system_line (session_ctx_t *ctx, const char *message);
 
-static void session_format_template(const char *format, const char *const *args, size_t arg_count, char *buffer,
-                                    size_t length) {
+static void
+session_format_template (const char *format, const char *const *args,
+                         size_t arg_count, char *buffer, size_t length)
+{
   if (buffer == NULL || length == 0U) {
     return;
   }
@@ -3990,12 +4298,13 @@ static void session_format_template(const char *format, const char *const *args,
   size_t arg_index = 0U;
   for (size_t idx = 0U; format[idx] != '\0' && out_index + 1U < length; ++idx) {
     if (format[idx] == '%' && format[idx + 1U] == 's') {
-      const char *replacement = (args != NULL && arg_index < arg_count && args[arg_index] != NULL)
-                                    ? args[arg_index]
-                                    : "";
+      const char *replacement
+          = (args != NULL && arg_index < arg_count && args[arg_index] != NULL)
+                ? args[arg_index]
+                : "";
       size_t available = length - out_index - 1U;
-      size_t rep_len = strnlen(replacement, available);
-      memcpy(buffer + out_index, replacement, rep_len);
+      size_t rep_len = strnlen (replacement, available);
+      memcpy (buffer + out_index, replacement, rep_len);
       out_index += rep_len;
       ++arg_index;
       ++idx;
@@ -4013,15 +4322,18 @@ static void session_format_template(const char *format, const char *const *args,
   buffer[out_index] = '\0';
 }
 
-static size_t session_help_collect_arguments(session_ctx_t *ctx,
-                                             const session_help_template_arg_kind_t *kinds,
-                                             size_t kind_count, const char **output, size_t capacity) {
+static size_t
+session_help_collect_arguments (session_ctx_t *ctx,
+                                const session_help_template_arg_kind_t *kinds,
+                                size_t kind_count, const char **output,
+                                size_t capacity)
+{
   if (output == NULL || capacity == 0U) {
     return 0U;
   }
 
   size_t produced = 0U;
-  const char *prefix = session_command_prefix(ctx);
+  const char *prefix = session_command_prefix (ctx);
 
   if (kind_count == 0U) {
     size_t repeat = capacity < 8U ? capacity : 8U;
@@ -4038,37 +4350,37 @@ static size_t session_help_collect_arguments(session_ctx_t *ctx,
       value = prefix;
       break;
     case SESSION_HELP_TEMPLATE_ARG_ASCIIART_TERMINATOR:
-      value = session_asciiart_terminator(ctx);
+      value = session_asciiart_terminator (ctx);
       break;
     case SESSION_HELP_TEMPLATE_ARG_BBS_TERMINATOR:
-      value = session_bbs_terminator(ctx);
+      value = session_bbs_terminator (ctx);
       break;
     case SESSION_HELP_TEMPLATE_ARG_COMMAND_REPLY:
-      value = session_command_alias_preferred_by_canonical(ctx, "/reply");
+      value = session_command_alias_preferred_by_canonical (ctx, "/reply");
       break;
     case SESSION_HELP_TEMPLATE_ARG_COMMAND_GOOD:
-      value = session_command_alias_preferred_by_canonical(ctx, "/good");
+      value = session_command_alias_preferred_by_canonical (ctx, "/good");
       break;
     case SESSION_HELP_TEMPLATE_ARG_COMMAND_SAD:
-      value = session_command_alias_preferred_by_canonical(ctx, "/sad");
+      value = session_command_alias_preferred_by_canonical (ctx, "/sad");
       break;
     case SESSION_HELP_TEMPLATE_ARG_COMMAND_WTF:
-      value = session_command_alias_preferred_by_canonical(ctx, "/wtf");
+      value = session_command_alias_preferred_by_canonical (ctx, "/wtf");
       break;
     case SESSION_HELP_TEMPLATE_ARG_COMMAND_COOL:
-      value = session_command_alias_preferred_by_canonical(ctx, "/cool");
+      value = session_command_alias_preferred_by_canonical (ctx, "/cool");
       break;
     case SESSION_HELP_TEMPLATE_ARG_COMMAND_ANGRY:
-      value = session_command_alias_preferred_by_canonical(ctx, "/angry");
+      value = session_command_alias_preferred_by_canonical (ctx, "/angry");
       break;
     case SESSION_HELP_TEMPLATE_ARG_COMMAND_CHECKED:
-      value = session_command_alias_preferred_by_canonical(ctx, "/checked");
+      value = session_command_alias_preferred_by_canonical (ctx, "/checked");
       break;
     case SESSION_HELP_TEMPLATE_ARG_COMMAND_LOVE:
-      value = session_command_alias_preferred_by_canonical(ctx, "/love");
+      value = session_command_alias_preferred_by_canonical (ctx, "/love");
       break;
     case SESSION_HELP_TEMPLATE_ARG_COMMAND_BBS:
-      value = session_command_alias_preferred_by_canonical(ctx, "/bbs");
+      value = session_command_alias_preferred_by_canonical (ctx, "/bbs");
       break;
     default:
       value = prefix;
@@ -4083,41 +4395,46 @@ static size_t session_help_collect_arguments(session_ctx_t *ctx,
   return produced;
 }
 
-static void session_format_help_line(session_ctx_t *ctx, const session_help_entry_t *entry, const char *description,
-                                     char *buffer, size_t length) {
+static void
+session_format_help_line (session_ctx_t *ctx, const session_help_entry_t *entry,
+                          const char *description, char *buffer, size_t length)
+{
   if (ctx == NULL || entry == NULL || buffer == NULL || length == 0U) {
     return;
   }
 
-  const size_t language_index = (size_t)session_ui_language_current(ctx);
+  const size_t language_index = (size_t)session_ui_language_current (ctx);
   const char *label_template = entry->label;
-  if (language_index < SESSION_UI_LANGUAGE_COUNT && entry->label_translations[language_index] != NULL &&
-      entry->label_translations[language_index][0] != '\0') {
+  if (language_index < SESSION_UI_LANGUAGE_COUNT
+      && entry->label_translations[language_index] != NULL
+      && entry->label_translations[language_index][0] != '\0') {
     label_template = entry->label_translations[language_index];
   }
   if (label_template == NULL) {
     label_template = "";
   }
 
-  const char *prefix = session_command_prefix(ctx);
+  const char *prefix = session_command_prefix (ctx);
   char label[128];
   label[0] = '\0';
 
   if (entry->kind == SESSION_HELP_ENTRY_COMMAND) {
-    snprintf(label, sizeof(label), "%s%s", prefix, label_template);
+    snprintf (label, sizeof (label), "%s%s", prefix, label_template);
   } else if (entry->kind == SESSION_HELP_ENTRY_FORMATTED) {
     const char *args[SESSION_HELP_TEMPLATE_ARG_LIMIT];
-    size_t arg_count = session_help_collect_arguments(ctx, entry->label_args, entry->label_arg_count, args,
-                                                      sizeof(args) / sizeof(args[0]));
-    session_format_template(label_template, args, arg_count, label, sizeof(label));
+    size_t arg_count = session_help_collect_arguments (
+        ctx, entry->label_args, entry->label_arg_count, args,
+        sizeof (args) / sizeof (args[0]));
+    session_format_template (label_template, args, arg_count, label,
+                             sizeof (label));
   }
 
   if (entry->kind == SESSION_HELP_ENTRY_TEXT) {
-    snprintf(buffer, length, "%s", description != NULL ? description : "");
+    snprintf (buffer, length, "%s", description != NULL ? description : "");
     return;
   }
 
-  int display_width = session_utf8_display_width(label);
+  int display_width = session_utf8_display_width (label);
   if (display_width < 0) {
     display_width = 0;
   }
@@ -4131,14 +4448,19 @@ static void session_format_help_line(session_ctx_t *ctx, const session_help_entr
   }
 
   char padding_buffer[33];
-  memset(padding_buffer, ' ', (size_t)padding);
+  memset (padding_buffer, ' ', (size_t)padding);
   padding_buffer[padding] = '\0';
 
-  snprintf(buffer, length, "%s%s- %s", label, padding_buffer, description != NULL ? description : "");
+  snprintf (buffer, length, "%s%s- %s", label, padding_buffer,
+            description != NULL ? description : "");
 }
 
-static void session_format_help_entries_to_buffer(session_ctx_t *ctx, const session_help_entry_t *entries,
-                                                  size_t count, char *buffer, size_t buffer_length) {
+static void
+session_format_help_entries_to_buffer (session_ctx_t *ctx,
+                                       const session_help_entry_t *entries,
+                                       size_t count, char *buffer,
+                                       size_t buffer_length)
+{
   if (ctx == NULL || entries == NULL || buffer == NULL || buffer_length == 0U) {
     if (buffer != NULL && buffer_length > 0U) {
       buffer[0] = '\0';
@@ -4148,7 +4470,7 @@ static void session_format_help_entries_to_buffer(session_ctx_t *ctx, const sess
 
   buffer[0] = '\0';
   size_t current_offset = 0U;
-  const size_t language_index = (size_t)session_ui_language_current(ctx);
+  const size_t language_index = (size_t)session_ui_language_current (ctx);
 
   for (size_t idx = 0; idx < count; ++idx) {
     const session_help_entry_t *entry = &entries[idx];
@@ -4159,20 +4481,23 @@ static void session_format_help_entries_to_buffer(session_ctx_t *ctx, const sess
 
     char description[SSH_CHATTER_MESSAGE_LIMIT];
     const char *args[SESSION_HELP_TEMPLATE_ARG_LIMIT];
-    size_t arg_count = session_help_collect_arguments(ctx, entry->description_args, entry->description_arg_count, args,
-                                                      sizeof(args) / sizeof(args[0]));
-    session_format_template(format, args, arg_count, description, sizeof(description));
+    size_t arg_count = session_help_collect_arguments (
+        ctx, entry->description_args, entry->description_arg_count, args,
+        sizeof (args) / sizeof (args[0]));
+    session_format_template (format, args, arg_count, description,
+                             sizeof (description));
 
     char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
     if (entry->kind == SESSION_HELP_ENTRY_TEXT) {
-      snprintf(line_buffer, sizeof(line_buffer), "%s", description);
+      snprintf (line_buffer, sizeof (line_buffer), "%s", description);
     } else {
-      session_format_help_line(ctx, entry, description, line_buffer, sizeof(line_buffer));
+      session_format_help_line (ctx, entry, description, line_buffer,
+                                sizeof (line_buffer));
     }
 
-    size_t line_len = strnlen(line_buffer, sizeof(line_buffer));
+    size_t line_len = strnlen (line_buffer, sizeof (line_buffer));
     if (current_offset + line_len + 1U < buffer_length) { // +1 for newline
-      memcpy(buffer + current_offset, line_buffer, line_len);
+      memcpy (buffer + current_offset, line_buffer, line_len);
       current_offset += line_len;
       buffer[current_offset++] = '\n';
     } else {
@@ -4209,8 +4534,9 @@ typedef enum {
   HOST_SECURITY_SCAN_ERROR,
 } host_security_scan_result_t;
 
-
-static unsigned session_prng_next(unsigned *state) {
+static unsigned
+session_prng_next (unsigned *state)
+{
   if (state == NULL) {
     return 0U;
   }
@@ -4219,14 +4545,16 @@ static unsigned session_prng_next(unsigned *state) {
   return *state;
 }
 
-static void session_fill_digit_sum_prompt(captcha_prompt_t *prompt, unsigned *state) {
+static void
+session_fill_digit_sum_prompt (captcha_prompt_t *prompt, unsigned *state)
+{
   if (prompt == NULL) {
     return;
   }
 
   unsigned digits_count = 3U;
   if (state != NULL) {
-    digits_count = 2U + (session_prng_next(state) % 2U);
+    digits_count = 2U + (session_prng_next (state) % 2U);
   }
   if (digits_count < 2U) {
     digits_count = 2U;
@@ -4235,7 +4563,7 @@ static void session_fill_digit_sum_prompt(captcha_prompt_t *prompt, unsigned *st
     digits_count = 3U;
   }
 
-  unsigned digits[4] = {0U, 0U, 0U, 0U};
+  unsigned digits[4] = { 0U, 0U, 0U, 0U };
   unsigned sum = 0U;
 
   if (digits_count == 3U) {
@@ -4245,7 +4573,7 @@ static void session_fill_digit_sum_prompt(captcha_prompt_t *prompt, unsigned *st
       for (unsigned idx = 0U; idx < digits_count; ++idx) {
         unsigned raw = (unsigned)((idx + 1U) % 10U);
         if (state != NULL) {
-          raw = session_prng_next(state) % 10U;
+          raw = session_prng_next (state) % 10U;
         }
         digits[idx] = raw;
         sum += raw;
@@ -4276,7 +4604,7 @@ static void session_fill_digit_sum_prompt(captcha_prompt_t *prompt, unsigned *st
     for (unsigned idx = 0U; idx < digits_count; ++idx) {
       unsigned raw = (unsigned)(idx + 1U);
       if (state != NULL) {
-        raw = (session_prng_next(state) % 9U) + 1U;
+        raw = (session_prng_next (state) % 9U) + 1U;
       } else {
         raw = (raw % 9U) + 1U;
       }
@@ -4291,36 +4619,44 @@ static void session_fill_digit_sum_prompt(captcha_prompt_t *prompt, unsigned *st
   for (unsigned idx = 0U; idx < digits_count; ++idx) {
     int appended = 0;
     if (idx == 0U) {
-      appended = snprintf(expression + written, sizeof(expression) - written, "%u", digits[idx]);
+      appended = snprintf (expression + written, sizeof (expression) - written,
+                           "%u", digits[idx]);
     } else {
-      appended = snprintf(expression + written, sizeof(expression) - written, " + %u", digits[idx]);
+      appended = snprintf (expression + written, sizeof (expression) - written,
+                           " + %u", digits[idx]);
     }
     if (appended < 0) {
-      expression[sizeof(expression) - 1U] = '\0';
+      expression[sizeof (expression) - 1U] = '\0';
       break;
     }
     size_t appended_size = (size_t)appended;
-    if (appended_size >= sizeof(expression) - written) {
-      expression[sizeof(expression) - 1U] = '\0';
+    if (appended_size >= sizeof (expression) - written) {
+      expression[sizeof (expression) - 1U] = '\0';
       break;
     }
     written += appended_size;
   }
 
-  snprintf(prompt->question_en, sizeof(prompt->question_en), "Add the digits: %s = ?", expression);
-  snprintf(prompt->question_ko, sizeof(prompt->question_ko), "다음 숫자들의 합은 얼마인가요? %s = ?", expression);
-  snprintf(prompt->question_ru, sizeof(prompt->question_ru), "Чему равна сумма цифр: %s = ?", expression);
-  snprintf(prompt->question_zh, sizeof(prompt->question_zh), "請計算以下數字的總和：%s = ?", expression);
-  snprintf(prompt->answer, sizeof(prompt->answer), "%u", sum);
+  snprintf (prompt->question_en, sizeof (prompt->question_en),
+            "Add the digits: %s = ?", expression);
+  snprintf (prompt->question_ko, sizeof (prompt->question_ko),
+            "다음 숫자들의 합은 얼마인가요? %s = ?", expression);
+  snprintf (prompt->question_ru, sizeof (prompt->question_ru),
+            "Чему равна сумма цифр: %s = ?", expression);
+  snprintf (prompt->question_zh, sizeof (prompt->question_zh),
+            "請計算以下數字的總和：%s = ?", expression);
+  snprintf (prompt->answer, sizeof (prompt->answer), "%u", sum);
 }
 
-static bool string_contains_case_insensitive(const char *haystack, const char *needle) {
+static bool
+string_contains_case_insensitive (const char *haystack, const char *needle)
+{
   if (haystack == NULL || needle == NULL || *needle == '\0') {
     return false;
   }
 
-  const size_t haystack_length = strlen(haystack);
-  const size_t needle_length = strlen(needle);
+  const size_t haystack_length = strlen (haystack);
+  const size_t needle_length = strlen (needle);
   if (needle_length == 0U || haystack_length < needle_length) {
     return false;
   }
@@ -4330,7 +4666,7 @@ static bool string_contains_case_insensitive(const char *haystack, const char *n
     while (matched < needle_length) {
       const unsigned char hay = (unsigned char)haystack[idx + matched];
       const unsigned char nee = (unsigned char)needle[matched];
-      if (tolower(hay) != tolower(nee)) {
+      if (tolower (hay) != tolower (nee)) {
         break;
       }
       ++matched;
@@ -4343,25 +4679,30 @@ static bool string_contains_case_insensitive(const char *haystack, const char *n
   return false;
 }
 
-static bool session_editor_matches_terminator(const session_ctx_t *ctx, const char *line) {
+static bool
+session_editor_matches_terminator (const session_ctx_t *ctx, const char *line)
+{
   if (ctx == NULL) {
     return false;
   }
 
   if (ctx->editor_mode == SESSION_EDITOR_MODE_ASCIIART) {
-    return session_asciiart_matches_terminator(line);
+    return session_asciiart_matches_terminator (line);
   }
 
-  return session_bbs_matches_terminator(line);
+  return session_bbs_matches_terminator (line);
 }
 
-static bool string_contains_token_case_insensitive(const char *haystack, const char *needle) {
+static bool
+string_contains_token_case_insensitive (const char *haystack,
+                                        const char *needle)
+{
   if (haystack == NULL || needle == NULL || *needle == '\0') {
     return false;
   }
 
-  const size_t haystack_length = strlen(haystack);
-  const size_t needle_length = strlen(needle);
+  const size_t haystack_length = strlen (haystack);
+  const size_t needle_length = strlen (needle);
   if (needle_length == 0U || haystack_length < needle_length) {
     return false;
   }
@@ -4371,7 +4712,7 @@ static bool string_contains_token_case_insensitive(const char *haystack, const c
     while (matched < needle_length) {
       const unsigned char hay = (unsigned char)haystack[idx + matched];
       const unsigned char nee = (unsigned char)needle[matched];
-      if (tolower(hay) != tolower(nee)) {
+      if (tolower (hay) != tolower (nee)) {
         break;
       }
       ++matched;
@@ -4383,10 +4724,12 @@ static bool string_contains_token_case_insensitive(const char *haystack, const c
 
     const bool has_prev = idx > 0U;
     const bool has_next = (idx + needle_length) < haystack_length;
-    const unsigned char prev = has_prev ? (unsigned char)haystack[idx - 1U] : 0U;
-    const unsigned char next = has_next ? (unsigned char)haystack[idx + needle_length] : 0U;
-    const bool prev_boundary = !has_prev || (!isalnum(prev) && prev != '_');
-    const bool next_boundary = !has_next || (!isalnum(next) && next != '_');
+    const unsigned char prev
+        = has_prev ? (unsigned char)haystack[idx - 1U] : 0U;
+    const unsigned char next
+        = has_next ? (unsigned char)haystack[idx + needle_length] : 0U;
+    const bool prev_boundary = !has_prev || (!isalnum (prev) && prev != '_');
+    const bool next_boundary = !has_next || (!isalnum (next) && next != '_');
 
     if (prev_boundary && next_boundary) {
       return true;
@@ -4396,7 +4739,9 @@ static bool string_contains_token_case_insensitive(const char *haystack, const c
   return false;
 }
 
-static void session_extract_banner_token(const char *banner, char *buffer, size_t length) {
+static void
+session_extract_banner_token (const char *banner, char *buffer, size_t length)
+{
   if (buffer == NULL || length == 0U) {
     return;
   }
@@ -4407,12 +4752,12 @@ static void session_extract_banner_token(const char *banner, char *buffer, size_
   }
 
   size_t idx = 0U;
-  while (banner[idx] != '\0' && isspace((unsigned char)banner[idx])) {
+  while (banner[idx] != '\0' && isspace ((unsigned char)banner[idx])) {
     ++idx;
   }
 
   size_t produced = 0U;
-  while (banner[idx] != '\0' && !isspace((unsigned char)banner[idx])) {
+  while (banner[idx] != '\0' && !isspace ((unsigned char)banner[idx])) {
     if (produced + 1U >= length) {
       break;
     }
@@ -4420,7 +4765,7 @@ static void session_extract_banner_token(const char *banner, char *buffer, size_
   }
 
   if (produced == 0U) {
-    snprintf(buffer, length, "%.*s", (int)length - 1, banner);
+    snprintf (buffer, length, "%.*s", (int)length - 1, banner);
   } else {
     buffer[produced] = '\0';
   }

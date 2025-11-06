@@ -49,26 +49,29 @@ typedef enum {
   SSH_BIND_OPTIONS_RSA_MIN_SIZE
 } ssh_bind_options_e;
 
-ssh_bind ssh_bind_new(void);
-void ssh_bind_free(ssh_bind bind);
-int ssh_bind_options_set(ssh_bind bind, ssh_bind_options_e type, const void *value);
-int ssh_bind_listen(ssh_bind bind);
-int ssh_bind_accept(ssh_bind bind, ssh_session session);
-const char *ssh_message_service_service(ssh_message message);
-int ssh_message_service_reply_success(ssh_message message);
-void ssh_message_reply_default(ssh_message message);
-const char *ssh_message_auth_user(ssh_message message);
-int ssh_message_auth_reply_success(ssh_message message, int partial);
-int ssh_channel_request_send_exit_status(ssh_channel channel, int exit_status);
-int ssh_handle_key_exchange(ssh_session session);
-const char *ssh_message_auth_password(ssh_message message);
-int ssh_message_auth_set_methods(ssh_message message, int methods);
-unsigned int ssh_message_channel_request_pty_width(ssh_message message);
-unsigned int ssh_message_channel_request_pty_height(ssh_message message);
+ssh_bind ssh_bind_new (void);
+void ssh_bind_free (ssh_bind bind);
+int ssh_bind_options_set (ssh_bind bind, ssh_bind_options_e type,
+                          const void *value);
+int ssh_bind_listen (ssh_bind bind);
+int ssh_bind_accept (ssh_bind bind, ssh_session session);
+const char *ssh_message_service_service (ssh_message message);
+int ssh_message_service_reply_success (ssh_message message);
+void ssh_message_reply_default (ssh_message message);
+const char *ssh_message_auth_user (ssh_message message);
+int ssh_message_auth_reply_success (ssh_message message, int partial);
+int ssh_channel_request_send_exit_status (ssh_channel channel, int exit_status);
+int ssh_handle_key_exchange (ssh_session session);
+const char *ssh_message_auth_password (ssh_message message);
+int ssh_message_auth_set_methods (ssh_message message, int methods);
+unsigned int ssh_message_channel_request_pty_width (ssh_message message);
+unsigned int ssh_message_channel_request_pty_height (ssh_message message);
 #if defined(LIBSSH_VERSION_INT) && defined(SSH_VERSION_INT)
 #if LIBSSH_VERSION_INT >= SSH_VERSION_INT(0, 9, 0)
-unsigned int ssh_message_channel_request_window_change_width(ssh_message message);
-unsigned int ssh_message_channel_request_window_change_height(ssh_message message);
+unsigned int
+ssh_message_channel_request_window_change_width (ssh_message message);
+unsigned int
+ssh_message_channel_request_window_change_height (ssh_message message);
 #endif
 #endif
 

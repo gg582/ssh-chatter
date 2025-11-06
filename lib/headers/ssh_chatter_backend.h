@@ -8,11 +8,11 @@
 extern "C" {
 #endif
 
-void ssh_chatter_backend_init(void);
+void ssh_chatter_backend_init (void);
 
-bool ssh_chatter_backend_translate_line(const char *message, const char *target_language,
-                                        char *translated, size_t translated_len,
-                                        char *detected_language, size_t detected_len);
+bool ssh_chatter_backend_translate_line (
+    const char *message, const char *target_language, char *translated,
+    size_t translated_len, char *detected_language, size_t detected_len);
 
 #ifdef __cplusplus
 }

@@ -1,85 +1,89 @@
 // BBS workflows plus interactive mini-games.
 
 // Handle the /bbs command entry point.
-static void session_handle_bbs(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_bbs (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
 
   if (arguments == NULL || *arguments == '\0') {
-    session_bbs_show_dashboard(ctx);
+    session_bbs_show_dashboard (ctx);
     return;
   }
 
   char working[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(working, sizeof(working), "%s", arguments);
-  trim_whitespace_inplace(working);
+  snprintf (working, sizeof (working), "%s", arguments);
+  trim_whitespace_inplace (working);
   if (working[0] == '\0') {
-    session_bbs_show_dashboard(ctx);
+    session_bbs_show_dashboard (ctx);
     return;
   }
 
   char *command = working;
   char *rest = NULL;
   for (char *cursor = working; *cursor != '\0'; ++cursor) {
-    if (isspace((unsigned char)*cursor)) {
+    if (isspace ((unsigned char)*cursor)) {
       *cursor = '\0';
       rest = cursor + 1;
       break;
     }
   }
   if (rest != NULL) {
-    trim_whitespace_inplace(rest);
+    trim_whitespace_inplace (rest);
   }
 
-  if (strcmp(command, "exit") == 0) {
+  if (strcmp (command, "exit") == 0) {
     ctx->in_bbs_mode = false;
     ctx->bbs_view_active = false;
     ctx->bbs_view_post_id = 0U;
-    session_send_system_line(ctx, "Exited BBS mode.");
+    session_send_system_line (ctx, "Exited BBS mode.");
     return;
   }
 
   ctx->in_bbs_mode = true;
 
-  const char *canonical_command = session_bbs_subcommand_canonicalize(ctx, command);
+  const char *canonical_command
+      = session_bbs_subcommand_canonicalize (ctx, command);
   if (canonical_command == NULL) {
-    session_send_system_line(ctx, "Unknown /bbs subcommand. Try /bbs for usage.");
+    session_send_system_line (ctx,
+                              "Unknown /bbs subcommand. Try /bbs for usage.");
     return;
   }
 
-  if (strcmp(canonical_command, "list") == 0) {
-    session_bbs_prepare_canvas(ctx);
-    session_bbs_list(ctx);
-  } else if (strcmp(canonical_command, "read") == 0) {
+  if (strcmp (canonical_command, "list") == 0) {
+    session_bbs_prepare_canvas (ctx);
+    session_bbs_list (ctx);
+  } else if (strcmp (canonical_command, "read") == 0) {
     if (rest == NULL || rest[0] == '\0') {
-      session_bbs_send_usage(ctx, "read", "<id>");
+      session_bbs_send_usage (ctx, "read", "<id>");
       return;
     }
-    uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
-    session_bbs_read(ctx, id);
-  } else if (strcmp(canonical_command, "topic") == 0) {
+    uint64_t id = (uint64_t)strtoull (rest, NULL, 10);
+    session_bbs_read (ctx, id);
+  } else if (strcmp (canonical_command, "topic") == 0) {
     if (rest == NULL || rest[0] == '\0') {
-      session_bbs_send_usage(ctx, "topic", "read <tag>");
+      session_bbs_send_usage (ctx, "topic", "read <tag>");
       return;
     }
 
     char topic_full[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(topic_full, sizeof(topic_full), "%s", rest);
-    trim_whitespace_inplace(topic_full);
+    snprintf (topic_full, sizeof (topic_full), "%s", rest);
+    trim_whitespace_inplace (topic_full);
     if (topic_full[0] == '\0') {
-      session_bbs_send_usage(ctx, "topic", "read <tag>");
+      session_bbs_send_usage (ctx, "topic", "read <tag>");
       return;
     }
 
     char topic_args[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(topic_args, sizeof(topic_args), "%s", topic_full);
+    snprintf (topic_args, sizeof (topic_args), "%s", topic_full);
 
     char action_token[32];
     size_t action_len = 0U;
     char *cursor = topic_args;
-    while (*cursor != '\0' && !isspace((unsigned char)*cursor)) {
-      if (action_len + 1U < sizeof(action_token)) {
+    while (*cursor != '\0' && !isspace ((unsigned char)*cursor)) {
+      if (action_len + 1U < sizeof (action_token)) {
         action_token[action_len++] = *cursor;
       }
       ++cursor;
@@ -90,55 +94,59 @@ static void session_handle_bbs(session_ctx_t *ctx, const char *arguments) {
     if (*cursor != '\0') {
       *cursor = '\0';
       remaining = cursor + 1;
-      trim_whitespace_inplace(remaining);
+      trim_whitespace_inplace (remaining);
     }
 
     if (action_token[0] != '\0') {
-      const char *canonical_action = session_bbs_subcommand_canonicalize(ctx, action_token);
-      if (canonical_action != NULL && strcmp(canonical_action, "read") == 0) {
+      const char *canonical_action
+          = session_bbs_subcommand_canonicalize (ctx, action_token);
+      if (canonical_action != NULL && strcmp (canonical_action, "read") == 0) {
         if (remaining == NULL || remaining[0] == '\0') {
-          session_bbs_send_usage(ctx, "topic", "read <tag>");
+          session_bbs_send_usage (ctx, "topic", "read <tag>");
           return;
         }
-        session_bbs_prepare_canvas(ctx);
-        session_bbs_list_topic(ctx, remaining);
+        session_bbs_prepare_canvas (ctx);
+        session_bbs_list_topic (ctx, remaining);
         return;
       }
     }
 
-    session_bbs_prepare_canvas(ctx);
-    session_bbs_list_topic(ctx, topic_full);
-  } else if (strcmp(canonical_command, "post") == 0) {
-    session_bbs_begin_post(ctx, rest);
-  } else if (strcmp(canonical_command, "edit") == 0) {
+    session_bbs_prepare_canvas (ctx);
+    session_bbs_list_topic (ctx, topic_full);
+  } else if (strcmp (canonical_command, "post") == 0) {
+    session_bbs_begin_post (ctx, rest);
+  } else if (strcmp (canonical_command, "edit") == 0) {
     if (rest == NULL || rest[0] == '\0') {
-      session_bbs_send_usage(ctx, "edit", "<id>");
+      session_bbs_send_usage (ctx, "edit", "<id>");
       return;
     }
-    uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
-    session_bbs_begin_edit(ctx, id);
-  } else if (strcmp(canonical_command, "comment") == 0) {
-    session_bbs_add_comment(ctx, rest);
-  } else if (strcmp(canonical_command, "regen") == 0) {
+    uint64_t id = (uint64_t)strtoull (rest, NULL, 10);
+    session_bbs_begin_edit (ctx, id);
+  } else if (strcmp (canonical_command, "comment") == 0) {
+    session_bbs_add_comment (ctx, rest);
+  } else if (strcmp (canonical_command, "regen") == 0) {
     if (rest == NULL || rest[0] == '\0') {
-      session_bbs_send_usage(ctx, "regen", "<id>");
+      session_bbs_send_usage (ctx, "regen", "<id>");
       return;
     }
-    uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
-    session_bbs_regen_post(ctx, id);
-  } else if (strcmp(canonical_command, "delete") == 0) {
+    uint64_t id = (uint64_t)strtoull (rest, NULL, 10);
+    session_bbs_regen_post (ctx, id);
+  } else if (strcmp (canonical_command, "delete") == 0) {
     if (rest == NULL || rest[0] == '\0') {
-      session_bbs_send_usage(ctx, "delete", "<id>");
+      session_bbs_send_usage (ctx, "delete", "<id>");
       return;
     }
-    uint64_t id = (uint64_t)strtoull(rest, NULL, 10);
-    session_bbs_delete(ctx, id);
+    uint64_t id = (uint64_t)strtoull (rest, NULL, 10);
+    session_bbs_delete (ctx, id);
   } else {
-    session_send_system_line(ctx, "Unknown /bbs subcommand. Try /bbs for usage.");
+    session_send_system_line (ctx,
+                              "Unknown /bbs subcommand. Try /bbs for usage.");
   }
 }
 
-static void session_game_seed_rng(session_ctx_t *ctx) {
+static void
+session_game_seed_rng (session_ctx_t *ctx)
+{
   if (ctx == NULL) {
     return;
   }
@@ -148,43 +156,50 @@ static void session_game_seed_rng(session_ctx_t *ctx) {
   }
 
   struct timespec ts;
-  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-    ts.tv_sec = time(NULL);
+  if (clock_gettime (CLOCK_MONOTONIC, &ts) != 0) {
+    ts.tv_sec = time (NULL);
     ts.tv_nsec = 0L;
   }
 
-  uint64_t seed = ((uint64_t)ts.tv_sec << 32) ^ (uint64_t)ts.tv_nsec ^ (uintptr_t)ctx ^ (uintptr_t)ctx->owner;
+  uint64_t seed = ((uint64_t)ts.tv_sec << 32) ^ (uint64_t)ts.tv_nsec
+                  ^ (uintptr_t)ctx ^ (uintptr_t)ctx->owner;
   if (seed == 0U) {
-    seed = UINT64_C(0x9E3779B97F4A7C15);
+    seed = UINT64_C (0x9E3779B97F4A7C15);
   }
   ctx->game.rng_state = seed;
   ctx->game.rng_seeded = true;
 }
 
-static uint32_t session_game_random(session_ctx_t *ctx) {
-  session_game_seed_rng(ctx);
+static uint32_t
+session_game_random (session_ctx_t *ctx)
+{
+  session_game_seed_rng (ctx);
   uint64_t x = ctx->game.rng_state;
   x ^= x >> 12;
   x ^= x << 25;
   x ^= x >> 27;
   ctx->game.rng_state = x;
-  uint64_t result = x * UINT64_C(2685821657736338717);
+  uint64_t result = x * UINT64_C (2685821657736338717);
   return (uint32_t)(result >> 32);
 }
 
-static int session_game_random_range(session_ctx_t *ctx, int max) {
+static int
+session_game_random_range (session_ctx_t *ctx, int max)
+{
   if (max <= 0) {
     return 0;
   }
-  return (int)(session_game_random(ctx) % (uint32_t)max);
+  return (int)(session_game_random (ctx) % (uint32_t)max);
 }
 
-static void session_game_tetris_reset(tetris_game_state_t *state) {
+static void
+session_game_tetris_reset (tetris_game_state_t *state)
+{
   if (state == NULL) {
     return;
   }
 
-  memset(state->board, 0, sizeof(state->board));
+  memset (state->board, 0, sizeof (state->board));
   state->current_piece = -1;
   state->rotation = 0;
   state->row = 0;
@@ -205,13 +220,15 @@ static void session_game_tetris_reset(tetris_game_state_t *state) {
   state->gravity_timer_accumulator_ns = 0U;
   state->round = 1U;
   state->next_round_line_goal = SSH_CHATTER_TETRIS_LINES_PER_ROUND;
-  session_game_tetris_apply_round_settings(state);
+  session_game_tetris_apply_round_settings (state);
   state->input_escape_active = false;
   state->input_escape_length = 0U;
-  memset(state->input_escape_buffer, 0, sizeof(state->input_escape_buffer));
+  memset (state->input_escape_buffer, 0, sizeof (state->input_escape_buffer));
 }
 
-static void session_game_tetris_apply_round_settings(tetris_game_state_t *state) {
+static void
+session_game_tetris_apply_round_settings (tetris_game_state_t *state)
+{
   if (state == NULL) {
     return;
   }
@@ -241,13 +258,15 @@ static void session_game_tetris_apply_round_settings(tetris_game_state_t *state)
   state->gravity_timer_accumulator_ns = 0U;
 }
 
-static void session_game_tetris_fill_bag(session_ctx_t *ctx) {
+static void
+session_game_tetris_fill_bag (session_ctx_t *ctx)
+{
   tetris_game_state_t *state = &ctx->game.tetris;
   for (size_t idx = 0U; idx < 7U; ++idx) {
     state->bag[idx] = (int)idx;
   }
   for (int idx = 6; idx > 0; --idx) {
-    int swap_index = session_game_random_range(ctx, idx + 1);
+    int swap_index = session_game_random_range (ctx, idx + 1);
     int temp = state->bag[idx];
     state->bag[idx] = state->bag[swap_index];
     state->bag[swap_index] = temp;
@@ -255,20 +274,25 @@ static void session_game_tetris_fill_bag(session_ctx_t *ctx) {
   state->bag_index = 0U;
 }
 
-static int session_game_tetris_take_piece(session_ctx_t *ctx) {
+static int
+session_game_tetris_take_piece (session_ctx_t *ctx)
+{
   tetris_game_state_t *state = &ctx->game.tetris;
   if (state->bag_index >= 7U) {
-    session_game_tetris_fill_bag(ctx);
+    session_game_tetris_fill_bag (ctx);
   }
   return state->bag[state->bag_index++];
 }
 
-static bool session_game_tetris_cell_occupied(int piece, int rotation, int row, int column) {
+static bool
+session_game_tetris_cell_occupied (int piece, int rotation, int row, int column)
+{
   if (piece < 0 || piece >= 7) {
     return false;
   }
   rotation = rotation & 3;
-  if (row < 0 || row >= SSH_CHATTER_TETROMINO_SIZE || column < 0 || column >= SSH_CHATTER_TETROMINO_SIZE) {
+  if (row < 0 || row >= SSH_CHATTER_TETROMINO_SIZE || column < 0
+      || column >= SSH_CHATTER_TETROMINO_SIZE) {
     return false;
   }
   const char *shape = TETROMINO_SHAPES[piece][rotation];
@@ -276,14 +300,16 @@ static bool session_game_tetris_cell_occupied(int piece, int rotation, int row, 
   return value != '.' && value != '\0';
 }
 
-static bool session_game_tetris_position_valid(const tetris_game_state_t *state, int piece, int rotation, int row,
-                                              int column) {
+static bool
+session_game_tetris_position_valid (const tetris_game_state_t *state, int piece,
+                                    int rotation, int row, int column)
+{
   if (state == NULL) {
     return false;
   }
   for (int r = 0; r < SSH_CHATTER_TETROMINO_SIZE; ++r) {
     for (int c = 0; c < SSH_CHATTER_TETROMINO_SIZE; ++c) {
-      if (!session_game_tetris_cell_occupied(piece, rotation, r, c)) {
+      if (!session_game_tetris_cell_occupied (piece, rotation, r, c)) {
         continue;
       }
       int board_row = row + r;
@@ -305,7 +331,9 @@ static bool session_game_tetris_position_valid(const tetris_game_state_t *state,
   return true;
 }
 
-static bool session_game_tetris_spawn_piece(session_ctx_t *ctx) {
+static bool
+session_game_tetris_spawn_piece (session_ctx_t *ctx)
+{
   if (ctx == NULL) {
     return false;
   }
@@ -319,15 +347,19 @@ static bool session_game_tetris_spawn_piece(session_ctx_t *ctx) {
   state->gravity_timer_accumulator_ns = 0U;
   state->input_escape_active = false;
   state->input_escape_length = 0U;
-  state->next_piece = session_game_tetris_take_piece(ctx);
-  if (!session_game_tetris_position_valid(state, state->current_piece, state->rotation, state->row, state->column)) {
+  state->next_piece = session_game_tetris_take_piece (ctx);
+  if (!session_game_tetris_position_valid (state, state->current_piece,
+                                           state->rotation, state->row,
+                                           state->column)) {
     state->game_over = true;
     return false;
   }
   return true;
 }
 
-static bool session_game_tetris_move(session_ctx_t *ctx, int drow, int dcol) {
+static bool
+session_game_tetris_move (session_ctx_t *ctx, int drow, int dcol)
+{
   if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
     return false;
   }
@@ -337,7 +369,8 @@ static bool session_game_tetris_move(session_ctx_t *ctx, int drow, int dcol) {
   }
   int new_row = state->row + drow;
   int new_col = state->column + dcol;
-  if (!session_game_tetris_position_valid(state, state->current_piece, state->rotation, new_row, new_col)) {
+  if (!session_game_tetris_position_valid (state, state->current_piece,
+                                           state->rotation, new_row, new_col)) {
     return false;
   }
   state->row = new_row;
@@ -345,16 +378,21 @@ static bool session_game_tetris_move(session_ctx_t *ctx, int drow, int dcol) {
   return true;
 }
 
-static bool session_game_tetris_soft_drop(session_ctx_t *ctx) {
-  if (session_game_tetris_move(ctx, 1, 0)) {
+static bool
+session_game_tetris_soft_drop (session_ctx_t *ctx)
+{
+  if (session_game_tetris_move (ctx, 1, 0)) {
     return true;
   }
-  session_game_tetris_lock_piece(ctx);
+  session_game_tetris_lock_piece (ctx);
   return false;
 }
 
-static bool session_game_tetris_apply_gravity(session_ctx_t *ctx, unsigned ticks) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+static bool
+session_game_tetris_apply_gravity (session_ctx_t *ctx, unsigned ticks)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS
+      || !ctx->game.active) {
     return false;
   }
 
@@ -370,7 +408,7 @@ static bool session_game_tetris_apply_gravity(session_ctx_t *ctx, unsigned ticks
   bool moved = false;
   state->gravity_counter += ticks;
   while (state->gravity_counter >= state->gravity_threshold) {
-    if (!session_game_tetris_soft_drop(ctx)) {
+    if (!session_game_tetris_soft_drop (ctx)) {
       state->gravity_counter = 0U;
       break;
     }
@@ -392,8 +430,11 @@ typedef enum {
   TETRIS_INPUT_HARD_DROP,
 } tetris_input_action_t;
 
-static bool session_game_tetris_update_timer(session_ctx_t *ctx, bool accelerate) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+static bool
+session_game_tetris_update_timer (session_ctx_t *ctx, bool accelerate)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS
+      || !ctx->game.active) {
     return false;
   }
 
@@ -403,8 +444,8 @@ static bool session_game_tetris_update_timer(session_ctx_t *ctx, bool accelerate
   }
 
   struct timespec now;
-  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
-    now.tv_sec = time(NULL);
+  if (clock_gettime (CLOCK_MONOTONIC, &now) != 0) {
+    now.tv_sec = time (NULL);
     now.tv_nsec = 0L;
   }
 
@@ -423,14 +464,17 @@ static bool session_game_tetris_update_timer(session_ctx_t *ctx, bool accelerate
     }
 
     if (sec_delta > 0 || nsec_delta > 0L) {
-      uint64_t elapsed_ns = (uint64_t)sec_delta * 1000000000ULL + (uint64_t)nsec_delta;
+      uint64_t elapsed_ns
+          = (uint64_t)sec_delta * 1000000000ULL + (uint64_t)nsec_delta;
       state->gravity_timer_accumulator_ns += elapsed_ns;
     }
   }
 
   unsigned ticks = 0U;
-  while (state->gravity_timer_accumulator_ns >= SSH_CHATTER_TETRIS_GRAVITY_INTERVAL_NS) {
-    state->gravity_timer_accumulator_ns -= SSH_CHATTER_TETRIS_GRAVITY_INTERVAL_NS;
+  while (state->gravity_timer_accumulator_ns
+         >= SSH_CHATTER_TETRIS_GRAVITY_INTERVAL_NS) {
+    state->gravity_timer_accumulator_ns
+        -= SSH_CHATTER_TETRIS_GRAVITY_INTERVAL_NS;
     ticks += state->gravity_rate;
   }
 
@@ -442,11 +486,14 @@ static bool session_game_tetris_update_timer(session_ctx_t *ctx, bool accelerate
     return false;
   }
 
-  return session_game_tetris_apply_gravity(ctx, ticks);
+  return session_game_tetris_apply_gravity (ctx, ticks);
 }
 
-static bool session_game_tetris_process_timeout(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+static bool
+session_game_tetris_process_timeout (session_ctx_t *ctx)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS
+      || !ctx->game.active) {
     return false;
   }
 
@@ -456,20 +503,23 @@ static bool session_game_tetris_process_timeout(session_ctx_t *ctx) {
     return false;
   }
 
-  bool redraw = session_game_tetris_update_timer(ctx, false);
+  bool redraw = session_game_tetris_update_timer (ctx, false);
   if (ctx->game.tetris.game_over) {
-    session_game_suspend(ctx, "Game over!");
+    session_game_suspend (ctx, "Game over!");
     return true;
   }
 
   if (redraw) {
-    session_game_tetris_render(ctx);
+    session_game_tetris_render (ctx);
   }
   return redraw;
 }
 
-static bool session_game_tetris_process_action(session_ctx_t *ctx, int action_value) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+static bool
+session_game_tetris_process_action (session_ctx_t *ctx, int action_value)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS
+      || !ctx->game.active) {
     return false;
   }
 
@@ -484,13 +534,13 @@ static bool session_game_tetris_process_action(session_ctx_t *ctx, int action_va
 
   tetris_game_state_t *state = &ctx->game.tetris;
   if (state->game_over) {
-    session_game_suspend(ctx, "Game over!");
+    session_game_suspend (ctx, "Game over!");
     return true;
   }
 
-  bool redraw = session_game_tetris_update_timer(ctx, false);
+  bool redraw = session_game_tetris_update_timer (ctx, false);
   if (state->game_over) {
-    session_game_suspend(ctx, "Game over!");
+    session_game_suspend (ctx, "Game over!");
     return true;
   }
 
@@ -498,64 +548,67 @@ static bool session_game_tetris_process_action(session_ctx_t *ctx, int action_va
   bool manual_drop = false;
 
   switch (action) {
-    case TETRIS_INPUT_MOVE_LEFT:
-      if (session_game_tetris_move(ctx, 0, -1)) {
-        redraw = true;
-      }
-      break;
-    case TETRIS_INPUT_MOVE_RIGHT:
-      if (session_game_tetris_move(ctx, 0, 1)) {
-        redraw = true;
-      }
-      break;
-    case TETRIS_INPUT_ROTATE:
-      if (session_game_tetris_rotate(ctx)) {
-        redraw = true;
-      }
-      break;
-    case TETRIS_INPUT_SOFT_DROP:
-      accelerate = true;
-      break;
-    case TETRIS_INPUT_HARD_DROP:
-      while (session_game_tetris_soft_drop(ctx)) {
-        redraw = true;
-      }
-      manual_drop = true;
-      break;
-    case TETRIS_INPUT_NONE:
-    default:
-      break;
+  case TETRIS_INPUT_MOVE_LEFT:
+    if (session_game_tetris_move (ctx, 0, -1)) {
+      redraw = true;
+    }
+    break;
+  case TETRIS_INPUT_MOVE_RIGHT:
+    if (session_game_tetris_move (ctx, 0, 1)) {
+      redraw = true;
+    }
+    break;
+  case TETRIS_INPUT_ROTATE:
+    if (session_game_tetris_rotate (ctx)) {
+      redraw = true;
+    }
+    break;
+  case TETRIS_INPUT_SOFT_DROP:
+    accelerate = true;
+    break;
+  case TETRIS_INPUT_HARD_DROP:
+    while (session_game_tetris_soft_drop (ctx)) {
+      redraw = true;
+    }
+    manual_drop = true;
+    break;
+  case TETRIS_INPUT_NONE:
+  default:
+    break;
   }
 
   if (state->game_over) {
-    session_game_suspend(ctx, "Game over!");
+    session_game_suspend (ctx, "Game over!");
     return true;
   }
 
   if (accelerate) {
-    if (session_game_tetris_update_timer(ctx, true)) {
+    if (session_game_tetris_update_timer (ctx, true)) {
       redraw = true;
     }
   } else if (!manual_drop) {
-    if (session_game_tetris_update_timer(ctx, false)) {
+    if (session_game_tetris_update_timer (ctx, false)) {
       redraw = true;
     }
   }
 
   if (state->game_over) {
-    session_game_suspend(ctx, "Game over!");
+    session_game_suspend (ctx, "Game over!");
     return true;
   }
 
   if (redraw) {
-    session_game_tetris_render(ctx);
+    session_game_tetris_render (ctx);
   }
 
   return true;
 }
 
-static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+static bool
+session_game_tetris_process_raw_input (session_ctx_t *ctx, char ch)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS
+      || !ctx->game.active) {
     return false;
   }
 
@@ -567,15 +620,17 @@ static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch) {
   }
 
   if (state->input_escape_active) {
-    if (state->input_escape_length < sizeof(state->input_escape_buffer)) {
+    if (state->input_escape_length < sizeof (state->input_escape_buffer)) {
       state->input_escape_buffer[state->input_escape_length++] = ch;
     }
 
-    if (state->input_escape_length == 2U && state->input_escape_buffer[1] == '[') {
+    if (state->input_escape_length == 2U
+        && state->input_escape_buffer[1] == '[') {
       return true;
     }
 
-    if (state->input_escape_length >= 3U && state->input_escape_buffer[1] == '[') {
+    if (state->input_escape_length >= 3U
+        && state->input_escape_buffer[1] == '[') {
       char final = state->input_escape_buffer[state->input_escape_length - 1U];
       tetris_input_action_t action = TETRIS_INPUT_NONE;
       if (final == 'A') {
@@ -590,7 +645,7 @@ static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch) {
       state->input_escape_active = false;
       state->input_escape_length = 0U;
       if (action != TETRIS_INPUT_NONE && !camouflaged) {
-        session_game_tetris_process_action(ctx, action);
+        session_game_tetris_process_action (ctx, action);
       }
       return true;
     }
@@ -615,13 +670,13 @@ static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch) {
     if (camouflaged) {
       return true;
     }
-    session_game_tetris_process_action(ctx, TETRIS_INPUT_ROTATE);
+    session_game_tetris_process_action (ctx, TETRIS_INPUT_ROTATE);
     return true;
   }
 
   unsigned char lowered = (unsigned char)ch;
   if (lowered >= 'A' && lowered <= 'Z') {
-    lowered = (unsigned char)tolower(lowered);
+    lowered = (unsigned char)tolower (lowered);
   }
 
   if (lowered == 't') {
@@ -631,8 +686,8 @@ static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch) {
       ctx->game.tetris.gravity_timer_initialized = false;
       ctx->game.tetris.gravity_timer_accumulator_ns = 0U;
       // Re-enable alternate screen buffer when returning to game
-      session_enable_alternate_screen(ctx);
-      session_game_tetris_render(ctx);
+      session_enable_alternate_screen (ctx);
+      session_game_tetris_render (ctx);
     } else {
       ctx->game.is_camouflaged = true;
       ctx->game.saved_tetris_state = ctx->game.tetris;
@@ -641,8 +696,8 @@ static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch) {
       ctx->game.tetris.gravity_timer_initialized = false;
       ctx->game.tetris.gravity_timer_accumulator_ns = 0U;
       // Disable alternate screen buffer when showing camouflage
-      session_disable_alternate_screen(ctx);
-      session_game_show_camouflage(ctx);
+      session_disable_alternate_screen (ctx);
+      session_game_show_camouflage (ctx);
     }
     return true;
   }
@@ -652,23 +707,23 @@ static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch) {
   }
 
   switch (lowered) {
-    case 'a':
-      session_game_tetris_process_action(ctx, TETRIS_INPUT_MOVE_LEFT);
-      return true;
-    case 'd':
-      session_game_tetris_process_action(ctx, TETRIS_INPUT_MOVE_RIGHT);
-      return true;
-    case 'w':
-      session_game_tetris_process_action(ctx, TETRIS_INPUT_ROTATE);
-      return true;
-    case 's':
-      session_game_tetris_process_action(ctx, TETRIS_INPUT_SOFT_DROP);
-      return true;
-    case ' ':
-      session_game_tetris_process_action(ctx, TETRIS_INPUT_HARD_DROP);
-      return true;
-    default:
-      break;
+  case 'a':
+    session_game_tetris_process_action (ctx, TETRIS_INPUT_MOVE_LEFT);
+    return true;
+  case 'd':
+    session_game_tetris_process_action (ctx, TETRIS_INPUT_MOVE_RIGHT);
+    return true;
+  case 'w':
+    session_game_tetris_process_action (ctx, TETRIS_INPUT_ROTATE);
+    return true;
+  case 's':
+    session_game_tetris_process_action (ctx, TETRIS_INPUT_SOFT_DROP);
+    return true;
+  case ' ':
+    session_game_tetris_process_action (ctx, TETRIS_INPUT_HARD_DROP);
+    return true;
+  default:
+    break;
   }
 
   if ((unsigned char)ch < 0x20U) {
@@ -678,7 +733,9 @@ static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch) {
   return true;
 }
 
-static bool session_game_tetris_rotate(session_ctx_t *ctx) {
+static bool
+session_game_tetris_rotate (session_ctx_t *ctx)
+{
   if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
     return false;
   }
@@ -687,14 +744,18 @@ static bool session_game_tetris_rotate(session_ctx_t *ctx) {
     return false;
   }
   int new_rotation = (state->rotation + 1) & 3;
-  if (!session_game_tetris_position_valid(state, state->current_piece, new_rotation, state->row, state->column)) {
+  if (!session_game_tetris_position_valid (state, state->current_piece,
+                                           new_rotation, state->row,
+                                           state->column)) {
     return false;
   }
   state->rotation = new_rotation;
   return true;
 }
 
-static void session_game_tetris_clear_lines(session_ctx_t *ctx, unsigned *cleared) {
+static void
+session_game_tetris_clear_lines (session_ctx_t *ctx, unsigned *cleared)
+{
   if (ctx == NULL) {
     if (cleared != NULL) {
       *cleared = 0U;
@@ -730,31 +791,38 @@ static void session_game_tetris_clear_lines(session_ctx_t *ctx, unsigned *cleare
   }
 }
 
-static void session_game_tetris_handle_round_progress(session_ctx_t *ctx) {
+static void
+session_game_tetris_handle_round_progress (session_ctx_t *ctx)
+{
   if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
     return;
   }
 
   tetris_game_state_t *state = &ctx->game.tetris;
-  while (state->round < SSH_CHATTER_TETRIS_MAX_ROUNDS && state->lines_cleared >= state->next_round_line_goal) {
+  while (state->round < SSH_CHATTER_TETRIS_MAX_ROUNDS
+         && state->lines_cleared >= state->next_round_line_goal) {
     state->round += 1U;
     state->next_round_line_goal += SSH_CHATTER_TETRIS_LINES_PER_ROUND;
-    session_game_tetris_apply_round_settings(state);
+    session_game_tetris_apply_round_settings (state);
 
     char announcement[SSH_CHATTER_MESSAGE_LIMIT];
     if (state->round >= SSH_CHATTER_TETRIS_MAX_ROUNDS) {
-      snprintf(announcement, sizeof(announcement), "Round %u reached! Gravity is at maximum speed.", state->round);
+      snprintf (announcement, sizeof (announcement),
+                "Round %u reached! Gravity is at maximum speed.", state->round);
     } else {
-      snprintf(announcement, sizeof(announcement), "Round %u reached! Blocks will fall faster.", state->round);
+      snprintf (announcement, sizeof (announcement),
+                "Round %u reached! Blocks will fall faster.", state->round);
     }
     bool previous_translation_suppress = ctx->translation_suppress_output;
     ctx->translation_suppress_output = true;
-    session_send_system_line(ctx, announcement);
+    session_send_system_line (ctx, announcement);
     ctx->translation_suppress_output = previous_translation_suppress;
   }
 }
 
-static void session_game_tetris_lock_piece(session_ctx_t *ctx) {
+static void
+session_game_tetris_lock_piece (session_ctx_t *ctx)
+{
   if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
     return;
   }
@@ -766,12 +834,14 @@ static void session_game_tetris_lock_piece(session_ctx_t *ctx) {
 
   for (int r = 0; r < SSH_CHATTER_TETROMINO_SIZE; ++r) {
     for (int c = 0; c < SSH_CHATTER_TETROMINO_SIZE; ++c) {
-      if (!session_game_tetris_cell_occupied(state->current_piece, state->rotation, r, c)) {
+      if (!session_game_tetris_cell_occupied (state->current_piece,
+                                              state->rotation, r, c)) {
         continue;
       }
       int board_row = state->row + r;
       int board_col = state->column + c;
-      if (board_row < 0 || board_row >= SSH_CHATTER_TETRIS_HEIGHT || board_col < 0 || board_col >= SSH_CHATTER_TETRIS_WIDTH) {
+      if (board_row < 0 || board_row >= SSH_CHATTER_TETRIS_HEIGHT
+          || board_col < 0 || board_col >= SSH_CHATTER_TETRIS_WIDTH) {
         continue;
       }
       state->board[board_row][board_col] = state->current_piece + 1;
@@ -779,78 +849,87 @@ static void session_game_tetris_lock_piece(session_ctx_t *ctx) {
   }
 
   unsigned cleared = 0U;
-  session_game_tetris_clear_lines(ctx, &cleared);
+  session_game_tetris_clear_lines (ctx, &cleared);
   if (cleared > 0U) {
     state->lines_cleared += cleared;
     state->score += cleared * 100U;
-    session_game_tetris_handle_round_progress(ctx);
+    session_game_tetris_handle_round_progress (ctx);
   }
 
-  if (!session_game_tetris_spawn_piece(ctx)) {
+  if (!session_game_tetris_spawn_piece (ctx)) {
     state->game_over = true;
   }
 }
 
-static const char *session_game_camouflage_lexer(const char *language) {
+static const char *
+session_game_camouflage_lexer (const char *language)
+{
   if (language == NULL) {
     return NULL;
   }
-  if (strcmp(language, "c") == 0) {
+  if (strcmp (language, "c") == 0) {
     return "c";
   }
-  if (strcmp(language, "cpp") == 0) {
+  if (strcmp (language, "cpp") == 0) {
     return "cpp";
   }
-  if (strcmp(language, "java") == 0) {
+  if (strcmp (language, "java") == 0) {
     return "java";
   }
-  if (strcmp(language, "go") == 0) {
+  if (strcmp (language, "go") == 0) {
     return "go";
   }
-  if (strcmp(language, "js") == 0) {
+  if (strcmp (language, "js") == 0) {
     return "javascript";
   }
-  if (strcmp(language, "ts") == 0) {
+  if (strcmp (language, "ts") == 0) {
     return "typescript";
   }
-  if (strcmp(language, "rust") == 0) {
+  if (strcmp (language, "rust") == 0) {
     return "rust";
   }
   return NULL;
 }
 
-static bool session_game_camouflage_highlight(session_ctx_t *ctx, const char *lexer, const char *file_path) {
+static bool
+session_game_camouflage_highlight (session_ctx_t *ctx, const char *lexer,
+                                   const char *file_path)
+{
   if (ctx == NULL || lexer == NULL || file_path == NULL) {
     return false;
   }
 
   char command[512];
-  int written = snprintf(command, sizeof(command), "pygmentize -f terminal256 -O stripnl=False -l %s %s", lexer, file_path);
-  if (written <= 0 || (size_t)written >= sizeof(command)) {
+  int written = snprintf (command, sizeof (command),
+                          "pygmentize -f terminal256 -O stripnl=False -l %s %s",
+                          lexer, file_path);
+  if (written <= 0 || (size_t)written >= sizeof (command)) {
     return false;
   }
 
   errno = 0;
-  FILE *pipe = popen(command, "r");
+  FILE *pipe = popen (command, "r");
   if (pipe == NULL) {
     if (errno == ENOENT) {
-      session_send_system_line(ctx, "Install python3-pygments to enable camouflage syntax highlighting.");
+      session_send_system_line (
+          ctx,
+          "Install python3-pygments to enable camouflage syntax highlighting.");
     }
     return false;
   }
 
   char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
   bool produced_output = false;
-  while (fgets(line_buffer, sizeof(line_buffer), pipe) != NULL) {
-    size_t len = strlen(line_buffer);
+  while (fgets (line_buffer, sizeof (line_buffer), pipe) != NULL) {
+    size_t len = strlen (line_buffer);
     if (len > 0U && line_buffer[len - 1U] == '\n') {
       line_buffer[len - 1U] = '\0';
     }
-    session_send_system_line(ctx, line_buffer);
+    session_send_system_line (ctx, line_buffer);
     produced_output = true;
   }
 
-  int status = pclose(pipe);
+  int status = pclose (pipe);
   if (status != 0 && !produced_output) {
     return false;
   }
@@ -858,54 +937,64 @@ static bool session_game_camouflage_highlight(session_ctx_t *ctx, const char *le
   return produced_output;
 }
 
-static void session_game_show_camouflage(session_ctx_t *ctx) {
+static void
+session_game_show_camouflage (session_ctx_t *ctx)
+{
   if (ctx == NULL) {
     return;
   }
 
-  session_clear_screen(ctx);
-  session_apply_background_fill(ctx);
+  session_clear_screen (ctx);
+  session_apply_background_fill (ctx);
 
   char file_path_buffer[256];
-  snprintf(file_path_buffer, sizeof(file_path_buffer), "/var/lib/ssh-chatter/%s.txt", ctx->game.chosen_camouflage_language);
+  snprintf (file_path_buffer, sizeof (file_path_buffer),
+            "/var/lib/ssh-chatter/%s.txt",
+            ctx->game.chosen_camouflage_language);
 
-  FILE *probe = fopen(file_path_buffer, "r");
+  FILE *probe = fopen (file_path_buffer, "r");
   if (probe == NULL) {
-    session_send_system_line(ctx, "Error: Could not load camouflage code snippet.");
+    session_send_system_line (ctx,
+                              "Error: Could not load camouflage code snippet.");
     return;
   }
-  fclose(probe);
+  fclose (probe);
 
   bool highlighted = false;
-  const char *lexer = session_game_camouflage_lexer(ctx->game.chosen_camouflage_language);
+  const char *lexer
+      = session_game_camouflage_lexer (ctx->game.chosen_camouflage_language);
   if (lexer != NULL) {
-    highlighted = session_game_camouflage_highlight(ctx, lexer, file_path_buffer);
+    highlighted
+        = session_game_camouflage_highlight (ctx, lexer, file_path_buffer);
   }
 
   if (!highlighted) {
-    FILE *fp = fopen(file_path_buffer, "r");
+    FILE *fp = fopen (file_path_buffer, "r");
     if (fp == NULL) {
-      session_send_system_line(ctx, "Error: Could not load camouflage code snippet.");
-      session_render_prompt(ctx, false);
+      session_send_system_line (
+          ctx, "Error: Could not load camouflage code snippet.");
+      session_render_prompt (ctx, false);
       return;
     }
 
     char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
-    while (fgets(line_buffer, sizeof(line_buffer), fp) != NULL) {
-      size_t len = strlen(line_buffer);
+    while (fgets (line_buffer, sizeof (line_buffer), fp) != NULL) {
+      size_t len = strlen (line_buffer);
       if (len > 0U && line_buffer[len - 1U] == '\n') {
         line_buffer[len - 1U] = '\0';
       }
-      session_send_system_line(ctx, line_buffer);
+      session_send_system_line (ctx, line_buffer);
     }
 
-    fclose(fp);
+    fclose (fp);
   }
 
-  session_render_prompt(ctx, false);
+  session_render_prompt (ctx, false);
 }
 
-static void session_game_tetris_render(session_ctx_t *ctx) {
+static void
+session_game_tetris_render (session_ctx_t *ctx)
+{
   if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS) {
     return;
   }
@@ -914,8 +1003,8 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
   ctx->translation_suppress_output = true;
 
   tetris_game_state_t *state = &ctx->game.tetris;
-  printf("\033[K");
-  session_render_separator(ctx, "Tetris");
+  printf ("\033[K");
+  session_render_separator (ctx, "Tetris");
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];
   char next_char = TETROMINO_DISPLAY_CHARS[state->next_piece % 7];
@@ -924,11 +1013,15 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
     if (state->next_round_line_goal > state->lines_cleared) {
       lines_remaining = state->next_round_line_goal - state->lines_cleared;
     }
-    snprintf(header, sizeof(header), "Score: %u   Lines: %u   Round: %u/%u (next in %u)   Next: %c", state->score,
-             state->lines_cleared, state->round, SSH_CHATTER_TETRIS_MAX_ROUNDS, lines_remaining, next_char);
+    snprintf (header, sizeof (header),
+              "Score: %u   Lines: %u   Round: %u/%u (next in %u)   Next: %c",
+              state->score, state->lines_cleared, state->round,
+              SSH_CHATTER_TETRIS_MAX_ROUNDS, lines_remaining, next_char);
   } else {
-    snprintf(header, sizeof(header), "Score: %u   Lines: %u   Round: %u/%u (max speed)   Next: %c", state->score,
-             state->lines_cleared, state->round, SSH_CHATTER_TETRIS_MAX_ROUNDS, next_char);
+    snprintf (header, sizeof (header),
+              "Score: %u   Lines: %u   Round: %u/%u (max speed)   Next: %c",
+              state->score, state->lines_cleared, state->round,
+              SSH_CHATTER_TETRIS_MAX_ROUNDS, next_char);
   }
 
   char border[SSH_CHATTER_TETRIS_WIDTH + 3];
@@ -938,7 +1031,7 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
   }
   border[SSH_CHATTER_TETRIS_WIDTH + 1] = '+';
   border[SSH_CHATTER_TETRIS_WIDTH + 2] = '\0';
-  session_send_system_line(ctx, border);
+  session_send_system_line (ctx, border);
 
   for (int row = 0; row < SSH_CHATTER_TETRIS_HEIGHT; ++row) {
     char line_buffer[SSH_CHATTER_TETRIS_WIDTH + 3];
@@ -954,9 +1047,10 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
       } else if (!state->game_over && state->current_piece >= 0) {
         int local_row = row - state->row;
         int local_col = col - state->column;
-        if (local_row >= 0 && local_row < SSH_CHATTER_TETROMINO_SIZE && local_col >= 0 &&
-            local_col < SSH_CHATTER_TETROMINO_SIZE &&
-            session_game_tetris_cell_occupied(state->current_piece, state->rotation, local_row, local_col)) {
+        if (local_row >= 0 && local_row < SSH_CHATTER_TETROMINO_SIZE
+            && local_col >= 0 && local_col < SSH_CHATTER_TETROMINO_SIZE
+            && session_game_tetris_cell_occupied (
+                state->current_piece, state->rotation, local_row, local_col)) {
           cell = TETROMINO_DISPLAY_CHARS[state->current_piece];
         }
       }
@@ -964,24 +1058,28 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
     }
     line_buffer[SSH_CHATTER_TETRIS_WIDTH + 1] = '|';
     line_buffer[SSH_CHATTER_TETRIS_WIDTH + 2] = '\0';
-    session_send_system_line(ctx, line_buffer);
+    session_send_system_line (ctx, line_buffer);
   }
 
-  session_send_system_line(ctx, border);
-  session_send_system_line(ctx, header);
-  session_send_system_line(ctx, "Controls: left, right, down, Ctrl+R or up: rotate, drop. Blank line = down.");
+  session_send_system_line (ctx, border);
+  session_send_system_line (ctx, header);
+  session_send_system_line (ctx, "Controls: left, right, down, Ctrl+R or up: "
+                                 "rotate, drop. Blank line = down.");
 
   ctx->translation_suppress_output = previous_translation_suppress;
 }
 
-static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS || !ctx->game.active) {
+static void
+session_game_tetris_handle_line (session_ctx_t *ctx, const char *line)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_TETRIS
+      || !ctx->game.active) {
     return;
   }
 
   tetris_game_state_t *state = &ctx->game.tetris;
   if (state->game_over) {
-    session_game_suspend(ctx, "Game over!");
+    session_game_suspend (ctx, "Game over!");
     return;
   }
 
@@ -992,45 +1090,52 @@ static void session_game_tetris_handle_line(session_ctx_t *ctx, const char *line
   if (line == NULL) {
     command[0] = '\0';
   } else {
-    size_t copy_len = strnlen(line, sizeof(command) - 1U);
-    memcpy(command, line, copy_len);
+    size_t copy_len = strnlen (line, sizeof (command) - 1U);
+    memcpy (command, line, copy_len);
     command[copy_len] = '\0';
   }
-  trim_whitespace_inplace(command);
+  trim_whitespace_inplace (command);
   for (size_t idx = 0U; command[idx] != '\0'; ++idx) {
-    command[idx] = (char)tolower((unsigned char)command[idx]);
+    command[idx] = (char)tolower ((unsigned char)command[idx]);
   }
 
   if (command[0] == '\0') {
-    session_game_tetris_process_timeout(ctx);
+    session_game_tetris_process_timeout (ctx);
     goto cleanup;
   }
 
-  if (strcmp(command, "help") == 0) {
-    session_send_system_line(ctx,
-                             "Tetris controls: WASD or arrow keys move (W/Up rotate, S/Down soft drop, A/Left, D/Right),"
-                             " space for a hard drop, and Ctrl+R also rotates. Ctrl+Z or /suspend! exits.");
+  if (strcmp (command, "help") == 0) {
+    session_send_system_line (ctx,
+                              "Tetris controls: WASD or arrow keys move (W/Up "
+                              "rotate, S/Down soft drop, A/Left, D/Right),"
+                              " space for a hard drop, and Ctrl+R also "
+                              "rotates. Ctrl+Z or /suspend! exits.");
     goto cleanup;
   }
 
-  if (strcmp(command, "drop") == 0) {
-    session_game_tetris_process_action(ctx, TETRIS_INPUT_HARD_DROP);
+  if (strcmp (command, "drop") == 0) {
+    session_game_tetris_process_action (ctx, TETRIS_INPUT_HARD_DROP);
     goto cleanup;
   }
 
-  session_send_system_line(ctx, "Use WASD or the arrow keys for control. Type help for a summary.");
+  session_send_system_line (
+      ctx, "Use WASD or the arrow keys for control. Type help for a summary.");
 
 cleanup:
   ctx->translation_suppress_output = previous_translation_suppress;
 }
 
-static void session_game_start_tetris(session_ctx_t *ctx) {
-  session_send_system_line(ctx, "CHOOSE YOUR LOCKSCREEN LANGUAGE TO HIDE THE SCREEN ON YOUR OFFICE! (c, cpp, java, go, js, ts, rust)");
+static void
+session_game_start_tetris (session_ctx_t *ctx)
+{
+  session_send_system_line (
+      ctx, "CHOOSE YOUR LOCKSCREEN LANGUAGE TO HIDE THE SCREEN ON YOUR OFFICE! "
+           "(c, cpp, java, go, js, ts, rust)");
   char language_choice[16];
   size_t length = 0U;
-  while (length + 1U < sizeof(language_choice)) {
+  while (length + 1U < sizeof (language_choice)) {
     char ch = '\0';
-    const int read_result = session_transport_read(ctx, &ch, 1, -1);
+    const int read_result = session_transport_read (ctx, &ch, 1, -1);
     if (read_result <= 0) {
       ctx->game.active = false;
       ctx->game.type = SESSION_GAME_NONE;
@@ -1038,14 +1143,14 @@ static void session_game_start_tetris(session_ctx_t *ctx) {
     }
 
     if (ch == '\r' || ch == '\n') {
-      session_local_echo_char(ctx, '\n');
+      session_local_echo_char (ctx, '\n');
       break;
     }
 
     if (ch == '\b' || (unsigned char)ch == 0x7fU) {
       if (length > 0U) {
         --length;
-        session_send_raw_text(ctx, "\b \b");
+        session_send_raw_text (ctx, "\b \b");
       }
       continue;
     }
@@ -1055,38 +1160,45 @@ static void session_game_start_tetris(session_ctx_t *ctx) {
     }
 
     language_choice[length++] = ch;
-    session_local_echo_char(ctx, ch);
+    session_local_echo_char (ctx, ch);
   }
   language_choice[length] = '\0';
-  trim_whitespace_inplace(language_choice);
+  trim_whitespace_inplace (language_choice);
   for (size_t idx = 0U; language_choice[idx] != '\0'; ++idx) {
-    language_choice[idx] = (char)tolower((unsigned char)language_choice[idx]);
+    language_choice[idx] = (char)tolower ((unsigned char)language_choice[idx]);
   }
 
   if (language_choice[0] == '\0') {
-    session_send_system_line(ctx, "No language chosen. Defaulting to C.");
-    snprintf(ctx->game.chosen_camouflage_language, sizeof(ctx->game.chosen_camouflage_language), "c");
-  } else if (strcmp(language_choice, "c") == 0 || strcmp(language_choice, "cpp") == 0 ||
-             strcmp(language_choice, "java") == 0 || strcmp(language_choice, "go") == 0 ||
-             strcmp(language_choice, "js") == 0 || strcmp(language_choice, "ts") == 0 ||
-             strcmp(language_choice, "rust") == 0) {
-    snprintf(ctx->game.chosen_camouflage_language, sizeof(ctx->game.chosen_camouflage_language), "%s", language_choice);
+    session_send_system_line (ctx, "No language chosen. Defaulting to C.");
+    snprintf (ctx->game.chosen_camouflage_language,
+              sizeof (ctx->game.chosen_camouflage_language), "c");
+  } else if (strcmp (language_choice, "c") == 0
+             || strcmp (language_choice, "cpp") == 0
+             || strcmp (language_choice, "java") == 0
+             || strcmp (language_choice, "go") == 0
+             || strcmp (language_choice, "js") == 0
+             || strcmp (language_choice, "ts") == 0
+             || strcmp (language_choice, "rust") == 0) {
+    snprintf (ctx->game.chosen_camouflage_language,
+              sizeof (ctx->game.chosen_camouflage_language), "%s",
+              language_choice);
   } else {
-    session_send_system_line(ctx, "Invalid language. Defaulting to C.");
-    snprintf(ctx->game.chosen_camouflage_language, sizeof(ctx->game.chosen_camouflage_language), "c");
+    session_send_system_line (ctx, "Invalid language. Defaulting to C.");
+    snprintf (ctx->game.chosen_camouflage_language,
+              sizeof (ctx->game.chosen_camouflage_language), "c");
   }
 
-  session_game_tetris_reset(&ctx->game.tetris);
-  session_game_seed_rng(ctx);
-  session_game_tetris_fill_bag(ctx);
-  ctx->game.tetris.next_piece = session_game_tetris_take_piece(ctx);
+  session_game_tetris_reset (&ctx->game.tetris);
+  session_game_seed_rng (ctx);
+  session_game_tetris_fill_bag (ctx);
+  ctx->game.tetris.next_piece = session_game_tetris_take_piece (ctx);
   ctx->game.type = SESSION_GAME_TETRIS;
   ctx->game.active = true;
   ctx->game.tetris.game_over = false;
   bool previous_translation_suppress = ctx->translation_suppress_output;
-  if (!session_game_tetris_spawn_piece(ctx)) {
+  if (!session_game_tetris_spawn_piece (ctx)) {
     ctx->translation_suppress_output = true;
-    session_send_system_line(ctx, "Unable to start Tetris right now.");
+    session_send_system_line (ctx, "Unable to start Tetris right now.");
     ctx->translation_suppress_output = previous_translation_suppress;
     ctx->game.active = false;
     ctx->game.type = SESSION_GAME_NONE;
@@ -1096,21 +1208,26 @@ static void session_game_start_tetris(session_ctx_t *ctx) {
   ctx->translation_suppress_output = true;
 
   // Enable alternate screen buffer to prevent scrolling and flickering
-  session_enable_alternate_screen(ctx);
+  session_enable_alternate_screen (ctx);
 
-  session_send_system_line(ctx,
-                           "Tetris started. Pieces fall on their own — use WASD or the arrow keys (W/Up rotate, S/Down soft"
-                           " drop, A/Left, D/Right), space for a hard drop, and Ctrl+R to rotate. Ctrl+Z or /suspend! exits.");
+  session_send_system_line (ctx,
+                            "Tetris started. Pieces fall on their own — use "
+                            "WASD or the arrow keys (W/Up rotate, S/Down soft"
+                            " drop, A/Left, D/Right), space for a hard drop, "
+                            "and Ctrl+R to rotate. Ctrl+Z or /suspend! exits.");
   char round_message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(round_message, sizeof(round_message), "Round 1/%u: Clear %u lines to reach the next round.",
-           SSH_CHATTER_TETRIS_MAX_ROUNDS, SSH_CHATTER_TETRIS_LINES_PER_ROUND);
-  session_send_system_line(ctx, round_message);
-  session_game_tetris_render(ctx);
+  snprintf (round_message, sizeof (round_message),
+            "Round 1/%u: Clear %u lines to reach the next round.",
+            SSH_CHATTER_TETRIS_MAX_ROUNDS, SSH_CHATTER_TETRIS_LINES_PER_ROUND);
+  session_send_system_line (ctx, round_message);
+  session_game_tetris_render (ctx);
 
   ctx->translation_suppress_output = previous_translation_suppress;
 }
 
-static void session_game_start_liargame(session_ctx_t *ctx) {
+static void
+session_game_start_liargame (session_ctx_t *ctx)
+{
   if (ctx == NULL) {
     return;
   }
@@ -1120,43 +1237,53 @@ static void session_game_start_liargame(session_ctx_t *ctx) {
   ctx->game.liar.round_number = 0U;
   ctx->game.liar.score = 0U;
   ctx->game.liar.awaiting_guess = false;
-  session_send_system_line(ctx, "Liar Game started. Guess which statement is the lie by typing 1, 2, or 3.");
-  session_game_liar_present_round(ctx);
+  session_send_system_line (ctx, "Liar Game started. Guess which statement is "
+                                 "the lie by typing 1, 2, or 3.");
+  session_game_liar_present_round (ctx);
 }
 
-static void session_game_liar_present_round(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_LIARGAME || !ctx->game.active) {
+static void
+session_game_liar_present_round (session_ctx_t *ctx)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_LIARGAME
+      || !ctx->game.active) {
     return;
   }
 
-  size_t prompt_count = sizeof(LIAR_PROMPTS) / sizeof(LIAR_PROMPTS[0]);
+  size_t prompt_count = sizeof (LIAR_PROMPTS) / sizeof (LIAR_PROMPTS[0]);
   if (prompt_count == 0U) {
-    session_game_suspend(ctx, "No prompts available for the liar game.");
+    session_game_suspend (ctx, "No prompts available for the liar game.");
     return;
   }
 
-  unsigned index = (unsigned)session_game_random_range(ctx, (int)prompt_count);
+  unsigned index = (unsigned)session_game_random_range (ctx, (int)prompt_count);
   ctx->game.liar.current_prompt_index = index;
   ctx->game.liar.liar_index = LIAR_PROMPTS[index].liar_index % 3U;
   ctx->game.liar.round_number += 1U;
   ctx->game.liar.awaiting_guess = true;
 
-  session_render_separator(ctx, "Liar Game");
+  session_render_separator (ctx, "Liar Game");
   char header[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(header, sizeof(header), "Round %u — which statement is the lie?", ctx->game.liar.round_number);
-  session_send_system_line(ctx, header);
+  snprintf (header, sizeof (header), "Round %u — which statement is the lie?",
+            ctx->game.liar.round_number);
+  session_send_system_line (ctx, header);
 
   const liar_prompt_t *prompt = &LIAR_PROMPTS[index];
   for (int i = 0; i < 3; ++i) {
     char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(line_buffer, sizeof(line_buffer), "%d. %s", i + 1, prompt->statements[i]);
-    session_send_system_line(ctx, line_buffer);
+    snprintf (line_buffer, sizeof (line_buffer), "%d. %s", i + 1,
+              prompt->statements[i]);
+    session_send_system_line (ctx, line_buffer);
   }
-  session_send_system_line(ctx, "Enter 1, 2, or 3 to choose. Type 'help' for options.");
+  session_send_system_line (
+      ctx, "Enter 1, 2, or 3 to choose. Type 'help' for options.");
 }
 
-static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_LIARGAME || !ctx->game.active) {
+static void
+session_game_liar_handle_line (session_ctx_t *ctx, const char *line)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_LIARGAME
+      || !ctx->game.active) {
     return;
   }
 
@@ -1165,34 +1292,36 @@ static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line) 
   if (line == NULL) {
     command[0] = '\0';
   } else {
-    size_t copy_len = strnlen(line, sizeof(command) - 1U);
-    memcpy(command, line, copy_len);
+    size_t copy_len = strnlen (line, sizeof (command) - 1U);
+    memcpy (command, line, copy_len);
     command[copy_len] = '\0';
   }
-  trim_whitespace_inplace(command);
+  trim_whitespace_inplace (command);
   for (size_t idx = 0U; command[idx] != '\0'; ++idx) {
-    command[idx] = (char)tolower((unsigned char)command[idx]);
+    command[idx] = (char)tolower ((unsigned char)command[idx]);
   }
 
-  if (strcmp(command, "help") == 0) {
-    session_send_system_line(ctx, "Type 1, 2, or 3 to guess the lie. /suspend! exits the game.");
+  if (strcmp (command, "help") == 0) {
+    session_send_system_line (
+        ctx, "Type 1, 2, or 3 to guess the lie. /suspend! exits the game.");
     return;
   }
 
   if (command[0] == '\0') {
-    session_send_system_line(ctx, "Pick a statement number between 1 and 3.");
+    session_send_system_line (ctx, "Pick a statement number between 1 and 3.");
     return;
   }
 
   if (!state->awaiting_guess) {
-    session_game_liar_present_round(ctx);
+    session_game_liar_present_round (ctx);
     return;
   }
 
   char *endptr = NULL;
-  long value = strtol(command, &endptr, 10);
+  long value = strtol (command, &endptr, 10);
   if (endptr == command || value < 1L || value > 3L) {
-    session_send_system_line(ctx, "Please enter 1, 2, or 3 to choose the lie.");
+    session_send_system_line (ctx,
+                              "Please enter 1, 2, or 3 to choose the lie.");
     return;
   }
 
@@ -1200,21 +1329,26 @@ static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line) 
   const liar_prompt_t *prompt = &LIAR_PROMPTS[state->current_prompt_index];
   if (guess == state->liar_index) {
     ++state->score;
-    session_send_system_line(ctx, "Correct! That statement was the lie.");
+    session_send_system_line (ctx, "Correct! That statement was the lie.");
   } else {
     char reveal[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(reveal, sizeof(reveal), "Nope! The lie was #%u: %s", state->liar_index + 1U,
-             prompt->statements[state->liar_index]);
-    session_send_system_line(ctx, reveal);
+    snprintf (reveal, sizeof (reveal), "Nope! The lie was #%u: %s",
+              state->liar_index + 1U, prompt->statements[state->liar_index]);
+    session_send_system_line (ctx, reveal);
   }
 
   state->awaiting_guess = false;
-  session_game_liar_present_round(ctx);
+  session_game_liar_present_round (ctx);
 }
 
-static void session_game_alpha_add_gravity_source(alpha_centauri_game_state_t *state, int x, int y, double mu,
-                                                  int influence_radius, char symbol, const char *name) {
-  if (state == NULL || state->gravity_source_count >= ALPHA_MAX_GRAVITY_SOURCES) {
+static void
+session_game_alpha_add_gravity_source (alpha_centauri_game_state_t *state,
+                                       int x, int y, double mu,
+                                       int influence_radius, char symbol,
+                                       const char *name)
+{
+  if (state == NULL
+      || state->gravity_source_count >= ALPHA_MAX_GRAVITY_SOURCES) {
     return;
   }
 
@@ -1230,20 +1364,23 @@ static void session_game_alpha_add_gravity_source(alpha_centauri_game_state_t *s
     y = ALPHA_NAV_HEIGHT - 1;
   }
 
-  alpha_gravity_source_t *source = &state->gravity_sources[state->gravity_source_count++];
+  alpha_gravity_source_t *source
+      = &state->gravity_sources[state->gravity_source_count++];
   source->x = x;
   source->y = y;
   source->mu = mu >= 0.0 ? mu : 0.0;
   source->influence_radius = influence_radius > 0 ? influence_radius : 0;
   source->symbol = symbol;
   if (name != NULL) {
-    snprintf(source->name, sizeof(source->name), "%s", name);
+    snprintf (source->name, sizeof (source->name), "%s", name);
   } else {
     source->name[0] = '\0';
   }
 }
 
-static void session_game_alpha_configure_gravity(session_ctx_t *ctx) {
+static void
+session_game_alpha_configure_gravity (session_ctx_t *ctx)
+{
   if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA) {
     return;
   }
@@ -1251,7 +1388,7 @@ static void session_game_alpha_configure_gravity(session_ctx_t *ctx) {
   alpha_centauri_game_state_t *state = &ctx->game.alpha;
 
   for (unsigned idx = 0U; idx < ALPHA_MAX_GRAVITY_SOURCES; ++idx) {
-    state->gravity_sources[idx] = (alpha_gravity_source_t){0};
+    state->gravity_sources[idx] = (alpha_gravity_source_t){ 0 };
   }
   state->gravity_source_count = 0U;
 
@@ -1262,11 +1399,12 @@ static void session_game_alpha_configure_gravity(session_ctx_t *ctx) {
       stage_multiplier += 0.75;
     }
   }
-  const char *hole_name = state->stage >= 3 ? "Proxima Abyss" : "Core Singularity";
+  const char *hole_name
+      = state->stage >= 3 ? "Proxima Abyss" : "Core Singularity";
   unsigned special_sources = 0U;
   if (state->stage == 4U) {
     if (!state->eva_ready || state->final_waypoint.symbol == '\0') {
-      session_game_alpha_plan_waypoints(ctx);
+      session_game_alpha_plan_waypoints (ctx);
     }
     if (!state->eva_ready) {
       special_sources += state->waypoint_count;
@@ -1275,9 +1413,11 @@ static void session_game_alpha_configure_gravity(session_ctx_t *ctx) {
       ++special_sources;
     }
   }
-  double hole_mu = ALPHA_BLACK_HOLE_MU * session_game_alpha_random_double(ctx, stage_multiplier,
-                                                                          stage_multiplier + 1.0);
-  session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN, hole_mu, ALPHA_NAV_MARGIN * 3, 'B', hole_name);
+  double hole_mu = ALPHA_BLACK_HOLE_MU
+                   * session_game_alpha_random_double (ctx, stage_multiplier,
+                                                       stage_multiplier + 1.0);
+  session_game_alpha_place_random_source (ctx, state, ALPHA_NAV_MARGIN, hole_mu,
+                                          ALPHA_NAV_MARGIN * 3, 'B', hole_name);
 
   int star_count = 2 + (int)state->stage;
   if (state->stage >= 2U) {
@@ -1296,7 +1436,8 @@ static void session_game_alpha_configure_gravity(session_ctx_t *ctx) {
     }
   }
 
-  int available_slots = (int)ALPHA_MAX_GRAVITY_SOURCES - 1 - (int)special_sources;
+  int available_slots
+      = (int)ALPHA_MAX_GRAVITY_SOURCES - 1 - (int)special_sources;
   if (available_slots < 0) {
     available_slots = 0;
   }
@@ -1319,39 +1460,56 @@ static void session_game_alpha_configure_gravity(session_ctx_t *ctx) {
   }
 
   for (int idx = 0; idx < star_count; ++idx) {
-    const char *name = kAlphaStarCatalog[session_game_random_range(ctx, (int)ALPHA_STAR_CATALOG_COUNT)];
-    double mu = ALPHA_STAR_MU * session_game_alpha_random_double(ctx, stage_multiplier * 0.7, stage_multiplier * 1.4);
-    session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN / 2, mu, ALPHA_NAV_MARGIN * 2, 'S', name);
+    const char *name = kAlphaStarCatalog[session_game_random_range (
+        ctx, (int)ALPHA_STAR_CATALOG_COUNT)];
+    double mu = ALPHA_STAR_MU
+                * session_game_alpha_random_double (ctx, stage_multiplier * 0.7,
+                                                    stage_multiplier * 1.4);
+    session_game_alpha_place_random_source (
+        ctx, state, ALPHA_NAV_MARGIN / 2, mu, ALPHA_NAV_MARGIN * 2, 'S', name);
   }
 
   for (int idx = 0; idx < planet_count; ++idx) {
-    const char *name = kAlphaPlanetCatalog[session_game_random_range(ctx, (int)ALPHA_PLANET_CATALOG_COUNT)];
-    double mu = ALPHA_PLANET_MU * session_game_alpha_random_double(ctx, stage_multiplier * 0.8, stage_multiplier * 1.6);
-    session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN / 2, mu, ALPHA_NAV_MARGIN * 2, 'P', name);
+    const char *name = kAlphaPlanetCatalog[session_game_random_range (
+        ctx, (int)ALPHA_PLANET_CATALOG_COUNT)];
+    double mu = ALPHA_PLANET_MU
+                * session_game_alpha_random_double (ctx, stage_multiplier * 0.8,
+                                                    stage_multiplier * 1.6);
+    session_game_alpha_place_random_source (
+        ctx, state, ALPHA_NAV_MARGIN / 2, mu, ALPHA_NAV_MARGIN * 2, 'P', name);
   }
 
   for (int idx = 0; idx < debris_count; ++idx) {
-    const char *name = kAlphaDebrisCatalog[session_game_random_range(ctx, (int)ALPHA_DEBRIS_CATALOG_COUNT)];
-    double mu = ALPHA_DEBRIS_MU * session_game_alpha_random_double(ctx, 0.7, 2.1) * stage_multiplier;
-    session_game_alpha_place_random_source(ctx, state, ALPHA_NAV_MARGIN / 3, mu, ALPHA_NAV_MARGIN, 'D', name);
+    const char *name = kAlphaDebrisCatalog[session_game_random_range (
+        ctx, (int)ALPHA_DEBRIS_CATALOG_COUNT)];
+    double mu = ALPHA_DEBRIS_MU
+                * session_game_alpha_random_double (ctx, 0.7, 2.1)
+                * stage_multiplier;
+    session_game_alpha_place_random_source (ctx, state, ALPHA_NAV_MARGIN / 3,
+                                            mu, ALPHA_NAV_MARGIN, 'D', name);
   }
 
   if (state->stage == 4U) {
     if (!state->eva_ready) {
       for (unsigned idx = 0U; idx < state->waypoint_count; ++idx) {
         const alpha_waypoint_t *waypoint = &state->waypoints[idx];
-        session_game_alpha_add_gravity_source(state, waypoint->x, waypoint->y, ALPHA_PLANET_MU,
-                                              ALPHA_NAV_MARGIN * 2, waypoint->symbol, waypoint->name);
+        session_game_alpha_add_gravity_source (
+            state, waypoint->x, waypoint->y, ALPHA_PLANET_MU,
+            ALPHA_NAV_MARGIN * 2, waypoint->symbol, waypoint->name);
       }
     }
     if (state->final_waypoint.symbol != '\0') {
-      session_game_alpha_add_gravity_source(state, state->final_waypoint.x, state->final_waypoint.y, ALPHA_PLANET_MU,
-                                            ALPHA_NAV_MARGIN * 2, state->final_waypoint.symbol, state->final_waypoint.name);
+      session_game_alpha_add_gravity_source (
+          state, state->final_waypoint.x, state->final_waypoint.y,
+          ALPHA_PLANET_MU, ALPHA_NAV_MARGIN * 2, state->final_waypoint.symbol,
+          state->final_waypoint.name);
     }
   }
 }
 
-static void session_game_alpha_apply_gravity(alpha_centauri_game_state_t *state) {
+static void
+session_game_alpha_apply_gravity (alpha_centauri_game_state_t *state)
+{
   if (state == NULL || state->gravity_source_count == 0U) {
     return;
   }
@@ -1370,12 +1528,14 @@ static void session_game_alpha_apply_gravity(alpha_centauri_game_state_t *state)
     double dx = (double)source->x - fx;
     double dy = (double)source->y - fy;
     double distance_sq = (dx * dx) + (dy * dy);
-    double distance = sqrt(distance_sq);
+    double distance = sqrt (distance_sq);
     if (distance < ALPHA_GRAVITY_MIN_DISTANCE) {
       distance = ALPHA_GRAVITY_MIN_DISTANCE;
     }
 
-    double radius = source->influence_radius > 0 ? (double)source->influence_radius : (double)ALPHA_NAV_MARGIN;
+    double radius = source->influence_radius > 0
+                        ? (double)source->influence_radius
+                        : (double)ALPHA_NAV_MARGIN;
     double attenuation = 1.0;
     if (radius > 0.0) {
       double normalized = distance / radius;
@@ -1393,7 +1553,7 @@ static void session_game_alpha_apply_gravity(alpha_centauri_game_state_t *state)
     ay += force * (dy / distance);
   }
 
-  double accel_magnitude = hypot(ax, ay);
+  double accel_magnitude = hypot (ax, ay);
   if (accel_magnitude > ALPHA_GRAVITY_MAX_ACCEL && accel_magnitude > 0.0) {
     double accel_scale = ALPHA_GRAVITY_MAX_ACCEL / accel_magnitude;
     ax *= accel_scale;
@@ -1403,7 +1563,7 @@ static void session_game_alpha_apply_gravity(alpha_centauri_game_state_t *state)
   state->nav_vx = (state->nav_vx + ax) * ALPHA_GRAVITY_DAMPING;
   state->nav_vy = (state->nav_vy + ay) * ALPHA_GRAVITY_DAMPING;
 
-  double speed = hypot(state->nav_vx, state->nav_vy);
+  double speed = hypot (state->nav_vx, state->nav_vy);
   if (speed > ALPHA_NAV_MAX_SPEED && speed > 0.0) {
     double speed_scale = ALPHA_NAV_MAX_SPEED / speed;
     state->nav_vx *= speed_scale;
@@ -1432,8 +1592,8 @@ static void session_game_alpha_apply_gravity(alpha_centauri_game_state_t *state)
     state->nav_vy = 0.0;
   }
 
-  long rounded_x = lround(state->nav_fx);
-  long rounded_y = lround(state->nav_fy);
+  long rounded_x = lround (state->nav_fx);
+  long rounded_y = lround (state->nav_fy);
   if (rounded_x < 0) {
     rounded_x = 0;
   } else if (rounded_x > (long)(ALPHA_NAV_WIDTH - 1)) {
@@ -1449,7 +1609,9 @@ static void session_game_alpha_apply_gravity(alpha_centauri_game_state_t *state)
   state->nav_y = (int)rounded_y;
 }
 
-static void session_game_alpha_prepare_navigation(session_ctx_t *ctx) {
+static void
+session_game_alpha_prepare_navigation (session_ctx_t *ctx)
+{
   if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA) {
     return;
   }
@@ -1484,80 +1646,105 @@ static void session_game_alpha_prepare_navigation(session_ctx_t *ctx) {
   state->nav_vy = 0.0;
 
   switch (state->stage) {
-    case 0:
-      state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
-      state->nav_y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, safe_margin + 4);
-      if (state->nav_y < safe_margin) {
-        state->nav_y = safe_margin;
-      }
-      state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
-      state->nav_target_y = session_game_random_range(ctx, safe_margin + 4);
-      state->nav_required_ticks = 1U;
-      break;
-    case 1:
-      state->nav_x = session_game_random_range(ctx, (ALPHA_NAV_WIDTH / 2)) + safe_margin;
-      if (state->nav_x >= ALPHA_NAV_WIDTH) {
-        state->nav_x = ALPHA_NAV_WIDTH - 1;
-      }
-      state->nav_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
-      state->nav_target_x = ALPHA_NAV_WIDTH - 1 - session_game_random_range(ctx, safe_margin + 5);
-      state->nav_target_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
-      state->nav_required_ticks = 1U;
-      break;
-    case 2:
-      state->nav_x = ALPHA_NAV_WIDTH - 1 - session_game_random_range(ctx, safe_margin + 5);
-      state->nav_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
-      state->nav_target_x = session_game_random_range(ctx, safe_margin + 5);
-      state->nav_target_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
-      state->nav_required_ticks = 1U;
-      break;
-    case 3:
-      state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
-      state->nav_y = session_game_random_range(ctx, safe_margin + 5);
-      state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
-      state->nav_target_y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, safe_margin + 5);
-      state->nav_required_ticks = 1U;
-      break;
-    case 4:
-      if (!state->eva_ready) {
-        session_game_alpha_plan_waypoints(ctx);
-        if (state->waypoint_count == 0U) {
-          state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
-          state->nav_target_y = session_game_random_range(ctx, safe_margin + 5);
-        } else {
-          if (state->waypoint_index >= state->waypoint_count) {
-            state->waypoint_index = state->waypoint_count - 1U;
-          }
-          const alpha_waypoint_t *waypoint = &state->waypoints[state->waypoint_index];
-          state->nav_target_x = waypoint->x;
-          state->nav_target_y = waypoint->y;
-        }
-        state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
-        state->nav_y = session_game_random_range(ctx, safe_margin + 5);
-        state->nav_required_ticks = 1U;
-      } else if (state->awaiting_flag) {
-        if (state->final_waypoint.symbol == '\0') {
-          session_game_alpha_plan_waypoints(ctx);
-        }
-        state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
-        state->nav_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
-        state->nav_target_x = state->final_waypoint.x;
-        state->nav_target_y = state->final_waypoint.y;
-        state->nav_required_ticks = 1U;
+  case 0:
+    state->nav_x = session_game_alpha_random_with_margin (ctx, ALPHA_NAV_WIDTH,
+                                                          safe_margin);
+    state->nav_y = ALPHA_NAV_HEIGHT - 1
+                   - session_game_random_range (ctx, safe_margin + 4);
+    if (state->nav_y < safe_margin) {
+      state->nav_y = safe_margin;
+    }
+    state->nav_target_x = session_game_alpha_random_with_margin (
+        ctx, ALPHA_NAV_WIDTH, safe_margin);
+    state->nav_target_y = session_game_random_range (ctx, safe_margin + 4);
+    state->nav_required_ticks = 1U;
+    break;
+  case 1:
+    state->nav_x
+        = session_game_random_range (ctx, (ALPHA_NAV_WIDTH / 2)) + safe_margin;
+    if (state->nav_x >= ALPHA_NAV_WIDTH) {
+      state->nav_x = ALPHA_NAV_WIDTH - 1;
+    }
+    state->nav_y = session_game_alpha_random_with_margin (ctx, ALPHA_NAV_HEIGHT,
+                                                          safe_margin);
+    state->nav_target_x = ALPHA_NAV_WIDTH - 1
+                          - session_game_random_range (ctx, safe_margin + 5);
+    state->nav_target_y = session_game_alpha_random_with_margin (
+        ctx, ALPHA_NAV_HEIGHT, safe_margin);
+    state->nav_required_ticks = 1U;
+    break;
+  case 2:
+    state->nav_x = ALPHA_NAV_WIDTH - 1
+                   - session_game_random_range (ctx, safe_margin + 5);
+    state->nav_y = session_game_alpha_random_with_margin (ctx, ALPHA_NAV_HEIGHT,
+                                                          safe_margin);
+    state->nav_target_x = session_game_random_range (ctx, safe_margin + 5);
+    state->nav_target_y = session_game_alpha_random_with_margin (
+        ctx, ALPHA_NAV_HEIGHT, safe_margin);
+    state->nav_required_ticks = 1U;
+    break;
+  case 3:
+    state->nav_x = session_game_alpha_random_with_margin (ctx, ALPHA_NAV_WIDTH,
+                                                          safe_margin);
+    state->nav_y = session_game_random_range (ctx, safe_margin + 5);
+    state->nav_target_x = session_game_alpha_random_with_margin (
+        ctx, ALPHA_NAV_WIDTH, safe_margin);
+    state->nav_target_y = ALPHA_NAV_HEIGHT - 1
+                          - session_game_random_range (ctx, safe_margin + 5);
+    state->nav_required_ticks = 1U;
+    break;
+  case 4:
+    if (!state->eva_ready) {
+      session_game_alpha_plan_waypoints (ctx);
+      if (state->waypoint_count == 0U) {
+        state->nav_target_x = session_game_alpha_random_with_margin (
+            ctx, ALPHA_NAV_WIDTH, safe_margin);
+        state->nav_target_y = session_game_random_range (ctx, safe_margin + 5);
       } else {
-        state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
-        state->nav_y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, safe_margin + 3);
-        state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
-        state->nav_target_y = session_game_random_range(ctx, safe_margin + 3);
-        state->nav_required_ticks = 1U;
+        if (state->waypoint_index >= state->waypoint_count) {
+          state->waypoint_index = state->waypoint_count - 1U;
+        }
+        const alpha_waypoint_t *waypoint
+            = &state->waypoints[state->waypoint_index];
+        state->nav_target_x = waypoint->x;
+        state->nav_target_y = waypoint->y;
       }
-      break;
-    default:
-      state->nav_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
-      state->nav_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
-      state->nav_target_x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, safe_margin);
-      state->nav_target_y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, safe_margin);
-      break;
+      state->nav_x = session_game_alpha_random_with_margin (
+          ctx, ALPHA_NAV_WIDTH, safe_margin);
+      state->nav_y = session_game_random_range (ctx, safe_margin + 5);
+      state->nav_required_ticks = 1U;
+    } else if (state->awaiting_flag) {
+      if (state->final_waypoint.symbol == '\0') {
+        session_game_alpha_plan_waypoints (ctx);
+      }
+      state->nav_x = session_game_alpha_random_with_margin (
+          ctx, ALPHA_NAV_WIDTH, safe_margin);
+      state->nav_y = session_game_alpha_random_with_margin (
+          ctx, ALPHA_NAV_HEIGHT, safe_margin);
+      state->nav_target_x = state->final_waypoint.x;
+      state->nav_target_y = state->final_waypoint.y;
+      state->nav_required_ticks = 1U;
+    } else {
+      state->nav_x = session_game_alpha_random_with_margin (
+          ctx, ALPHA_NAV_WIDTH, safe_margin);
+      state->nav_y = ALPHA_NAV_HEIGHT - 1
+                     - session_game_random_range (ctx, safe_margin + 3);
+      state->nav_target_x = session_game_alpha_random_with_margin (
+          ctx, ALPHA_NAV_WIDTH, safe_margin);
+      state->nav_target_y = session_game_random_range (ctx, safe_margin + 3);
+      state->nav_required_ticks = 1U;
+    }
+    break;
+  default:
+    state->nav_x = session_game_alpha_random_with_margin (ctx, ALPHA_NAV_WIDTH,
+                                                          safe_margin);
+    state->nav_y = session_game_alpha_random_with_margin (ctx, ALPHA_NAV_HEIGHT,
+                                                          safe_margin);
+    state->nav_target_x = session_game_alpha_random_with_margin (
+        ctx, ALPHA_NAV_WIDTH, safe_margin);
+    state->nav_target_y = session_game_alpha_random_with_margin (
+        ctx, ALPHA_NAV_HEIGHT, safe_margin);
+    break;
   }
 
   if (state->nav_target_x < 0) {
@@ -1582,42 +1769,52 @@ static void session_game_alpha_prepare_navigation(session_ctx_t *ctx) {
     state->nav_y = ALPHA_NAV_HEIGHT - 1;
   }
 
-  if (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y) {
+  if (state->nav_x == state->nav_target_x
+      && state->nav_y == state->nav_target_y) {
     if (state->stage == 4U) {
       state->nav_x = (state->nav_target_x + ALPHA_NAV_MARGIN) % ALPHA_NAV_WIDTH;
-      state->nav_y = (state->nav_target_y + ALPHA_NAV_MARGIN) % ALPHA_NAV_HEIGHT;
+      state->nav_y
+          = (state->nav_target_y + ALPHA_NAV_MARGIN) % ALPHA_NAV_HEIGHT;
       state->nav_fx = (double)state->nav_x;
       state->nav_fy = (double)state->nav_y;
     } else {
-      state->nav_target_x = (state->nav_target_x + (ALPHA_NAV_WIDTH / 2)) % ALPHA_NAV_WIDTH;
-      state->nav_target_y = (state->nav_target_y + (ALPHA_NAV_HEIGHT / 2)) % ALPHA_NAV_HEIGHT;
+      state->nav_target_x
+          = (state->nav_target_x + (ALPHA_NAV_WIDTH / 2)) % ALPHA_NAV_WIDTH;
+      state->nav_target_y
+          = (state->nav_target_y + (ALPHA_NAV_HEIGHT / 2)) % ALPHA_NAV_HEIGHT;
     }
   }
 
   state->nav_fx = (double)state->nav_x;
   state->nav_fy = (double)state->nav_y;
 
-  session_game_alpha_configure_gravity(ctx);
+  session_game_alpha_configure_gravity (ctx);
 }
 
-static void session_game_alpha_reroll_navigation(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
+static void
+session_game_alpha_reroll_navigation (session_ctx_t *ctx)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA
+      || !ctx->game.active) {
     return;
   }
 
-  session_send_system_line(ctx, "Mission control: Recomputing the navigation solution...");
-  session_game_alpha_prepare_navigation(ctx);
-  session_game_alpha_sync_to_save(ctx);
-  session_game_alpha_present_stage(ctx);
+  session_send_system_line (
+      ctx, "Mission control: Recomputing the navigation solution...");
+  session_game_alpha_prepare_navigation (ctx);
+  session_game_alpha_sync_to_save (ctx);
+  session_game_alpha_present_stage (ctx);
 }
 
-static void session_game_alpha_reset(session_ctx_t *ctx) {
+static void
+session_game_alpha_reset (session_ctx_t *ctx)
+{
   if (ctx == NULL) {
     return;
   }
 
   alpha_centauri_game_state_t *state = &ctx->game.alpha;
-  *state = (alpha_centauri_game_state_t){0};
+  *state = (alpha_centauri_game_state_t){ 0 };
   state->stage = 0U;
   state->velocity_fraction_c = 0.0;
   state->distance_travelled_ly = 0.0;
@@ -1629,18 +1826,20 @@ static void session_game_alpha_reset(session_ctx_t *ctx) {
   state->active = false;
   state->eva_ready = false;
   state->awaiting_flag = false;
-  session_game_alpha_prepare_navigation(ctx);
+  session_game_alpha_prepare_navigation (ctx);
 }
 
-static void session_game_alpha_sync_from_save(session_ctx_t *ctx) {
+static void
+session_game_alpha_sync_from_save (session_ctx_t *ctx)
+{
   if (ctx == NULL) {
     return;
   }
 
   alpha_centauri_game_state_t *state = &ctx->game.alpha;
-  session_game_alpha_reset(ctx);
+  session_game_alpha_reset (ctx);
 
-  if (!session_user_data_load(ctx)) {
+  if (!session_user_data_load (ctx)) {
     return;
   }
 
@@ -1663,15 +1862,17 @@ static void session_game_alpha_sync_from_save(session_ctx_t *ctx) {
   state->oxygen_days = save->oxygen_days;
   state->mission_time_years = save->mission_time_years;
   state->radiation_msv = save->radiation_msv;
-  session_game_alpha_prepare_navigation(ctx);
+  session_game_alpha_prepare_navigation (ctx);
 }
 
-static void session_game_alpha_sync_to_save(session_ctx_t *ctx) {
+static void
+session_game_alpha_sync_to_save (session_ctx_t *ctx)
+{
   if (ctx == NULL) {
     return;
   }
 
-  if (!session_user_data_load(ctx)) {
+  if (!session_user_data_load (ctx)) {
     return;
   }
 
@@ -1688,10 +1889,12 @@ static void session_game_alpha_sync_to_save(session_ctx_t *ctx) {
   save->oxygen_days = state->oxygen_days;
   save->mission_time_years = state->mission_time_years;
   save->radiation_msv = state->radiation_msv;
-  session_user_data_commit(ctx);
+  session_user_data_commit (ctx);
 }
 
-static void session_game_alpha_report_state(session_ctx_t *ctx, const char *label) {
+static void
+session_game_alpha_report_state (session_ctx_t *ctx, const char *label)
+{
   if (ctx == NULL) {
     return;
   }
@@ -1701,66 +1904,78 @@ static void session_game_alpha_report_state(session_ctx_t *ctx, const char *labe
   ctx->translation_suppress_output = true;
 
   if (label != NULL && label[0] != '\0') {
-    session_send_system_line(ctx, label);
+    session_send_system_line (ctx, label);
   }
 
-  double velocity_kms = state->velocity_fraction_c * ALPHA_SPEED_OF_LIGHT_MPS / 1000.0;
+  double velocity_kms
+      = state->velocity_fraction_c * ALPHA_SPEED_OF_LIGHT_MPS / 1000.0;
   double distance_au = state->distance_remaining_ly * ALPHA_LY_TO_AU;
 
   char line[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(line, sizeof(line),
-           "Velocity: %.2f%% c (%.0f km/s) | Fuel %.1f%% | Radiation %.1f mSv",
-           state->velocity_fraction_c * 100.0, velocity_kms, state->fuel_percent, state->radiation_msv);
-  session_send_system_line(ctx, line);
+  snprintf (line, sizeof (line),
+            "Velocity: %.2f%% c (%.0f km/s) | Fuel %.1f%% | Radiation %.1f mSv",
+            state->velocity_fraction_c * 100.0, velocity_kms,
+            state->fuel_percent, state->radiation_msv);
+  session_send_system_line (ctx, line);
 
-  snprintf(line, sizeof(line),
-           "Distance remaining: %.2f ly (%.0f AU) | Oxygen %.0f days | Mission clock %.2f years",
-           state->distance_remaining_ly, distance_au, state->oxygen_days, state->mission_time_years);
-  session_send_system_line(ctx, line);
+  snprintf (line, sizeof (line),
+            "Distance remaining: %.2f ly (%.0f AU) | Oxygen %.0f days | "
+            "Mission clock %.2f years",
+            state->distance_remaining_ly, distance_au, state->oxygen_days,
+            state->mission_time_years);
+  session_send_system_line (ctx, line);
 
   ctx->translation_suppress_output = previous_translation;
 }
 
-static const char *session_game_alpha_phase_label(const alpha_centauri_game_state_t *state) {
+static const char *
+session_game_alpha_phase_label (const alpha_centauri_game_state_t *state)
+{
   if (state == NULL) {
     return "Guidance";
   }
 
   switch (state->stage) {
-    case 0:
-      return "Launch corridor beacon";
-    case 1:
-      return "Barycenter alignment";
-    case 2:
-      return "Turnover marker";
-    case 3:
-      return "Retro burn beacon";
-    case 4:
-      if (!state->eva_ready) {
-        return "Deorbit corridor";
-      }
-      if (state->awaiting_flag) {
-        return "Landing beacon";
-      }
-      return "Orbit standby";
-    default:
-      break;
+  case 0:
+    return "Launch corridor beacon";
+  case 1:
+    return "Barycenter alignment";
+  case 2:
+    return "Turnover marker";
+  case 3:
+    return "Retro burn beacon";
+  case 4:
+    if (!state->eva_ready) {
+      return "Deorbit corridor";
+    }
+    if (state->awaiting_flag) {
+      return "Landing beacon";
+    }
+    return "Orbit standby";
+  default:
+    break;
   }
   return "Guidance";
 }
 
-static void session_game_alpha_render_navigation(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
+static void
+session_game_alpha_render_navigation (session_ctx_t *ctx)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA
+      || !ctx->game.active) {
     return;
   }
 
   const alpha_centauri_game_state_t *state = &ctx->game.alpha;
-  const char *phase_label = session_game_alpha_phase_label(state);
+  const char *phase_label = session_game_alpha_phase_label (state);
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];
-  bool contact = (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y);
+  bool contact = (state->nav_x == state->nav_target_x
+                  && state->nav_y == state->nav_target_y);
   const char *status = contact ? "beacon contact achieved" : "tracking beacon";
-  snprintf(header, sizeof(header), "Guidance: %s (%s — reach '+' to advance automatically)", phase_label, status);
+  snprintf (header, sizeof (header),
+            "Guidance: %s (%s — reach '+' to advance automatically)",
+            phase_label, status);
 
   char border[ALPHA_NAV_WIDTH + 3];
   border[0] = '+';
@@ -1769,7 +1984,7 @@ static void session_game_alpha_render_navigation(session_ctx_t *ctx) {
   }
   border[ALPHA_NAV_WIDTH + 1] = '+';
   border[ALPHA_NAV_WIDTH + 2] = '\0';
-  session_send_system_line(ctx, border);
+  session_send_system_line (ctx, border);
 
   for (int y = 0; y < ALPHA_NAV_HEIGHT; ++y) {
     char row[ALPHA_NAV_WIDTH + 1];
@@ -1785,14 +2000,16 @@ static void session_game_alpha_render_navigation(session_ctx_t *ctx) {
       }
     }
 
-    if (state->nav_target_x >= 0 && state->nav_target_x < ALPHA_NAV_WIDTH && state->nav_target_y >= 0 &&
-        state->nav_target_y < ALPHA_NAV_HEIGHT && y == state->nav_target_y) {
+    if (state->nav_target_x >= 0 && state->nav_target_x < ALPHA_NAV_WIDTH
+        && state->nav_target_y >= 0 && state->nav_target_y < ALPHA_NAV_HEIGHT
+        && y == state->nav_target_y) {
       row[state->nav_target_x] = '+';
     }
 
-    if (state->nav_x >= 0 && state->nav_x < ALPHA_NAV_WIDTH && state->nav_y >= 0 && state->nav_y < ALPHA_NAV_HEIGHT &&
-        y == state->nav_y) {
-      if (state->nav_target_x == state->nav_x && state->nav_target_y == state->nav_y) {
+    if (state->nav_x >= 0 && state->nav_x < ALPHA_NAV_WIDTH && state->nav_y >= 0
+        && state->nav_y < ALPHA_NAV_HEIGHT && y == state->nav_y) {
+      if (state->nav_target_x == state->nav_x
+          && state->nav_target_y == state->nav_y) {
         row[state->nav_x] = '*';
       } else {
         row[state->nav_x] = '@';
@@ -1806,59 +2023,69 @@ static void session_game_alpha_render_navigation(session_ctx_t *ctx) {
     }
     line[ALPHA_NAV_WIDTH + 1] = '|';
     line[ALPHA_NAV_WIDTH + 2] = '\0';
-    session_send_system_line(ctx, line);
+    session_send_system_line (ctx, line);
   }
 
-  session_send_system_line(ctx, border);
-  session_send_system_line(ctx, header);
+  session_send_system_line (ctx, border);
+  session_send_system_line (ctx, header);
 
   if (state->gravity_source_count > 0U) {
     char gravity_line[SSH_CHATTER_MESSAGE_LIMIT];
-    int written = snprintf(gravity_line, sizeof(gravity_line), "Gravity wells: ");
+    int written
+        = snprintf (gravity_line, sizeof (gravity_line), "Gravity wells: ");
     size_t offset = 0U;
     if (written >= 0) {
       offset = (size_t)written;
-      if (offset >= sizeof(gravity_line)) {
-        offset = sizeof(gravity_line) - 1U;
+      if (offset >= sizeof (gravity_line)) {
+        offset = sizeof (gravity_line) - 1U;
       }
     } else {
       gravity_line[0] = '\0';
     }
 
-    for (unsigned idx = 0U; idx < state->gravity_source_count && offset < sizeof(gravity_line) - 1U; ++idx) {
+    for (unsigned idx = 0U; idx < state->gravity_source_count
+                            && offset < sizeof (gravity_line) - 1U;
+         ++idx) {
       const alpha_gravity_source_t *source = &state->gravity_sources[idx];
-      const char *name = source->name[0] != '\0' ? source->name : "Gravity Source";
+      const char *name
+          = source->name[0] != '\0' ? source->name : "Gravity Source";
       char symbol = source->symbol != '\0' ? source->symbol : 'G';
-      written = snprintf(gravity_line + offset, sizeof(gravity_line) - offset, "%s%c=%s(μ=%.2e)",
-                         idx == 0U ? "" : ", ", symbol, name, source->mu);
+      written = snprintf (gravity_line + offset, sizeof (gravity_line) - offset,
+                          "%s%c=%s(μ=%.2e)", idx == 0U ? "" : ", ", symbol,
+                          name, source->mu);
       if (written < 0) {
         break;
       }
-      if ((size_t)written >= sizeof(gravity_line) - offset) {
-        offset = sizeof(gravity_line) - 1U;
+      if ((size_t)written >= sizeof (gravity_line) - offset) {
+        offset = sizeof (gravity_line) - 1U;
         break;
       }
       offset += (size_t)written;
     }
 
-    gravity_line[sizeof(gravity_line) - 1U] = '\0';
-    session_send_system_line(ctx, gravity_line);
+    gravity_line[sizeof (gravity_line) - 1U] = '\0';
+    session_send_system_line (ctx, gravity_line);
   }
 }
 
-static void session_game_alpha_refresh_navigation(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
+static void
+session_game_alpha_refresh_navigation (session_ctx_t *ctx)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA
+      || !ctx->game.active) {
     return;
   }
 
   bool previous_translation = ctx->translation_suppress_output;
   ctx->translation_suppress_output = true;
-  session_game_alpha_render_navigation(ctx);
-  session_game_alpha_report_state(ctx, "Current status:");
+  session_game_alpha_render_navigation (ctx);
+  session_game_alpha_report_state (ctx, "Current status:");
   ctx->translation_suppress_output = previous_translation;
 }
 
-static void session_game_alpha_plan_waypoints(session_ctx_t *ctx) {
+static void
+session_game_alpha_plan_waypoints (session_ctx_t *ctx)
+{
   if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA) {
     return;
   }
@@ -1867,11 +2094,12 @@ static void session_game_alpha_plan_waypoints(session_ctx_t *ctx) {
   if (state->stage != 4U) {
     state->waypoint_count = 0U;
     state->waypoint_index = 0U;
-    state->final_waypoint = (alpha_waypoint_t){0};
+    state->final_waypoint = (alpha_waypoint_t){ 0 };
     return;
   }
 
-  size_t name_count = sizeof(kAlphaWaystationNames) / sizeof(kAlphaWaystationNames[0]);
+  size_t name_count
+      = sizeof (kAlphaWaystationNames) / sizeof (kAlphaWaystationNames[0]);
 
   if (!state->eva_ready && state->waypoint_count == 0U) {
     unsigned desired = ALPHA_MIN_WAYPOINTS;
@@ -1886,8 +2114,10 @@ static void session_game_alpha_plan_waypoints(session_ctx_t *ctx) {
       int y = 0;
       bool placed = false;
       for (unsigned attempt = 0U; attempt < 96U && !placed; ++attempt) {
-        x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, ALPHA_NAV_MARGIN);
-        y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, ALPHA_NAV_MARGIN);
+        x = session_game_alpha_random_with_margin (ctx, ALPHA_NAV_WIDTH,
+                                                   ALPHA_NAV_MARGIN);
+        y = session_game_alpha_random_with_margin (ctx, ALPHA_NAV_HEIGHT,
+                                                   ALPHA_NAV_MARGIN);
         bool conflict = false;
         for (unsigned prior = 0U; prior < idx; ++prior) {
           const alpha_waypoint_t *existing = &state->waypoints[prior];
@@ -1901,8 +2131,10 @@ static void session_game_alpha_plan_waypoints(session_ctx_t *ctx) {
         }
       }
       if (!placed) {
-        x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, ALPHA_NAV_MARGIN);
-        y = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_HEIGHT, ALPHA_NAV_MARGIN);
+        x = session_game_alpha_random_with_margin (ctx, ALPHA_NAV_WIDTH,
+                                                   ALPHA_NAV_MARGIN);
+        y = session_game_alpha_random_with_margin (ctx, ALPHA_NAV_HEIGHT,
+                                                   ALPHA_NAV_MARGIN);
       }
 
       alpha_waypoint_t *waypoint = &state->waypoints[idx];
@@ -1910,8 +2142,10 @@ static void session_game_alpha_plan_waypoints(session_ctx_t *ctx) {
       waypoint->y = y;
       waypoint->symbol = (char)('1' + (idx % 9));
       waypoint->visited = false;
-      const char *name = name_count > 0 ? kAlphaWaystationNames[idx % name_count] : "Waystation";
-      snprintf(waypoint->name, sizeof(waypoint->name), "%s", name);
+      const char *name = name_count > 0
+                             ? kAlphaWaystationNames[idx % name_count]
+                             : "Waystation";
+      snprintf (waypoint->name, sizeof (waypoint->name), "%s", name);
     }
   } else if (!state->eva_ready) {
     for (unsigned idx = 0U; idx < state->waypoint_count; ++idx) {
@@ -1923,8 +2157,10 @@ static void session_game_alpha_plan_waypoints(session_ctx_t *ctx) {
   }
 
   if (state->final_waypoint.symbol == '\0') {
-    int x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, ALPHA_NAV_MARGIN);
-    int y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, ALPHA_NAV_MARGIN + 4);
+    int x = session_game_alpha_random_with_margin (ctx, ALPHA_NAV_WIDTH,
+                                                   ALPHA_NAV_MARGIN);
+    int y = ALPHA_NAV_HEIGHT - 1
+            - session_game_random_range (ctx, ALPHA_NAV_MARGIN + 4);
     for (unsigned attempt = 0U; attempt < 96U; ++attempt) {
       bool conflict = false;
       for (unsigned idx = 0U; idx < state->waypoint_count; ++idx) {
@@ -1937,19 +2173,24 @@ static void session_game_alpha_plan_waypoints(session_ctx_t *ctx) {
       if (!conflict) {
         break;
       }
-      x = session_game_alpha_random_with_margin(ctx, ALPHA_NAV_WIDTH, ALPHA_NAV_MARGIN);
-      y = ALPHA_NAV_HEIGHT - 1 - session_game_random_range(ctx, ALPHA_NAV_MARGIN + 4);
+      x = session_game_alpha_random_with_margin (ctx, ALPHA_NAV_WIDTH,
+                                                 ALPHA_NAV_MARGIN);
+      y = ALPHA_NAV_HEIGHT - 1
+          - session_game_random_range (ctx, ALPHA_NAV_MARGIN + 4);
     }
 
     state->final_waypoint.x = x;
     state->final_waypoint.y = y;
     state->final_waypoint.symbol = 'P';
     state->final_waypoint.visited = false;
-    snprintf(state->final_waypoint.name, sizeof(state->final_waypoint.name), "%s", "Proxima Landing");
+    snprintf (state->final_waypoint.name, sizeof (state->final_waypoint.name),
+              "%s", "Proxima Landing");
   }
 }
 
-static void session_game_alpha_present_waypoints(session_ctx_t *ctx) {
+static void
+session_game_alpha_present_waypoints (session_ctx_t *ctx)
+{
   if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA) {
     return;
   }
@@ -1961,38 +2202,46 @@ static void session_game_alpha_present_waypoints(session_ctx_t *ctx) {
 
   if (!state->eva_ready) {
     if (state->waypoint_count == 0U) {
-      session_send_system_line(ctx, "Waystation manifest pending — reroll if the corridor looks blocked.");
+      session_send_system_line (ctx, "Waystation manifest pending — reroll if "
+                                     "the corridor looks blocked.");
       return;
     }
 
-    session_send_system_line(ctx, "Waystation manifest:");
+    session_send_system_line (ctx, "Waystation manifest:");
     for (unsigned idx = 0U; idx < state->waypoint_count; ++idx) {
       const alpha_waypoint_t *waypoint = &state->waypoints[idx];
       char line[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(line, sizeof(line), "  [%c] %c — %s%s", waypoint->visited ? 'x' : ' ', waypoint->symbol, waypoint->name,
-               idx == state->waypoint_index ? " ← current objective" : "");
-      session_send_system_line(ctx, line);
+      snprintf (line, sizeof (line), "  [%c] %c — %s%s",
+                waypoint->visited ? 'x' : ' ', waypoint->symbol, waypoint->name,
+                idx == state->waypoint_index ? " ← current objective" : "");
+      session_send_system_line (ctx, line);
     }
 
     char landing[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(landing, sizeof(landing),
-             "Final descent: P — %s unlocks after the last waystation. Touch down to finish or press Alt+L if you"
-             " prefer a manual confirmation.",
-             state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing");
-    session_send_system_line(ctx, landing);
+    snprintf (landing, sizeof (landing),
+              "Final descent: P — %s unlocks after the last waystation. Touch "
+              "down to finish or press Alt+L if you"
+              " prefer a manual confirmation.",
+              state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name
+                                                    : "Proxima Landing");
+    session_send_system_line (ctx, landing);
     return;
   }
 
   if (state->awaiting_flag) {
     char landing[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(landing, sizeof(landing),
-             "Final target: P — %s. Touch down to plant automatically, or press Alt+L/type 'plant flag' to finish.",
-             state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing");
-    session_send_system_line(ctx, landing);
+    snprintf (landing, sizeof (landing),
+              "Final target: P — %s. Touch down to plant automatically, or "
+              "press Alt+L/type 'plant flag' to finish.",
+              state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name
+                                                    : "Proxima Landing");
+    session_send_system_line (ctx, landing);
   }
 }
 
-static void session_game_alpha_complete_waypoint(session_ctx_t *ctx) {
+static void
+session_game_alpha_complete_waypoint (session_ctx_t *ctx)
+{
   if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA) {
     return;
   }
@@ -2003,7 +2252,7 @@ static void session_game_alpha_complete_waypoint(session_ctx_t *ctx) {
   }
 
   if (state->waypoint_index >= state->waypoint_count) {
-    session_game_alpha_execute_eva(ctx);
+    session_game_alpha_execute_eva (ctx);
     return;
   }
 
@@ -2013,9 +2262,10 @@ static void session_game_alpha_complete_waypoint(session_ctx_t *ctx) {
   state->nav_stable_ticks = 0U;
 
   if (state->waypoint_index >= state->waypoint_count) {
-    session_send_system_line(ctx, "Waystations secured. Setting the descent beacon...");
+    session_send_system_line (
+        ctx, "Waystations secured. Setting the descent beacon...");
     state->waypoint_index = state->waypoint_count;
-    session_game_alpha_execute_eva(ctx);
+    session_game_alpha_execute_eva (ctx);
     return;
   }
 
@@ -2028,17 +2278,21 @@ static void session_game_alpha_complete_waypoint(session_ctx_t *ctx) {
   state->nav_vx = 0.0;
   state->nav_vy = 0.0;
 
-  session_game_alpha_configure_gravity(ctx);
+  session_game_alpha_configure_gravity (ctx);
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(message, sizeof(message), "Next stop %u/%u — marker %c (%s).", state->waypoint_index + 1U,
-           state->waypoint_count, next->symbol, next->name);
-  session_send_system_line(ctx, message);
-  session_game_alpha_refresh_navigation(ctx);
+  snprintf (message, sizeof (message), "Next stop %u/%u — marker %c (%s).",
+            state->waypoint_index + 1U, state->waypoint_count, next->symbol,
+            next->name);
+  session_send_system_line (ctx, message);
+  session_game_alpha_refresh_navigation (ctx);
 }
 
-static void session_game_alpha_present_stage(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
+static void
+session_game_alpha_present_stage (session_ctx_t *ctx)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA
+      || !ctx->game.active) {
     return;
   }
 
@@ -2046,88 +2300,108 @@ static void session_game_alpha_present_stage(session_ctx_t *ctx) {
   bool previous_translation = ctx->translation_suppress_output;
   ctx->translation_suppress_output = true;
 
-  session_render_separator(ctx, "Alpha Centauri Expedition");
-  session_game_alpha_render_navigation(ctx);
+  session_render_separator (ctx, "Alpha Centauri Expedition");
+  session_game_alpha_render_navigation (ctx);
 
   char stage_line[SSH_CHATTER_MESSAGE_LIMIT];
   switch (state->stage) {
-    case 0:
-      snprintf(stage_line, sizeof(stage_line),
-               "Stage 0 — Launch stack ready. Ride the ascent beacon; contact ignites the antimatter booster automatically.");
-      session_send_system_line(ctx, stage_line);
-      break;
-    case 1:
-      snprintf(stage_line, sizeof(stage_line),
-               "Stage 1 — Mid-course trim. Touch the barycenter beacon to bank the correction burn; manual lock is optional.");
-      session_send_system_line(ctx, stage_line);
-      break;
-    case 2:
-      snprintf(stage_line, sizeof(stage_line),
-               "Stage 2 — Turnover. Settle on the retrograde marker to flip into braking attitude automatically.");
-      session_send_system_line(ctx, stage_line);
-      break;
-    case 3:
-      snprintf(stage_line, sizeof(stage_line),
-               "Stage 3 — Braking burn. Drop onto the braking beacon and the burn locks the moment you make contact.");
-      session_send_system_line(ctx, stage_line);
-      break;
-    case 4:
-      if (!state->eva_ready) {
-        unsigned remaining = 0U;
-        if (state->waypoint_count > state->waypoint_index) {
-          remaining = state->waypoint_count - state->waypoint_index;
-        }
-        snprintf(stage_line, sizeof(stage_line),
-                 "Stage 4 — High orbit over Proxima b. Visit the numbered waystations; each beacon contact auto-logs"
-                 " the stop. %u stop(s) remain before descent.",
-                 remaining);
-        session_send_system_line(ctx, stage_line);
-      } else if (state->awaiting_flag) {
-        snprintf(stage_line, sizeof(stage_line),
-                 "Stage 4 — Surface EVA. Touch marker %c (%s) to plant \"Immigrants' Flag\" automatically, or press"
-                 " Alt+L/type 'plant flag' for manual confirmation.",
-                 state->final_waypoint.symbol != '\0' ? state->final_waypoint.symbol : 'P',
-                 state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing");
-        session_send_system_line(ctx, stage_line);
-      } else {
-        session_send_system_line(ctx,
-                                 "Stage 4 — Mission reset. Realign with the beacons for another run or exit with /suspend!.");
+  case 0:
+    snprintf (stage_line, sizeof (stage_line),
+              "Stage 0 — Launch stack ready. Ride the ascent beacon; contact "
+              "ignites the antimatter booster automatically.");
+    session_send_system_line (ctx, stage_line);
+    break;
+  case 1:
+    snprintf (stage_line, sizeof (stage_line),
+              "Stage 1 — Mid-course trim. Touch the barycenter beacon to bank "
+              "the correction burn; manual lock is optional.");
+    session_send_system_line (ctx, stage_line);
+    break;
+  case 2:
+    snprintf (stage_line, sizeof (stage_line),
+              "Stage 2 — Turnover. Settle on the retrograde marker to flip "
+              "into braking attitude automatically.");
+    session_send_system_line (ctx, stage_line);
+    break;
+  case 3:
+    snprintf (stage_line, sizeof (stage_line),
+              "Stage 3 — Braking burn. Drop onto the braking beacon and the "
+              "burn locks the moment you make contact.");
+    session_send_system_line (ctx, stage_line);
+    break;
+  case 4:
+    if (!state->eva_ready) {
+      unsigned remaining = 0U;
+      if (state->waypoint_count > state->waypoint_index) {
+        remaining = state->waypoint_count - state->waypoint_index;
       }
-      session_game_alpha_present_waypoints(ctx);
-      break;
-    default:
-      session_send_system_line(ctx, "Awaiting next burn sequence.");
-      break;
+      snprintf (stage_line, sizeof (stage_line),
+                "Stage 4 — High orbit over Proxima b. Visit the numbered "
+                "waystations; each beacon contact auto-logs"
+                " the stop. %u stop(s) remain before descent.",
+                remaining);
+      session_send_system_line (ctx, stage_line);
+    } else if (state->awaiting_flag) {
+      snprintf (
+          stage_line, sizeof (stage_line),
+          "Stage 4 — Surface EVA. Touch marker %c (%s) to plant \"Immigrants' "
+          "Flag\" automatically, or press"
+          " Alt+L/type 'plant flag' for manual confirmation.",
+          state->final_waypoint.symbol != '\0' ? state->final_waypoint.symbol
+                                               : 'P',
+          state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name
+                                                : "Proxima Landing");
+      session_send_system_line (ctx, stage_line);
+    } else {
+      session_send_system_line (
+          ctx, "Stage 4 — Mission reset. Realign with the beacons for another "
+               "run or exit with /suspend!.");
+    }
+    session_game_alpha_present_waypoints (ctx);
+    break;
+  default:
+    session_send_system_line (ctx, "Awaiting next burn sequence.");
+    break;
   }
 
   if (state->stage == 4U) {
-    session_send_system_line(ctx,
-                             "Route markers: 1–9 mark required waystations; P marks the Proxima landing zone.");
-    session_send_system_line(ctx,
-                             "Gravitational pulls: B=black hole, S=star, D=debris — each mass tugs with its own μ.");
+    session_send_system_line (ctx,
+                              "Route markers: 1–9 mark required waystations; P "
+                              "marks the Proxima landing zone.");
+    session_send_system_line (ctx, "Gravitational pulls: B=black hole, S=star, "
+                                   "D=debris — each mass tugs with its own μ.");
   } else {
-    session_send_system_line(ctx,
-                             "Gravitational pulls: B=black hole, S=star, P=planet, D=debris — each mass tugs with its own μ.");
+    session_send_system_line (
+        ctx, "Gravitational pulls: B=black hole, S=star, P=planet, D=debris — "
+             "each mass tugs with its own μ.");
   }
   if (state->stage == 4U) {
-    session_send_system_line(ctx,
-                             "Legend: @ craft, + beacon, * beacon contact, digits=waystations, P final landing, B black"
-                             " hole, S star, D debris.");
+    session_send_system_line (ctx,
+                              "Legend: @ craft, + beacon, * beacon contact, "
+                              "digits=waystations, P final landing, B black"
+                              " hole, S star, D debris.");
   } else {
-    session_send_system_line(ctx,
-                             "Legend: @ craft, + beacon, * beacon contact, B black hole, S star, P planet, D debris.");
+    session_send_system_line (ctx,
+                              "Legend: @ craft, + beacon, * beacon contact, B "
+                              "black hole, S star, P planet, D debris.");
   }
-  session_send_system_line(ctx, "Navigation grid spans 60×60 sectors; each maneuver reshuffles the gravity field.");
-  session_send_system_line(ctx, "Use arrow keys to nudge the craft; touching the beacon advances immediately.");
-  session_send_system_line(ctx,
-                           "Alt+L records a manual confirmation; press Ctrl+S anytime to save the mission log.");
-  session_send_system_line(ctx, "Each stage intensifies the gravity field, so later maneuvers demand tighter control.");
-  session_send_system_line(ctx, "Stuck? Type 'reset' to reroll the field with a fresh gravimetric solution.");
-  session_game_alpha_report_state(ctx, "Current status:");
+  session_send_system_line (ctx, "Navigation grid spans 60×60 sectors; each "
+                                 "maneuver reshuffles the gravity field.");
+  session_send_system_line (ctx, "Use arrow keys to nudge the craft; touching "
+                                 "the beacon advances immediately.");
+  session_send_system_line (ctx, "Alt+L records a manual confirmation; press "
+                                 "Ctrl+S anytime to save the mission log.");
+  session_send_system_line (ctx, "Each stage intensifies the gravity field, so "
+                                 "later maneuvers demand tighter control.");
+  session_send_system_line (ctx, "Stuck? Type 'reset' to reroll the field with "
+                                 "a fresh gravimetric solution.");
+  session_game_alpha_report_state (ctx, "Current status:");
   ctx->translation_suppress_output = previous_translation;
 }
 
-static void session_game_alpha_log_completion(session_ctx_t *ctx) {
+static void
+session_game_alpha_log_completion (session_ctx_t *ctx)
+{
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
@@ -2152,7 +2426,7 @@ static void session_game_alpha_log_completion(session_ctx_t *ctx) {
   double total_years = state->mission_time_years;
   double total_radiation = state->radiation_msv;
 
-  time_t now = time(NULL);
+  time_t now = time (NULL);
   uint64_t landing_timestamp = 0U;
   if (now != (time_t)-1) {
     landing_timestamp = (uint64_t)now;
@@ -2160,16 +2434,19 @@ static void session_game_alpha_log_completion(session_ctx_t *ctx) {
   bool recorded = false;
   uint32_t updated_flag_count = 0U;
 
-  if (session_user_data_load(ctx)) {
+  if (session_user_data_load (ctx)) {
     ctx->user_data.flag_count += 1U;
     uint64_t timestamp = landing_timestamp;
     if (ctx->user_data.flag_history_count < USER_DATA_FLAG_HISTORY_LIMIT) {
-      ctx->user_data.flag_history[ctx->user_data.flag_history_count++] = timestamp;
+      ctx->user_data.flag_history[ctx->user_data.flag_history_count++]
+          = timestamp;
     } else {
       for (size_t idx = 1U; idx < USER_DATA_FLAG_HISTORY_LIMIT; ++idx) {
-        ctx->user_data.flag_history[idx - 1U] = ctx->user_data.flag_history[idx];
+        ctx->user_data.flag_history[idx - 1U]
+            = ctx->user_data.flag_history[idx];
       }
-      ctx->user_data.flag_history[USER_DATA_FLAG_HISTORY_LIMIT - 1U] = timestamp;
+      ctx->user_data.flag_history[USER_DATA_FLAG_HISTORY_LIMIT - 1U]
+          = timestamp;
     }
     recorded = true;
     updated_flag_count = ctx->user_data.flag_count;
@@ -2179,30 +2456,37 @@ static void session_game_alpha_log_completion(session_ctx_t *ctx) {
   ctx->translation_suppress_output = true;
 
   char success[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(success, sizeof(success),
-           "Mission complete! \"Immigrants' Flag\" is registered for %s. Flight time %.2f years, exposure %.1f mSv.",
-           ctx->user.name, total_years, total_radiation);
-  session_send_system_line(ctx, success);
+  snprintf (success, sizeof (success),
+            "Mission complete! \"Immigrants' Flag\" is registered for %s. "
+            "Flight time %.2f years, exposure %.1f mSv.",
+            ctx->user.name, total_years, total_radiation);
+  session_send_system_line (ctx, success);
 
   char notice[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(notice, sizeof(notice), "* [alpha-centauri] Immigrants' Flag planted by %s.", ctx->user.name);
-  host_history_record_system(ctx->owner, notice);
-  chat_room_broadcast(&ctx->owner->room, notice, NULL);
+  snprintf (notice, sizeof (notice),
+            "* [alpha-centauri] Immigrants' Flag planted by %s.",
+            ctx->user.name);
+  host_history_record_system (ctx->owner, notice);
+  chat_room_broadcast (&ctx->owner->room, notice, NULL);
 
   ctx->translation_suppress_output = previous_translation;
 
   if (recorded) {
-    host_alpha_landers_record(ctx->owner, ctx->user.name, updated_flag_count, landing_timestamp);
+    host_alpha_landers_record (ctx->owner, ctx->user.name, updated_flag_count,
+                               landing_timestamp);
   }
 
-  session_game_alpha_reset(ctx);
+  session_game_alpha_reset (ctx);
   state->active = true;
-  session_game_alpha_sync_to_save(ctx);
-  session_game_alpha_present_stage(ctx);
+  session_game_alpha_sync_to_save (ctx);
+  session_game_alpha_present_stage (ctx);
 }
 
-static void session_game_alpha_execute_ignite(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || ctx->game.alpha.stage != 0U) {
+static void
+session_game_alpha_execute_ignite (session_ctx_t *ctx)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA
+      || ctx->game.alpha.stage != 0U) {
     return;
   }
 
@@ -2211,20 +2495,24 @@ static void session_game_alpha_execute_ignite(session_ctx_t *ctx) {
   state->active = true;
   state->velocity_fraction_c = 0.04;
   state->distance_travelled_ly = 0.05;
-  state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
+  state->distance_remaining_ly
+      = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
   state->fuel_percent = 82.0;
   if (state->oxygen_days > 10.0) {
     state->oxygen_days -= 10.0;
   }
   state->mission_time_years += 0.02;
   state->radiation_msv += 12.0;
-  session_game_alpha_prepare_navigation(ctx);
-  session_game_alpha_sync_to_save(ctx);
-  session_game_alpha_present_stage(ctx);
+  session_game_alpha_prepare_navigation (ctx);
+  session_game_alpha_sync_to_save (ctx);
+  session_game_alpha_present_stage (ctx);
 }
 
-static void session_game_alpha_execute_trim(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || ctx->game.alpha.stage != 1U) {
+static void
+session_game_alpha_execute_trim (session_ctx_t *ctx)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA
+      || ctx->game.alpha.stage != 1U) {
     return;
   }
 
@@ -2232,7 +2520,8 @@ static void session_game_alpha_execute_trim(session_ctx_t *ctx) {
   state->stage = 2U;
   state->velocity_fraction_c = 0.18;
   state->distance_travelled_ly = 1.90;
-  state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
+  state->distance_remaining_ly
+      = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
   state->fuel_percent = 58.0;
   if (state->oxygen_days > 110.0) {
     state->oxygen_days -= 110.0;
@@ -2241,20 +2530,24 @@ static void session_game_alpha_execute_trim(session_ctx_t *ctx) {
   }
   state->mission_time_years += 0.55;
   state->radiation_msv += 28.0;
-  session_game_alpha_prepare_navigation(ctx);
-  session_game_alpha_sync_to_save(ctx);
-  session_game_alpha_present_stage(ctx);
+  session_game_alpha_prepare_navigation (ctx);
+  session_game_alpha_sync_to_save (ctx);
+  session_game_alpha_present_stage (ctx);
 }
 
-static void session_game_alpha_execute_flip(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || ctx->game.alpha.stage != 2U) {
+static void
+session_game_alpha_execute_flip (session_ctx_t *ctx)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA
+      || ctx->game.alpha.stage != 2U) {
     return;
   }
 
   alpha_centauri_game_state_t *state = &ctx->game.alpha;
   state->stage = 3U;
   state->distance_travelled_ly = 3.60;
-  state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
+  state->distance_remaining_ly
+      = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
   state->fuel_percent = 45.0;
   if (state->oxygen_days > 220.0) {
     state->oxygen_days -= 220.0;
@@ -2263,13 +2556,16 @@ static void session_game_alpha_execute_flip(session_ctx_t *ctx) {
   }
   state->mission_time_years += 1.80;
   state->radiation_msv += 18.0;
-  session_game_alpha_prepare_navigation(ctx);
-  session_game_alpha_sync_to_save(ctx);
-  session_game_alpha_present_stage(ctx);
+  session_game_alpha_prepare_navigation (ctx);
+  session_game_alpha_sync_to_save (ctx);
+  session_game_alpha_present_stage (ctx);
 }
 
-static void session_game_alpha_execute_retro(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || ctx->game.alpha.stage != 3U) {
+static void
+session_game_alpha_execute_retro (session_ctx_t *ctx)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA
+      || ctx->game.alpha.stage != 3U) {
     return;
   }
 
@@ -2277,7 +2573,8 @@ static void session_game_alpha_execute_retro(session_ctx_t *ctx) {
   state->stage = 4U;
   state->velocity_fraction_c = 0.01;
   state->distance_travelled_ly = 4.22;
-  state->distance_remaining_ly = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
+  state->distance_remaining_ly
+      = ALPHA_TOTAL_DISTANCE_LY - state->distance_travelled_ly;
   state->fuel_percent = 18.0;
   if (state->oxygen_days > 150.0) {
     state->oxygen_days -= 150.0;
@@ -2290,16 +2587,18 @@ static void session_game_alpha_execute_retro(session_ctx_t *ctx) {
   state->awaiting_flag = false;
   state->waypoint_index = 0U;
   state->waypoint_count = 0U;
-  state->final_waypoint = (alpha_waypoint_t){0};
-  session_game_alpha_plan_waypoints(ctx);
-  session_game_alpha_prepare_navigation(ctx);
-  session_game_alpha_sync_to_save(ctx);
-  session_game_alpha_present_stage(ctx);
+  state->final_waypoint = (alpha_waypoint_t){ 0 };
+  session_game_alpha_plan_waypoints (ctx);
+  session_game_alpha_prepare_navigation (ctx);
+  session_game_alpha_sync_to_save (ctx);
+  session_game_alpha_present_stage (ctx);
 }
 
-static void session_game_alpha_execute_eva(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || ctx->game.alpha.stage != 4U ||
-      ctx->game.alpha.eva_ready) {
+static void
+session_game_alpha_execute_eva (session_ctx_t *ctx)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA
+      || ctx->game.alpha.stage != 4U || ctx->game.alpha.eva_ready) {
     return;
   }
 
@@ -2314,45 +2613,48 @@ static void session_game_alpha_execute_eva(session_ctx_t *ctx) {
   }
   state->mission_time_years += 0.05;
   state->radiation_msv += 6.0;
-  session_game_alpha_prepare_navigation(ctx);
-  session_game_alpha_sync_to_save(ctx);
-  session_game_alpha_present_stage(ctx);
+  session_game_alpha_prepare_navigation (ctx);
+  session_game_alpha_sync_to_save (ctx);
+  session_game_alpha_present_stage (ctx);
 }
 
-static bool session_game_alpha_attempt_completion(session_ctx_t *ctx) {
+static bool
+session_game_alpha_attempt_completion (session_ctx_t *ctx)
+{
   if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA) {
     return false;
   }
 
   alpha_centauri_game_state_t *state = &ctx->game.alpha;
-  if (state->nav_x != state->nav_target_x || state->nav_y != state->nav_target_y) {
+  if (state->nav_x != state->nav_target_x
+      || state->nav_y != state->nav_target_y) {
     return false;
   }
 
   if (state->stage == 0U) {
-    session_game_alpha_execute_ignite(ctx);
+    session_game_alpha_execute_ignite (ctx);
     return true;
   }
   if (state->stage == 1U) {
-    session_game_alpha_execute_trim(ctx);
+    session_game_alpha_execute_trim (ctx);
     return true;
   }
   if (state->stage == 2U) {
-    session_game_alpha_execute_flip(ctx);
+    session_game_alpha_execute_flip (ctx);
     return true;
   }
   if (state->stage == 3U) {
-    session_game_alpha_execute_retro(ctx);
+    session_game_alpha_execute_retro (ctx);
     return true;
   }
   if (state->stage == 4U) {
     if (!state->eva_ready) {
-      session_game_alpha_complete_waypoint(ctx);
+      session_game_alpha_complete_waypoint (ctx);
       return true;
     }
     if (state->awaiting_flag) {
       state->final_waypoint.visited = true;
-      session_game_alpha_log_completion(ctx);
+      session_game_alpha_log_completion (ctx);
       return true;
     }
   }
@@ -2360,35 +2662,47 @@ static bool session_game_alpha_attempt_completion(session_ctx_t *ctx) {
   return false;
 }
 
-static void session_game_alpha_manual_lock(session_ctx_t *ctx) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
+static void
+session_game_alpha_manual_lock (session_ctx_t *ctx)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA
+      || !ctx->game.active) {
     return;
   }
 
   alpha_centauri_game_state_t *state = &ctx->game.alpha;
-  if (state->nav_x != state->nav_target_x || state->nav_y != state->nav_target_y) {
-    session_send_system_line(ctx, "Lock failed: align with the beacon before pressing Alt+L.");
-    session_game_alpha_refresh_navigation(ctx);
+  if (state->nav_x != state->nav_target_x
+      || state->nav_y != state->nav_target_y) {
+    session_send_system_line (
+        ctx, "Lock failed: align with the beacon before pressing Alt+L.");
+    session_game_alpha_refresh_navigation (ctx);
     return;
   }
 
-  if (!session_game_alpha_attempt_completion(ctx)) {
-    session_send_system_line(ctx, "Beacon contact logged; mission control is standing by.");
-    session_game_alpha_refresh_navigation(ctx);
+  if (!session_game_alpha_attempt_completion (ctx)) {
+    session_send_system_line (
+        ctx, "Beacon contact logged; mission control is standing by.");
+    session_game_alpha_refresh_navigation (ctx);
   }
 }
 
-static void session_game_alpha_manual_save(session_ctx_t *ctx) {
+static void
+session_game_alpha_manual_save (session_ctx_t *ctx)
+{
   if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA) {
     return;
   }
 
-  session_game_alpha_sync_to_save(ctx);
-  session_send_system_line(ctx, "Mission log saved. Touch the beacon to advance or press Alt+L to confirm manually.");
+  session_game_alpha_sync_to_save (ctx);
+  session_send_system_line (ctx, "Mission log saved. Touch the beacon to "
+                                 "advance or press Alt+L to confirm manually.");
 }
 
-static bool session_game_alpha_handle_arrow(session_ctx_t *ctx, int dx, int dy) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
+static bool
+session_game_alpha_handle_arrow (session_ctx_t *ctx, int dx, int dy)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA
+      || !ctx->game.active) {
     return false;
   }
 
@@ -2420,8 +2734,8 @@ static bool session_game_alpha_handle_arrow(session_ctx_t *ctx, int dx, int dy) 
     state->nav_vy = 0.0;
   }
 
-  state->nav_x = (int)lround(state->nav_fx);
-  state->nav_y = (int)lround(state->nav_fy);
+  state->nav_x = (int)lround (state->nav_fx);
+  state->nav_y = (int)lround (state->nav_fy);
   if (state->nav_x < 0) {
     state->nav_x = 0;
   } else if (state->nav_x >= ALPHA_NAV_WIDTH) {
@@ -2433,24 +2747,28 @@ static bool session_game_alpha_handle_arrow(session_ctx_t *ctx, int dx, int dy) 
     state->nav_y = ALPHA_NAV_HEIGHT - 1;
   }
 
-  session_game_alpha_apply_gravity(state);
+  session_game_alpha_apply_gravity (state);
 
-  if (state->nav_x == state->nav_target_x && state->nav_y == state->nav_target_y) {
+  if (state->nav_x == state->nav_target_x
+      && state->nav_y == state->nav_target_y) {
     state->nav_stable_ticks = 1U;
   } else {
     state->nav_stable_ticks = 0U;
   }
 
-  bool completed = session_game_alpha_attempt_completion(ctx);
+  bool completed = session_game_alpha_attempt_completion (ctx);
   if (!completed) {
-    session_game_alpha_refresh_navigation(ctx);
+    session_game_alpha_refresh_navigation (ctx);
   }
 
   return true;
 }
 
-static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line) {
-  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA || !ctx->game.active) {
+static void
+session_game_alpha_handle_line (session_ctx_t *ctx, const char *line)
+{
+  if (ctx == NULL || ctx->game.type != SESSION_GAME_ALPHA
+      || !ctx->game.active) {
     return;
   }
 
@@ -2459,67 +2777,77 @@ static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line)
   if (line == NULL) {
     command[0] = '\0';
   } else {
-    snprintf(command, sizeof(command), "%s", line);
+    snprintf (command, sizeof (command), "%s", line);
   }
-  trim_whitespace_inplace(command);
+  trim_whitespace_inplace (command);
 
   if (command[0] == '\0') {
-    session_game_alpha_refresh_navigation(ctx);
+    session_game_alpha_refresh_navigation (ctx);
     return;
   }
 
-  if (strcasecmp(command, "lock") == 0 || strcasecmp(command, "align lock") == 0) {
-    session_game_alpha_manual_lock(ctx);
+  if (strcasecmp (command, "lock") == 0
+      || strcasecmp (command, "align lock") == 0) {
+    session_game_alpha_manual_lock (ctx);
     return;
   }
 
-  if (strcasecmp(command, "save") == 0 || strcasecmp(command, "log") == 0) {
-    session_game_alpha_manual_save(ctx);
+  if (strcasecmp (command, "save") == 0 || strcasecmp (command, "log") == 0) {
+    session_game_alpha_manual_save (ctx);
     return;
   }
 
-  if (strcasecmp(command, "reset") == 0 || strcasecmp(command, "reroll") == 0 ||
-      strcasecmp(command, "rescan") == 0) {
-    session_game_alpha_reroll_navigation(ctx);
+  if (strcasecmp (command, "reset") == 0 || strcasecmp (command, "reroll") == 0
+      || strcasecmp (command, "rescan") == 0) {
+    session_game_alpha_reroll_navigation (ctx);
     return;
   }
 
   if (state->stage == 0U) {
-    if (strcasecmp(command, "ignite") == 0 || strcasecmp(command, "launch") == 0) {
-      session_game_alpha_execute_ignite(ctx);
+    if (strcasecmp (command, "ignite") == 0
+        || strcasecmp (command, "launch") == 0) {
+      session_game_alpha_execute_ignite (ctx);
     } else {
-      session_send_system_line(ctx, "Line up with the ascent beacon using arrow keys or type 'ignite'.");
-      session_game_alpha_refresh_navigation(ctx);
+      session_send_system_line (
+          ctx,
+          "Line up with the ascent beacon using arrow keys or type 'ignite'.");
+      session_game_alpha_refresh_navigation (ctx);
     }
     return;
   }
 
   if (state->stage == 1U) {
-    if (strcasecmp(command, "trim") == 0 || strcasecmp(command, "align") == 0) {
-      session_game_alpha_execute_trim(ctx);
+    if (strcasecmp (command, "trim") == 0
+        || strcasecmp (command, "align") == 0) {
+      session_game_alpha_execute_trim (ctx);
     } else {
-      session_send_system_line(ctx, "Touch the barycenter beacon with arrow keys or type 'trim'.");
-      session_game_alpha_refresh_navigation(ctx);
+      session_send_system_line (
+          ctx, "Touch the barycenter beacon with arrow keys or type 'trim'.");
+      session_game_alpha_refresh_navigation (ctx);
     }
     return;
   }
 
   if (state->stage == 2U) {
-    if (strcasecmp(command, "flip") == 0 || strcasecmp(command, "turnover") == 0) {
-      session_game_alpha_execute_flip(ctx);
+    if (strcasecmp (command, "flip") == 0
+        || strcasecmp (command, "turnover") == 0) {
+      session_game_alpha_execute_flip (ctx);
     } else {
-      session_send_system_line(ctx, "Rotate into retrograde by touching the marker with arrow keys or type 'flip'.");
-      session_game_alpha_refresh_navigation(ctx);
+      session_send_system_line (ctx, "Rotate into retrograde by touching the "
+                                     "marker with arrow keys or type 'flip'.");
+      session_game_alpha_refresh_navigation (ctx);
     }
     return;
   }
 
   if (state->stage == 3U) {
-    if (strcasecmp(command, "retro") == 0 || strcasecmp(command, "brake") == 0) {
-      session_game_alpha_execute_retro(ctx);
+    if (strcasecmp (command, "retro") == 0
+        || strcasecmp (command, "brake") == 0) {
+      session_game_alpha_execute_retro (ctx);
     } else {
-      session_send_system_line(ctx, "Drop onto the braking beacon with arrow keys or type 'retro'.");
-      session_game_alpha_refresh_navigation(ctx);
+      session_send_system_line (
+          ctx, "Drop onto the braking beacon with arrow keys or type 'retro'.");
+      session_game_alpha_refresh_navigation (ctx);
     }
     return;
   }
@@ -2527,176 +2855,206 @@ static void session_game_alpha_handle_line(session_ctx_t *ctx, const char *line)
   if (state->stage == 4U) {
     if (!state->eva_ready) {
       if (state->waypoint_index < state->waypoint_count) {
-        const alpha_waypoint_t *target = &state->waypoints[state->waypoint_index];
+        const alpha_waypoint_t *target
+            = &state->waypoints[state->waypoint_index];
         char message[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(message, sizeof(message),
-                 "Route checkpoint %u/%u — touch marker %c (%s) to proceed automatically. Alt+L remains available for"
-                 " manual control.",
-                 state->waypoint_index + 1U, state->waypoint_count, target->symbol, target->name);
-        session_send_system_line(ctx, message);
-        session_game_alpha_refresh_navigation(ctx);
+        snprintf (message, sizeof (message),
+                  "Route checkpoint %u/%u — touch marker %c (%s) to proceed "
+                  "automatically. Alt+L remains available for"
+                  " manual control.",
+                  state->waypoint_index + 1U, state->waypoint_count,
+                  target->symbol, target->name);
+        session_send_system_line (ctx, message);
+        session_game_alpha_refresh_navigation (ctx);
       } else {
-        session_send_system_line(ctx,
-                                 "Waystations cleared. Touch the descent beacon or press Alt+L to trigger EVA.");
-        session_game_alpha_refresh_navigation(ctx);
+        session_send_system_line (ctx, "Waystations cleared. Touch the descent "
+                                       "beacon or press Alt+L to trigger EVA.");
+        session_game_alpha_refresh_navigation (ctx);
       }
     } else if (state->awaiting_flag) {
-      if (strcasecmp(command, "plant") == 0 || strcasecmp(command, "plant flag") == 0 ||
-          strcasecmp(command, "flag") == 0) {
-        session_game_alpha_log_completion(ctx);
+      if (strcasecmp (command, "plant") == 0
+          || strcasecmp (command, "plant flag") == 0
+          || strcasecmp (command, "flag") == 0) {
+        session_game_alpha_log_completion (ctx);
       } else {
         char message[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(message, sizeof(message),
-                 "Touch marker %c (%s) to finish automatically, or press Alt+L/type 'plant flag' to plant manually.",
-                 state->final_waypoint.symbol != '\0' ? state->final_waypoint.symbol : 'P',
-                 state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name : "Proxima Landing");
-        session_send_system_line(ctx, message);
-        session_game_alpha_refresh_navigation(ctx);
+        snprintf (
+            message, sizeof (message),
+            "Touch marker %c (%s) to finish automatically, or press Alt+L/type "
+            "'plant flag' to plant manually.",
+            state->final_waypoint.symbol != '\0' ? state->final_waypoint.symbol
+                                                 : 'P',
+            state->final_waypoint.name[0] != '\0' ? state->final_waypoint.name
+                                                  : "Proxima Landing");
+        session_send_system_line (ctx, message);
+        session_game_alpha_refresh_navigation (ctx);
       }
     } else {
-      session_send_system_line(ctx, "Launch again with 'ignite' or exit with /suspend!.");
-      session_game_alpha_refresh_navigation(ctx);
+      session_send_system_line (
+          ctx, "Launch again with 'ignite' or exit with /suspend!.");
+      session_game_alpha_refresh_navigation (ctx);
     }
     return;
   }
 
-  session_send_system_line(ctx, "Hold position for the next maneuver.");
-  session_game_alpha_refresh_navigation(ctx);
+  session_send_system_line (ctx, "Hold position for the next maneuver.");
+  session_game_alpha_refresh_navigation (ctx);
 }
 
-static void session_game_start_alpha(session_ctx_t *ctx) {
+static void
+session_game_start_alpha (session_ctx_t *ctx)
+{
   if (ctx == NULL) {
     return;
   }
 
-  if (!session_user_data_load(ctx)) {
-    session_send_system_line(ctx, "Profile storage unavailable; cannot start the mission.");
+  if (!session_user_data_load (ctx)) {
+    session_send_system_line (
+        ctx, "Profile storage unavailable; cannot start the mission.");
     return;
   }
 
-  session_game_alpha_sync_from_save(ctx);
+  session_game_alpha_sync_from_save (ctx);
   alpha_centauri_game_state_t *state = &ctx->game.alpha;
   ctx->game.type = SESSION_GAME_ALPHA;
   ctx->game.active = true;
   state->active = true;
 
   if (state->stage == 0U) {
-    session_send_system_line(ctx,
-                             "Mission control: Alpha Centauri expedition primed. Complete each maneuver to reach Proxima b.");
+    session_send_system_line (
+        ctx, "Mission control: Alpha Centauri expedition primed. Complete each "
+             "maneuver to reach Proxima b.");
   } else {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "Mission control: Resuming expedition at stage %u.", state->stage);
-    session_send_system_line(ctx, message);
+    snprintf (message, sizeof (message),
+              "Mission control: Resuming expedition at stage %u.",
+              state->stage);
+    session_send_system_line (ctx, message);
   }
 
-  session_game_alpha_sync_to_save(ctx);
-  session_game_alpha_present_stage(ctx);
+  session_game_alpha_sync_to_save (ctx);
+  session_game_alpha_present_stage (ctx);
 }
 
-static void session_handle_game(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_game (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
 
   if (ctx->game.active) {
-    session_send_system_line(ctx, "Finish the current game with /suspend! first.");
+    session_send_system_line (ctx,
+                              "Finish the current game with /suspend! first.");
     return;
   }
 
   if (arguments == NULL) {
-    session_send_system_line(ctx, "Usage: /game <tetris|liargame|alpha>");
+    session_send_system_line (ctx, "Usage: /game <tetris|liargame|alpha>");
     return;
   }
 
   char working[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(working, sizeof(working), "%s", arguments);
-  trim_whitespace_inplace(working);
+  snprintf (working, sizeof (working), "%s", arguments);
+  trim_whitespace_inplace (working);
   if (working[0] == '\0') {
-    session_send_system_line(ctx, "Usage: /game <tetris|liargame|alpha>");
+    session_send_system_line (ctx, "Usage: /game <tetris|liargame|alpha>");
     return;
   }
 
   for (size_t idx = 0U; working[idx] != '\0'; ++idx) {
-    working[idx] = (char)tolower((unsigned char)working[idx]);
+    working[idx] = (char)tolower ((unsigned char)working[idx]);
   }
 
-  if (strcmp(working, "tetris") == 0) {
-    session_game_start_tetris(ctx);
-  } else if (strcmp(working, "liargame") == 0) {
-    session_game_start_liargame(ctx);
-  } else if (strcmp(working, "alpha") == 0 || strcmp(working, "alphacentauri") == 0) {
-    session_game_start_alpha(ctx);
+  if (strcmp (working, "tetris") == 0) {
+    session_game_start_tetris (ctx);
+  } else if (strcmp (working, "liargame") == 0) {
+    session_game_start_liargame (ctx);
+  } else if (strcmp (working, "alpha") == 0
+             || strcmp (working, "alphacentauri") == 0) {
+    session_game_start_alpha (ctx);
   } else {
-    session_send_system_line(ctx, "Unknown game. Available options: tetris, liargame, alpha.");
+    session_send_system_line (
+        ctx, "Unknown game. Available options: tetris, liargame, alpha.");
   }
 }
 
-static void session_game_suspend(session_ctx_t *ctx, const char *reason) {
+static void
+session_game_suspend (session_ctx_t *ctx, const char *reason)
+{
   if (ctx == NULL) {
     return;
   }
 
   if (!ctx->game.active) {
     if (reason != NULL && reason[0] != '\0') {
-      session_send_system_line(ctx, reason);
+      session_send_system_line (ctx, reason);
     } else {
-      session_send_system_line(ctx, "There is no active game to suspend.");
+      session_send_system_line (ctx, "There is no active game to suspend.");
     }
     return;
   }
 
   // Restore normal screen buffer when exiting game mode
   if (ctx->game.type == SESSION_GAME_TETRIS) {
-    session_disable_alternate_screen(ctx);
+    session_disable_alternate_screen (ctx);
   }
 
   if (reason != NULL && reason[0] != '\0') {
-    session_send_system_line(ctx, reason);
+    session_send_system_line (ctx, reason);
   }
 
   if (ctx->game.type == SESSION_GAME_TETRIS) {
     char summary[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(summary, sizeof(summary), "Tetris final score: %u (lines cleared: %u).", ctx->game.tetris.score,
-             ctx->game.tetris.lines_cleared);
-    session_send_system_line(ctx, summary);
-    session_game_tetris_reset(&ctx->game.tetris);
+    snprintf (summary, sizeof (summary),
+              "Tetris final score: %u (lines cleared: %u).",
+              ctx->game.tetris.score, ctx->game.tetris.lines_cleared);
+    session_send_system_line (ctx, summary);
+    session_game_tetris_reset (&ctx->game.tetris);
   } else if (ctx->game.type == SESSION_GAME_LIARGAME) {
     char summary[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(summary, sizeof(summary), "Liar Game rounds played: %u, score: %u.", ctx->game.liar.round_number,
-             ctx->game.liar.score);
-    session_send_system_line(ctx, summary);
+    snprintf (summary, sizeof (summary),
+              "Liar Game rounds played: %u, score: %u.",
+              ctx->game.liar.round_number, ctx->game.liar.score);
+    session_send_system_line (ctx, summary);
     ctx->game.liar.awaiting_guess = false;
     ctx->game.liar.round_number = 0U;
     ctx->game.liar.score = 0U;
   } else if (ctx->game.type == SESSION_GAME_ALPHA) {
     char summary[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(summary, sizeof(summary), "Alpha Centauri mission paused at stage %u with %.2f ly remaining.",
-             ctx->game.alpha.stage, ctx->game.alpha.distance_remaining_ly);
-    session_send_system_line(ctx, summary);
-    session_game_alpha_reset(ctx);
-    session_game_alpha_sync_to_save(ctx);
+    snprintf (
+        summary, sizeof (summary),
+        "Alpha Centauri mission paused at stage %u with %.2f ly remaining.",
+        ctx->game.alpha.stage, ctx->game.alpha.distance_remaining_ly);
+    session_send_system_line (ctx, summary);
+    session_game_alpha_reset (ctx);
+    session_game_alpha_sync_to_save (ctx);
   }
 
   ctx->game.active = false;
   ctx->game.type = SESSION_GAME_NONE;
 }
 
-static int session_channel_read_poll(session_ctx_t *ctx, char *buffer, size_t length, int timeout_ms) {
-  if (ctx == NULL || buffer == NULL || length == 0U || !session_transport_active(ctx)) {
+static int
+session_channel_read_poll (session_ctx_t *ctx, char *buffer, size_t length,
+                           int timeout_ms)
+{
+  if (ctx == NULL || buffer == NULL || length == 0U
+      || !session_transport_active (ctx)) {
     return SSH_ERROR;
   }
 
   if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
-    int result = session_transport_read(ctx, buffer, length, timeout_ms);
+    int result = session_transport_read (ctx, buffer, length, timeout_ms);
     if (result == SSH_AGAIN) {
       return SESSION_CHANNEL_TIMEOUT;
     }
     return result;
   }
 
-  int fd = ssh_get_fd(ctx->session);
+  int fd = ssh_get_fd (ctx->session);
   if (fd < 0) {
-    return session_transport_read(ctx, buffer, length, -1);
+    return session_transport_read (ctx, buffer, length, -1);
   }
 
   struct pollfd pfd;
@@ -2705,7 +3063,7 @@ static int session_channel_read_poll(session_ctx_t *ctx, char *buffer, size_t le
   pfd.revents = 0;
 
   for (;;) {
-    int poll_result = poll(&pfd, 1, timeout_ms);
+    int poll_result = poll (&pfd, 1, timeout_ms);
     if (poll_result < 0) {
       if (errno == EINTR) {
         continue;
@@ -2725,10 +3083,13 @@ static int session_channel_read_poll(session_ctx_t *ctx, char *buffer, size_t le
     return SESSION_CHANNEL_TIMEOUT;
   }
 
-  return session_transport_read(ctx, buffer, length, -1);
+  return session_transport_read (ctx, buffer, length, -1);
 }
 
-static bool session_parse_color_arguments(char *working, char **tokens, size_t max_tokens, size_t *token_count) {
+static bool
+session_parse_color_arguments (char *working, char **tokens, size_t max_tokens,
+                               size_t *token_count)
+{
   if (working == NULL || tokens == NULL || token_count == NULL) {
     return false;
   }
@@ -2737,12 +3098,12 @@ static bool session_parse_color_arguments(char *working, char **tokens, size_t m
   bool extra_tokens = false;
   char *cursor = working;
   while (cursor != NULL) {
-    char *next = strchr(cursor, ';');
+    char *next = strchr (cursor, ';');
     if (next != NULL) {
       *next = '\0';
     }
 
-    trim_whitespace_inplace(cursor);
+    trim_whitespace_inplace (cursor);
     if (cursor[0] == '\0') {
       return false;
     }
@@ -2768,77 +3129,84 @@ static bool session_parse_color_arguments(char *working, char **tokens, size_t m
   return !extra_tokens;
 }
 
-static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_color (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
 
   if (arguments == NULL) {
-    session_send_system_line(ctx, "Usage: /color (text;highlight[;bold])");
+    session_send_system_line (ctx, "Usage: /color (text;highlight[;bold])");
     return;
   }
 
   char working[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(working, sizeof(working), "%s", arguments);
-  trim_whitespace_inplace(working);
+  snprintf (working, sizeof (working), "%s", arguments);
+  trim_whitespace_inplace (working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, "Usage: /color (text;highlight[;bold])");
+    session_send_system_line (ctx, "Usage: /color (text;highlight[;bold])");
     return;
   }
 
   bool had_parentheses = false;
   if (working[0] == '(') {
     had_parentheses = true;
-    memmove(working, working + 1, strlen(working));
-    trim_whitespace_inplace(working);
+    memmove (working, working + 1, strlen (working));
+    trim_whitespace_inplace (working);
   }
 
   if (had_parentheses) {
-    size_t len = strlen(working);
+    size_t len = strlen (working);
     if (len == 0U || working[len - 1U] != ')') {
-      session_send_system_line(ctx, "Usage: /color (text;highlight[;bold])");
+      session_send_system_line (ctx, "Usage: /color (text;highlight[;bold])");
       return;
     }
     working[len - 1U] = '\0';
-    trim_whitespace_inplace(working);
+    trim_whitespace_inplace (working);
   }
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, "Usage: /color (text;highlight[;bold])");
+    session_send_system_line (ctx, "Usage: /color (text;highlight[;bold])");
     return;
   }
 
-  char *tokens[3] = {0};
+  char *tokens[3] = { 0 };
   size_t token_count = 0U;
-  if (!session_parse_color_arguments(working, tokens, 3U, &token_count) || token_count < 2U) {
-    session_send_system_line(ctx, "Usage: /color (text;highlight[;bold])");
+  if (!session_parse_color_arguments (working, tokens, 3U, &token_count)
+      || token_count < 2U) {
+    session_send_system_line (ctx, "Usage: /color (text;highlight[;bold])");
     return;
   }
 
-  const char *text_code =
-      lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]), tokens[0]);
+  const char *text_code = lookup_color_code (
+      USER_COLOR_MAP, sizeof (USER_COLOR_MAP) / sizeof (USER_COLOR_MAP[0]),
+      tokens[0]);
   if (text_code == NULL) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "Unknown text color '%s'.", tokens[0]);
-    session_send_system_line(ctx, message);
+    snprintf (message, sizeof (message), "Unknown text color '%s'.", tokens[0]);
+    session_send_system_line (ctx, message);
     return;
   }
 
-  const char *highlight_code = lookup_color_code(HIGHLIGHT_COLOR_MAP,
-                                                sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]),
-                                                tokens[1]);
+  const char *highlight_code = lookup_color_code (
+      HIGHLIGHT_COLOR_MAP,
+      sizeof (HIGHLIGHT_COLOR_MAP) / sizeof (HIGHLIGHT_COLOR_MAP[0]),
+      tokens[1]);
   if (highlight_code == NULL) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "Unknown highlight color '%s'.", tokens[1]);
-    session_send_system_line(ctx, message);
+    snprintf (message, sizeof (message), "Unknown highlight color '%s'.",
+              tokens[1]);
+    session_send_system_line (ctx, message);
     return;
   }
 
   bool is_bold = false;
   if (token_count == 3U) {
-    if (!parse_bool_token(tokens[2], &is_bold)) {
-      session_send_system_line(ctx, "The third value must describe bold (ex: bold, true, normal).");
+    if (!parse_bool_token (tokens[2], &is_bold)) {
+      session_send_system_line (
+          ctx, "The third value must describe bold (ex: bold, true, normal).");
       return;
     }
   }
@@ -2846,126 +3214,139 @@ static void session_handle_color(session_ctx_t *ctx, const char *arguments) {
   ctx->user_color_code = text_code;
   ctx->user_highlight_code = highlight_code;
   ctx->user_is_bold = is_bold;
-  snprintf(ctx->user_color_name, sizeof(ctx->user_color_name), "%s", tokens[0]);
-  snprintf(ctx->user_highlight_name, sizeof(ctx->user_highlight_name), "%s", tokens[1]);
+  snprintf (ctx->user_color_name, sizeof (ctx->user_color_name), "%s",
+            tokens[0]);
+  snprintf (ctx->user_highlight_name, sizeof (ctx->user_highlight_name), "%s",
+            tokens[1]);
 
   char info[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(info, sizeof(info), "Handle colors updated: text=%s highlight=%s bold=%s", tokens[0], tokens[1],
-           is_bold ? "on" : "off");
-  session_send_system_line(ctx, info);
+  snprintf (info, sizeof (info),
+            "Handle colors updated: text=%s highlight=%s bold=%s", tokens[0],
+            tokens[1], is_bold ? "on" : "off");
+  session_send_system_line (ctx, info);
 
   const char *bold_code = is_bold ? ANSI_BOLD : "";
   char preview[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(preview, sizeof(preview), "%s%s%s[%s] preview%s", highlight_code, bold_code, text_code, ctx->user.name,
-           ANSI_RESET);
-  session_send_line(ctx, preview);
+  snprintf (preview, sizeof (preview), "%s%s%s[%s] preview%s", highlight_code,
+            bold_code, text_code, ctx->user.name, ANSI_RESET);
+  session_send_line (ctx, preview);
 
   if (ctx->owner != NULL) {
-    host_store_user_theme(ctx->owner, ctx);
+    host_store_user_theme (ctx->owner, ctx);
   }
 }
 
-
-
-static void session_handle_motd(session_ctx_t *ctx) {
+static void
+session_handle_motd (session_ctx_t *ctx)
+{
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
 
-  host_refresh_motd(ctx->owner);
+  host_refresh_motd (ctx->owner);
 
-  pthread_mutex_lock(&ctx->owner->lock);
+  pthread_mutex_lock (&ctx->owner->lock);
   const char *motd_to_display = ctx->owner->motd;
-  pthread_mutex_unlock(&ctx->owner->lock);
+  pthread_mutex_unlock (&ctx->owner->lock);
 
   if (motd_to_display[0] != '\0') {
-    session_send_raw_text(ctx, motd_to_display);
+    session_send_raw_text (ctx, motd_to_display);
   } else {
-    session_send_system_line(ctx, "No message of the day configured.");
+    session_send_system_line (ctx, "No message of the day configured.");
   }
 }
 
-static void session_handle_system_color(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_system_color (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
 
-  static const char *kUsage =
-      "Usage: /systemcolor (fg;background[;highlight][;bold]) or /systemcolor reset - third value may be highlight or "
-      "bold.";
+  static const char *kUsage
+      = "Usage: /systemcolor (fg;background[;highlight][;bold]) or "
+        "/systemcolor reset - third value may be highlight or "
+        "bold.";
 
   char usage[SSH_CHATTER_MESSAGE_LIMIT];
-  session_command_format_usage(ctx, "/systemcolor", kUsage, usage, sizeof(usage));
+  session_command_format_usage (ctx, "/systemcolor", kUsage, usage,
+                                sizeof (usage));
 
   if (arguments == NULL) {
-    session_send_system_line(ctx, usage);
+    session_send_system_line (ctx, usage);
     return;
   }
 
   char working[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(working, sizeof(working), "%s", arguments);
-  trim_whitespace_inplace(working);
+  snprintf (working, sizeof (working), "%s", arguments);
+  trim_whitespace_inplace (working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, usage);
+    session_send_system_line (ctx, usage);
     return;
   }
 
   bool had_parentheses = false;
   if (working[0] == '(') {
     had_parentheses = true;
-    memmove(working, working + 1, strlen(working));
-    trim_whitespace_inplace(working);
+    memmove (working, working + 1, strlen (working));
+    trim_whitespace_inplace (working);
   }
 
   if (had_parentheses) {
-    size_t len = strlen(working);
+    size_t len = strlen (working);
     if (len == 0U || working[len - 1U] != ')') {
-      session_send_system_line(ctx, usage);
+      session_send_system_line (ctx, usage);
       return;
     }
     working[len - 1U] = '\0';
-    trim_whitespace_inplace(working);
+    trim_whitespace_inplace (working);
   }
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, usage);
+    session_send_system_line (ctx, usage);
     return;
   }
 
-  if (strcasecmp(working, "reset") == 0) {
-    session_apply_system_theme_defaults(ctx);
-    session_send_system_line(ctx, "System colors reset to defaults.");
-    session_render_separator(ctx, "Chatroom");
-    session_render_prompt(ctx, true);
+  if (strcasecmp (working, "reset") == 0) {
+    session_apply_system_theme_defaults (ctx);
+    session_send_system_line (ctx, "System colors reset to defaults.");
+    session_render_separator (ctx, "Chatroom");
+    session_render_prompt (ctx, true);
     if (ctx->owner != NULL) {
-      host_store_system_theme(ctx->owner, ctx);
+      host_store_system_theme (ctx->owner, ctx);
     }
     return;
   }
 
-  char *tokens[4] = {0};
+  char *tokens[4] = { 0 };
   size_t token_count = 0U;
-  if (!session_parse_color_arguments(working, tokens, 4U, &token_count) || token_count < 2U) {
-    session_send_system_line(ctx, usage);
+  if (!session_parse_color_arguments (working, tokens, 4U, &token_count)
+      || token_count < 2U) {
+    session_send_system_line (ctx, usage);
     return;
   }
 
-  const char *fg_code =
-      lookup_color_code(USER_COLOR_MAP, sizeof(USER_COLOR_MAP) / sizeof(USER_COLOR_MAP[0]), tokens[0]);
+  const char *fg_code = lookup_color_code (
+      USER_COLOR_MAP, sizeof (USER_COLOR_MAP) / sizeof (USER_COLOR_MAP[0]),
+      tokens[0]);
   if (fg_code == NULL) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "Unknown foreground color '%s'.", tokens[0]);
-    session_send_system_line(ctx, message);
+    snprintf (message, sizeof (message), "Unknown foreground color '%s'.",
+              tokens[0]);
+    session_send_system_line (ctx, message);
     return;
   }
 
-  const char *bg_code = lookup_color_code(HIGHLIGHT_COLOR_MAP,
-                                          sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), tokens[1]);
+  const char *bg_code = lookup_color_code (
+      HIGHLIGHT_COLOR_MAP,
+      sizeof (HIGHLIGHT_COLOR_MAP) / sizeof (HIGHLIGHT_COLOR_MAP[0]),
+      tokens[1]);
   if (bg_code == NULL) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "Unknown background color '%s'.", tokens[1]);
-    session_send_system_line(ctx, message);
+    snprintf (message, sizeof (message), "Unknown background color '%s'.",
+              tokens[1]);
+    session_send_system_line (ctx, message);
     return;
   }
 
@@ -2974,26 +3355,31 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   bool is_bold = ctx->system_is_bold;
   if (token_count >= 3U) {
     bool bool_value = false;
-    if (parse_bool_token(tokens[2], &bool_value)) {
+    if (parse_bool_token (tokens[2], &bool_value)) {
       if (token_count > 3U) {
-        session_send_system_line(ctx, usage);
+        session_send_system_line (ctx, usage);
         return;
       }
       is_bold = bool_value;
     } else {
-      highlight_code = lookup_color_code(HIGHLIGHT_COLOR_MAP,
-                                         sizeof(HIGHLIGHT_COLOR_MAP) / sizeof(HIGHLIGHT_COLOR_MAP[0]), tokens[2]);
+      highlight_code = lookup_color_code (HIGHLIGHT_COLOR_MAP,
+                                          sizeof (HIGHLIGHT_COLOR_MAP)
+                                              / sizeof (HIGHLIGHT_COLOR_MAP[0]),
+                                          tokens[2]);
       if (highlight_code == NULL) {
         char message[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(message, sizeof(message), "Unknown highlight color '%s'.", tokens[2]);
-        session_send_system_line(ctx, message);
+        snprintf (message, sizeof (message), "Unknown highlight color '%s'.",
+                  tokens[2]);
+        session_send_system_line (ctx, message);
         return;
       }
       highlight_updated = true;
 
       if (token_count == 4U) {
-        if (!parse_bool_token(tokens[3], &bool_value)) {
-          session_send_system_line(ctx, "The last value must describe bold (ex: bold, true, normal).");
+        if (!parse_bool_token (tokens[3], &bool_value)) {
+          session_send_system_line (
+              ctx,
+              "The last value must describe bold (ex: bold, true, normal).");
           return;
         }
         is_bold = bool_value;
@@ -3005,24 +3391,27 @@ static void session_handle_system_color(session_ctx_t *ctx, const char *argument
   ctx->system_bg_code = bg_code;
   ctx->system_highlight_code = highlight_code;
   ctx->system_is_bold = is_bold;
-  snprintf(ctx->system_fg_name, sizeof(ctx->system_fg_name), "%s", tokens[0]);
-  snprintf(ctx->system_bg_name, sizeof(ctx->system_bg_name), "%s", tokens[1]);
+  snprintf (ctx->system_fg_name, sizeof (ctx->system_fg_name), "%s", tokens[0]);
+  snprintf (ctx->system_bg_name, sizeof (ctx->system_bg_name), "%s", tokens[1]);
   if (highlight_updated) {
-    snprintf(ctx->system_highlight_name, sizeof(ctx->system_highlight_name), "%s", tokens[2]);
+    snprintf (ctx->system_highlight_name, sizeof (ctx->system_highlight_name),
+              "%s", tokens[2]);
   }
 
-  session_force_dark_mode_foreground(ctx);
-  session_apply_background_fill(ctx);
+  session_force_dark_mode_foreground (ctx);
+  session_apply_background_fill (ctx);
 
-  session_send_system_line(ctx, "System colors updated.");
-  session_render_separator(ctx, "Chatroom");
-  session_render_prompt(ctx, true);
+  session_send_system_line (ctx, "System colors updated.");
+  session_render_separator (ctx, "Chatroom");
+  session_render_prompt (ctx, true);
   if (ctx->owner != NULL) {
-    host_store_system_theme(ctx->owner, ctx);
+    host_store_system_theme (ctx->owner, ctx);
   }
 }
 
-static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_set_trans_lang (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
@@ -3031,89 +3420,106 @@ static void session_handle_set_trans_lang(session_ctx_t *ctx, const char *argume
   if (arguments == NULL) {
     working[0] = '\0';
   } else {
-    snprintf(working, sizeof(working), "%s", arguments);
+    snprintf (working, sizeof (working), "%s", arguments);
   }
-  trim_whitespace_inplace(working);
+  trim_whitespace_inplace (working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, "Usage: /set-trans-lang <language|off>");
+    session_send_system_line (ctx, "Usage: /set-trans-lang <language|off>");
     return;
   }
 
-  if (session_argument_is_disable(working)) {
+  if (session_argument_is_disable (working)) {
     ctx->output_translation_enabled = false;
     ctx->output_translation_language[0] = '\0';
-    session_translation_clear_queue(ctx);
-    session_send_system_line(ctx, "Terminal translation disabled.");
+    session_translation_clear_queue (ctx);
+    session_send_system_line (ctx, "Terminal translation disabled.");
     if (ctx->owner != NULL) {
-      host_store_translation_preferences(ctx->owner, ctx);
+      host_store_translation_preferences (ctx->owner, ctx);
     }
     return;
   }
 
-  if (session_language_equals(ctx->output_translation_language, working)) {
-    snprintf(ctx->output_translation_language, sizeof(ctx->output_translation_language), "%s", working);
+  if (session_language_equals (ctx->output_translation_language, working)) {
+    snprintf (ctx->output_translation_language,
+              sizeof (ctx->output_translation_language), "%s", working);
     ctx->output_translation_enabled = true;
-    session_translation_clear_queue(ctx);
+    session_translation_clear_queue (ctx);
 
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "Terminal output will continue to be translated to %s.",
-             ctx->output_translation_language);
-    session_send_system_line(ctx, message);
+    snprintf (message, sizeof (message),
+              "Terminal output will continue to be translated to %s.",
+              ctx->output_translation_language);
+    session_send_system_line (ctx, message);
     if (!ctx->translation_enabled) {
-      session_send_system_line(ctx, "Translation is currently disabled; enable it with /translate on.");
+      session_send_system_line (
+          ctx,
+          "Translation is currently disabled; enable it with /translate on.");
     }
     if (ctx->owner != NULL) {
-      host_store_translation_preferences(ctx->owner, ctx);
+      host_store_translation_preferences (ctx->owner, ctx);
     }
     return;
   }
 
   char preview[SSH_CHATTER_MESSAGE_LIMIT];
   char detected[SSH_CHATTER_LANG_NAME_LEN];
-  if (!translator_translate("Terminal messages will be translated for you.", working, preview, sizeof(preview), detected,
-                            sizeof(detected))) {
-    const char *error = translator_last_error();
+  if (!translator_translate ("Terminal messages will be translated for you.",
+                             working, preview, sizeof (preview), detected,
+                             sizeof (detected))) {
+    const char *error = translator_last_error ();
     if (error != NULL && *error != '\0') {
       char message[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(message, sizeof(message), "Translation service error: %s", error);
-      session_send_system_line(ctx, message);
+      snprintf (message, sizeof (message), "Translation service error: %s",
+                error);
+      session_send_system_line (ctx, message);
     } else {
-      session_send_system_line(ctx, "Failed to reach the translation service. Please try again later.");
+      session_send_system_line (
+          ctx,
+          "Failed to reach the translation service. Please try again later.");
     }
     return;
   }
 
-  snprintf(ctx->output_translation_language, sizeof(ctx->output_translation_language), "%s", working);
+  snprintf (ctx->output_translation_language,
+            sizeof (ctx->output_translation_language), "%s", working);
   ctx->output_translation_enabled = true;
-  session_translation_clear_queue(ctx);
+  session_translation_clear_queue (ctx);
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
-  int preview_limit = (int)(sizeof(message) / 2);
+  int preview_limit = (int)(sizeof (message) / 2);
   if (preview_limit <= 0) {
-    preview_limit = (int)sizeof(message) - 1;
+    preview_limit = (int)sizeof (message) - 1;
   }
-  int detected_limit = (int)sizeof(detected) - 1;
+  int detected_limit = (int)sizeof (detected) - 1;
   if (detected_limit <= 0) {
-    detected_limit = (int)sizeof(detected);
+    detected_limit = (int)sizeof (detected);
   }
   if (detected[0] != '\0') {
-    snprintf(message, sizeof(message), "Terminal output will be translated to %s. Sample: %.*s (detected: %.*s).",
-             ctx->output_translation_language, preview_limit, preview, detected_limit, detected);
+    snprintf (message, sizeof (message),
+              "Terminal output will be translated to %s. Sample: %.*s "
+              "(detected: %.*s).",
+              ctx->output_translation_language, preview_limit, preview,
+              detected_limit, detected);
   } else {
-    snprintf(message, sizeof(message), "Terminal output will be translated to %s. Sample: %.*s.",
-             ctx->output_translation_language, preview_limit, preview);
+    snprintf (message, sizeof (message),
+              "Terminal output will be translated to %s. Sample: %.*s.",
+              ctx->output_translation_language, preview_limit, preview);
   }
-  session_send_system_line(ctx, message);
+  session_send_system_line (ctx, message);
   if (!ctx->translation_enabled) {
-    session_send_system_line(ctx, "Translation is currently disabled; enable it with /translate on.");
+    session_send_system_line (
+        ctx,
+        "Translation is currently disabled; enable it with /translate on.");
   }
   if (ctx->owner != NULL) {
-    host_store_translation_preferences(ctx->owner, ctx);
+    host_store_translation_preferences (ctx->owner, ctx);
   }
 }
 
-static void session_handle_set_target_lang(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_set_target_lang (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
@@ -3122,96 +3528,114 @@ static void session_handle_set_target_lang(session_ctx_t *ctx, const char *argum
   if (arguments == NULL) {
     working[0] = '\0';
   } else {
-    snprintf(working, sizeof(working), "%s", arguments);
+    snprintf (working, sizeof (working), "%s", arguments);
   }
-  trim_whitespace_inplace(working);
+  trim_whitespace_inplace (working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, "Usage: /set-target-lang <language|off>");
+    session_send_system_line (ctx, "Usage: /set-target-lang <language|off>");
     return;
   }
 
-  if (session_argument_is_disable(working)) {
+  if (session_argument_is_disable (working)) {
     ctx->input_translation_enabled = false;
     ctx->input_translation_language[0] = '\0';
     ctx->last_detected_input_language[0] = '\0';
-    session_send_system_line(ctx, "Outgoing message translation disabled.");
+    session_send_system_line (ctx, "Outgoing message translation disabled.");
     if (ctx->owner != NULL) {
-      host_store_translation_preferences(ctx->owner, ctx);
+      host_store_translation_preferences (ctx->owner, ctx);
     }
     return;
   }
 
-  if (session_language_equals(ctx->input_translation_language, working)) {
-    snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s", working);
+  if (session_language_equals (ctx->input_translation_language, working)) {
+    snprintf (ctx->input_translation_language,
+              sizeof (ctx->input_translation_language), "%s", working);
     ctx->input_translation_enabled = true;
     ctx->last_detected_input_language[0] = '\0';
 
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "Outgoing messages will continue to be translated to %s.",
-             ctx->input_translation_language);
-    session_send_system_line(ctx, message);
+    snprintf (message, sizeof (message),
+              "Outgoing messages will continue to be translated to %s.",
+              ctx->input_translation_language);
+    session_send_system_line (ctx, message);
     if (!ctx->translation_enabled) {
-      session_send_system_line(ctx, "Translation is currently disabled; enable it with /translate on.");
+      session_send_system_line (
+          ctx,
+          "Translation is currently disabled; enable it with /translate on.");
     }
     if (ctx->owner != NULL) {
-      host_store_translation_preferences(ctx->owner, ctx);
+      host_store_translation_preferences (ctx->owner, ctx);
     }
     return;
   }
 
   char preview[SSH_CHATTER_MESSAGE_LIMIT];
   char detected[SSH_CHATTER_LANG_NAME_LEN];
-  if (!translator_translate("Your messages will be translated before broadcasting.", working, preview, sizeof(preview),
-                            detected, sizeof(detected))) {
-    const char *error = translator_last_error();
+  if (!translator_translate (
+          "Your messages will be translated before broadcasting.", working,
+          preview, sizeof (preview), detected, sizeof (detected))) {
+    const char *error = translator_last_error ();
     if (error != NULL && *error != '\0') {
       char message[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(message, sizeof(message), "Translation service error: %s", error);
-      session_send_system_line(ctx, message);
+      snprintf (message, sizeof (message), "Translation service error: %s",
+                error);
+      session_send_system_line (ctx, message);
     } else {
-      session_send_system_line(ctx, "Failed to reach the translation service. Please try again later.");
+      session_send_system_line (
+          ctx,
+          "Failed to reach the translation service. Please try again later.");
     }
     return;
   }
 
-  snprintf(ctx->input_translation_language, sizeof(ctx->input_translation_language), "%s", working);
+  snprintf (ctx->input_translation_language,
+            sizeof (ctx->input_translation_language), "%s", working);
   ctx->input_translation_enabled = true;
   ctx->last_detected_input_language[0] = '\0';
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
-  int preview_limit = (int)(sizeof(message) / 2);
+  int preview_limit = (int)(sizeof (message) / 2);
   if (preview_limit <= 0) {
-    preview_limit = (int)sizeof(message) - 1;
+    preview_limit = (int)sizeof (message) - 1;
   }
-  int detected_limit = (int)sizeof(detected) - 1;
+  int detected_limit = (int)sizeof (detected) - 1;
   if (detected_limit <= 0) {
-    detected_limit = (int)sizeof(detected);
+    detected_limit = (int)sizeof (detected);
   }
   if (detected[0] != '\0') {
-    snprintf(message, sizeof(message), "Outgoing messages will be translated to %s. Sample: %.*s (detected: %.*s).",
-             ctx->input_translation_language, preview_limit, preview, detected_limit, detected);
+    snprintf (message, sizeof (message),
+              "Outgoing messages will be translated to %s. Sample: %.*s "
+              "(detected: %.*s).",
+              ctx->input_translation_language, preview_limit, preview,
+              detected_limit, detected);
   } else {
-    snprintf(message, sizeof(message), "Outgoing messages will be translated to %s. Sample: %.*s.",
-             ctx->input_translation_language, preview_limit, preview);
+    snprintf (message, sizeof (message),
+              "Outgoing messages will be translated to %s. Sample: %.*s.",
+              ctx->input_translation_language, preview_limit, preview);
   }
-  session_send_system_line(ctx, message);
+  session_send_system_line (ctx, message);
   if (!ctx->translation_enabled) {
-    session_send_system_line(ctx, "Translation is currently disabled; enable it with /translate on.");
+    session_send_system_line (
+        ctx,
+        "Translation is currently disabled; enable it with /translate on.");
   }
   if (ctx->owner != NULL) {
-    host_store_translation_preferences(ctx->owner, ctx);
+    host_store_translation_preferences (ctx->owner, ctx);
   }
 }
 
-static void session_handle_chat_spacing(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_chat_spacing (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
 
-  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
-  const char *prefix = session_command_prefix(ctx);
-  const char *usage_format = (locale->chat_spacing_usage != NULL && locale->chat_spacing_usage[0] != '\0')
+  const session_ui_locale_t *locale = session_ui_get_locale (ctx);
+  const char *prefix = session_command_prefix (ctx);
+  const char *usage_format = (locale->chat_spacing_usage != NULL
+                              && locale->chat_spacing_usage[0] != '\0')
                                  ? locale->chat_spacing_usage
                                  : "Usage: %schat-spacing <0-5>";
 
@@ -3219,26 +3643,29 @@ static void session_handle_chat_spacing(session_ctx_t *ctx, const char *argument
   if (arguments == NULL) {
     working[0] = '\0';
   } else {
-    snprintf(working, sizeof(working), "%s", arguments);
+    snprintf (working, sizeof (working), "%s", arguments);
   }
-  trim_whitespace_inplace(working);
+  trim_whitespace_inplace (working);
 
   char usage_message[SSH_CHATTER_MESSAGE_LIMIT];
-  const char *usage_args[] = {prefix};
+  const char *usage_args[] = { prefix };
 
   if (working[0] == '\0') {
-    session_format_template(usage_format, usage_args, sizeof(usage_args) / sizeof(usage_args[0]), usage_message,
-                            sizeof(usage_message));
-    session_send_system_line(ctx, usage_message);
+    session_format_template (usage_format, usage_args,
+                             sizeof (usage_args) / sizeof (usage_args[0]),
+                             usage_message, sizeof (usage_message));
+    session_send_system_line (ctx, usage_message);
     return;
   }
 
   char *endptr = NULL;
-  long value = strtol(working, &endptr, 10);
-  if (endptr == working || (endptr != NULL && *endptr != '\0') || value < 0L || value > 5L) {
-    session_format_template(usage_format, usage_args, sizeof(usage_args) / sizeof(usage_args[0]), usage_message,
-                            sizeof(usage_message));
-    session_send_system_line(ctx, usage_message);
+  long value = strtol (working, &endptr, 10);
+  if (endptr == working || (endptr != NULL && *endptr != '\0') || value < 0L
+      || value > 5L) {
+    session_format_template (usage_format, usage_args,
+                             sizeof (usage_args) / sizeof (usage_args[0]),
+                             usage_message, sizeof (usage_message));
+    session_send_system_line (ctx, usage_message);
     return;
   }
 
@@ -3246,207 +3673,266 @@ static void session_handle_chat_spacing(session_ctx_t *ctx, const char *argument
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
   if (value == 0L) {
-    const char *format = (locale->chat_spacing_immediate != NULL && locale->chat_spacing_immediate[0] != '\0')
+    const char *format = (locale->chat_spacing_immediate != NULL
+                          && locale->chat_spacing_immediate[0] != '\0')
                              ? locale->chat_spacing_immediate
-                             : "Translation captions will appear immediately without reserving extra blank lines.";
-    session_format_template(format, NULL, 0U, message, sizeof(message));
+                             : "Translation captions will appear immediately "
+                               "without reserving extra blank lines.";
+    session_format_template (format, NULL, 0U, message, sizeof (message));
   } else if (value == 1L) {
-    const char *format = (locale->chat_spacing_single != NULL && locale->chat_spacing_single[0] != '\0')
+    const char *format = (locale->chat_spacing_single != NULL
+                          && locale->chat_spacing_single[0] != '\0')
                              ? locale->chat_spacing_single
-                             : "Translation captions will reserve 1 blank line before appearing in chat threads.";
-    session_format_template(format, NULL, 0U, message, sizeof(message));
+                             : "Translation captions will reserve 1 blank line "
+                               "before appearing in chat threads.";
+    session_format_template (format, NULL, 0U, message, sizeof (message));
   } else {
-    const char *format = (locale->chat_spacing_multiple != NULL && locale->chat_spacing_multiple[0] != '\0')
+    const char *format = (locale->chat_spacing_multiple != NULL
+                          && locale->chat_spacing_multiple[0] != '\0')
                              ? locale->chat_spacing_multiple
-                             : "Translation captions will reserve %s blank lines before appearing in chat threads.";
+                             : "Translation captions will reserve %s blank "
+                               "lines before appearing in chat threads.";
     char count[16];
-    snprintf(count, sizeof(count), "%ld", value);
-    const char *args[] = {count};
-    session_format_template(format, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
+    snprintf (count, sizeof (count), "%ld", value);
+    const char *args[] = { count };
+    session_format_template (format, args, sizeof (args) / sizeof (args[0]),
+                             message, sizeof (message));
   }
-  session_send_system_line(ctx, message);
+  session_send_system_line (ctx, message);
 
   if (ctx->owner != NULL) {
-    host_store_chat_spacing(ctx->owner, ctx);
+    host_store_chat_spacing (ctx->owner, ctx);
   }
 }
 
-static void session_handle_set_ui_lang(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_set_ui_lang (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
 
-  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
-  const char *prefix = session_command_prefix(ctx);
+  const session_ui_locale_t *locale = session_ui_get_locale (ctx);
+  const char *prefix = session_command_prefix (ctx);
 
   char token[SSH_CHATTER_LANG_NAME_LEN];
-  const char *cursor = session_consume_token(arguments, token, sizeof(token));
+  const char *cursor = session_consume_token (arguments, token, sizeof (token));
 
   bool extra_tokens = cursor != NULL && *cursor != '\0';
   if (token[0] == '\0' || extra_tokens) {
-    const char *format = (locale->set_ui_lang_usage != NULL && locale->set_ui_lang_usage[0] != '\0')
+    const char *format = (locale->set_ui_lang_usage != NULL
+                          && locale->set_ui_lang_usage[0] != '\0')
                              ? locale->set_ui_lang_usage
                              : "Usage: %sset-ui-lang <ko|en|jp|zh|ru>";
-    const char *args[] = {prefix};
+    const char *args[] = { prefix };
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    session_format_template(format, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
-    session_send_system_line(ctx, message);
+    session_format_template (format, args, sizeof (args) / sizeof (args[0]),
+                             message, sizeof (message));
+    session_send_system_line (ctx, message);
     return;
   }
 
-  session_ui_language_t language = session_ui_language_from_code(token);
+  session_ui_language_t language = session_ui_language_from_code (token);
   if (language == SESSION_UI_LANGUAGE_COUNT) {
-    const char *format = (locale->set_ui_lang_invalid != NULL && locale->set_ui_lang_invalid[0] != '\0')
-                             ? locale->set_ui_lang_invalid
-                             : "Unsupported language. Use one of: ko, en, jp, zh, ru.";
+    const char *format
+        = (locale->set_ui_lang_invalid != NULL
+           && locale->set_ui_lang_invalid[0] != '\0')
+              ? locale->set_ui_lang_invalid
+              : "Unsupported language. Use one of: ko, en, jp, zh, ru.";
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    session_format_template(format, NULL, 0U, message, sizeof(message));
-    session_send_system_line(ctx, message);
+    session_format_template (format, NULL, 0U, message, sizeof (message));
+    session_send_system_line (ctx, message);
     return;
   }
 
   ctx->ui_language = language;
-  const session_ui_locale_t *updated_locale = session_ui_get_locale(ctx);
-  const char *language_name = session_ui_language_name(language, ctx->ui_language);
-  const char *format = (updated_locale->set_ui_lang_success != NULL &&
-                        updated_locale->set_ui_lang_success[0] != '\0')
-                           ? updated_locale->set_ui_lang_success
-                           : "UI language set to %s. Use %shelp to review commands.";
-  const char *updated_prefix = session_command_prefix(ctx);
+  const session_ui_locale_t *updated_locale = session_ui_get_locale (ctx);
+  const char *language_name
+      = session_ui_language_name (language, ctx->ui_language);
+  const char *format
+      = (updated_locale->set_ui_lang_success != NULL
+         && updated_locale->set_ui_lang_success[0] != '\0')
+            ? updated_locale->set_ui_lang_success
+            : "UI language set to %s. Use %shelp to review commands.";
+  const char *updated_prefix = session_command_prefix (ctx);
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
-  const char *args[] = {language_name != NULL ? language_name : "-", updated_prefix};
-  session_format_template(format, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
-  session_send_system_line(ctx, message);
+  const char *args[]
+      = { language_name != NULL ? language_name : "-", updated_prefix };
+  session_format_template (format, args, sizeof (args) / sizeof (args[0]),
+                           message, sizeof (message));
+  session_send_system_line (ctx, message);
 
   if (ctx->owner != NULL) {
-    host_store_ui_language(ctx->owner, ctx);
+    host_store_ui_language (ctx->owner, ctx);
   }
 }
 
-static void session_handle_mode(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_mode (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
 
-  const session_ui_locale_t *locale = session_ui_get_locale(ctx);
-  const char *prefix = session_command_prefix(ctx);
-  const char *chat_label = (locale->mode_label_chat != NULL && locale->mode_label_chat[0] != '\0')
-                               ? locale->mode_label_chat
-                               : "chat";
-  const char *command_label = (locale->mode_label_command != NULL && locale->mode_label_command[0] != '\0')
-                                   ? locale->mode_label_command
-                                   : "command";
+  const session_ui_locale_t *locale = session_ui_get_locale (ctx);
+  const char *prefix = session_command_prefix (ctx);
+  const char *chat_label
+      = (locale->mode_label_chat != NULL && locale->mode_label_chat[0] != '\0')
+            ? locale->mode_label_chat
+            : "chat";
+  const char *command_label = (locale->mode_label_command != NULL
+                               && locale->mode_label_command[0] != '\0')
+                                  ? locale->mode_label_command
+                                  : "command";
 
   char working[32];
   if (arguments == NULL) {
     working[0] = '\0';
   } else {
-    snprintf(working, sizeof(working), "%s", arguments);
+    snprintf (working, sizeof (working), "%s", arguments);
   }
-  trim_whitespace_inplace(working);
+  trim_whitespace_inplace (working);
 
-  const char *status_format = (locale->mode_status_format != NULL && locale->mode_status_format[0] != '\0')
+  const char *status_format = (locale->mode_status_format != NULL
+                               && locale->mode_status_format[0] != '\0')
                                   ? locale->mode_status_format
                                   : "Current input mode: %s.";
-  const char *explain_chat = (locale->mode_explain_chat != NULL && locale->mode_explain_chat[0] != '\0')
-                                 ? locale->mode_explain_chat
-                                 : "Chat mode: send messages normally. Prefix commands with %s.";
-  const char *explain_command = (locale->mode_explain_command != NULL && locale->mode_explain_command[0] != '\0')
-                                    ? locale->mode_explain_command
-                                    : "Command mode: enter commands without %s, use UpArrow/DownArrow for history and Tab for completion.";
-  const char *already_chat = (locale->mode_already_chat != NULL && locale->mode_already_chat[0] != '\0')
-                                 ? locale->mode_already_chat
-                                 : "Already in chat mode. Commands require the %s prefix.";
-  const char *already_command = (locale->mode_already_command != NULL && locale->mode_already_command[0] != '\0')
-                                    ? locale->mode_already_command
-                                    : "Command mode already active. Enter commands without %s.";
-  const char *enabled_chat = (locale->mode_enabled_chat != NULL && locale->mode_enabled_chat[0] != '\0')
-                                 ? locale->mode_enabled_chat
-                                 : "Chat mode enabled. Commands once again require the %s prefix.";
-  const char *enabled_command = (locale->mode_enabled_command != NULL && locale->mode_enabled_command[0] != '\0')
-                                    ? locale->mode_enabled_command
-                                    : "Command mode enabled. Enter commands without %s; use UpArrow/DownArrow for history and Tab for completion.";
-  const char *usage_format = (locale->mode_usage != NULL && locale->mode_usage[0] != '\0')
-                                 ? locale->mode_usage
-                                 : "Usage: %smode <chat|command|toggle>";
+  const char *explain_chat
+      = (locale->mode_explain_chat != NULL
+         && locale->mode_explain_chat[0] != '\0')
+            ? locale->mode_explain_chat
+            : "Chat mode: send messages normally. Prefix commands with %s.";
+  const char *explain_command
+      = (locale->mode_explain_command != NULL
+         && locale->mode_explain_command[0] != '\0')
+            ? locale->mode_explain_command
+            : "Command mode: enter commands without %s, use UpArrow/DownArrow "
+              "for history and Tab for completion.";
+  const char *already_chat
+      = (locale->mode_already_chat != NULL
+         && locale->mode_already_chat[0] != '\0')
+            ? locale->mode_already_chat
+            : "Already in chat mode. Commands require the %s prefix.";
+  const char *already_command
+      = (locale->mode_already_command != NULL
+         && locale->mode_already_command[0] != '\0')
+            ? locale->mode_already_command
+            : "Command mode already active. Enter commands without %s.";
+  const char *enabled_chat
+      = (locale->mode_enabled_chat != NULL
+         && locale->mode_enabled_chat[0] != '\0')
+            ? locale->mode_enabled_chat
+            : "Chat mode enabled. Commands once again require the %s prefix.";
+  const char *enabled_command
+      = (locale->mode_enabled_command != NULL
+         && locale->mode_enabled_command[0] != '\0')
+            ? locale->mode_enabled_command
+            : "Command mode enabled. Enter commands without %s; use "
+              "UpArrow/DownArrow for history and Tab for completion.";
+  const char *usage_format
+      = (locale->mode_usage != NULL && locale->mode_usage[0] != '\0')
+            ? locale->mode_usage
+            : "Usage: %smode <chat|command|toggle>";
 
   if (working[0] == '\0') {
-    const char *current_label =
-        (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) ? command_label : chat_label;
+    const char *current_label = (ctx->input_mode == SESSION_INPUT_MODE_COMMAND)
+                                    ? command_label
+                                    : chat_label;
     char status_line[128];
-    const char *status_args[] = {current_label};
-    session_format_template(status_format, status_args, sizeof(status_args) / sizeof(status_args[0]), status_line,
-                            sizeof(status_line));
-    session_send_system_line(ctx, status_line);
+    const char *status_args[] = { current_label };
+    session_format_template (status_format, status_args,
+                             sizeof (status_args) / sizeof (status_args[0]),
+                             status_line, sizeof (status_line));
+    session_send_system_line (ctx, status_line);
 
-    const char *explain = (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) ? explain_command : explain_chat;
+    const char *explain = (ctx->input_mode == SESSION_INPUT_MODE_COMMAND)
+                              ? explain_command
+                              : explain_chat;
     char explain_line[SSH_CHATTER_MESSAGE_LIMIT];
-    const char *explain_args[] = {prefix};
-    session_format_template(explain, explain_args, sizeof(explain_args) / sizeof(explain_args[0]), explain_line,
-                            sizeof(explain_line));
-    session_send_system_line(ctx, explain_line);
+    const char *explain_args[] = { prefix };
+    session_format_template (explain, explain_args,
+                             sizeof (explain_args) / sizeof (explain_args[0]),
+                             explain_line, sizeof (explain_line));
+    session_send_system_line (ctx, explain_line);
     return;
   }
 
-  const bool matches_chat = (strcasecmp(working, "chat") == 0) ||
-                            (chat_label != NULL && chat_label[0] != '\0' && strcmp(working, chat_label) == 0);
+  const bool matches_chat = (strcasecmp (working, "chat") == 0)
+                            || (chat_label != NULL && chat_label[0] != '\0'
+                                && strcmp (working, chat_label) == 0);
   if (matches_chat) {
     if (ctx->input_mode == SESSION_INPUT_MODE_CHAT) {
       char message[SSH_CHATTER_MESSAGE_LIMIT];
-      const char *args[] = {prefix};
-      session_format_template(already_chat, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
-      session_send_system_line(ctx, message);
+      const char *args[] = { prefix };
+      session_format_template (already_chat, args,
+                               sizeof (args) / sizeof (args[0]), message,
+                               sizeof (message));
+      session_send_system_line (ctx, message);
       return;
     }
     ctx->input_mode = SESSION_INPUT_MODE_CHAT;
-    session_refresh_input_line(ctx);
+    session_refresh_input_line (ctx);
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    const char *args[] = {prefix};
-    session_format_template(enabled_chat, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
-    session_send_system_line(ctx, message);
+    const char *args[] = { prefix };
+    session_format_template (enabled_chat, args,
+                             sizeof (args) / sizeof (args[0]), message,
+                             sizeof (message));
+    session_send_system_line (ctx, message);
     return;
   }
 
-  const bool matches_command = (strcasecmp(working, "command") == 0) ||
-                               (command_label != NULL && command_label[0] != '\0' &&
-                                strcmp(working, command_label) == 0);
+  const bool matches_command
+      = (strcasecmp (working, "command") == 0)
+        || (command_label != NULL && command_label[0] != '\0'
+            && strcmp (working, command_label) == 0);
   if (matches_command) {
     if (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) {
       char message[SSH_CHATTER_MESSAGE_LIMIT];
-      const char *args[] = {prefix};
-      session_format_template(already_command, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
-      session_send_system_line(ctx, message);
+      const char *args[] = { prefix };
+      session_format_template (already_command, args,
+                               sizeof (args) / sizeof (args[0]), message,
+                               sizeof (message));
+      session_send_system_line (ctx, message);
       return;
     }
     ctx->input_mode = SESSION_INPUT_MODE_COMMAND;
-    session_refresh_input_line(ctx);
+    session_refresh_input_line (ctx);
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    const char *args[] = {prefix};
-    session_format_template(enabled_command, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
-    session_send_system_line(ctx, message);
+    const char *args[] = { prefix };
+    session_format_template (enabled_command, args,
+                             sizeof (args) / sizeof (args[0]), message,
+                             sizeof (message));
+    session_send_system_line (ctx, message);
     return;
   }
 
-  if (strcasecmp(working, "toggle") == 0) {
-    ctx->input_mode =
-        (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) ? SESSION_INPUT_MODE_CHAT : SESSION_INPUT_MODE_COMMAND;
-    session_refresh_input_line(ctx);
-    const char *format = (ctx->input_mode == SESSION_INPUT_MODE_COMMAND) ? enabled_command : enabled_chat;
+  if (strcasecmp (working, "toggle") == 0) {
+    ctx->input_mode = (ctx->input_mode == SESSION_INPUT_MODE_COMMAND)
+                          ? SESSION_INPUT_MODE_CHAT
+                          : SESSION_INPUT_MODE_COMMAND;
+    session_refresh_input_line (ctx);
+    const char *format = (ctx->input_mode == SESSION_INPUT_MODE_COMMAND)
+                             ? enabled_command
+                             : enabled_chat;
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    const char *args[] = {prefix};
-    session_format_template(format, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
-    session_send_system_line(ctx, message);
+    const char *args[] = { prefix };
+    session_format_template (format, args, sizeof (args) / sizeof (args[0]),
+                             message, sizeof (message));
+    session_send_system_line (ctx, message);
     return;
   }
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
-  const char *args[] = {prefix};
-  session_format_template(usage_format, args, sizeof(args) / sizeof(args[0]), message, sizeof(message));
-  session_send_system_line(ctx, message);
+  const char *args[] = { prefix };
+  session_format_template (usage_format, args, sizeof (args) / sizeof (args[0]),
+                           message, sizeof (message));
+  session_send_system_line (ctx, message);
 }
 
-static void session_handle_history(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_history (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
@@ -3460,21 +3946,21 @@ static void session_handle_history(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (command_count == 0U) {
-    session_send_system_line(ctx, "No command history recorded yet.");
+    session_send_system_line (ctx, "No command history recorded yet.");
     return;
   }
 
   size_t limit = command_count;
   if (arguments != NULL) {
     char working[32];
-    snprintf(working, sizeof(working), "%s", arguments);
-    trim_whitespace_inplace(working);
+    snprintf (working, sizeof (working), "%s", arguments);
+    trim_whitespace_inplace (working);
     if (working[0] != '\0') {
       char *end = NULL;
       errno = 0;
-      long requested = strtol(working, &end, 10);
+      long requested = strtol (working, &end, 10);
       if (errno != 0 || end == working || *end != '\0' || requested <= 0) {
-        session_send_system_line(ctx, "Usage: /history [count]");
+        session_send_system_line (ctx, "Usage: /history [count]");
         return;
       }
       if ((size_t)requested < limit) {
@@ -3483,7 +3969,7 @@ static void session_handle_history(session_ctx_t *ctx, const char *arguments) {
     }
   }
 
-  session_send_system_line(ctx, "Command history (newest first):");
+  session_send_system_line (ctx, "Command history (newest first):");
 
   for (size_t displayed = 0U; displayed < limit; ++displayed) {
     size_t source_index = command_indices[command_count - 1U - displayed];
@@ -3493,28 +3979,29 @@ static void session_handle_history(session_ctx_t *ctx, const char *arguments) {
     }
     char normalized[SSH_CHATTER_MAX_INPUT_LEN];
     normalized[0] = '\0';
-    const char *prefix = session_command_prefix(ctx);
-    const char *display_prefix = (prefix != NULL && prefix[0] != '\0') ? prefix : "/";
-    size_t prefix_len = strlen(display_prefix);
+    const char *prefix = session_command_prefix (ctx);
+    const char *display_prefix
+        = (prefix != NULL && prefix[0] != '\0') ? prefix : "/";
+    size_t prefix_len = strlen (display_prefix);
     bool has_prefix = false;
     if (prefix_len > 0U) {
-      has_prefix = strncmp(entry, display_prefix, prefix_len) == 0;
+      has_prefix = strncmp (entry, display_prefix, prefix_len) == 0;
     } else {
       has_prefix = entry[0] == '/';
     }
 
     if (!has_prefix) {
-      snprintf(normalized, sizeof(normalized), "%s%s", display_prefix, entry);
+      snprintf (normalized, sizeof (normalized), "%s%s", display_prefix, entry);
     } else {
-      snprintf(normalized, sizeof(normalized), "%s", entry);
+      snprintf (normalized, sizeof (normalized), "%s", entry);
     }
 
     char line[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(line, sizeof(line), "%2zu. %s", displayed + 1U, normalized);
-    session_send_system_line(ctx, line);
+    snprintf (line, sizeof (line), "%2zu. %s", displayed + 1U, normalized);
+    session_send_system_line (ctx, line);
   }
 
-  session_refresh_input_line(ctx);
+  session_refresh_input_line (ctx);
 }
 
 typedef struct session_weather_buffer {
@@ -3522,77 +4009,85 @@ typedef struct session_weather_buffer {
   size_t length;
 } session_weather_buffer_t;
 
-static size_t session_weather_write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
+static size_t
+session_weather_write_callback (void *contents, size_t size, size_t nmemb,
+                                void *userp)
+{
   session_weather_buffer_t *buffer = (session_weather_buffer_t *)userp;
   const size_t total = size * nmemb;
   if (buffer == NULL || total == 0U) {
     return 0U;
   }
 
-  char *resized = realloc(buffer->data, buffer->length + total + 1U);
+  char *resized = realloc (buffer->data, buffer->length + total + 1U);
   if (resized == NULL) {
     return 0U;
   }
 
   buffer->data = resized;
-  memcpy(buffer->data + buffer->length, contents, total);
+  memcpy (buffer->data + buffer->length, contents, total);
   buffer->length += total;
   buffer->data[buffer->length] = '\0';
   return total;
 }
 
-static bool session_fetch_weather_summary(const char *region, const char *city, char *summary, size_t summary_len) {
+static bool
+session_fetch_weather_summary (const char *region, const char *city,
+                               char *summary, size_t summary_len)
+{
   if (region == NULL || city == NULL || summary == NULL || summary_len == 0U) {
     return false;
   }
 
-  CURL *curl = curl_easy_init();
+  CURL *curl = curl_easy_init ();
   if (curl == NULL) {
     return false;
   }
 
   bool success = false;
-  session_weather_buffer_t buffer = {0};
+  session_weather_buffer_t buffer = { 0 };
   char query[128];
-  snprintf(query, sizeof(query), "%s %s", region, city);
+  snprintf (query, sizeof (query), "%s %s", region, city);
 
-  char *escaped = curl_easy_escape(curl, query, 0);
+  char *escaped = curl_easy_escape (curl, query, 0);
   if (escaped == NULL) {
     goto cleanup;
   }
 
   char url[512];
   static const char *kFormat = "%25l:%20%25C,%20%25t";
-  int written = snprintf(url, sizeof(url), "https://wttr.in/%s?format=%s", escaped, kFormat);
-  curl_free(escaped);
-  if (written < 0 || (size_t)written >= sizeof(url)) {
+  int written = snprintf (url, sizeof (url), "https://wttr.in/%s?format=%s",
+                          escaped, kFormat);
+  curl_free (escaped);
+  if (written < 0 || (size_t)written >= sizeof (url)) {
     goto cleanup;
   }
 
-  curl_easy_setopt(curl, CURLOPT_URL, url);
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
-  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, session_weather_write_callback);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
+  curl_easy_setopt (curl, CURLOPT_URL, url);
+  curl_easy_setopt (curl, CURLOPT_TIMEOUT, 10L);
+  curl_easy_setopt (curl, CURLOPT_CONNECTTIMEOUT, 5L);
+  curl_easy_setopt (curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt (curl, CURLOPT_WRITEFUNCTION,
+                    session_weather_write_callback);
+  curl_easy_setopt (curl, CURLOPT_WRITEDATA, &buffer);
 
-  CURLcode result = curl_easy_perform(curl);
+  CURLcode result = curl_easy_perform (curl);
   if (result != CURLE_OK) {
     goto cleanup;
   }
 
   long status = 0;
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+  curl_easy_getinfo (curl, CURLINFO_RESPONSE_CODE, &status);
   if (status < 200L || status >= 300L || buffer.data == NULL) {
     goto cleanup;
   }
 
   char *trimmed = buffer.data;
-  while (*trimmed != '\0' && isspace((unsigned char)*trimmed)) {
+  while (*trimmed != '\0' && isspace ((unsigned char)*trimmed)) {
     ++trimmed;
   }
-  size_t end = strlen(trimmed);
-  while (end > 0U && isspace((unsigned char)trimmed[end - 1U])) {
+  size_t end = strlen (trimmed);
+  while (end > 0U && isspace ((unsigned char)trimmed[end - 1U])) {
     trimmed[--end] = '\0';
   }
 
@@ -3600,151 +4095,166 @@ static bool session_fetch_weather_summary(const char *region, const char *city, 
     goto cleanup;
   }
 
-  snprintf(summary, summary_len, "%s", trimmed);
+  snprintf (summary, summary_len, "%s", trimmed);
   success = true;
 
 cleanup:
-  curl_easy_cleanup(curl);
+  curl_easy_cleanup (curl);
   return success;
 }
 
-static void session_handle_status(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_status (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
 
   static const char *kUsage = "Usage: /status <message|clear>";
   char usage[SSH_CHATTER_MESSAGE_LIMIT];
-  session_command_format_usage(ctx, "/status", kUsage, usage, sizeof(usage));
+  session_command_format_usage (ctx, "/status", kUsage, usage, sizeof (usage));
   if (arguments == NULL || *arguments == '\0') {
-    session_send_system_line(ctx, usage);
+    session_send_system_line (ctx, usage);
     return;
   }
 
   char working[SSH_CHATTER_STATUS_LEN];
-  snprintf(working, sizeof(working), "%s", arguments);
-  trim_whitespace_inplace(working);
+  snprintf (working, sizeof (working), "%s", arguments);
+  trim_whitespace_inplace (working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, usage);
+    session_send_system_line (ctx, usage);
     return;
   }
 
-  if (session_argument_is_disable(working) || strcasecmp(working, "clear") == 0) {
+  if (session_argument_is_disable (working)
+      || strcasecmp (working, "clear") == 0) {
     ctx->status_message[0] = '\0';
-    session_send_system_line(ctx, "Status cleared.");
+    session_send_system_line (ctx, "Status cleared.");
     return;
   }
 
-  snprintf(ctx->status_message, sizeof(ctx->status_message), "%s", working);
-  session_send_system_line(ctx, "Status updated.");
+  snprintf (ctx->status_message, sizeof (ctx->status_message), "%s", working);
+  session_send_system_line (ctx, "Status updated.");
 }
 
-static void session_handle_showstatus(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_showstatus (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
 
   static const char *kUsage = "Usage: /showstatus <username>";
   char usage[SSH_CHATTER_MESSAGE_LIMIT];
-  session_command_format_usage(ctx, "/showstatus", kUsage, usage, sizeof(usage));
+  session_command_format_usage (ctx, "/showstatus", kUsage, usage,
+                                sizeof (usage));
   if (arguments == NULL || *arguments == '\0') {
-    session_send_system_line(ctx, usage);
+    session_send_system_line (ctx, usage);
     return;
   }
 
   char target_name[SSH_CHATTER_USERNAME_LEN];
-  snprintf(target_name, sizeof(target_name), "%s", arguments);
-  trim_whitespace_inplace(target_name);
+  snprintf (target_name, sizeof (target_name), "%s", arguments);
+  trim_whitespace_inplace (target_name);
 
   if (target_name[0] == '\0') {
-    session_send_system_line(ctx, usage);
+    session_send_system_line (ctx, usage);
     return;
   }
 
-  session_ctx_t *target = chat_room_find_user(&ctx->owner->room, target_name);
+  session_ctx_t *target = chat_room_find_user (&ctx->owner->room, target_name);
   if (target == NULL) {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "User '%s' is not connected.", target_name);
-    session_send_system_line(ctx, message);
+    snprintf (message, sizeof (message), "User '%s' is not connected.",
+              target_name);
+    session_send_system_line (ctx, message);
     return;
   }
 
   if (target->status_message[0] == '\0') {
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "[%s] has not set a status.", target->user.name);
-    session_send_system_line(ctx, message);
+    snprintf (message, sizeof (message), "[%s] has not set a status.",
+              target->user.name);
+    session_send_system_line (ctx, message);
     return;
   }
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(message, sizeof(message), "[%s]'s status: %s", target->user.name, target->status_message);
-  session_send_system_line(ctx, message);
+  snprintf (message, sizeof (message), "[%s]'s status: %s", target->user.name,
+            target->status_message);
+  session_send_system_line (ctx, message);
 }
 
-static void session_handle_weather(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_weather (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
 
   static const char *kUsage = "Usage: /weather <region> <city>";
   char usage[SSH_CHATTER_MESSAGE_LIMIT];
-  session_command_format_usage(ctx, "/weather", kUsage, usage, sizeof(usage));
+  session_command_format_usage (ctx, "/weather", kUsage, usage, sizeof (usage));
   if (arguments == NULL || *arguments == '\0') {
-    session_send_system_line(ctx, usage);
+    session_send_system_line (ctx, usage);
     return;
   }
 
   const char *cursor = arguments;
-  while (*cursor != '\0' && !isspace((unsigned char)*cursor)) {
+  while (*cursor != '\0' && !isspace ((unsigned char)*cursor)) {
     ++cursor;
   }
 
   if (*cursor == '\0') {
-    session_send_system_line(ctx, usage);
+    session_send_system_line (ctx, usage);
     return;
   }
 
   size_t region_len = (size_t)(cursor - arguments);
   char region[64];
-  if (region_len >= sizeof(region)) {
-    session_send_system_line(ctx, "Region name is too long.");
+  if (region_len >= sizeof (region)) {
+    session_send_system_line (ctx, "Region name is too long.");
     return;
   }
-  memcpy(region, arguments, region_len);
+  memcpy (region, arguments, region_len);
   region[region_len] = '\0';
-  trim_whitespace_inplace(region);
+  trim_whitespace_inplace (region);
 
-  while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
+  while (*cursor != '\0' && isspace ((unsigned char)*cursor)) {
     ++cursor;
   }
 
   if (*cursor == '\0') {
-    session_send_system_line(ctx, usage);
+    session_send_system_line (ctx, usage);
     return;
   }
 
   char city[64];
-  snprintf(city, sizeof(city), "%s", cursor);
-  trim_whitespace_inplace(city);
+  snprintf (city, sizeof (city), "%s", cursor);
+  trim_whitespace_inplace (city);
 
   if (region[0] == '\0' || city[0] == '\0') {
-    session_send_system_line(ctx, usage);
+    session_send_system_line (ctx, usage);
     return;
   }
 
   char summary[256];
-  if (!session_fetch_weather_summary(region, city, summary, sizeof(summary))) {
-    session_send_system_line(ctx, "Failed to fetch weather information. Please try again later.");
+  if (!session_fetch_weather_summary (region, city, summary,
+                                      sizeof (summary))) {
+    session_send_system_line (
+        ctx, "Failed to fetch weather information. Please try again later.");
     return;
   }
 
   char message[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(message, sizeof(message), "%s", summary);
-  session_send_system_line(ctx, message);
+  snprintf (message, sizeof (message), "%s", summary);
+  session_send_system_line (ctx, message);
 }
 
-static void session_handle_translate(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_translate (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
@@ -3753,32 +4263,34 @@ static void session_handle_translate(session_ctx_t *ctx, const char *arguments) 
   if (arguments == NULL) {
     working[0] = '\0';
   } else {
-    snprintf(working, sizeof(working), "%s", arguments);
+    snprintf (working, sizeof (working), "%s", arguments);
   }
-  trim_whitespace_inplace(working);
+  trim_whitespace_inplace (working);
 
   if (working[0] == '\0') {
-    session_send_system_line(ctx, "Usage: /translate <on|off>");
+    session_send_system_line (ctx, "Usage: /translate <on|off>");
     return;
   }
 
-  if (session_argument_is_disable(working)) {
+  if (session_argument_is_disable (working)) {
     ctx->translation_enabled = false;
     ctx->translation_quota_notified = false;
-    session_translation_clear_queue(ctx);
-    session_send_system_line(ctx, "Translation disabled. New messages will be delivered without translation.");
+    session_translation_clear_queue (ctx);
+    session_send_system_line (ctx, "Translation disabled. New messages will be "
+                                   "delivered without translation.");
     if (ctx->owner != NULL) {
-      host_store_translation_preferences(ctx->owner, ctx);
+      host_store_translation_preferences (ctx->owner, ctx);
     }
     return;
   }
 
   bool enabled = false;
-  if (!parse_bool_token(working, &enabled)) {
-    if (strcasecmp(working, "enable") == 0 || strcasecmp(working, "enabled") == 0) {
+  if (!parse_bool_token (working, &enabled)) {
+    if (strcasecmp (working, "enable") == 0
+        || strcasecmp (working, "enabled") == 0) {
       enabled = true;
     } else {
-      session_send_system_line(ctx, "Usage: /translate <on|off>");
+      session_send_system_line (ctx, "Usage: /translate <on|off>");
       return;
     }
   }
@@ -3786,17 +4298,21 @@ static void session_handle_translate(session_ctx_t *ctx, const char *arguments) 
   ctx->translation_enabled = enabled;
   ctx->translation_quota_notified = false;
   if (enabled) {
-    session_send_system_line(ctx, "Translation enabled. Configure directions with /set-trans-lang or /set-target-lang.");
+    session_send_system_line (ctx, "Translation enabled. Configure directions "
+                                   "with /set-trans-lang or /set-target-lang.");
   } else {
-    session_translation_clear_queue(ctx);
-    session_send_system_line(ctx, "Translation disabled. New messages will be delivered without translation.");
+    session_translation_clear_queue (ctx);
+    session_send_system_line (ctx, "Translation disabled. New messages will be "
+                                   "delivered without translation.");
   }
   if (ctx->owner != NULL) {
-    host_store_translation_preferences(ctx->owner, ctx);
+    host_store_translation_preferences (ctx->owner, ctx);
   }
 }
 
-static void session_handle_breaking_alerts(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_breaking_alerts (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL) {
     return;
   }
@@ -3805,39 +4321,39 @@ static void session_handle_breaking_alerts(session_ctx_t *ctx, const char *argum
   if (arguments == NULL) {
     working[0] = '\0';
   } else {
-    snprintf(working, sizeof(working), "%s", arguments);
+    snprintf (working, sizeof (working), "%s", arguments);
   }
-  trim_whitespace_inplace(working);
+  trim_whitespace_inplace (working);
 
-  const char *prefix = session_command_prefix(ctx);
+  const char *prefix = session_command_prefix (ctx);
   char usage[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(usage, sizeof(usage), "Usage: %sbreaking <on|off|toggle>", prefix);
+  snprintf (usage, sizeof (usage), "Usage: %sbreaking <on|off|toggle>", prefix);
 
   if (working[0] == '\0') {
     char status[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(status, sizeof(status), "Breaking alerts are currently %s.",
-             ctx->breaking_alerts_enabled ? "ON" : "OFF");
-    session_send_system_line(ctx, status);
-    session_send_system_line(ctx, usage);
+    snprintf (status, sizeof (status), "Breaking alerts are currently %s.",
+              ctx->breaking_alerts_enabled ? "ON" : "OFF");
+    session_send_system_line (ctx, status);
+    session_send_system_line (ctx, usage);
     return;
   }
 
   bool desired_state = ctx->breaking_alerts_enabled;
   bool recognized = false;
 
-  if (session_argument_is_disable(working)) {
+  if (session_argument_is_disable (working)) {
     desired_state = false;
     recognized = true;
-  } else if (session_argument_is_enable(working)) {
+  } else if (session_argument_is_enable (working)) {
     desired_state = true;
     recognized = true;
-  } else if (strcasecmp(working, "toggle") == 0) {
+  } else if (strcasecmp (working, "toggle") == 0) {
     desired_state = !ctx->breaking_alerts_enabled;
     recognized = true;
   }
 
   if (!recognized) {
-    session_send_system_line(ctx, usage);
+    session_send_system_line (ctx, usage);
     return;
   }
 
@@ -3845,65 +4361,74 @@ static void session_handle_breaking_alerts(session_ctx_t *ctx, const char *argum
     ctx->breaking_alerts_enabled = false;
     if (ctx->bbs_breaking_count > 0U) {
       ctx->bbs_breaking_count = 0U;
-      memset(ctx->bbs_breaking_messages, 0, sizeof(ctx->bbs_breaking_messages));
+      memset (ctx->bbs_breaking_messages, 0,
+              sizeof (ctx->bbs_breaking_messages));
     }
-    session_send_system_line(ctx, "Breaking alerts disabled.");
+    session_send_system_line (ctx, "Breaking alerts disabled.");
   } else {
     ctx->breaking_alerts_enabled = true;
-    session_send_system_line(ctx, "Breaking alerts enabled.");
+    session_send_system_line (ctx, "Breaking alerts enabled.");
   }
 
   if (ctx->owner != NULL) {
-    host_store_breaking_alerts(ctx->owner, ctx);
+    host_store_breaking_alerts (ctx->owner, ctx);
   }
 }
 
-static void session_translate_scope_send_usage(session_ctx_t *ctx) {
+static void
+session_translate_scope_send_usage (session_ctx_t *ctx)
+{
   if (ctx == NULL) {
     return;
   }
 
-  const char *prefix = session_command_prefix(ctx);
+  const char *prefix = session_command_prefix (ctx);
   char *usage_format_head = "Usage: ";
   char *usage_format_tail = "translate-scope <chat|chat-nohistory|all>";
 
   switch (ctx->ui_language) {
-    case SESSION_UI_LANGUAGE_KO:
-      usage_format_head = "사용법: ";
-      usage_format_tail = "번역범위 <채팅|채팅기록없음|모두>";
-      break;
-    case SESSION_UI_LANGUAGE_JP:
-      usage_format_head = "使い方: ";
-      usage_format_tail = "翻訳範囲 <チャット|チャット履歴なし|すべて>";
-      break;
-    case SESSION_UI_LANGUAGE_ZH:
-      usage_format_head = "用法：";
-      usage_format_tail = "翻译范围 <聊天|无聊天记录|全部>";
-      break;
-    case SESSION_UI_LANGUAGE_RU:
-      usage_format_head = "Использование: ";
-      usage_format_tail = "область-перевода <чат|чат-без-истории|все>";
-      break;
-    default:
-      break;
+  case SESSION_UI_LANGUAGE_KO:
+    usage_format_head = "사용법: ";
+    usage_format_tail = "번역범위 <채팅|채팅기록없음|모두>";
+    break;
+  case SESSION_UI_LANGUAGE_JP:
+    usage_format_head = "使い方: ";
+    usage_format_tail = "翻訳範囲 <チャット|チャット履歴なし|すべて>";
+    break;
+  case SESSION_UI_LANGUAGE_ZH:
+    usage_format_head = "用法：";
+    usage_format_tail = "翻译范围 <聊天|无聊天记录|全部>";
+    break;
+  case SESSION_UI_LANGUAGE_RU:
+    usage_format_head = "Использование: ";
+    usage_format_tail = "область-перевода <чат|чат-без-истории|все>";
+    break;
+  default:
+    break;
   }
 
   char usage_line[SSH_CHATTER_MESSAGE_LIMIT];
-  strncat(usage_line, usage_format_head, strnlen(usage_format_head, SSH_CHATTER_MESSAGE_LIMIT));
-  
-  size_t prefix_len = strnlen(prefix, SSH_CHATTER_MESSAGE_LIMIT);
-  if(prefix_len > 0) strncat(usage_line, prefix, prefix_len);
-  strncat(usage_line, usage_format_tail, strnlen(usage_format_tail, SSH_CHATTER_MESSAGE_LIMIT));
-  session_send_system_line(ctx, usage_line);
+  strncat (usage_line, usage_format_head,
+           strnlen (usage_format_head, SSH_CHATTER_MESSAGE_LIMIT));
+
+  size_t prefix_len = strnlen (prefix, SSH_CHATTER_MESSAGE_LIMIT);
+  if (prefix_len > 0)
+    strncat (usage_line, prefix, prefix_len);
+  strncat (usage_line, usage_format_tail,
+           strnlen (usage_format_tail, SSH_CHATTER_MESSAGE_LIMIT));
+  session_send_system_line (ctx, usage_line);
 }
 
-static void session_handle_translate_scope(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_translate_scope (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
 
   if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
-    session_send_system_line(ctx, "Only operators may manage translation scope.");
+    session_send_system_line (ctx,
+                              "Only operators may manage translation scope.");
     return;
   }
 
@@ -3916,7 +4441,8 @@ static void session_handle_translate_scope(session_ctx_t *ctx, const char *argum
     }
 
     size_t length = 0U;
-    while (cursor[length] != '\0' && !isspace((unsigned char)cursor[length]) && length + 1U < sizeof(token)) {
+    while (cursor[length] != '\0' && !isspace ((unsigned char)cursor[length])
+           && length + 1U < sizeof (token)) {
       token[length] = cursor[length];
       ++length;
     }
@@ -3924,37 +4450,45 @@ static void session_handle_translate_scope(session_ctx_t *ctx, const char *argum
   }
 
   if (token[0] == '\0') {
-    const bool limited = translator_should_limit_to_chat_bbs();
-    const bool forced = translator_is_ollama_only();
-    const bool manual = translator_is_manual_chat_bbs_only();
-    const bool skip_scrollback = translator_is_manual_skip_scrollback();
+    const bool limited = translator_should_limit_to_chat_bbs ();
+    const bool forced = translator_is_ollama_only ();
+    const bool manual = translator_is_manual_chat_bbs_only ();
+    const bool skip_scrollback = translator_is_manual_skip_scrollback ();
 
     char status[SSH_CHATTER_MESSAGE_LIMIT];
     if (limited) {
       if (skip_scrollback) {
-        snprintf(status, sizeof(status),
-                 "Translation scope is currently limited to chat messages and BBS posts. Scrollback translation is disabled.");
+        snprintf (status, sizeof (status),
+                  "Translation scope is currently limited to chat messages and "
+                  "BBS posts. Scrollback translation is disabled.");
       } else {
-        snprintf(status, sizeof(status), "Translation scope is currently limited to chat messages and BBS posts.");
+        snprintf (status, sizeof (status),
+                  "Translation scope is currently limited to chat messages and "
+                  "BBS posts.");
       }
     } else {
-      snprintf(status, sizeof(status),
-               "Translation scope currently includes system output and bulk messages.");
+      snprintf (status, sizeof (status),
+                "Translation scope currently includes system output and bulk "
+                "messages.");
     }
-    session_send_system_line(ctx, status);
+    session_send_system_line (ctx, status);
 
     if (forced) {
-      session_send_system_line(ctx,
-                               "Gemini translation is unavailable; Ollama fallback enforces chat/BBS-only scope.");
+      session_send_system_line (ctx,
+                                "Gemini translation is unavailable; Ollama "
+                                "fallback enforces chat/BBS-only scope.");
     } else if (manual) {
       if (skip_scrollback) {
-        session_send_system_line(ctx, "Chat/BBS-only scope is enabled manually. Scrollback translation is suppressed.");
+        session_send_system_line (ctx,
+                                  "Chat/BBS-only scope is enabled manually. "
+                                  "Scrollback translation is suppressed.");
       } else {
-        session_send_system_line(ctx, "Chat/BBS-only scope is enabled manually.");
+        session_send_system_line (ctx,
+                                  "Chat/BBS-only scope is enabled manually.");
       }
     }
 
-    session_translate_scope_send_usage(ctx);
+    session_translate_scope_send_usage (ctx);
     return;
   }
 
@@ -3962,104 +4496,127 @@ static void session_handle_translate_scope(session_ctx_t *ctx, const char *argum
   bool limit_chat_nohistory_scope = false;
   bool restore_full_scope = false;
 
-  if (strcasecmp(token, "chat") == 0 || strcasecmp(token, "limit") == 0 || strcasecmp(token, "on") == 0) {
+  if (strcasecmp (token, "chat") == 0 || strcasecmp (token, "limit") == 0
+      || strcasecmp (token, "on") == 0) {
     limit_chat_scope = true;
   }
-  if (strcasecmp(token, "chat-nohistory") == 0 || strcasecmp(token, "chat_nohistory") == 0 ||
-      strcasecmp(token, "chat-nohist") == 0) {
+  if (strcasecmp (token, "chat-nohistory") == 0
+      || strcasecmp (token, "chat_nohistory") == 0
+      || strcasecmp (token, "chat-nohist") == 0) {
     limit_chat_nohistory_scope = true;
   }
-  if (strcasecmp(token, "all") == 0 || strcasecmp(token, "full") == 0 || strcasecmp(token, "off") == 0) {
+  if (strcasecmp (token, "all") == 0 || strcasecmp (token, "full") == 0
+      || strcasecmp (token, "off") == 0) {
     restore_full_scope = true;
   }
 
   if (!limit_chat_scope && !limit_chat_nohistory_scope && !restore_full_scope) {
-    if (strcmp(token, "채팅") == 0 || strcmp(token, "チャット") == 0 || strcmp(token, "聊天") == 0 ||
-        strcmp(token, "чат") == 0) {
+    if (strcmp (token, "채팅") == 0 || strcmp (token, "チャット") == 0
+        || strcmp (token, "聊天") == 0 || strcmp (token, "чат") == 0) {
       limit_chat_scope = true;
-    } else if (strcmp(token, "채팅기록없음") == 0 || strcmp(token, "チャット履歴なし") == 0 ||
-               strcmp(token, "无聊天记录") == 0 || strcmp(token, "чат-без-истории") == 0) {
+    } else if (strcmp (token, "채팅기록없음") == 0
+               || strcmp (token, "チャット履歴なし") == 0
+               || strcmp (token, "无聊天记录") == 0
+               || strcmp (token, "чат-без-истории") == 0) {
       limit_chat_nohistory_scope = true;
-    } else if (strcmp(token, "모두") == 0 || strcmp(token, "すべて") == 0 || strcmp(token, "全部") == 0 ||
-               strcmp(token, "все") == 0 || strcmp(token, "всё") == 0) {
+    } else if (strcmp (token, "모두") == 0 || strcmp (token, "すべて") == 0
+               || strcmp (token, "全部") == 0 || strcmp (token, "все") == 0
+               || strcmp (token, "всё") == 0) {
       restore_full_scope = true;
     }
   }
 
   if (limit_chat_scope) {
-    if (translator_is_manual_chat_bbs_only() && !translator_is_manual_skip_scrollback()) {
-      session_send_system_line(ctx,
-                               "Translation scope is already limited to chat messages and BBS posts.");
+    if (translator_is_manual_chat_bbs_only ()
+        && !translator_is_manual_skip_scrollback ()) {
+      session_send_system_line (ctx, "Translation scope is already limited to "
+                                     "chat messages and BBS posts.");
       return;
     }
 
-    translator_set_manual_chat_bbs_only(true);
-    translator_set_manual_skip_scrollback(false);
-    session_send_system_line(ctx, "Translation scope limited to chat messages and BBS posts.");
+    translator_set_manual_chat_bbs_only (true);
+    translator_set_manual_skip_scrollback (false);
+    session_send_system_line (
+        ctx, "Translation scope limited to chat messages and BBS posts.");
 
     char notice[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(notice, sizeof(notice), "* [%s] limited translation scope to chat and BBS posts.", ctx->user.name);
-    host_history_record_system(ctx->owner, notice);
-    chat_room_broadcast(&ctx->owner->room, notice, NULL);
+    snprintf (notice, sizeof (notice),
+              "* [%s] limited translation scope to chat and BBS posts.",
+              ctx->user.name);
+    host_history_record_system (ctx->owner, notice);
+    chat_room_broadcast (&ctx->owner->room, notice, NULL);
     return;
   }
 
   if (limit_chat_nohistory_scope) {
-    if (translator_is_manual_chat_bbs_only() && translator_is_manual_skip_scrollback()) {
-      session_send_system_line(ctx,
-                               "Translation scope is already limited to chat/BBS posts with scrollback translation disabled.");
+    if (translator_is_manual_chat_bbs_only ()
+        && translator_is_manual_skip_scrollback ()) {
+      session_send_system_line (
+          ctx, "Translation scope is already limited to chat/BBS posts with "
+               "scrollback translation disabled.");
       return;
     }
 
-    translator_set_manual_chat_bbs_only(true);
-    translator_set_manual_skip_scrollback(true);
-    session_send_system_line(ctx,
-                             "Translation scope limited to chat messages and BBS posts. Scrollback translation is disabled.");
+    translator_set_manual_chat_bbs_only (true);
+    translator_set_manual_skip_scrollback (true);
+    session_send_system_line (ctx,
+                              "Translation scope limited to chat messages and "
+                              "BBS posts. Scrollback translation is disabled.");
 
     char notice[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(notice, sizeof(notice),
-             "* [%s] limited translation scope to chat/BBS posts and disabled scrollback translation.", ctx->user.name);
-    host_history_record_system(ctx->owner, notice);
-    chat_room_broadcast(&ctx->owner->room, notice, NULL);
+    snprintf (notice, sizeof (notice),
+              "* [%s] limited translation scope to chat/BBS posts and disabled "
+              "scrollback translation.",
+              ctx->user.name);
+    host_history_record_system (ctx->owner, notice);
+    chat_room_broadcast (&ctx->owner->room, notice, NULL);
     return;
   }
 
   if (restore_full_scope) {
-    if (translator_is_ollama_only()) {
-      session_send_system_line(ctx,
-                               "Full translation scope cannot be restored while Gemini is unavailable."
-                               " Ollama-only mode restricts translation to chat and BBS posts.");
+    if (translator_is_ollama_only ()) {
+      session_send_system_line (
+          ctx,
+          "Full translation scope cannot be restored while Gemini is "
+          "unavailable."
+          " Ollama-only mode restricts translation to chat and BBS posts.");
       return;
     }
 
-    if (!translator_is_manual_chat_bbs_only()) {
-      session_send_system_line(ctx,
-                               "Translation scope already includes system output and bulk messages.");
+    if (!translator_is_manual_chat_bbs_only ()) {
+      session_send_system_line (ctx, "Translation scope already includes "
+                                     "system output and bulk messages.");
       return;
     }
 
-    translator_set_manual_chat_bbs_only(false);
-    translator_set_manual_skip_scrollback(false);
-    session_send_system_line(ctx,
-                             "Full translation scope restored. System output and bulk messages are eligible for translation.");
+    translator_set_manual_chat_bbs_only (false);
+    translator_set_manual_skip_scrollback (false);
+    session_send_system_line (
+        ctx, "Full translation scope restored. System output and bulk messages "
+             "are eligible for translation.");
 
     char notice[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(notice, sizeof(notice), "* [%s] restored full translation scope for translations.", ctx->user.name);
-    host_history_record_system(ctx->owner, notice);
-    chat_room_broadcast(&ctx->owner->room, notice, NULL);
+    snprintf (notice, sizeof (notice),
+              "* [%s] restored full translation scope for translations.",
+              ctx->user.name);
+    host_history_record_system (ctx->owner, notice);
+    chat_room_broadcast (&ctx->owner->room, notice, NULL);
     return;
   }
 
-  session_translate_scope_send_usage(ctx);
+  session_translate_scope_send_usage (ctx);
 }
 
-static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_gemini (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
 
   if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
-    session_send_system_line(ctx, "Only operators may manage Gemini translation.");
+    session_send_system_line (ctx,
+                              "Only operators may manage Gemini translation.");
     return;
   }
 
@@ -4072,7 +4629,8 @@ static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
   token[0] = '\0';
   if (cursor != NULL && *cursor != '\0') {
     size_t length = 0U;
-    while (cursor[length] != '\0' && !isspace((unsigned char)cursor[length]) && length + 1U < sizeof(token)) {
+    while (cursor[length] != '\0' && !isspace ((unsigned char)cursor[length])
+           && length + 1U < sizeof (token)) {
       token[length] = cursor[length];
       ++length;
     }
@@ -4080,17 +4638,21 @@ static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
   }
 
   if (token[0] == '\0') {
-    bool enabled = translator_is_gemini_enabled();
-    bool manual = translator_is_gemini_manually_disabled();
-    struct timespec remaining = {0, 0};
-    bool cooldown_active = translator_gemini_backoff_remaining(&remaining);
+    bool enabled = translator_is_gemini_enabled ();
+    bool manual = translator_is_gemini_manually_disabled ();
+    struct timespec remaining = { 0, 0 };
+    bool cooldown_active = translator_gemini_backoff_remaining (&remaining);
 
     char status_line[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(status_line, sizeof(status_line), "Gemini translation is currently %s.", enabled ? "enabled" : "disabled");
-    session_send_system_line(ctx, status_line);
+    snprintf (status_line, sizeof (status_line),
+              "Gemini translation is currently %s.",
+              enabled ? "enabled" : "disabled");
+    session_send_system_line (ctx, status_line);
 
     if (manual) {
-      session_send_system_line(ctx, "Gemini usage is manually disabled. Use /gemini on to re-enable it.");
+      session_send_system_line (
+          ctx,
+          "Gemini usage is manually disabled. Use /gemini on to re-enable it.");
     }
 
     if (cooldown_active) {
@@ -4104,190 +4666,214 @@ static void session_handle_gemini(session_ctx_t *ctx, const char *arguments) {
 
       char cooldown_line[SSH_CHATTER_MESSAGE_LIMIT];
       if (hours > 0) {
-        snprintf(cooldown_line, sizeof(cooldown_line),
-                 "Automatic Gemini cooldown ends in %lldh %lldm %llds.", hours, minutes, secs);
+        snprintf (cooldown_line, sizeof (cooldown_line),
+                  "Automatic Gemini cooldown ends in %lldh %lldm %llds.", hours,
+                  minutes, secs);
       } else if (minutes > 0) {
-        snprintf(cooldown_line, sizeof(cooldown_line),
-                 "Automatic Gemini cooldown ends in %lldm %llds.", minutes, secs);
+        snprintf (cooldown_line, sizeof (cooldown_line),
+                  "Automatic Gemini cooldown ends in %lldm %llds.", minutes,
+                  secs);
       } else {
-        snprintf(cooldown_line, sizeof(cooldown_line),
-                 "Automatic Gemini cooldown ends in %lld seconds.", secs > 0 ? secs : 1LL);
+        snprintf (cooldown_line, sizeof (cooldown_line),
+                  "Automatic Gemini cooldown ends in %lld seconds.",
+                  secs > 0 ? secs : 1LL);
       }
-      session_send_system_line(ctx, cooldown_line);
+      session_send_system_line (ctx, cooldown_line);
     }
 
-    session_send_system_line(ctx, "Usage: /gemini <on|off>");
-    session_send_system_line(ctx, "Use /gemini-unfreeze to clear the automatic cooldown manually.");
+    session_send_system_line (ctx, "Usage: /gemini <on|off>");
+    session_send_system_line (
+        ctx, "Use /gemini-unfreeze to clear the automatic cooldown manually.");
     return;
   }
 
   bool requested_enable = false;
   bool recognized = false;
-  if (session_argument_is_disable(token)) {
+  if (session_argument_is_disable (token)) {
     recognized = true;
     requested_enable = false;
   } else {
-    recognized = parse_bool_token(token, &requested_enable);
+    recognized = parse_bool_token (token, &requested_enable);
   }
 
   if (!recognized) {
-    session_send_system_line(ctx, "Usage: /gemini <on|off>");
+    session_send_system_line (ctx, "Usage: /gemini <on|off>");
     return;
   }
 
   if (requested_enable) {
-    translator_set_gemini_enabled(true);
-    session_send_system_line(ctx, "Gemini translation enabled. Ollama fallback remains available.");
+    translator_set_gemini_enabled (true);
+    session_send_system_line (
+        ctx, "Gemini translation enabled. Ollama fallback remains available.");
 
     char notice[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(notice, sizeof(notice), "* [%s] enabled Gemini translation; Ollama fallback remains available.",
-             ctx->user.name);
-    host_history_record_system(ctx->owner, notice);
-    chat_room_broadcast(&ctx->owner->room, notice, NULL);
+    snprintf (
+        notice, sizeof (notice),
+        "* [%s] enabled Gemini translation; Ollama fallback remains available.",
+        ctx->user.name);
+    host_history_record_system (ctx->owner, notice);
+    chat_room_broadcast (&ctx->owner->room, notice, NULL);
     return;
   }
 
-  translator_set_gemini_enabled(false);
-  session_send_system_line(ctx, "Gemini translation disabled. Using Ollama gemma2:2b only.");
-  session_send_system_line(ctx, "While Gemini is off, only chat messages and BBS posts will be translated.");
+  translator_set_gemini_enabled (false);
+  session_send_system_line (
+      ctx, "Gemini translation disabled. Using Ollama gemma2:2b only.");
+  session_send_system_line (ctx, "While Gemini is off, only chat messages and "
+                                 "BBS posts will be translated.");
 
   char notice[SSH_CHATTER_MESSAGE_LIMIT];
-  snprintf(notice, sizeof(notice),
-           "* [%s] disabled Gemini translation; using Ollama fallback only (chat and BBS posts).", ctx->user.name);
-  host_history_record_system(ctx->owner, notice);
-  chat_room_broadcast(&ctx->owner->room, notice, NULL);
+  snprintf (notice, sizeof (notice),
+            "* [%s] disabled Gemini translation; using Ollama fallback only "
+            "(chat and BBS posts).",
+            ctx->user.name);
+  host_history_record_system (ctx->owner, notice);
+  chat_room_broadcast (&ctx->owner->room, notice, NULL);
   return;
 }
 
-static void session_handle_captcha(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_captcha (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
 
   if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
-    session_send_system_line(ctx, "Only operators may control captcha requirements.");
+    session_send_system_line (
+        ctx, "Only operators may control captcha requirements.");
     return;
   }
 
   char token[16];
   if (arguments != NULL) {
-    snprintf(token, sizeof(token), "%s", arguments);
-    trim_whitespace_inplace(token);
+    snprintf (token, sizeof (token), "%s", arguments);
+    trim_whitespace_inplace (token);
   } else {
     token[0] = '\0';
   }
 
   host_t *host = ctx->owner;
   if (token[0] == '\0') {
-    bool enabled = atomic_load(&host->captcha_enabled);
+    bool enabled = atomic_load (&host->captcha_enabled);
     char status[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(status, sizeof(status), "Captcha is currently %s.", enabled ? "enabled" : "disabled");
-    session_send_system_line(ctx, status);
-    session_send_system_line(ctx, "Usage: /captcha <on|off>");
+    snprintf (status, sizeof (status), "Captcha is currently %s.",
+              enabled ? "enabled" : "disabled");
+    session_send_system_line (ctx, status);
+    session_send_system_line (ctx, "Usage: /captcha <on|off>");
     return;
   }
 
   bool requested_enable = false;
   bool recognized = false;
-  if (session_argument_is_disable(token)) {
+  if (session_argument_is_disable (token)) {
     recognized = true;
     requested_enable = false;
   } else {
-    recognized = parse_bool_token(token, &requested_enable);
+    recognized = parse_bool_token (token, &requested_enable);
   }
 
   if (!recognized) {
-    session_send_system_line(ctx, "Usage: /captcha <on|off>");
+    session_send_system_line (ctx, "Usage: /captcha <on|off>");
     return;
   }
 
   if (requested_enable) {
-    bool was_enabled = atomic_exchange(&host->captcha_enabled, true);
+    bool was_enabled = atomic_exchange (&host->captcha_enabled, true);
     if (was_enabled) {
-      session_send_system_line(ctx, "Captcha is already enabled.");
+      session_send_system_line (ctx, "Captcha is already enabled.");
     } else {
-      session_send_system_line(ctx, "Captcha enabled. New connections must solve the puzzle.");
+      session_send_system_line (
+          ctx, "Captcha enabled. New connections must solve the puzzle.");
       char notice[SSH_CHATTER_MESSAGE_LIMIT];
-      snprintf(notice, sizeof(notice), "* [%s] enabled captcha for new connections.", ctx->user.name);
-      host_history_record_system(host, notice);
-      chat_room_broadcast(&host->room, notice, NULL);
-      pthread_mutex_lock(&host->lock);
-      host_state_save_locked(host);
-      pthread_mutex_unlock(&host->lock);
+      snprintf (notice, sizeof (notice),
+                "* [%s] enabled captcha for new connections.", ctx->user.name);
+      host_history_record_system (host, notice);
+      chat_room_broadcast (&host->room, notice, NULL);
+      pthread_mutex_lock (&host->lock);
+      host_state_save_locked (host);
+      pthread_mutex_unlock (&host->lock);
     }
     return;
   }
 
-  bool was_enabled = atomic_exchange(&host->captcha_enabled, false);
+  bool was_enabled = atomic_exchange (&host->captcha_enabled, false);
   if (!was_enabled) {
-    session_send_system_line(ctx, "Captcha is already disabled.");
+    session_send_system_line (ctx, "Captcha is already disabled.");
   } else {
-    session_send_system_line(ctx, "Captcha disabled. New connections will skip the puzzle.");
+    session_send_system_line (
+        ctx, "Captcha disabled. New connections will skip the puzzle.");
     char notice[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(notice, sizeof(notice), "* [%s] disabled captcha for new connections.", ctx->user.name);
-    host_history_record_system(host, notice);
-    chat_room_broadcast(&host->room, notice, NULL);
-    pthread_mutex_lock(&host->lock);
-    host_state_save_locked(host);
-    pthread_mutex_unlock(&host->lock);
+    snprintf (notice, sizeof (notice),
+              "* [%s] disabled captcha for new connections.", ctx->user.name);
+    host_history_record_system (host, notice);
+    chat_room_broadcast (&host->room, notice, NULL);
+    pthread_mutex_lock (&host->lock);
+    host_state_save_locked (host);
+    pthread_mutex_unlock (&host->lock);
   }
   return;
 }
 
-static void session_handle_eliza(session_ctx_t *ctx, const char *arguments) {
+static void
+session_handle_eliza (session_ctx_t *ctx, const char *arguments)
+{
   if (ctx == NULL || ctx->owner == NULL) {
     return;
   }
 
   if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
-    session_send_system_line(ctx, "Only operators may control eliza.");
+    session_send_system_line (ctx, "Only operators may control eliza.");
     return;
   }
 
   char token[32];
   if (arguments != NULL) {
-    snprintf(token, sizeof(token), "%s", arguments);
-    trim_whitespace_inplace(token);
+    snprintf (token, sizeof (token), "%s", arguments);
+    trim_whitespace_inplace (token);
   } else {
     token[0] = '\0';
   }
 
   if (token[0] == '\0') {
-    bool enabled = atomic_load(&ctx->owner->eliza_enabled);
+    bool enabled = atomic_load (&ctx->owner->eliza_enabled);
     char status[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(status, sizeof(status), "eliza is currently %s.", enabled ? "enabled" : "disabled");
-    session_send_system_line(ctx, status);
-    session_send_system_line(ctx, "Usage: /eliza <on|off>");
+    snprintf (status, sizeof (status), "eliza is currently %s.",
+              enabled ? "enabled" : "disabled");
+    session_send_system_line (ctx, status);
+    session_send_system_line (ctx, "Usage: /eliza <on|off>");
     return;
   }
 
   bool requested_enable = false;
   bool recognized = false;
-  if (session_argument_is_disable(token)) {
+  if (session_argument_is_disable (token)) {
     recognized = true;
     requested_enable = false;
   } else {
-    recognized = parse_bool_token(token, &requested_enable);
+    recognized = parse_bool_token (token, &requested_enable);
   }
 
   if (!recognized) {
-    session_send_system_line(ctx, "Usage: /eliza <on|off>");
+    session_send_system_line (ctx, "Usage: /eliza <on|off>");
     return;
   }
 
   if (requested_enable) {
-    if (host_eliza_enable(ctx->owner)) {
-      session_send_system_line(ctx, "eliza enabled. She will now mingle with the room and watch for severe issues.");
+    if (host_eliza_enable (ctx->owner)) {
+      session_send_system_line (ctx, "eliza enabled. She will now mingle with "
+                                     "the room and watch for severe issues.");
     } else {
-      session_send_system_line(ctx, "eliza is already active.");
+      session_send_system_line (ctx, "eliza is already active.");
     }
     return;
   }
 
-  if (host_eliza_disable(ctx->owner)) {
-    session_send_system_line(ctx, "eliza disabled. She will no longer intervene.");
+  if (host_eliza_disable (ctx->owner)) {
+    session_send_system_line (ctx,
+                              "eliza disabled. She will no longer intervene.");
   } else {
-    session_send_system_line(ctx, "eliza is already inactive.");
+    session_send_system_line (ctx, "eliza is already inactive.");
   }
   return;
 }

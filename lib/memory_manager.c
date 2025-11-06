@@ -31,60 +31,72 @@ static sshc_memory_context_t *sshc_contexts = NULL;
 static sshc_memory_allocation_t *sshc_allocations = NULL;
 static __thread sshc_memory_context_t *sshc_tls_context = NULL;
 
-static void sshc_memory_context_init(sshc_memory_context_t *ctx, const char *label) {
+static void
+sshc_memory_context_init (sshc_memory_context_t *ctx, const char *label)
+{
   ctx->allocations = NULL;
   ctx->label = label;
   ctx->next = NULL;
 }
 
-static sshc_memory_context_t *sshc_memory_context_global(void) {
+static sshc_memory_context_t *
+sshc_memory_context_global (void)
+{
   return &sshc_global_context;
 }
 
-void sshc_memory_runtime_init(void) {
-  pthread_mutex_lock(&sshc_registry_mutex);
+void
+sshc_memory_runtime_init (void)
+{
+  pthread_mutex_lock (&sshc_registry_mutex);
   if (!sshc_runtime_initialised) {
-    sshc_memory_context_init(&sshc_global_context, "global");
+    sshc_memory_context_init (&sshc_global_context, "global");
     sshc_global_context.next = NULL;
-    sshc_contexts = sshc_memory_context_global();
+    sshc_contexts = sshc_memory_context_global ();
     sshc_runtime_initialised = true;
   }
-  pthread_mutex_unlock(&sshc_registry_mutex);
+  pthread_mutex_unlock (&sshc_registry_mutex);
 }
 
-void sshc_memory_runtime_shutdown(void) {
-  pthread_mutex_lock(&sshc_registry_mutex);
+void
+sshc_memory_runtime_shutdown (void)
+{
+  pthread_mutex_lock (&sshc_registry_mutex);
   sshc_memory_context_t *ctx = sshc_contexts;
   while (ctx != NULL) {
     sshc_memory_context_t *next = ctx->next;
-    if (ctx != sshc_memory_context_global()) {
-      sshc_memory_context_destroy(ctx);
+    if (ctx != sshc_memory_context_global ()) {
+      sshc_memory_context_destroy (ctx);
     }
     ctx = next;
   }
-  sshc_contexts = sshc_memory_context_global();
+  sshc_contexts = sshc_memory_context_global ();
   sshc_runtime_initialised = false;
-  pthread_mutex_unlock(&sshc_registry_mutex);
+  pthread_mutex_unlock (&sshc_registry_mutex);
 }
 
-sshc_memory_context_t *sshc_memory_context_create(const char *label) {
-  sshc_memory_runtime_init();
-  sshc_memory_context_t *ctx = (sshc_memory_context_t *)malloc(sizeof(*ctx));
+sshc_memory_context_t *
+sshc_memory_context_create (const char *label)
+{
+  sshc_memory_runtime_init ();
+  sshc_memory_context_t *ctx = (sshc_memory_context_t *)malloc (sizeof (*ctx));
   if (ctx == NULL) {
     errno = ENOMEM;
     return NULL;
   }
-  sshc_memory_context_init(ctx, label);
+  sshc_memory_context_init (ctx, label);
 
-  pthread_mutex_lock(&sshc_registry_mutex);
+  pthread_mutex_lock (&sshc_registry_mutex);
   ctx->next = sshc_contexts;
   sshc_contexts = ctx;
-  pthread_mutex_unlock(&sshc_registry_mutex);
+  pthread_mutex_unlock (&sshc_registry_mutex);
   return ctx;
 }
 
-static void sshc_memory_registry_remove(sshc_memory_allocation_t *allocation) {
-  pthread_mutex_lock(&sshc_registry_mutex);
+static void
+sshc_memory_registry_remove (sshc_memory_allocation_t *allocation)
+{
+  pthread_mutex_lock (&sshc_registry_mutex);
   sshc_memory_allocation_t **prev = &sshc_allocations;
   while (*prev != NULL) {
     if (*prev == allocation) {
@@ -93,25 +105,29 @@ static void sshc_memory_registry_remove(sshc_memory_allocation_t *allocation) {
     }
     prev = &(*prev)->next_global;
   }
-  pthread_mutex_unlock(&sshc_registry_mutex);
+  pthread_mutex_unlock (&sshc_registry_mutex);
 }
 
-static void sshc_memory_registry_add(sshc_memory_allocation_t *allocation) {
-  pthread_mutex_lock(&sshc_registry_mutex);
+static void
+sshc_memory_registry_add (sshc_memory_allocation_t *allocation)
+{
+  pthread_mutex_lock (&sshc_registry_mutex);
   allocation->next_global = sshc_allocations;
   sshc_allocations = allocation;
-  pthread_mutex_unlock(&sshc_registry_mutex);
+  pthread_mutex_unlock (&sshc_registry_mutex);
 }
 
-void sshc_memory_context_destroy(sshc_memory_context_t *ctx) {
+void
+sshc_memory_context_destroy (sshc_memory_context_t *ctx)
+{
   if (ctx == NULL) {
     return;
   }
 
-  sshc_memory_context_reset(ctx);
-  pthread_mutex_destroy(&ctx->mutex);
+  sshc_memory_context_reset (ctx);
+  pthread_mutex_destroy (&ctx->mutex);
 
-  pthread_mutex_lock(&sshc_registry_mutex);
+  pthread_mutex_lock (&sshc_registry_mutex);
   sshc_memory_context_t **prev = &sshc_contexts;
   while (*prev != NULL) {
     if (*prev == ctx) {
@@ -120,75 +136,90 @@ void sshc_memory_context_destroy(sshc_memory_context_t *ctx) {
     }
     prev = &(*prev)->next;
   }
-  pthread_mutex_unlock(&sshc_registry_mutex);
-  free(ctx);
+  pthread_mutex_unlock (&sshc_registry_mutex);
+  free (ctx);
 }
 
-sshc_memory_context_t *sshc_memory_context_push(sshc_memory_context_t *ctx) {
-  sshc_memory_runtime_init();
+sshc_memory_context_t *
+sshc_memory_context_push (sshc_memory_context_t *ctx)
+{
+  sshc_memory_runtime_init ();
   sshc_memory_context_t *previous = sshc_tls_context;
   if (ctx == NULL) {
-    sshc_tls_context = sshc_memory_context_global();
+    sshc_tls_context = sshc_memory_context_global ();
   } else {
     sshc_tls_context = ctx;
   }
   return previous;
 }
 
-void sshc_memory_context_pop(sshc_memory_context_t *previous) {
+void
+sshc_memory_context_pop (sshc_memory_context_t *previous)
+{
   sshc_tls_context = previous;
 }
 
-sshc_memory_context_t *sshc_memory_context_current(void) {
-  sshc_memory_runtime_init();
-  return (sshc_tls_context != NULL) ? sshc_tls_context : sshc_memory_context_global();
+sshc_memory_context_t *
+sshc_memory_context_current (void)
+{
+  sshc_memory_runtime_init ();
+  return (sshc_tls_context != NULL) ? sshc_tls_context
+                                    : sshc_memory_context_global ();
 }
 
-static sshc_memory_allocation_t *sshc_memory_context_remove_allocation(sshc_memory_context_t *ctx, void *ptr) {
+static sshc_memory_allocation_t *
+sshc_memory_context_remove_allocation (sshc_memory_context_t *ctx, void *ptr)
+{
   if (ctx == NULL || ptr == NULL) {
     return NULL;
   }
 
-  pthread_mutex_lock(&ctx->mutex);
+  pthread_mutex_lock (&ctx->mutex);
   sshc_memory_allocation_t **prev = &ctx->allocations;
   while (*prev != NULL) {
     if ((*prev)->ptr == ptr) {
       sshc_memory_allocation_t *found = *prev;
       *prev = (*prev)->next_in_context;
-      pthread_mutex_unlock(&ctx->mutex);
+      pthread_mutex_unlock (&ctx->mutex);
       return found;
     }
     prev = &(*prev)->next_in_context;
   }
-  pthread_mutex_unlock(&ctx->mutex);
+  pthread_mutex_unlock (&ctx->mutex);
   return NULL;
 }
 
-static void sshc_memory_context_register_allocation(sshc_memory_context_t *ctx, sshc_memory_allocation_t *allocation) {
-  pthread_mutex_lock(&ctx->mutex);
+static void
+sshc_memory_context_register_allocation (sshc_memory_context_t *ctx,
+                                         sshc_memory_allocation_t *allocation)
+{
+  pthread_mutex_lock (&ctx->mutex);
   allocation->next_in_context = ctx->allocations;
   ctx->allocations = allocation;
-  pthread_mutex_unlock(&ctx->mutex);
+  pthread_mutex_unlock (&ctx->mutex);
 }
 
-static void *sshc_memory_context_alloc(sshc_memory_context_t *ctx, size_t size, bool zero) {
+static void *
+sshc_memory_context_alloc (sshc_memory_context_t *ctx, size_t size, bool zero)
+{
   if (ctx == NULL) {
-    ctx = sshc_memory_context_current();
+    ctx = sshc_memory_context_current ();
   }
 
   if (size == 0U) {
     size = 1U;
   }
 
-  void *ptr = zero ? calloc(1U, size) : malloc(size);
+  void *ptr = zero ? calloc (1U, size) : malloc (size);
   if (ptr == NULL) {
     errno = ENOMEM;
     return NULL;
   }
 
-  sshc_memory_allocation_t *allocation = (sshc_memory_allocation_t *)malloc(sizeof(*allocation));
+  sshc_memory_allocation_t *allocation
+      = (sshc_memory_allocation_t *)malloc (sizeof (*allocation));
   if (allocation == NULL) {
-    free(ptr);
+    free (ptr);
     errno = ENOMEM;
     return NULL;
   }
@@ -199,56 +230,68 @@ static void *sshc_memory_context_alloc(sshc_memory_context_t *ctx, size_t size, 
   allocation->next_in_context = NULL;
   allocation->next_global = NULL;
 
-  sshc_memory_context_register_allocation(ctx, allocation);
-  sshc_memory_registry_add(allocation);
+  sshc_memory_context_register_allocation (ctx, allocation);
+  sshc_memory_registry_add (allocation);
   return ptr;
 }
 
-void sshc_memory_context_reset(sshc_memory_context_t *ctx) {
+void
+sshc_memory_context_reset (sshc_memory_context_t *ctx)
+{
   if (ctx == NULL) {
     return;
   }
 
-  pthread_mutex_lock(&ctx->mutex);
+  pthread_mutex_lock (&ctx->mutex);
   sshc_memory_allocation_t *allocation = ctx->allocations;
   ctx->allocations = NULL;
-  pthread_mutex_unlock(&ctx->mutex);
+  pthread_mutex_unlock (&ctx->mutex);
 
   while (allocation != NULL) {
     sshc_memory_allocation_t *next = allocation->next_in_context;
-    sshc_memory_registry_remove(allocation);
-    free(allocation->ptr);
-    free(allocation);
+    sshc_memory_registry_remove (allocation);
+    free (allocation->ptr);
+    free (allocation);
     allocation = next;
   }
 }
 
-void GC_INIT(void) {
-  sshc_memory_runtime_init();
+void
+GC_INIT (void)
+{
+  sshc_memory_runtime_init ();
 }
 
-void *GC_MALLOC(size_t size) {
-  return sshc_memory_context_alloc(sshc_memory_context_current(), size, false);
+void *
+GC_MALLOC (size_t size)
+{
+  return sshc_memory_context_alloc (sshc_memory_context_current (), size,
+                                    false);
 }
 
-void *GC_CALLOC(size_t count, size_t size) {
+void *
+GC_CALLOC (size_t count, size_t size)
+{
   if (count == 0U || size == 0U) {
-    return sshc_memory_context_alloc(sshc_memory_context_current(), 1U, true);
+    return sshc_memory_context_alloc (sshc_memory_context_current (), 1U, true);
   }
   if (count > SIZE_MAX / size) {
     errno = ENOMEM;
     return NULL;
   }
-  return sshc_memory_context_alloc(sshc_memory_context_current(), count * size, true);
+  return sshc_memory_context_alloc (sshc_memory_context_current (),
+                                    count * size, true);
 }
 
-void GC_free(void *ptr) {
+void
+GC_free (void *ptr)
+{
   if (ptr == NULL) {
     return;
   }
 
-  sshc_memory_runtime_init();
-  pthread_mutex_lock(&sshc_registry_mutex);
+  sshc_memory_runtime_init ();
+  pthread_mutex_lock (&sshc_registry_mutex);
   sshc_memory_allocation_t **prev = &sshc_allocations;
   sshc_memory_allocation_t *allocation = NULL;
   while (*prev != NULL) {
@@ -259,20 +302,20 @@ void GC_free(void *ptr) {
     }
     prev = &(*prev)->next_global;
   }
-  pthread_mutex_unlock(&sshc_registry_mutex);
+  pthread_mutex_unlock (&sshc_registry_mutex);
 
   if (allocation == NULL) {
-    free(ptr);
+    free (ptr);
     return;
   }
 
   sshc_memory_context_t *ctx = allocation->context;
   if (ctx != NULL) {
-    sshc_memory_context_remove_allocation(ctx, ptr);
+    sshc_memory_context_remove_allocation (ctx, ptr);
   }
 
-  free(allocation->ptr);
-  free(allocation);
+  free (allocation->ptr);
+  free (allocation);
 }
 
 #endif
