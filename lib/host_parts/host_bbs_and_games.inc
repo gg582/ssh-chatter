@@ -914,6 +914,7 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
   ctx->translation_suppress_output = true;
 
   tetris_game_state_t *state = &ctx->game.tetris;
+  printf("\033[K");
   session_render_separator(ctx, "Tetris");
 
   char header[SSH_CHATTER_MESSAGE_LIMIT];

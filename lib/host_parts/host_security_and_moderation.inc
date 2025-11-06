@@ -3812,10 +3812,10 @@ static void *host_rss_backend(void *arg) {
 
           char notice[SSH_CHATTER_MESSAGE_LIMIT];
           if (item->link[0] != '\0') {
-            snprintf(notice, sizeof(notice), "* %s [%s] %s — %s", SSH_CHATTER_RSS_BREAKING_PREFIX, feed_snapshot.tag,
+            snprintf(notice, sizeof(notice), "* %s [%s]\n%s\n%s", SSH_CHATTER_RSS_BREAKING_PREFIX, feed_snapshot.tag,
                      headline, item->link);
           } else {
-            snprintf(notice, sizeof(notice), "* %s [%s] %s", SSH_CHATTER_RSS_BREAKING_PREFIX, feed_snapshot.tag,
+            snprintf(notice, sizeof(notice), "* %s [%s]\n%s", SSH_CHATTER_RSS_BREAKING_PREFIX, feed_snapshot.tag,
                      headline);
           }
 
