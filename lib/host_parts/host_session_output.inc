@@ -1690,12 +1690,33 @@ static void session_refresh_input_line(session_ctx_t *ctx) {
 
   bool locked = session_output_lock(ctx);
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
-  if (bg[0] != '\0') {
-    session_channel_write(ctx, bg, strlen(bg));
+  const size_t bg_len = strlen(bg);
+  unsigned int width = ctx->terminal_width > 0U ? ctx->terminal_width : 80U;
+  if (width > SSH_CHATTER_MESSAGE_LIMIT) {
+    width = SSH_CHATTER_MESSAGE_LIMIT;
   }
 
-  static const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
-  session_channel_write(ctx, clear_sequence, sizeof(clear_sequence) - 1U);
+  static const char column_reset[] = "\033[1G";
+  session_channel_write(ctx, column_reset, sizeof(column_reset) - 1U);
+  if (bg_len > 0U) {
+    session_channel_write(ctx, bg, bg_len);
+  }
+
+  if (width > 0U) {
+    char spaces[64];
+    memset(spaces, ' ', sizeof(spaces));
+    unsigned int remaining = width;
+    while (remaining > 0U) {
+      size_t chunk = remaining < sizeof(spaces) ? remaining : sizeof(spaces);
+      session_channel_write(ctx, spaces, chunk);
+      remaining -= (unsigned int)chunk;
+    }
+  }
+
+  session_channel_write(ctx, column_reset, sizeof(column_reset) - 1U);
+  if (bg_len > 0U) {
+    session_channel_write(ctx, bg, bg_len);
+  }
 
   session_render_prompt(ctx, false);
   fflush(stdout);
@@ -3502,6 +3523,8 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
         ctx->game.is_camouflaged = false;
         if (ctx->game.type == SESSION_GAME_TETRIS) {
           ctx->game.tetris = ctx->game.saved_tetris_state;
+          ctx->game.tetris.gravity_timer_initialized = false;
+          ctx->game.tetris.gravity_timer_accumulator_ns = 0U;
           session_game_tetris_render(ctx);
         } else if (ctx->game.type == SESSION_GAME_LIARGAME) {
           ctx->game.liar = ctx->game.saved_liar_state;
@@ -3514,6 +3537,10 @@ static void session_process_line(session_ctx_t *ctx, const char *line) {
         ctx->game.is_camouflaged = true;
         if (ctx->game.type == SESSION_GAME_TETRIS) {
           ctx->game.saved_tetris_state = ctx->game.tetris;
+          ctx->game.saved_tetris_state.gravity_timer_initialized = false;
+          ctx->game.saved_tetris_state.gravity_timer_accumulator_ns = 0U;
+          ctx->game.tetris.gravity_timer_initialized = false;
+          ctx->game.tetris.gravity_timer_accumulator_ns = 0U;
         } else if (ctx->game.type == SESSION_GAME_LIARGAME) {
           ctx->game.saved_liar_state = ctx->game.liar;
         } else if (ctx->game.type == SESSION_GAME_ALPHA) {
