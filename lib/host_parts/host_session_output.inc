@@ -1642,53 +1642,7 @@ static void session_render_banner(session_ctx_t *ctx) {
   session_render_separator(ctx, "Chatroom");
 }
 
-static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
-  if (ctx == NULL || !session_transport_active(ctx)) {
-    return;
-  }
-
-  bool locked = session_output_lock(ctx);
-  if (include_separator) {
-    session_render_separator(ctx, "Input");
-  }
-
-  const char *fg = ctx->system_fg_code != NULL ? ctx->system_fg_code : "";
-  const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
-  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
-  const char *mode_prompt = "> ";
-
-  char prompt[128];
-  size_t offset = 0U;
-  offset = session_append_fragment(prompt, sizeof(prompt), offset, "\033[38;5;117m");
-  offset = session_append_fragment(prompt, sizeof(prompt), offset, bold);
-  offset = session_append_fragment(prompt, sizeof(prompt), offset, mode_prompt);
-  offset = session_append_fragment(prompt, sizeof(prompt), offset, ANSI_RESET);
-  if (bg[0] != '\0') {
-    offset = session_append_fragment(prompt, sizeof(prompt), offset, bg);
-  }
-  if (fg[0] != '\0') {
-    offset = session_append_fragment(prompt, sizeof(prompt), offset, fg);
-  }
-  if (bold[0] != '\0') {
-    offset = session_append_fragment(prompt, sizeof(prompt), offset, bold);
-  }
-
-  session_channel_write(ctx, prompt, offset);
-  if (ctx->input_length > 0U) {
-    session_channel_write(ctx, ctx->input_buffer, ctx->input_length);
-  }
-
-  if (locked) {
-    session_output_unlock(ctx);
-  }
-}
-
-static void session_refresh_input_line(session_ctx_t *ctx) {
-  if (ctx == NULL || !session_transport_active(ctx)) {
-    return;
-  }
-
-  bool locked = session_output_lock(ctx);
+static void session_fill_prompt_line(session_ctx_t *ctx) {
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   const size_t bg_len = strlen(bg);
   unsigned int width = ctx->terminal_width > 0U ? ctx->terminal_width : 80U;
@@ -1717,8 +1671,67 @@ static void session_refresh_input_line(session_ctx_t *ctx) {
   if (bg_len > 0U) {
     session_channel_write(ctx, bg, bg_len);
   }
+}
 
-  session_render_prompt(ctx, false);
+static void session_render_prompt_internal(session_ctx_t *ctx, bool include_separator, bool fill_line) {
+  if (ctx == NULL || !session_transport_active(ctx)) {
+    return;
+  }
+
+  if (include_separator) {
+    session_render_separator(ctx, "Input");
+  }
+
+  if (fill_line) {
+    session_fill_prompt_line(ctx);
+  }
+
+  const char *fg = ctx->system_fg_code != NULL ? ctx->system_fg_code : "";
+  const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
+  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
+  const char *mode_prompt = "> ";
+
+  char prompt[128];
+  size_t offset = 0U;
+  offset = session_append_fragment(prompt, sizeof(prompt), offset, "\033[38;5;117m");
+  offset = session_append_fragment(prompt, sizeof(prompt), offset, bold);
+  offset = session_append_fragment(prompt, sizeof(prompt), offset, mode_prompt);
+  offset = session_append_fragment(prompt, sizeof(prompt), offset, ANSI_RESET);
+  if (bg[0] != '\0') {
+    offset = session_append_fragment(prompt, sizeof(prompt), offset, bg);
+  }
+  if (fg[0] != '\0') {
+    offset = session_append_fragment(prompt, sizeof(prompt), offset, fg);
+  }
+  if (bold[0] != '\0') {
+    offset = session_append_fragment(prompt, sizeof(prompt), offset, bold);
+  }
+
+  session_channel_write(ctx, prompt, offset);
+  if (ctx->input_length > 0U) {
+    session_channel_write(ctx, ctx->input_buffer, ctx->input_length);
+  }
+}
+
+static void session_render_prompt(session_ctx_t *ctx, bool include_separator) {
+  if (ctx == NULL || !session_transport_active(ctx)) {
+    return;
+  }
+
+  bool locked = session_output_lock(ctx);
+  session_render_prompt_internal(ctx, include_separator, true);
+  if (locked) {
+    session_output_unlock(ctx);
+  }
+}
+
+static void session_refresh_input_line(session_ctx_t *ctx) {
+  if (ctx == NULL || !session_transport_active(ctx)) {
+    return;
+  }
+
+  bool locked = session_output_lock(ctx);
+  session_render_prompt_internal(ctx, false, true);
   fflush(stdout);
 
   if (locked) {

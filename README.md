@@ -117,6 +117,7 @@ Building the project requires a POSIX environment with:
 - `libssh` development headers and library (`libssh-dev` on Debian/Ubuntu)
 - `libcurl` development headers and library (`libcurl4-openssl-dev` on Debian/Ubuntu)
 - POSIX threads (usually supplied by the system `libpthread`)
+- `python3-pygments` (provides the `pygmentize` highlighter for the Tetris camouflage screen)
 
 On Debian/Ubuntu the dependencies can be installed with:
 

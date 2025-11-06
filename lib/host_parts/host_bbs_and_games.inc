@@ -787,6 +787,73 @@ static void session_game_tetris_lock_piece(session_ctx_t *ctx) {
   }
 }
 
+static const char *session_game_camouflage_lexer(const char *language) {
+  if (language == NULL) {
+    return NULL;
+  }
+  if (strcmp(language, "c") == 0) {
+    return "c";
+  }
+  if (strcmp(language, "cpp") == 0) {
+    return "cpp";
+  }
+  if (strcmp(language, "java") == 0) {
+    return "java";
+  }
+  if (strcmp(language, "go") == 0) {
+    return "go";
+  }
+  if (strcmp(language, "js") == 0) {
+    return "javascript";
+  }
+  if (strcmp(language, "ts") == 0) {
+    return "typescript";
+  }
+  if (strcmp(language, "rust") == 0) {
+    return "rust";
+  }
+  return NULL;
+}
+
+static bool session_game_camouflage_highlight(session_ctx_t *ctx, const char *lexer, const char *file_path) {
+  if (ctx == NULL || lexer == NULL || file_path == NULL) {
+    return false;
+  }
+
+  char command[512];
+  int written = snprintf(command, sizeof(command), "pygmentize -f terminal256 -O stripnl=False -l %s %s", lexer, file_path);
+  if (written <= 0 || (size_t)written >= sizeof(command)) {
+    return false;
+  }
+
+  errno = 0;
+  FILE *pipe = popen(command, "r");
+  if (pipe == NULL) {
+    if (errno == ENOENT) {
+      session_send_system_line(ctx, "Install python3-pygments to enable camouflage syntax highlighting.");
+    }
+    return false;
+  }
+
+  char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
+  bool produced_output = false;
+  while (fgets(line_buffer, sizeof(line_buffer), pipe) != NULL) {
+    size_t len = strlen(line_buffer);
+    if (len > 0U && line_buffer[len - 1U] == '\n') {
+      line_buffer[len - 1U] = '\0';
+    }
+    session_send_system_line(ctx, line_buffer);
+    produced_output = true;
+  }
+
+  int status = pclose(pipe);
+  if (status != 0 && !produced_output) {
+    return false;
+  }
+
+  return produced_output;
+}
+
 static void session_game_show_camouflage(session_ctx_t *ctx) {
   if (ctx == NULL) {
     return;
@@ -797,23 +864,40 @@ static void session_game_show_camouflage(session_ctx_t *ctx) {
 
   char file_path_buffer[256];
   snprintf(file_path_buffer, sizeof(file_path_buffer), "/var/lib/ssh-chatter/%s.txt", ctx->game.chosen_camouflage_language);
-  FILE *fp = fopen(file_path_buffer, "r");
-  if (fp == NULL) {
+
+  FILE *probe = fopen(file_path_buffer, "r");
+  if (probe == NULL) {
     session_send_system_line(ctx, "Error: Could not load camouflage code snippet.");
     return;
   }
+  fclose(probe);
 
-  char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
-  while (fgets(line_buffer, sizeof(line_buffer), fp) != NULL) {
-    // Remove newline character if present
-    size_t len = strlen(line_buffer);
-    if (len > 0 && line_buffer[len - 1] == '\n') {
-      line_buffer[len - 1] = '\0';
-    }
-    session_send_system_line(ctx, line_buffer);
+  bool highlighted = false;
+  const char *lexer = session_game_camouflage_lexer(ctx->game.chosen_camouflage_language);
+  if (lexer != NULL) {
+    highlighted = session_game_camouflage_highlight(ctx, lexer, file_path_buffer);
   }
 
-  fclose(fp);
+  if (!highlighted) {
+    FILE *fp = fopen(file_path_buffer, "r");
+    if (fp == NULL) {
+      session_send_system_line(ctx, "Error: Could not load camouflage code snippet.");
+      session_render_prompt(ctx, false);
+      return;
+    }
+
+    char line_buffer[SSH_CHATTER_MESSAGE_LIMIT];
+    while (fgets(line_buffer, sizeof(line_buffer), fp) != NULL) {
+      size_t len = strlen(line_buffer);
+      if (len > 0U && line_buffer[len - 1U] == '\n') {
+        line_buffer[len - 1U] = '\0';
+      }
+      session_send_system_line(ctx, line_buffer);
+    }
+
+    fclose(fp);
+  }
+
   session_render_prompt(ctx, false);
 }
 
