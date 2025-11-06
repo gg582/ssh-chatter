@@ -610,6 +610,10 @@ static const char *const kAlphaWaystationNames[] = {
 #define TELNET_OPT_TERMINAL_SPEED 32
 #define TELNET_OPT_LINEMODE 34
 
+// Terminal dimension limits for validation
+#define TERMINAL_MAX_WIDTH 1000U
+#define TERMINAL_MAX_HEIGHT 1000U
+
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
 #endif

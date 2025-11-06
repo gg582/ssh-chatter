@@ -3374,7 +3374,16 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
   bool locked = session_output_lock(ctx);
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   const size_t bg_len = strlen(bg);
+  
+  // Get terminal dimensions, use defaults if not set
+  unsigned int width = ctx->terminal_width > 0U ? ctx->terminal_width : 80U;
+  unsigned int height = ctx->terminal_height > 0U ? ctx->terminal_height : 24U;
 
+  // Clear entire screen and move cursor to home position
+  static const char clear_screen[] = "\033[2J\033[H";
+  session_channel_write(ctx, clear_screen, sizeof(clear_screen) - 1U);
+
+  // Apply background color if set
   if (bg_len > 0U) {
     session_channel_write(ctx, bg, bg_len);
   }
@@ -3384,7 +3393,30 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
 
   if (bg_len > 0U) {
     session_channel_write(ctx, bg, bg_len);
+  // Fill entire screen with background color
+  // Use spaces to fill each line
+  // Support terminals up to 1024 columns wide
+  char line_buffer[1024];
+  size_t fill_width = width < sizeof(line_buffer) ? width : sizeof(line_buffer) - 1U;
+  memset(line_buffer, ' ', fill_width);
+  line_buffer[fill_width] = '\0';
+
+  for (unsigned int row = 0U; row < height; ++row) {
+    // Write background-filled line
+    session_channel_write(ctx, line_buffer, fill_width);
+    
+    // Move to next line (except for last line to avoid scrolling)
+    if (row < height - 1U) {
+      session_channel_write(ctx, "\r\n", 2U);
+    }
   }
+
+  // Reset cursor to home position
+  session_channel_write(ctx, "\033[H", 3U);
+
+  // Reset colors to default
+  static const char reset[] = "\033[0m";
+  session_channel_write(ctx, reset, sizeof(reset) - 1U);
 
   if (locked) {
     session_output_unlock(ctx);
@@ -3396,7 +3428,7 @@ static size_t session_append_fragment(char *dest, size_t dest_size, size_t offse
 size_t normalize_output(session_ctx_t *ctx, char *buf, size_t buf_size) {
     (void)buf_size;
 
-    unsigned width = ctx->terminal_width > 0 ? ctx->terminal_width : 80;
+    unsigned int width = ctx->terminal_width > 0U ? ctx->terminal_width : 80U;
     const char *bg = ctx->system_bg_code ? ctx->system_bg_code : "";
     const char *fg = ctx->system_fg_code ? ctx->system_fg_code : "";
     const char *reset = "\033[0m";
@@ -3560,11 +3592,23 @@ static void session_telnet_handle_option(session_ctx_t *ctx, unsigned char comma
       } else if (option == TELNET_OPT_TERMINAL_TYPE) {
         session_telnet_send_option(ctx, TELNET_CMD_DO, option);
         session_telnet_request_terminal_type(ctx);
+      } else if (option == TELNET_OPT_NAWS) {
+        // Client will send NAWS - accept it
+        session_telnet_send_option(ctx, TELNET_CMD_DO, option);
       } else {
         session_telnet_send_option(ctx, TELNET_CMD_DONT, option);
       }
       break;
     case TELNET_CMD_WONT:
+      if (option == TELNET_OPT_NAWS) {
+        // Client won't send NAWS, use defaults
+        if (ctx->terminal_width == 0U) {
+          ctx->terminal_width = 80U;
+        }
+        if (ctx->terminal_height == 0U) {
+          ctx->terminal_height = 24U;
+        }
+      }
       session_telnet_send_option(ctx, TELNET_CMD_DONT, option);
       break;
     default:
@@ -3584,7 +3628,8 @@ static void session_telnet_initialize(session_ctx_t *ctx) {
   session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_STATUS);
   session_telnet_send_option(ctx, TELNET_CMD_DO, TELNET_OPT_TERMINAL_TYPE);
   session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_TERMINAL_SPEED);
-  session_telnet_send_option(ctx, TELNET_CMD_WONT, TELNET_OPT_NAWS);
+  // Request NAWS (Negotiate About Window Size) to get terminal dimensions
+  session_telnet_send_option(ctx, TELNET_CMD_DO, TELNET_OPT_NAWS);
 
   ctx->telnet_negotiated = true;
 }
@@ -3760,6 +3805,94 @@ static int session_telnet_read_byte(session_ctx_t *ctx, unsigned char *out, int 
               }
               snprintf(ctx->terminal_type, sizeof(ctx->terminal_type), "%s", type_buffer);
               session_refresh_output_encoding(ctx);
+            }
+          }
+        } else if (option == TELNET_OPT_NAWS) {
+          // Handle NAWS (Negotiate About Window Size) subnegotiation
+          // Format: IAC SB NAWS WIDTH[1] WIDTH[0] HEIGHT[1] HEIGHT[0] IAC SE
+          unsigned char naws_data[4];
+          size_t naws_idx = 0U;
+          bool naws_finished = false;
+          
+          while (!naws_finished && naws_idx < 4U) {
+            unsigned char chunk = 0U;
+            ssize_t chunk_result = recv(ctx->telnet_fd, &chunk, 1, 0);
+            if (chunk_result < 0) {
+              if (errno == EINTR) {
+                continue;
+              }
+              if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+              }
+              return SSH_ERROR;
+            }
+            if (chunk_result == 0) {
+              ctx->telnet_eof = true;
+              return 0;
+            }
+            
+            if (chunk == TELNET_IAC) {
+              unsigned char next = 0U;
+              ssize_t next_result = recv(ctx->telnet_fd, &next, 1, 0);
+              if (next_result < 0) {
+                if (errno == EINTR) {
+                  continue;
+                }
+                return SSH_ERROR;
+              }
+              if (next_result == 0) {
+                ctx->telnet_eof = true;
+                return 0;
+              }
+              
+              if (next == TELNET_CMD_SE) {
+                naws_finished = true;
+                break;
+              }
+              // IAC IAC means a literal IAC byte (255)
+              if (next == TELNET_IAC) {
+                naws_data[naws_idx++] = TELNET_IAC;
+              }
+              continue;
+            }
+            
+            naws_data[naws_idx++] = chunk;
+          }
+          
+          // Parse NAWS data if we got 4 bytes
+          if (naws_idx == 4U) {
+            unsigned int width = ((unsigned int)naws_data[0] << 8) | (unsigned int)naws_data[1];
+            unsigned int height = ((unsigned int)naws_data[2] << 8) | (unsigned int)naws_data[3];
+            
+            if (width > 0U && width < TERMINAL_MAX_WIDTH && height > 0U && height < TERMINAL_MAX_HEIGHT) {
+              ctx->terminal_width = width;
+              ctx->terminal_height = height;
+            }
+          }
+          
+          // Consume remaining bytes until IAC SE if not finished
+          // Limit iterations to prevent infinite loop on malformed data
+          if (!naws_finished) {
+            unsigned char prev = 0U;
+            size_t safety_limit = 100U;
+            for (size_t iter = 0U; iter < safety_limit; ++iter) {
+              unsigned char chunk = 0U;
+              ssize_t chunk_result = recv(ctx->telnet_fd, &chunk, 1, 0);
+              if (chunk_result < 0) {
+                if (errno == EINTR) {
+                  continue;
+                }
+                return SSH_ERROR;
+              }
+              if (chunk_result == 0) {
+                ctx->telnet_eof = true;
+                return 0;
+              }
+              
+              if (prev == TELNET_IAC && chunk == TELNET_CMD_SE) {
+                break;
+              }
+              prev = chunk;
             }
           }
         } else {
