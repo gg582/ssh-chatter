@@ -3366,25 +3366,51 @@ static bool session_utf8_to_utf16le(const char *input, size_t length, unsigned c
   return true;
 }
 
+static const char SESSION_COLUMN_RESET[] = "\033[1G";
+
+static void session_fill_line_with_theme(session_ctx_t *ctx) {
+  if (ctx == NULL || !session_transport_active(ctx)) {
+    return;
+  }
+
+  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
+  const size_t bg_len = strlen(bg);
+  unsigned int width = ctx->terminal_width > 0U ? ctx->terminal_width : 80U;
+  if (width > SSH_CHATTER_MESSAGE_LIMIT) {
+    width = SSH_CHATTER_MESSAGE_LIMIT;
+  }
+
+  session_channel_write(ctx, SESSION_COLUMN_RESET, sizeof(SESSION_COLUMN_RESET) - 1U);
+
+  if (bg_len > 0U) {
+    session_channel_write(ctx, bg, bg_len);
+  }
+
+  if (width > 0U) {
+    char spaces[64];
+    memset(spaces, ' ', sizeof(spaces));
+    unsigned int remaining = width;
+    while (remaining > 0U) {
+      size_t chunk = remaining < sizeof(spaces) ? remaining : sizeof(spaces);
+      session_channel_write(ctx, spaces, chunk);
+      remaining -= (unsigned int)chunk;
+    }
+  }
+
+  session_channel_write(ctx, SESSION_COLUMN_RESET, sizeof(SESSION_COLUMN_RESET) - 1U);
+
+  if (bg_len > 0U) {
+    session_channel_write(ctx, bg, bg_len);
+  }
+}
+
 static void session_apply_background_fill(session_ctx_t *ctx) {
   if (ctx == NULL || !session_transport_active(ctx)) {
     return;
   }
 
   bool locked = session_output_lock(ctx);
-  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
-  const size_t bg_len = strlen(bg);
-
-  if (bg_len > 0U) {
-    session_channel_write(ctx, bg, bg_len);
-  }
-
-  session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
-  session_channel_write(ctx, "\r", 1U);
-
-  if (bg_len > 0U) {
-    session_channel_write(ctx, bg, bg_len);
-  }
+  session_fill_line_with_theme(ctx);
 
   if (locked) {
     session_output_unlock(ctx);
@@ -3393,46 +3419,148 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
 
 static size_t session_append_fragment(char *dest, size_t dest_size, size_t offset, const char *fragment);
 
-size_t normalize_output(session_ctx_t *ctx, char *buf, size_t buf_size) {
-    (void)buf_size;
+static bool session_sequence_resets_theme(const char *sequence_start, size_t sequence_length, bool *reset_fg,
+                                          bool *reset_bg, bool *reset_bold) {
+  if (sequence_start == NULL || sequence_length == 0U) {
+    return false;
+  }
 
-    unsigned width = ctx->terminal_width > 0 ? ctx->terminal_width : 80;
-    const char *bg = ctx->system_bg_code ? ctx->system_bg_code : "";
-    const char *fg = ctx->system_fg_code ? ctx->system_fg_code : "";
-    const char *reset = "\033[0m";
+  if (sequence_start[0] != '\033' || sequence_length < 2U) {
+    return false;
+  }
 
-    char out[SSH_CHATTER_BBS_BODY_LEN];
-    out[0] = '\0';
+  const char final_char = sequence_start[sequence_length - 1U];
+  if (final_char != 'm') {
+    return false;
+  }
 
-    char *line = buf;
-    while (*line) {
-        char *e = strchrnul(line, '\n');
-        size_t len = (size_t)(e - line);
+  if (reset_fg != NULL) {
+    *reset_fg = false;
+  }
+  if (reset_bg != NULL) {
+    *reset_bg = false;
+  }
+  if (reset_bold != NULL) {
+    *reset_bold = false;
+  }
 
-        /* copy line as-is (no sanitization) */
-        char raw[4096];
-        if (len >= sizeof(raw)) len = sizeof(raw) - 1;
-        memcpy(raw, line, len);
-        raw[len] = '\0';
+  const char *params_start = sequence_start + 2U;
+  const char *params_end = sequence_start + sequence_length - 1U;
+  bool reset_all = false;
 
-        /* measure visible length simply = strlen (we assume no width calc) */
-        size_t vis = strlen(raw);
-        size_t pad = (vis < width) ? (width - vis) : 0;
+  if (params_start >= params_end) {
+    reset_all = true;
+  }
 
-        /* write: bg fg raw + spaces + reset + newline */
-        snprintf(out + strlen(out), sizeof(out) - strlen(out),
-                 "%s%s%s%*s%s\n",
-                 bg, fg, raw, (int)pad, "", reset);
-
-        if (*e == '\0')
-            break;
-        line = e + 1;
+  while (!reset_all && params_start < params_end) {
+    if (*params_start == ';') {
+      ++params_start;
+      continue;
     }
 
-    strncpy(buf, out, buf_size - 1);
-    buf[buf_size - 1] = '\0';
+    char *parse_end = NULL;
+    long value = strtol(params_start, &parse_end, 10);
+    if (parse_end == params_start) {
+      reset_all = true;
+      break;
+    }
 
-    return strlen(buf);
+    if (value == 0L) {
+      reset_all = true;
+      break;
+    }
+    if (value == 39L && reset_fg != NULL) {
+      *reset_fg = true;
+    }
+    if (value == 49L && reset_bg != NULL) {
+      *reset_bg = true;
+    }
+    if ((value == 21L || value == 22L) && reset_bold != NULL) {
+      *reset_bold = true;
+    }
+
+    params_start = parse_end;
+  }
+
+  if (reset_all) {
+    if (reset_fg != NULL) {
+      *reset_fg = true;
+    }
+    if (reset_bg != NULL) {
+      *reset_bg = true;
+    }
+    if (reset_bold != NULL) {
+      *reset_bold = true;
+    }
+  }
+
+  return reset_all || (reset_fg != NULL && *reset_fg) || (reset_bg != NULL && *reset_bg) ||
+         (reset_bold != NULL && *reset_bold);
+}
+
+static size_t session_prepare_themed_output(session_ctx_t *ctx, const char *render_source, char *dest, size_t dest_size) {
+  if (dest == NULL || dest_size == 0U) {
+    return 0U;
+  }
+
+  dest[0] = '\0';
+
+  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
+  const char *fg = ctx->system_fg_code != NULL ? ctx->system_fg_code : "";
+  const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
+
+  size_t offset = 0U;
+  offset = session_append_fragment(dest, dest_size, offset, bg);
+  offset = session_append_fragment(dest, dest_size, offset, fg);
+  offset = session_append_fragment(dest, dest_size, offset, bold);
+
+  const char *cursor = render_source;
+  while (cursor != NULL && *cursor != '\0') {
+    if ((size_t)offset >= dest_size - 1U) {
+      break;
+    }
+
+    if (*cursor == '\033' && cursor[1] == '[') {
+      const char *sequence_start = cursor;
+      cursor += 2;
+      while (*cursor != '\0' && (*cursor < '@' || *cursor > '~')) {
+        ++cursor;
+      }
+      if (*cursor == '\0') {
+        break;
+      }
+      ++cursor;
+      size_t sequence_length = (size_t)(cursor - sequence_start);
+      if (sequence_length >= dest_size - offset) {
+        sequence_length = dest_size - offset - 1U;
+      }
+      memcpy(dest + offset, sequence_start, sequence_length);
+      offset += sequence_length;
+      dest[offset] = '\0';
+
+      bool reset_fg = false;
+      bool reset_bg = false;
+      bool reset_bold = false;
+      if (session_sequence_resets_theme(sequence_start, sequence_length, &reset_fg, &reset_bg, &reset_bold)) {
+        if (reset_bg) {
+          offset = session_append_fragment(dest, dest_size, offset, bg);
+        }
+        if (reset_fg) {
+          offset = session_append_fragment(dest, dest_size, offset, fg);
+        }
+        if (ctx->system_is_bold && reset_bold) {
+          offset = session_append_fragment(dest, dest_size, offset, ANSI_BOLD);
+        }
+      }
+
+      continue;
+    }
+
+    dest[offset++] = *cursor++;
+    dest[offset] = '\0';
+  }
+
+  return offset;
 }
 
 static void session_write_rendered_line(session_ctx_t *ctx, const char *render_source) {
@@ -3441,32 +3569,17 @@ static void session_write_rendered_line(session_ctx_t *ctx, const char *render_s
   }
 
   bool locked = session_output_lock(ctx);
-  const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
-  const size_t bg_len = strlen(bg);
+  session_fill_line_with_theme(ctx);
 
-  // Move cursor to beginning of line, apply background, clear line, then write content
-  session_channel_write(ctx, "\r", 1U); // Move to column 0
-  if (bg_len > 0U) {
-    session_channel_write(ctx, bg, bg_len); // Apply background color
+  char buffer[SSH_CHATTER_MESSAGE_LIMIT * 4U];
+  size_t offset = session_prepare_themed_output(ctx, render_source, buffer, sizeof(buffer));
+
+  if (offset > 0U) {
+    session_channel_write(ctx, buffer, offset);
   }
-  session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U); // Clear entire line
 
-  const char *fg = ctx->system_fg_code != NULL ? ctx->system_fg_code : "";
-  const char *bold = ctx->system_is_bold ? ANSI_BOLD : "";
-  const char *message = render_source; // Declare message here
-
-  char buffer[SSH_CHATTER_MESSAGE_LIMIT * 2];
-  size_t offset = 0U;
-  offset = session_append_fragment(buffer, sizeof(buffer), offset, bg);
-  offset = session_append_fragment(buffer, sizeof(buffer), offset, fg);
-  offset = session_append_fragment(buffer, sizeof(buffer), offset, bold);
-  offset = session_append_fragment(buffer, sizeof(buffer), offset, message);
-  offset = normalize_output(ctx, buffer, sizeof(buffer));
-
-  session_channel_write(ctx, buffer, offset); // Write the actual message
-
-  session_channel_write(ctx, ANSI_RESET, sizeof(ANSI_RESET) - 1U); // Reset colors
-  session_channel_write(ctx, "\r\n", 2U); // Add newline
+  session_channel_write(ctx, ANSI_RESET, sizeof(ANSI_RESET) - 1U);
+  session_channel_write(ctx, "\r\n", 2U);
 
   if (locked) {
     session_output_unlock(ctx);
@@ -3479,7 +3592,7 @@ static void session_send_caption_line(session_ctx_t *ctx, const char *message) {
   }
 
   bool locked = session_output_lock(ctx);
-  session_channel_write(ctx, "\r", 1U);
+  session_channel_write(ctx, SESSION_COLUMN_RESET, sizeof(SESSION_COLUMN_RESET) - 1U);
   session_channel_write(ctx, ANSI_INSERT_LINE, sizeof(ANSI_INSERT_LINE) - 1U);
 
   session_write_rendered_line(ctx, message);
@@ -3508,7 +3621,7 @@ static void session_render_caption_with_offset(session_ctx_t *ctx, const char *m
     session_channel_write(ctx, command, (size_t)written);
   }
 
-  session_channel_write(ctx, "\r", 1U);
+  session_channel_write(ctx, SESSION_COLUMN_RESET, sizeof(SESSION_COLUMN_RESET) - 1U);
   session_write_rendered_line(ctx, message);
   session_channel_write(ctx, "\033[u", 3U);
 
