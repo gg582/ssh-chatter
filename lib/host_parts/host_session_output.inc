@@ -2966,6 +2966,19 @@ static int session_prepare_shell(session_ctx_t *ctx) {
     if (ssh_message_type(message) == SSH_REQUEST_CHANNEL) {
       const int subtype = ssh_message_subtype(message);
       if (subtype == SSH_CHANNEL_REQUEST_PTY || subtype == SSH_CHANNEL_REQUEST_SHELL) {
+        if (subtype == SSH_CHANNEL_REQUEST_PTY) {
+          unsigned int width = ssh_message_channel_request_pty_width(message);
+          unsigned int height = ssh_message_channel_request_pty_height(message);
+          if (width > 0U) {
+            if (width > SSH_CHATTER_MESSAGE_LIMIT) {
+              width = SSH_CHATTER_MESSAGE_LIMIT;
+            }
+            ctx->terminal_width = width;
+          }
+          if (height > 0U) {
+            ctx->terminal_height = height;
+          }
+        }
         ssh_message_channel_request_reply_success(message);
         if (subtype == SSH_CHANNEL_REQUEST_SHELL) {
           shell_ready = true;
