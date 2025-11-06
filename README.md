@@ -32,6 +32,8 @@ SSH-Chatter has started from a C reimplementation of the Go [`ssh-chat`](https:/
 
 ![Preview](./full%20screenshot.png)
 
+*Warning: ENABLE_GC=1 is unstable*
+
 ## Repository layout
 
 The codebase is intentionally compact so new contributors can navigate it quickly:
