@@ -1065,10 +1065,7 @@ typedef struct palette_descriptor {
   bool is_256_color;
 } palette_descriptor_t;
 
-#define L10N_ALL(str)                                                          \
-  {                                                                            \
-    (str), (str), (str), (str), (str)                                          \
-  }
+#define L10N_ALL(str) { (str), (str), (str), (str), (str) }
 
 static const l10n_string_t PALETTE_NAME_MONOKAI = L10N_ALL ("monokai");
 static const l10n_string_t PALETTE_DESC_MONOKAI

@@ -14,6 +14,9 @@ typedef struct sshc_memory_context sshc_memory_context_t;
 #if defined(SSH_CHATTER_USE_GC) && SSH_CHATTER_USE_GC
 #include <gc/gc.h>
 
+struct sshc_memory_context {
+};
+
 static inline void
 sshc_memory_runtime_init (void)
 {
@@ -29,7 +32,8 @@ static inline sshc_memory_context_t *
 sshc_memory_context_create (const char *label)
 {
   (void)label;
-  return NULL;
+  static sshc_memory_context_t dummy_context;
+  return &dummy_context;
 }
 
 static inline void
