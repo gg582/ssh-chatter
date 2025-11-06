@@ -315,6 +315,15 @@ typedef struct tetris_game_state {
   bool input_escape_active;
   char input_escape_buffer[8];
   size_t input_escape_length;
+  bool needs_full_redraw;
+  int prev_current_piece;
+  int prev_rotation;
+  int prev_row;
+  int prev_column;
+  unsigned prev_score;
+  unsigned prev_lines_cleared;
+  int prev_next_piece;
+  unsigned prev_round;
 } tetris_game_state_t;
 
 typedef struct liar_game_state {
