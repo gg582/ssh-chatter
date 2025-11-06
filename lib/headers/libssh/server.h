@@ -63,6 +63,14 @@ int ssh_channel_request_send_exit_status(ssh_channel channel, int exit_status);
 int ssh_handle_key_exchange(ssh_session session);
 const char *ssh_message_auth_password(ssh_message message);
 int ssh_message_auth_set_methods(ssh_message message, int methods);
+unsigned int ssh_message_channel_request_pty_width(ssh_message message);
+unsigned int ssh_message_channel_request_pty_height(ssh_message message);
+#if defined(LIBSSH_VERSION_INT) && defined(SSH_VERSION_INT)
+#if LIBSSH_VERSION_INT >= SSH_VERSION_INT(0, 9, 0)
+unsigned int ssh_message_channel_request_window_change_width(ssh_message message);
+unsigned int ssh_message_channel_request_window_change_height(ssh_message message);
+#endif
+#endif
 
 #ifdef __cplusplus
 }
