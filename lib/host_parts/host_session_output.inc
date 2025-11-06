@@ -814,6 +814,115 @@ static bool session_bbs_should_defer_breaking(session_ctx_t *ctx, const char *me
   return session_message_contains_breaking(message);
 }
 
+static size_t session_find_wrap_position(const char *text, size_t start, size_t max_width) {
+  if (text == NULL || max_width == 0U) {
+    return start;
+  }
+
+  size_t pos = start;
+  size_t visible_chars = 0U;
+  size_t last_space_pos = start;
+  size_t last_space_visible = 0U;
+  bool in_escape = false;
+
+  while (text[pos] != '\0' && visible_chars < max_width) {
+    if (text[pos] == '\033') {
+      // Start of ANSI escape sequence
+      in_escape = true;
+      ++pos;
+      continue;
+    }
+
+    if (in_escape) {
+      // Skip escape sequence characters
+      if ((text[pos] >= 'A' && text[pos] <= 'Z') || (text[pos] >= 'a' && text[pos] <= 'z')) {
+        in_escape = false;
+      }
+      ++pos;
+      continue;
+    }
+
+    // Regular character
+    if (text[pos] == ' ' || text[pos] == '\t') {
+      last_space_pos = pos;
+      last_space_visible = visible_chars;
+    }
+
+    ++visible_chars;
+    ++pos;
+  }
+
+  // If we haven't exceeded max_width, return the current position
+  if (text[pos] == '\0' || visible_chars < max_width) {
+    return pos;
+  }
+
+  // If we found a space within reasonable distance, break there
+  if (last_space_visible > 0U && (visible_chars - last_space_visible) < (max_width / 3)) {
+    return last_space_pos + 1; // Skip the space itself
+  }
+
+  // Otherwise, hard break at max_width
+  return pos;
+}
+
+static void session_bbs_format_breaking_notice_wrapped(const char *message, char lines[][SSH_CHATTER_MESSAGE_LIMIT],
+                                                        size_t max_lines, size_t *line_count) {
+  if (message == NULL || lines == NULL || max_lines == 0U || line_count == NULL) {
+    if (line_count != NULL) {
+      *line_count = 0U;
+    }
+    return;
+  }
+
+  *line_count = 0U;
+
+  // Maximum visible characters per line (accounting for terminal width)
+  const size_t kMaxVisibleWidth = 76U;
+
+  // ANSI codes to apply
+  const char *kPrefix = ANSI_BG_BRIGHT_BLUE ANSI_BRIGHT_MAGENTA ANSI_BOLD;
+  const char *kSuffix = ANSI_RESET;
+
+  size_t pos = 0U;
+  while (message[pos] != '\0' && *line_count < max_lines) {
+    // Skip leading whitespace
+    while (message[pos] == ' ' || message[pos] == '\t') {
+      ++pos;
+    }
+
+    if (message[pos] == '\0') {
+      break;
+    }
+
+    // Find where to wrap this line
+    size_t next_pos = session_find_wrap_position(message, pos, kMaxVisibleWidth);
+    
+    // Extract the segment
+    size_t segment_len = next_pos - pos;
+    char segment[SSH_CHATTER_MESSAGE_LIMIT];
+    if (segment_len >= sizeof(segment)) {
+      segment_len = sizeof(segment) - 1U;
+    }
+    memcpy(segment, message + pos, segment_len);
+    segment[segment_len] = '\0';
+
+    // Remove trailing whitespace
+    while (segment_len > 0U && (segment[segment_len - 1U] == ' ' || segment[segment_len - 1U] == '\t')) {
+      segment[--segment_len] = '\0';
+    }
+
+    // Format the line with ANSI codes
+    size_t offset = 0U;
+    offset = session_append_fragment(lines[*line_count], SSH_CHATTER_MESSAGE_LIMIT, offset, kPrefix);
+    offset = session_append_fragment(lines[*line_count], SSH_CHATTER_MESSAGE_LIMIT, offset, segment);
+    session_append_fragment(lines[*line_count], SSH_CHATTER_MESSAGE_LIMIT, offset, kSuffix);
+
+    (*line_count)++;
+    pos = next_pos;
+  }
+}
+
 static void session_bbs_format_breaking_notice(const char *message, char *out, size_t length) {
   if (out == NULL || length == 0U) {
     return;
@@ -842,24 +951,58 @@ static void session_bbs_buffer_breaking_notice(session_ctx_t *ctx, const char *m
     return;
   }
 
-  char formatted[SSH_CHATTER_MESSAGE_LIMIT];
-  session_bbs_format_breaking_notice(message, formatted, sizeof(formatted));
+  // Check message length to decide if wrapping is needed
+  size_t msg_len = strlen(message);
+  const size_t kWrapThreshold = 76U; // Wrap if message is longer than this
 
-  size_t limit = SSH_CHATTER_BBS_BREAKING_MAX;
-  if (limit == 0U) {
-    return;
-  }
+  if (msg_len > kWrapThreshold) {
+    // Use wrapped formatting for long messages
+    char wrapped_lines[4][SSH_CHATTER_MESSAGE_LIMIT];
+    size_t wrapped_count = 0U;
+    session_bbs_format_breaking_notice_wrapped(message, wrapped_lines, 4U, &wrapped_count);
 
-  if (ctx->bbs_breaking_count < limit) {
-    snprintf(ctx->bbs_breaking_messages[ctx->bbs_breaking_count],
-             sizeof(ctx->bbs_breaking_messages[ctx->bbs_breaking_count]), "%s", formatted);
-    ctx->bbs_breaking_count += 1U;
-  } else {
-    for (size_t idx = 1U; idx < limit; ++idx) {
-      snprintf(ctx->bbs_breaking_messages[idx - 1U], sizeof(ctx->bbs_breaking_messages[idx - 1U]), "%s",
-               ctx->bbs_breaking_messages[idx]);
+    size_t limit = SSH_CHATTER_BBS_BREAKING_MAX;
+    if (limit == 0U) {
+      return;
     }
-    snprintf(ctx->bbs_breaking_messages[limit - 1U], sizeof(ctx->bbs_breaking_messages[limit - 1U]), "%s", formatted);
+
+    // Add each wrapped line as a separate breaking message
+    for (size_t i = 0U; i < wrapped_count; ++i) {
+      if (ctx->bbs_breaking_count < limit) {
+        snprintf(ctx->bbs_breaking_messages[ctx->bbs_breaking_count],
+                 sizeof(ctx->bbs_breaking_messages[ctx->bbs_breaking_count]), "%s", wrapped_lines[i]);
+        ctx->bbs_breaking_count += 1U;
+      } else {
+        // Shift messages up and add new one at the end
+        for (size_t idx = 1U; idx < limit; ++idx) {
+          snprintf(ctx->bbs_breaking_messages[idx - 1U], sizeof(ctx->bbs_breaking_messages[idx - 1U]), "%s",
+                   ctx->bbs_breaking_messages[idx]);
+        }
+        snprintf(ctx->bbs_breaking_messages[limit - 1U], sizeof(ctx->bbs_breaking_messages[limit - 1U]), "%s",
+                 wrapped_lines[i]);
+      }
+    }
+  } else {
+    // Use original formatting for short messages
+    char formatted[SSH_CHATTER_MESSAGE_LIMIT];
+    session_bbs_format_breaking_notice(message, formatted, sizeof(formatted));
+
+    size_t limit = SSH_CHATTER_BBS_BREAKING_MAX;
+    if (limit == 0U) {
+      return;
+    }
+
+    if (ctx->bbs_breaking_count < limit) {
+      snprintf(ctx->bbs_breaking_messages[ctx->bbs_breaking_count],
+               sizeof(ctx->bbs_breaking_messages[ctx->bbs_breaking_count]), "%s", formatted);
+      ctx->bbs_breaking_count += 1U;
+    } else {
+      for (size_t idx = 1U; idx < limit; ++idx) {
+        snprintf(ctx->bbs_breaking_messages[idx - 1U], sizeof(ctx->bbs_breaking_messages[idx - 1U]), "%s",
+                 ctx->bbs_breaking_messages[idx]);
+      }
+      snprintf(ctx->bbs_breaking_messages[limit - 1U], sizeof(ctx->bbs_breaking_messages[limit - 1U]), "%s", formatted);
+    }
   }
 
   session_bbs_render_editor(ctx, NULL);
@@ -1035,6 +1178,30 @@ static void session_render_separator(session_ctx_t *ctx, const char *label) {
   if (line[0] != '\0') {
     session_send_line(ctx, line);
   }
+}
+
+static void session_enable_alternate_screen(session_ctx_t *ctx) {
+  if (ctx == NULL || !session_transport_active(ctx)) {
+    return;
+  }
+
+  // Switch to alternate screen buffer and disable scrolling
+  // \033[?1049h = enable alternate screen buffer (saves current screen)
+  // \033[2J = clear screen
+  // \033[H = move cursor to home position
+  static const char kEnableAltScreen[] = "\033[?1049h\033[2J\033[H";
+  session_channel_write(ctx, kEnableAltScreen, sizeof(kEnableAltScreen) - 1U);
+}
+
+static void session_disable_alternate_screen(session_ctx_t *ctx) {
+  if (ctx == NULL || !session_transport_active(ctx)) {
+    return;
+  }
+
+  // Switch back to main screen buffer (restores previous screen)
+  // \033[?1049l = disable alternate screen buffer
+  static const char kDisableAltScreen[] = "\033[?1049l";
+  session_channel_write(ctx, kDisableAltScreen, sizeof(kDisableAltScreen) - 1U);
 }
 
 static void session_clear_screen(session_ctx_t *ctx) {

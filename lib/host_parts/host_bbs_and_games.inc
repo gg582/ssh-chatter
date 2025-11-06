@@ -630,6 +630,8 @@ static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch) {
       ctx->game.tetris = ctx->game.saved_tetris_state;
       ctx->game.tetris.gravity_timer_initialized = false;
       ctx->game.tetris.gravity_timer_accumulator_ns = 0U;
+      // Re-enable alternate screen buffer when returning to game
+      session_enable_alternate_screen(ctx);
       session_game_tetris_render(ctx);
     } else {
       ctx->game.is_camouflaged = true;
@@ -638,6 +640,8 @@ static bool session_game_tetris_process_raw_input(session_ctx_t *ctx, char ch) {
       ctx->game.saved_tetris_state.gravity_timer_accumulator_ns = 0U;
       ctx->game.tetris.gravity_timer_initialized = false;
       ctx->game.tetris.gravity_timer_accumulator_ns = 0U;
+      // Disable alternate screen buffer when showing camouflage
+      session_disable_alternate_screen(ctx);
       session_game_show_camouflage(ctx);
     }
     return true;
@@ -1089,6 +1093,9 @@ static void session_game_start_tetris(session_ctx_t *ctx) {
   }
 
   ctx->translation_suppress_output = true;
+
+  // Enable alternate screen buffer to prevent scrolling and flickering
+  session_enable_alternate_screen(ctx);
 
   session_send_system_line(ctx,
                            "Tetris started. Pieces fall on their own — use WASD or the arrow keys (W/Up rotate, S/Down soft"
@@ -2635,6 +2642,11 @@ static void session_game_suspend(session_ctx_t *ctx, const char *reason) {
       session_send_system_line(ctx, "There is no active game to suspend.");
     }
     return;
+  }
+
+  // Restore normal screen buffer when exiting game mode
+  if (ctx->game.type == SESSION_GAME_TETRIS) {
+    session_disable_alternate_screen(ctx);
   }
 
   if (reason != NULL && reason[0] != '\0') {
