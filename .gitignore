@@ -6,3 +6,5 @@
 *.o
 *.d
 *.so
+ssh-chatter
+libssh_chatter_backend.so
