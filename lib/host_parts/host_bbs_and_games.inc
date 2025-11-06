@@ -793,6 +793,7 @@ static void session_game_tetris_lock_piece(session_ctx_t *ctx) {
     state->lines_cleared += cleared;
     state->score += cleared * 100U;
     session_game_tetris_handle_round_progress(ctx);
+    state->needs_full_redraw = true;  // Board changed significantly, force full redraw
   }
 
   if (!session_game_tetris_spawn_piece(ctx)) {
