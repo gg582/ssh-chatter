@@ -3374,49 +3374,53 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
   bool locked = session_output_lock(ctx);
   const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
   const size_t bg_len = strlen(bg);
-  
-  // Get terminal dimensions, use defaults if not set
-  unsigned int width = ctx->terminal_width > 0U ? ctx->terminal_width : 80U;
-  unsigned int height = ctx->terminal_height > 0U ? ctx->terminal_height : 24U;
-
-  // Clear entire screen and move cursor to home position
-  static const char clear_screen[] = "\033[2J\033[H";
-  session_channel_write(ctx, clear_screen, sizeof(clear_screen) - 1U);
-
-  // Apply background color if set
-  if (bg_len > 0U) {
-    session_channel_write(ctx, bg, bg_len);
-  }
-
-  session_channel_write(ctx, ANSI_CURSOR_HOME, sizeof(ANSI_CURSOR_HOME) - 1U);
-  session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
 
   if (bg_len > 0U) {
-    session_channel_write(ctx, bg, bg_len);
-  // Fill entire screen with background color
-  // Use spaces to fill each line
-  // Support terminals up to 1024 columns wide
-  char line_buffer[1024];
-  size_t fill_width = width < sizeof(line_buffer) ? width : sizeof(line_buffer) - 1U;
-  memset(line_buffer, ' ', fill_width);
-  line_buffer[fill_width] = '\0';
+    unsigned int width = ctx->terminal_width > 0U ? ctx->terminal_width : 80U;
+    unsigned int height = ctx->terminal_height > 0U ? ctx->terminal_height : 24U;
 
-  for (unsigned int row = 0U; row < height; ++row) {
-    // Write background-filled line
-    session_channel_write(ctx, line_buffer, fill_width);
-    
-    // Move to next line (except for last line to avoid scrolling)
-    if (row < height - 1U) {
-      session_channel_write(ctx, "\r\n", 2U);
+    if (width == 0U) {
+      width = 80U;
     }
+    if (height == 0U) {
+      height = 24U;
+    }
+
+    char line_buffer[1024];
+    size_t fill_width = width > 0U ? (size_t)width : (size_t)80U;
+    if (fill_width > sizeof(line_buffer)) {
+      fill_width = sizeof(line_buffer);
+    }
+    memset(line_buffer, ' ', fill_width);
+
+    static const char save_cursor[] = "\033[s";
+    static const char restore_cursor[] = "\033[u";
+    static const char move_home[] = "\033[H";
+
+    session_channel_write(ctx, save_cursor, sizeof(save_cursor) - 1U);
+    session_channel_write(ctx, move_home, sizeof(move_home) - 1U);
+    session_channel_write(ctx, bg, bg_len);
+
+    for (unsigned int row = 0U; row < height; ++row) {
+      session_channel_write(ctx, line_buffer, fill_width);
+      if (row + 1U < height) {
+        session_channel_write(ctx, "\r\n", 2U);
+        session_channel_write(ctx, bg, bg_len);
+      }
+    }
+
+    session_channel_write(ctx, ANSI_RESET, sizeof(ANSI_RESET) - 1U);
+    session_channel_write(ctx, restore_cursor, sizeof(restore_cursor) - 1U);
   }
 
-  // Reset cursor to home position
-  session_channel_write(ctx, "\033[H", 3U);
-
-  // Reset colors to default
-  static const char reset[] = "\033[0m";
-  session_channel_write(ctx, reset, sizeof(reset) - 1U);
+  if (bg_len > 0U) {
+    session_channel_write(ctx, bg, bg_len);
+  }
+  session_channel_write(ctx, ANSI_CLEAR_LINE, sizeof(ANSI_CLEAR_LINE) - 1U);
+  session_channel_write(ctx, "\r", 1U);
+  if (bg_len > 0U) {
+    session_channel_write(ctx, bg, bg_len);
+  }
 
   if (locked) {
     session_output_unlock(ctx);
@@ -3424,48 +3428,6 @@ static void session_apply_background_fill(session_ctx_t *ctx) {
 }
 
 static size_t session_append_fragment(char *dest, size_t dest_size, size_t offset, const char *fragment);
-
-size_t normalize_output(session_ctx_t *ctx, char *buf, size_t buf_size) {
-    (void)buf_size;
-
-    unsigned int width = ctx->terminal_width > 0U ? ctx->terminal_width : 80U;
-    const char *bg = ctx->system_bg_code ? ctx->system_bg_code : "";
-    const char *fg = ctx->system_fg_code ? ctx->system_fg_code : "";
-    const char *reset = "\033[0m";
-
-    char out[SSH_CHATTER_BBS_BODY_LEN];
-    out[0] = '\0';
-
-    char *line = buf;
-    while (*line) {
-        char *e = strchrnul(line, '\n');
-        size_t len = (size_t)(e - line);
-
-        /* copy line as-is (no sanitization) */
-        char raw[4096];
-        if (len >= sizeof(raw)) len = sizeof(raw) - 1;
-        memcpy(raw, line, len);
-        raw[len] = '\0';
-
-        /* measure visible length simply = strlen (we assume no width calc) */
-        size_t vis = strlen(raw);
-        size_t pad = (vis < width) ? (width - vis) : 0;
-
-        /* write: bg fg raw + spaces + reset + newline */
-        snprintf(out + strlen(out), sizeof(out) - strlen(out),
-                 "%s%s%s%*s%s\n",
-                 bg, fg, raw, (int)pad, "", reset);
-
-        if (*e == '\0')
-            break;
-        line = e + 1;
-    }
-
-    strncpy(buf, out, buf_size - 1);
-    buf[buf_size - 1] = '\0';
-
-    return strlen(buf);
-}
 
 static void session_write_rendered_line(session_ctx_t *ctx, const char *render_source) {
   if (ctx == NULL || render_source == NULL || !session_transport_active(ctx)) {
@@ -3477,7 +3439,7 @@ static void session_write_rendered_line(session_ctx_t *ctx, const char *render_s
   const size_t bg_len = strlen(bg);
 
   // Move cursor to beginning of line, apply background, clear line, then write content
-  session_channel_write(ctx, ANSI_CURSOR_HOME, sizeof(ANSI_CURSOR_HOME) - 1U); // Move to column 0
+  session_channel_write(ctx, "\r", 1U); // Move to column 0
   if (bg_len > 0U) {
     session_channel_write(ctx, bg, bg_len); // Apply background color
   }
@@ -3493,7 +3455,7 @@ static void session_write_rendered_line(session_ctx_t *ctx, const char *render_s
   offset = session_append_fragment(buffer, sizeof(buffer), offset, fg);
   offset = session_append_fragment(buffer, sizeof(buffer), offset, bold);
   offset = session_append_fragment(buffer, sizeof(buffer), offset, message);
-  offset = normalize_output(ctx, buffer, sizeof(buffer));
+  offset = session_append_fragment(buffer, sizeof(buffer), offset, ANSI_RESET);
 
   session_channel_write(ctx, buffer, offset); // Write the actual message
 
