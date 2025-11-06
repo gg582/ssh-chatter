@@ -994,10 +994,8 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
     state->prev_round = state->round;
   } else {
     // Smart incremental update: only redraw changed parts
-    // We need to update:
-    // 1. The cells where the previous piece was (clear them)
-    // 2. The cells where the current piece is (draw them)
-    // 3. The header if score/lines/round changed
+    // Instead of scrolling new content, we'll use ANSI escape sequences to
+    // update in-place using cursor positioning
     
     bool header_changed = (state->score != state->prev_score || 
                           state->lines_cleared != state->prev_lines_cleared ||
@@ -1009,24 +1007,45 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
                        state->row != state->prev_row ||
                        state->column != state->prev_column);
     
-    if (piece_moved) {
-      // Clear old piece position by redrawing those rows
-      int min_row = state->prev_row;
-      int max_row = state->prev_row + SSH_CHATTER_TETROMINO_SIZE - 1;
+    if (piece_moved || header_changed) {
+      // Calculate affected rows for piece movement
+      int min_row = 0;
+      int max_row = SSH_CHATTER_TETRIS_HEIGHT - 1;
       
-      // Extend range to include current piece position
-      if (state->current_piece >= 0) {
-        if (state->row < min_row) min_row = state->row;
-        int curr_max = state->row + SSH_CHATTER_TETROMINO_SIZE - 1;
-        if (curr_max > max_row) max_row = curr_max;
+      if (piece_moved && !header_changed) {
+        // Only update the rows where the piece changed
+        min_row = state->prev_row;
+        max_row = state->prev_row + SSH_CHATTER_TETROMINO_SIZE - 1;
+        
+        if (state->current_piece >= 0) {
+          if (state->row < min_row) min_row = state->row;
+          int curr_max = state->row + SSH_CHATTER_TETROMINO_SIZE - 1;
+          if (curr_max > max_row) max_row = curr_max;
+        }
+        
+        if (min_row < 0) min_row = 0;
+        if (max_row >= SSH_CHATTER_TETRIS_HEIGHT) max_row = SSH_CHATTER_TETRIS_HEIGHT - 1;
       }
       
-      // Clamp to board boundaries
-      if (min_row < 0) min_row = 0;
-      if (max_row >= SSH_CHATTER_TETRIS_HEIGHT) max_row = SSH_CHATTER_TETRIS_HEIGHT - 1;
+      // Build the update in a buffer to minimize flicker
+      char update_buffer[8192];
+      int buffer_pos = 0;
       
-      // Update only the affected rows using ANSI cursor positioning
-      // Position is relative to top of game board (after separator and top border)
+      // Save cursor position
+      buffer_pos += snprintf(update_buffer + buffer_pos, sizeof(update_buffer) - (size_t)buffer_pos, "\033[s");
+      
+      // Move cursor up to start of game board area
+      // Total lines: separator(skipped) + top_border(1) + rows(20) + bottom_border(1) + header(1) + controls(1) = 24
+      buffer_pos += snprintf(update_buffer + buffer_pos, sizeof(update_buffer) - (size_t)buffer_pos, "\033[24A");
+      
+      // Skip to first affected row (1 for border + min_row)
+      if (min_row > 0) {
+        buffer_pos += snprintf(update_buffer + buffer_pos, sizeof(update_buffer) - (size_t)buffer_pos, "\033[%dB", min_row + 1);
+      } else {
+        buffer_pos += snprintf(update_buffer + buffer_pos, sizeof(update_buffer) - (size_t)buffer_pos, "\033[1B");
+      }
+      
+      // Update affected game board rows
       for (int row = min_row; row <= max_row; ++row) {
         char line_buffer[SSH_CHATTER_TETRIS_WIDTH + 3];
         line_buffer[0] = '|';
@@ -1052,48 +1071,49 @@ static void session_game_tetris_render(session_ctx_t *ctx) {
         line_buffer[SSH_CHATTER_TETRIS_WIDTH + 1] = '|';
         line_buffer[SSH_CHATTER_TETRIS_WIDTH + 2] = '\0';
         
-        // Use ANSI escape to position cursor and update this line
-        // Save cursor, move up to the row, output line, restore cursor
-        char positioned_line[256];
-        // Calculate how many lines up from current position
-        // Game board is: separator(1) + top_border(1) + rows(20) + bottom_border(1) + header(1) + controls(1) = 25 lines
-        // Current cursor is at bottom (after controls)
-        // To reach row N in game board: we need to go up (25 - 1 - 1 - row) = (23 - row) lines from bottom
-        int lines_from_bottom = SSH_CHATTER_TETRIS_HEIGHT + 3 - row;
-        snprintf(positioned_line, sizeof(positioned_line), "\033[s\033[%dA\r%s\033[u", lines_from_bottom, line_buffer);
-        session_send_raw_text(ctx, positioned_line);
+        buffer_pos += snprintf(update_buffer + buffer_pos, sizeof(update_buffer) - (size_t)buffer_pos, "\r%s", line_buffer);
+        if (row < max_row) {
+          buffer_pos += snprintf(update_buffer + buffer_pos, sizeof(update_buffer) - (size_t)buffer_pos, "\033[1B");
+        }
       }
+      
+      // Update header if it changed
+      if (header_changed) {
+        // Move to header line (from current position: remaining rows + bottom border + 1)
+        int rows_to_skip = SSH_CHATTER_TETRIS_HEIGHT - max_row;
+        buffer_pos += snprintf(update_buffer + buffer_pos, sizeof(update_buffer) - (size_t)buffer_pos, "\033[%dB", rows_to_skip);
+        
+        char header[SSH_CHATTER_MESSAGE_LIMIT];
+        char next_char = TETROMINO_DISPLAY_CHARS[state->next_piece % 7];
+        if (state->round < SSH_CHATTER_TETRIS_MAX_ROUNDS) {
+          unsigned lines_remaining = 0U;
+          if (state->next_round_line_goal > state->lines_cleared) {
+            lines_remaining = state->next_round_line_goal - state->lines_cleared;
+          }
+          snprintf(header, sizeof(header), "Score: %u   Lines: %u   Round: %u/%u (next in %u)   Next: %c", state->score,
+                   state->lines_cleared, state->round, SSH_CHATTER_TETRIS_MAX_ROUNDS, lines_remaining, next_char);
+        } else {
+          snprintf(header, sizeof(header), "Score: %u   Lines: %u   Round: %u/%u (max speed)   Next: %c", state->score,
+                   state->lines_cleared, state->round, SSH_CHATTER_TETRIS_MAX_ROUNDS, next_char);
+        }
+        buffer_pos += snprintf(update_buffer + buffer_pos, sizeof(update_buffer) - (size_t)buffer_pos, "\r%s\033[K", header);
+        
+        state->prev_score = state->score;
+        state->prev_lines_cleared = state->lines_cleared;
+        state->prev_next_piece = state->next_piece;
+        state->prev_round = state->round;
+      }
+      
+      // Restore cursor position
+      buffer_pos += snprintf(update_buffer + buffer_pos, sizeof(update_buffer) - (size_t)buffer_pos, "\033[u");
+      
+      // Send the entire update at once
+      session_send_raw_text(ctx, update_buffer);
       
       state->prev_current_piece = state->current_piece;
       state->prev_rotation = state->rotation;
       state->prev_row = state->row;
       state->prev_column = state->column;
-    }
-    
-    if (header_changed) {
-      char header[SSH_CHATTER_MESSAGE_LIMIT];
-      char next_char = TETROMINO_DISPLAY_CHARS[state->next_piece % 7];
-      if (state->round < SSH_CHATTER_TETRIS_MAX_ROUNDS) {
-        unsigned lines_remaining = 0U;
-        if (state->next_round_line_goal > state->lines_cleared) {
-          lines_remaining = state->next_round_line_goal - state->lines_cleared;
-        }
-        snprintf(header, sizeof(header), "Score: %u   Lines: %u   Round: %u/%u (next in %u)   Next: %c", state->score,
-                 state->lines_cleared, state->round, SSH_CHATTER_TETRIS_MAX_ROUNDS, lines_remaining, next_char);
-      } else {
-        snprintf(header, sizeof(header), "Score: %u   Lines: %u   Round: %u/%u (max speed)   Next: %c", state->score,
-                 state->lines_cleared, state->round, SSH_CHATTER_TETRIS_MAX_ROUNDS, next_char);
-      }
-      
-      // Update header line (2 lines up from bottom: controls + header)
-      char positioned_header[512];
-      snprintf(positioned_header, sizeof(positioned_header), "\033[s\033[2A\r%s\033[K\033[u", header);
-      session_send_raw_text(ctx, positioned_header);
-      
-      state->prev_score = state->score;
-      state->prev_lines_cleared = state->lines_cleared;
-      state->prev_next_piece = state->next_piece;
-      state->prev_round = state->round;
     }
   }
 
