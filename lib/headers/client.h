@@ -11,6 +11,7 @@ typedef enum client_kind {
     CLIENT_KIND_UNKNOWN = 0,
     CLIENT_KIND_WEBSSH,
     CLIENT_KIND_BOT,
+    CLIENT_KIND_AI,
 } client_kind_t;
 
 #define CLIENT_IDENTIFIER_LEN 64

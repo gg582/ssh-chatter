@@ -81,7 +81,7 @@ static void session_send_reply_tree(session_ctx_t *ctx,
         indent[indent_len] = '\0';
 
         char line[SSH_CHATTER_MESSAGE_LIMIT + 160];
-        snprintf(line, sizeof(line), "%s(r#%" PRIu64 ") %s", indent,
+        snprintf(line, sizeof(line), "\033[1G%s(r#%" PRIu64 ") %s", indent,
                  reply->reply_id, reply->message);
         session_send_plain_line(ctx, line);
 
@@ -102,7 +102,7 @@ static bool host_lookup_member_ip(host_t *host, const char *username, char *ip,
         return false;
     }
 
-    snprintf(ip, length, "%s", member->client_ip);
+    snprintf(ip, length, "\033[1G%s", member->client_ip);
     return true;
 }
 
@@ -624,7 +624,7 @@ static void session_handle_suspicious_first_message(session_ctx_t *ctx,
     }
 
     const char *address = (ip != NULL) ? ip : "unknown";
-    printf("[security] suspicious first message from %s (%s): %s\n",
+    printf("\033[1G[security] suspicious first message from %s (%s): %s\n",
            ctx->user.name, address, trimmed[0] != '\0' ? trimmed : "(empty)");
 
     host_t *host = ctx->owner;
@@ -632,11 +632,11 @@ static void session_handle_suspicious_first_message(session_ctx_t *ctx,
         (void)host_history_remove_join_entry(host, ctx->user.name);
         const char *ban_ip = (ip != NULL) ? ip : "";
         if (host_add_ban_entry(host, ctx->user.name, ban_ip)) {
-            printf("[security] permanently banned %s (%s) for suspicious first "
+            printf("\033[1G[[security] permanently banned %s (%s) for suspicious first "
                    "message\n",
                    ctx->user.name, address);
         } else {
-            printf("[security] unable to record permanent ban for %s (%s)\n",
+            printf("\033[1G[[security] unable to record permanent ban for %s (%s)\n",
                    ctx->user.name, address);
         }
 
@@ -652,7 +652,7 @@ static void session_handle_suspicious_first_message(session_ctx_t *ctx,
 
             char notification[USER_DATA_MAILBOX_MESSAGE_LEN];
             snprintf(notification, sizeof(notification),
-                     "Suspicious first message ban: [%s] from %s sent '%s'.",
+                     "\033[1G[Suspicious first message ban: [%s] from %s sent '%s'.",
                      ctx->user.name, address,
                      trimmed[0] != '\0' ? trimmed : "(empty)");
 
@@ -661,16 +661,16 @@ static void session_handle_suspicious_first_message(session_ctx_t *ctx,
                     host, admin_user, admin_ip[0] != '\0' ? admin_ip : NULL,
                     "system", notification, mail_error, sizeof(mail_error))) {
                 if (mail_error[0] != '\0') {
-                    printf("[mail] failed to notify %s about suspicious first "
+                    printf("\033[1G[[mail] failed to notify %s about suspicious first "
                            "message: %s\n",
                            admin_user, mail_error);
                 } else {
-                    printf("[mail] failed to notify %s about suspicious first "
+                    printf("\033[1G[[mail] failed to notify %s about suspicious first "
                            "message\n",
                            admin_user);
                 }
             } else {
-                printf("[mail] notified %s about suspicious first message from "
+                printf("\033[1G[[mail] notified %s about suspicious first message from "
                        "%s\n",
                        admin_user, ctx->user.name);
             }
@@ -680,7 +680,7 @@ static void session_handle_suspicious_first_message(session_ctx_t *ctx,
     ctx->user_data_loaded = false;
     memset(&ctx->user_data, 0, sizeof(ctx->user_data));
 
-    session_force_disconnect(ctx, "Suspicious command activity detected. You "
+    session_force_disconnect(ctx, "\033[1G[Suspicious command activity detected. You "
                                   "have been permanently banned.");
 }
 
@@ -863,11 +863,11 @@ static void session_blocklist_show(session_ctx_t *ctx)
     }
 
     if (ctx->block_entry_count == 0U) {
-        session_send_system_line(ctx, "No blocked users or IPs.");
+        session_send_system_line(ctx, "\033[1G[No blocked users or IPs.");
         return;
     }
 
-    session_send_system_line(ctx, "Blocked targets:");
+    session_send_system_line(ctx, "\033[1G[Blocked targets:");
     for (size_t idx = 0U; idx < SSH_CHATTER_MAX_BLOCKED; ++idx) {
         const session_block_entry_t *entry = &ctx->block_entries[idx];
         if (!entry->in_use) {
@@ -878,21 +878,21 @@ static void session_blocklist_show(session_ctx_t *ctx)
         if (entry->ip_wide && entry->ip[0] != '\0') {
             if (entry->username[0] != '\0') {
                 snprintf(line, sizeof(line),
-                         "- %s (all users from this IP, originally [%s])",
+                         "\033[1G[- %s (all users from this IP, originally [%s])",
                          entry->ip, entry->username);
             } else {
-                snprintf(line, sizeof(line), "- %s (all users from this IP)",
+                snprintf(line, sizeof(line), "\033[1G[- %s (all users from this IP)",
                          entry->ip);
             }
         } else if (entry->username[0] != '\0') {
             if (entry->ip[0] != '\0') {
-                snprintf(line, sizeof(line), "- [%s] (only this user, IP %s)",
+                snprintf(line, sizeof(line), "\033[1G[- [%s] (only this user, IP %s)",
                          entry->username, entry->ip);
             } else {
-                snprintf(line, sizeof(line), "- [%s]", entry->username);
+                snprintf(line, sizeof(line), "\033[1G[- [%s]", entry->username);
             }
         } else {
-            snprintf(line, sizeof(line), "- entry #%zu", idx + 1U);
+            snprintf(line, sizeof(line), "\033[1G[- entry #%zu", idx + 1U);
         }
         session_send_system_line(ctx, line);
     }
@@ -1247,7 +1247,7 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message)
     }
 
     char prefixed_message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(prefixed_message, sizeof(prefixed_message), "+ %s", message);
+    snprintf(prefixed_message, sizeof(prefixed_message), "\033[1G+ %s", message);
 
     session_send_plain_line(ctx, prefixed_message);
 }
@@ -1408,17 +1408,17 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post,
     }
 
     char title_line[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(title_line, sizeof(title_line), "#%" PRIu64 ": %s", post->id,
+    snprintf(title_line, sizeof(title_line), "\033[1G#%" PRIu64 ": %s", post->id,
              post->title);
 
     char author_line[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(author_line, sizeof(author_line), "Author: %s", post->author);
+    snprintf(author_line, sizeof(author_line), "\033[1GAuthor: %s", post->author);
 
     char created_line[SSH_CHATTER_MESSAGE_LIMIT];
     time_t created = (time_t)post->created_at;
     struct tm created_tm;
     localtime_r(&created, &created_tm);
-    strftime(created_line, sizeof(created_line), "Created: %Y-%m-%d %H:%M:%S",
+    strftime(created_line, sizeof(created_line), "\033[1GCreated: %Y-%m-%d %H:%M:%S",
              &created_tm);
 
     char bumped_line[SSH_CHATTER_MESSAGE_LIMIT];
@@ -3163,7 +3163,7 @@ static void session_send_history_entry(session_ctx_t *ctx,
         const char *bold = entry->user_is_bold ? ANSI_BOLD : "";
 
         char name_block[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(name_block, sizeof(name_block), "%s%s%s%s", color, bold,
+        snprintf(name_block, sizeof(name_block), "\033[1G%s%s%s%s", color, bold,
                  entry->username, ANSI_RESET);
         strncat(formatted, name_block,
                 sizeof(formatted) - strlen(formatted) - 1U);

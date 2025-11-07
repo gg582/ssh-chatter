@@ -1,0 +1,24 @@
+[Unit]
+Description=AI Message Sender for SSH Chatter
+After=network.target ssh-chat-server.service
+
+[Service]
+#User=nobody ; IMPORTANT: Change this to a dedicated, less privileged user
+#Group=nogroup ; IMPORTANT: Change this to a dedicated, less privileged group
+WorkingDirectory=/home/yjlee/ssh-chatter/ssh-chat-with-ai/stream-ai-message-sender/
+
+# IMPORTANT: Set your AI API keys and other environment variables here.
+# Example: Environment="GOOGLE_API_KEY=your_api_key_here"
+# Environment="OPENAI_API_KEY=your_openai_api_key_here"
+
+# Ensure Python dependencies are installed using uv (or pip)
+ExecStartPre=/usr/bin/bash -c "uv sync"
+
+# Start the AI message sender (Python)
+ExecStart=/usr/bin/python3 main.py
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

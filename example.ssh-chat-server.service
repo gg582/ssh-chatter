@@ -1,0 +1,20 @@
+[Unit]
+Description=SSH Chat Server
+After=network.target
+
+[Service]
+#User=nobody ; IMPORTANT: Change this to a dedicated, less privileged user
+#Group=nogroup ; IMPORTANT: Change this to a dedicated, less privileged group
+WorkingDirectory=/home/yjlee/ssh-chatter/ssh-chat-with-ai/ssh-chat/
+
+# Build the Go SSH chat server (if not already built)
+ExecStartPre=/usr/bin/bash -c "go build -o ssh-chat-server ."
+
+# Start the SSH chat server
+ExecStart=/home/yjlee/ssh-chatter/ssh-chat-with-ai/ssh-chat/ssh-chat-server -key /home/yjlee/ssh-chatter/tmp_keys/ssh_host_rsa_key -port 2222
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
