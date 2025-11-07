@@ -5,16 +5,16 @@
 #include <stdio.h>
 #include <string.h>
 
-static inline void
-humanized_log_error (const char *section, const char *message, int error_code)
+static inline void humanized_log_error(const char *section, const char *message,
+                                       int error_code)
 {
-  if (section == NULL) {
-    section = "unknown";
-  }
-  if (message == NULL) {
-    message = strerror (error_code != 0 ? error_code : errno);
-  }
-  fprintf (stderr, "[%s] %s (code: %d)\n", section, message, error_code);
+    if (section == NULL) {
+        section = "unknown";
+    }
+    if (message == NULL) {
+        message = strerror(error_code != 0 ? error_code : errno);
+    }
+    fprintf(stderr, "[%s] %s (code: %d)\n", section, message, error_code);
 }
 
 #endif

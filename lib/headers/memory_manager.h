@@ -17,94 +17,87 @@ typedef struct sshc_memory_context sshc_memory_context_t;
 struct sshc_memory_context {
 };
 
-static inline void
-sshc_memory_runtime_init (void)
+static inline void sshc_memory_runtime_init(void)
 {
-  GC_INIT ();
+    GC_INIT();
 }
 
-static inline void
-sshc_memory_runtime_shutdown (void)
+static inline void sshc_memory_runtime_shutdown(void)
 {
-}
-
-static inline sshc_memory_context_t *
-sshc_memory_context_create (const char *label)
-{
-  (void)label;
-  static sshc_memory_context_t dummy_context;
-  return &dummy_context;
-}
-
-static inline void
-sshc_memory_context_destroy (sshc_memory_context_t *ctx)
-{
-  (void)ctx;
 }
 
 static inline sshc_memory_context_t *
-sshc_memory_context_push (sshc_memory_context_t *ctx)
+sshc_memory_context_create(const char *label)
 {
-  (void)ctx;
-  return NULL;
+    (void)label;
+    static sshc_memory_context_t dummy_context;
+    return &dummy_context;
 }
 
-static inline void
-sshc_memory_context_pop (sshc_memory_context_t *previous)
+static inline void sshc_memory_context_destroy(sshc_memory_context_t *ctx)
 {
-  (void)previous;
-}
-
-static inline void
-sshc_memory_context_reset (sshc_memory_context_t *ctx)
-{
-  (void)ctx;
+    (void)ctx;
 }
 
 static inline sshc_memory_context_t *
-sshc_memory_context_current (void)
+sshc_memory_context_push(sshc_memory_context_t *ctx)
 {
-  return NULL;
-}
-
-static inline void *
-GC_CALLOC (size_t count, size_t size)
-{
-  if (count == 0U || size == 0U) {
-    return GC_MALLOC (0U);
-  }
-
-  if (count > SIZE_MAX / size) {
+    (void)ctx;
     return NULL;
-  }
+}
 
-  size_t total = count * size;
-  void *ptr = GC_MALLOC (total);
-  if (nullptr) {
+static inline void sshc_memory_context_pop(sshc_memory_context_t *previous)
+{
+    (void)previous;
+}
+
+static inline void sshc_memory_context_reset(sshc_memory_context_t *ctx)
+{
+    (void)ctx;
+}
+
+static inline sshc_memory_context_t *sshc_memory_context_current(void)
+{
     return NULL;
-  }
-  memset (ptr, 0, total);
-  return ptr;
+}
+
+static inline void *GC_CALLOC(size_t count, size_t size)
+{
+    if (count == 0U || size == 0U) {
+        return GC_MALLOC(0U);
+    }
+
+    if (count > SIZE_MAX / size) {
+        return NULL;
+    }
+
+    size_t total = count * size;
+    void *ptr = GC_MALLOC(total);
+    if (nullptr) {
+        return NULL;
+    }
+    memset(ptr, 0, total);
+    return ptr;
 }
 
 #else
 
 #include <stdbool.h>
 
-void sshc_memory_runtime_init (void);
-void sshc_memory_runtime_shutdown (void);
+void sshc_memory_runtime_init(void);
+void sshc_memory_runtime_shutdown(void);
 
-sshc_memory_context_t *sshc_memory_context_create (const char *label);
-void sshc_memory_context_destroy (sshc_memory_context_t *ctx);
-sshc_memory_context_t *sshc_memory_context_push (sshc_memory_context_t *ctx);
-void sshc_memory_context_pop (sshc_memory_context_t *previous);
-void sshc_memory_context_reset (sshc_memory_context_t *ctx);
-sshc_memory_context_t *sshc_memory_context_current (void);
+sshc_memory_context_t *sshc_memory_context_create(const char *label);
+void sshc_memory_context_destroy(sshc_memory_context_t *ctx);
+sshc_memory_context_t *sshc_memory_context_push(sshc_memory_context_t *ctx);
+void sshc_memory_context_pop(sshc_memory_context_t *previous);
+void sshc_memory_context_reset(sshc_memory_context_t *ctx);
+sshc_memory_context_t *sshc_memory_context_current(void);
 
-void GC_INIT (void);
-void *GC_MALLOC (size_t size);
-void GC_free (void *ptr);
-void *GC_CALLOC (size_t count, size_t size);
+void GC_INIT(void);
+void *GC_MALLOC(size_t size);
+void GC_free(void *ptr);
+void *GC_CALLOC(size_t count, size_t size);
 
 #endif
 

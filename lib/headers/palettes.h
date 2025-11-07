@@ -44,22 +44,22 @@
 #include <stddef.h>
 #include <stdio.h>
 
-static inline int
-ansi_256 (char *buffer, size_t buffer_len, unsigned int color_code)
+static inline int ansi_256(char *buffer, size_t buffer_len,
+                           unsigned int color_code)
 {
-  if (buffer_len == 0) {
-    return 0;
-  }
-  return snprintf (buffer, buffer_len, "\033[38;5;%um", color_code);
+    if (buffer_len == 0) {
+        return 0;
+    }
+    return snprintf(buffer, buffer_len, "\033[38;5;%um", color_code);
 }
 
-static inline int
-ansi_bg_256 (char *buffer, size_t buffer_len, unsigned int color_code)
+static inline int ansi_bg_256(char *buffer, size_t buffer_len,
+                              unsigned int color_code)
 {
-  if (buffer_len == 0) {
-    return 0;
-  }
-  return snprintf (buffer, buffer_len, "\033[48;5;%um", color_code);
+    if (buffer_len == 0) {
+        return 0;
+    }
+    return snprintf(buffer, buffer_len, "\033[48;5;%um", color_code);
 }
 
 #define MONOKAI_BLUE_BACKGROUND_COLOR 235
