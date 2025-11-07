@@ -1,4 +1,4 @@
-ENABLE_GC ?= 0
+ENABLE_GC ?= 1
 
 CC := gcc
 CFLAGS = -std=c2x -Ofast \
