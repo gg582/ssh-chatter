@@ -29,6 +29,8 @@ static volatile sig_atomic_t g_shutdown_flag = 0;
 static void signal_handler(int signum)
 {
     (void)signum;
+    printf("[signal] Received signal %d, setting shutdown flag\n", signum);
+    fflush(stdout);
     g_shutdown_flag = 1;
 }
 
@@ -96,6 +98,7 @@ int main(int argc, char **argv)
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = signal_handler;
+    sa.sa_flags = 0;  // Do NOT use SA_RESTART - we want signals to interrupt accept()
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 

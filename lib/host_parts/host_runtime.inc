@@ -4535,6 +4535,12 @@ int host_serve(host_t *host, const char *bind_addr, const char *port,
                 const int accept_error = errno;
                 const char *bind_error = ssh_get_error(bind_handle);
 
+                printf("[listener] accept failed, error=%d, shutdown_flag=%p value=%d\n",
+                       accept_error,
+                       (void*)host->shutdown_flag,
+                       (host->shutdown_flag != NULL ? *host->shutdown_flag : -1));
+                fflush(stdout);
+
                 if (accept_error != 0) {
                     char log_message[512];
                     const char *system_message = strerror(accept_error);
@@ -4640,6 +4646,15 @@ int host_serve(host_t *host, const char *bind_addr, const char *port,
                     };
                     host_sleep_uninterruptible(&retry_delay);
                 }
+                
+                // Check shutdown flag after non-fatal errors (e.g., EINTR from signal)
+                if (host->shutdown_flag != NULL && *host->shutdown_flag != 0) {
+                    printf("[listener] detected shutdown flag after socket error, "
+                           "breaking from accept loop\n");
+                    restart_listener = true;
+                    break;
+                }
+                
                 continue;
             }
 
@@ -4833,6 +4848,12 @@ int host_serve(host_t *host, const char *bind_addr, const char *port,
 
         ssh_bind_free(bind_handle);
         host->listener.handle = NULL;
+
+        // Check for shutdown signal before deciding to restart
+        if (host->shutdown_flag != NULL && *host->shutdown_flag != 0) {
+            printf("[listener] shutdown signal received, exiting listener loop\n");
+            break;
+        }
 
         if (!restart_listener) {
             host_sleep_after_error(host);
