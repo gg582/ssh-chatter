@@ -1,14 +1,16 @@
-BasedOnStyle: GNU
-IndentWidth: 2
+BasedOnStyle: LLVM
+IndentWidth: 4
 PointerAlignment: Right
 BreakBeforeBraces: Linux
 AllowShortFunctionsOnASingleLine: None
 IndentCaseLabels: false
 ColumnLimit: 80
+IncludeBlocks: Preserve
+SkipMacroDefinitionBody: true
 
 SortIncludes: false
 ReflowComments: false
-KeepEmptyLinesAtTheStartOfBlocks: true
+KeepEmptyLinesAtTheStartOfBlocks: false
 
 AlignEscapedNewlines: Right
 AlignConsecutiveMacros: false
