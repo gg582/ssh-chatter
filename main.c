@@ -30,7 +30,17 @@
 
 #include <time.h>
 
+#include <signal.h>
+
 #define HOST_STABLE_RESET_SECONDS 10.0
+
+static volatile sig_atomic_t g_shutdown_flag = 0;
+
+static void signal_handler(int signum) {
+    (void)signum;
+    g_shutdown_flag = 1;
+}
+
 
 static void
 print_usage (const char *prog_name)
@@ -105,6 +115,11 @@ sleep_before_restart (unsigned int attempts)
 int
 main (int argc, char **argv)
 {
+  struct sigaction sa;
+  memset (&sa, 0, sizeof (sa));
+  sa.sa_handler = signal_handler;
+  sigaction (SIGINT, &sa, NULL);
+  sigaction (SIGTERM, &sa, NULL);
 
   setlocale (LC_ALL, "");
 

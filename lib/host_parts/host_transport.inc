@@ -6009,7 +6009,7 @@ host_security_execute_clamav_backend (host_t *host, char *notice,
   int status = -1;
   do {
     errno = 0;
-    status = pclose (pipe);
+    status = fclose (pipe);
   } while (status == -1 && errno == EINTR);
   struct timespec end = { 0, 0 };
   if (clock_gettime (CLOCK_MONOTONIC, &end) != 0) {
