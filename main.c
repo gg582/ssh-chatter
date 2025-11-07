@@ -29,6 +29,8 @@ static volatile sig_atomic_t g_shutdown_flag = 0;
 static void signal_handler(int signum)
 {
     (void)signum;
+    printf("[signal] Received signal %d, setting shutdown flag\n", signum);
+    fflush(stdout);
     g_shutdown_flag = 1;
 }
 
@@ -96,6 +98,7 @@ int main(int argc, char **argv)
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = signal_handler;
+    sa.sa_flags = 0;  // Do NOT use SA_RESTART - we want signals to interrupt accept()
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
@@ -283,7 +286,7 @@ int main(int argc, char **argv)
 
     unsigned int restart_attempts = 0U;
 
-    while (true) {
+    while (!g_shutdown_flag) {
         host_t *host = calloc(1, sizeof(*host));
 
         if (host == nullptr) {
@@ -322,6 +325,7 @@ int main(int argc, char **argv)
         sshc_memory_context_t *init_scope =
             sshc_memory_context_push(host->memory_context);
 
+        host->shutdown_flag = &g_shutdown_flag;
         host_init(host, &default_profile);
 
         sshc_memory_context_pop(init_scope);
@@ -378,8 +382,14 @@ int main(int argc, char **argv)
 
         host = nullptr;
 
-        if (serve_result == 0) {
+        if (g_shutdown_flag) {
+            printf("[daemon] shutdown signal received, exiting gracefully\n");
             return EXIT_SUCCESS;
+        }
+
+        if (serve_result == 0) {
+            printf("[daemon] host_serve returned 0 without shutdown signal, "
+                   "treating as unexpected exit\n");
         }
 
         double runtime_seconds =

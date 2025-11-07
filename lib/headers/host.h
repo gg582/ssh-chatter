@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -802,6 +803,7 @@ typedef struct host {
     _Atomic bool rss_thread_running;
     _Atomic bool rss_thread_stop;
     struct timespec rss_last_run;
+    volatile sig_atomic_t *shutdown_flag;
 } host_t;
 
 typedef struct {
