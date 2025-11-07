@@ -1,0 +1,136 @@
+# Valgrind suppression file for Boehm GC (libgc)
+# This file suppresses known false positives when using libgc
+
+# GC_malloc and related functions intentionally retain reachable memory
+{
+   libgc-still-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:GC_*
+}
+
+# GC initialization allocates memory that is kept for the lifetime of the program
+{
+   libgc-init-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:GC_init
+}
+
+# GC internal data structures
+{
+   libgc-malloc-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   ...
+   fun:GC_*
+}
+
+{
+   libgc-calloc-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   ...
+   fun:GC_*
+}
+
+{
+   libgc-realloc-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:realloc
+   ...
+   fun:GC_*
+}
+
+# GC uses uninitialized memory for performance reasons in its internal operations
+{
+   libgc-conditional-jump
+   Memcheck:Cond
+   ...
+   fun:GC_*
+}
+
+{
+   libgc-value-use
+   Memcheck:Value8
+   ...
+   fun:GC_*
+}
+
+# GC mark and sweep operations
+{
+   libgc-mark-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:GC_mark_*
+}
+
+# Pthread-related GC issues
+{
+   libgc-pthread-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   fun:allocate_dtv
+   fun:_dl_allocate_tls
+}
+
+{
+   libgc-pthread-create
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   ...
+   fun:pthread_create*
+}
+
+# libssh allocations that are kept for the session lifetime
+{
+   libssh-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   obj:*/libssh.so*
+}
+
+# OpenSSL/libcrypto allocations
+{
+   libcrypto-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   obj:*/libcrypto.so*
+}
+
+# libcurl allocations
+{
+   libcurl-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   obj:*/libcurl.so*
+}
+
+# System library allocations that are reachable
+{
+   libc-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   ...
+   obj:*/libc.so*
+}
+
+{
+   libdl-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   obj:*/libdl.so*
+}

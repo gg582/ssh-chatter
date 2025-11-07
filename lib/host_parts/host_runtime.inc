@@ -2468,7 +2468,8 @@ static void *host_telnet_thread(void *arg)
 
     atomic_store(&host->telnet.running, true);
 
-    while (!atomic_load(&host->telnet.stop)) {
+    while (!atomic_load(&host->telnet.stop) && 
+           (host->shutdown_flag == NULL || *host->shutdown_flag == 0)) {
         if (host->telnet.fd < 0) {
             int fd = host_telnet_open_socket(host);
             if (fd < 0) {
@@ -2494,7 +2495,8 @@ static void *host_telnet_thread(void *arg)
             if (accept_error == EINTR) {
                 continue;
             }
-            if (atomic_load(&host->telnet.stop)) {
+            if (atomic_load(&host->telnet.stop) || 
+                (host->shutdown_flag != NULL && *host->shutdown_flag != 0)) {
                 break;
             }
 
@@ -2620,7 +2622,8 @@ static void *host_telnet_thread(void *arg)
             continue;
         }
 
-        if (atomic_load(&host->telnet.stop)) {
+        if (atomic_load(&host->telnet.stop) || 
+            (host->shutdown_flag != NULL && *host->shutdown_flag != 0)) {
             close(client_fd);
             break;
         }
@@ -4380,7 +4383,7 @@ int host_serve(host_t *host, const char *bind_addr, const char *port,
     const size_t host_key_count =
         sizeof(host_key_definitions) / sizeof(host_key_definitions[0]);
 
-    while (true) {
+    while (host->shutdown_flag == NULL || *host->shutdown_flag == 0) {
         ssh_bind bind_handle = ssh_bind_new();
         if (bind_handle == NULL) {
             humanized_log_error("host", "failed to allocate ssh_bind", ENOMEM);
@@ -4519,7 +4522,8 @@ int host_serve(host_t *host, const char *bind_addr, const char *port,
         host_error_guard_register_success(host);
 
         bool restart_listener = false;
-        while (!restart_listener) {
+        while (!restart_listener && (host->shutdown_flag == NULL || 
+                                     *host->shutdown_flag == 0)) {
             ssh_session session = ssh_new();
             if (session == NULL) {
                 humanized_log_error("host", "failed to allocate session",
