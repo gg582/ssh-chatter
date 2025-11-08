@@ -2468,7 +2468,7 @@ static void *host_telnet_thread(void *arg)
 
     atomic_store(&host->telnet.running, true);
 
-    while (!atomic_load(&host->telnet.stop) && 
+    while (!atomic_load(&host->telnet.stop) &&
            (host->shutdown_flag == NULL || *host->shutdown_flag == 0)) {
         if (host->telnet.fd < 0) {
             int fd = host_telnet_open_socket(host);
@@ -2495,7 +2495,7 @@ static void *host_telnet_thread(void *arg)
             if (accept_error == EINTR) {
                 continue;
             }
-            if (atomic_load(&host->telnet.stop) || 
+            if (atomic_load(&host->telnet.stop) ||
                 (host->shutdown_flag != NULL && *host->shutdown_flag != 0)) {
                 break;
             }
@@ -2622,7 +2622,7 @@ static void *host_telnet_thread(void *arg)
             continue;
         }
 
-        if (atomic_load(&host->telnet.stop) || 
+        if (atomic_load(&host->telnet.stop) ||
             (host->shutdown_flag != NULL && *host->shutdown_flag != 0)) {
             close(client_fd);
             break;
@@ -4522,8 +4522,8 @@ int host_serve(host_t *host, const char *bind_addr, const char *port,
         host_error_guard_register_success(host);
 
         bool restart_listener = false;
-        while (!restart_listener && (host->shutdown_flag == NULL || 
-                                     *host->shutdown_flag == 0)) {
+        while (!restart_listener &&
+               (host->shutdown_flag == NULL || *host->shutdown_flag == 0)) {
             ssh_session session = ssh_new();
             if (session == NULL) {
                 humanized_log_error("host", "failed to allocate session",
@@ -4535,10 +4535,11 @@ int host_serve(host_t *host, const char *bind_addr, const char *port,
                 const int accept_error = errno;
                 const char *bind_error = ssh_get_error(bind_handle);
 
-                printf("[listener] accept failed, error=%d, shutdown_flag=%p value=%d\n",
-                       accept_error,
-                       (void*)host->shutdown_flag,
-                       (host->shutdown_flag != NULL ? *host->shutdown_flag : -1));
+                printf(
+                    "[listener] accept failed, error=%d, shutdown_flag=%p "
+                    "value=%d\n",
+                    accept_error, (void *)host->shutdown_flag,
+                    (host->shutdown_flag != NULL ? *host->shutdown_flag : -1));
                 fflush(stdout);
 
                 if (accept_error != 0) {
@@ -4646,15 +4647,16 @@ int host_serve(host_t *host, const char *bind_addr, const char *port,
                     };
                     host_sleep_uninterruptible(&retry_delay);
                 }
-                
+
                 // Check shutdown flag after non-fatal errors (e.g., EINTR from signal)
                 if (host->shutdown_flag != NULL && *host->shutdown_flag != 0) {
-                    printf("[listener] detected shutdown flag after socket error, "
-                           "breaking from accept loop\n");
+                    printf(
+                        "[listener] detected shutdown flag after socket error, "
+                        "breaking from accept loop\n");
                     restart_listener = true;
                     break;
                 }
-                
+
                 continue;
             }
 
@@ -4851,7 +4853,8 @@ int host_serve(host_t *host, const char *bind_addr, const char *port,
 
         // Check for shutdown signal before deciding to restart
         if (host->shutdown_flag != NULL && *host->shutdown_flag != 0) {
-            printf("[listener] shutdown signal received, exiting listener loop\n");
+            printf(
+                "[listener] shutdown signal received, exiting listener loop\n");
             break;
         }
 

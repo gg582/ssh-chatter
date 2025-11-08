@@ -632,11 +632,13 @@ static void session_handle_suspicious_first_message(session_ctx_t *ctx,
         (void)host_history_remove_join_entry(host, ctx->user.name);
         const char *ban_ip = (ip != NULL) ? ip : "";
         if (host_add_ban_entry(host, ctx->user.name, ban_ip)) {
-            printf("\033[1G[[security] permanently banned %s (%s) for suspicious first "
+            printf("\033[1G[[security] permanently banned %s (%s) for "
+                   "suspicious first "
                    "message\n",
                    ctx->user.name, address);
         } else {
-            printf("\033[1G[[security] unable to record permanent ban for %s (%s)\n",
+            printf("\033[1G[[security] unable to record permanent ban for %s "
+                   "(%s)\n",
                    ctx->user.name, address);
         }
 
@@ -651,26 +653,30 @@ static void session_handle_suspicious_first_message(session_ctx_t *ctx,
             }
 
             char notification[USER_DATA_MAILBOX_MESSAGE_LEN];
-            snprintf(notification, sizeof(notification),
-                     "\033[1G[Suspicious first message ban: [%s] from %s sent '%s'.",
-                     ctx->user.name, address,
-                     trimmed[0] != '\0' ? trimmed : "(empty)");
+            snprintf(
+                notification, sizeof(notification),
+                "\033[1G[Suspicious first message ban: [%s] from %s sent '%s'.",
+                ctx->user.name, address,
+                trimmed[0] != '\0' ? trimmed : "(empty)");
 
             char mail_error[128];
             if (!host_user_data_send_mail(
                     host, admin_user, admin_ip[0] != '\0' ? admin_ip : NULL,
                     "system", notification, mail_error, sizeof(mail_error))) {
                 if (mail_error[0] != '\0') {
-                    printf("\033[1G[[mail] failed to notify %s about suspicious first "
+                    printf("\033[1G[[mail] failed to notify %s about "
+                           "suspicious first "
                            "message: %s\n",
                            admin_user, mail_error);
                 } else {
-                    printf("\033[1G[[mail] failed to notify %s about suspicious first "
+                    printf("\033[1G[[mail] failed to notify %s about "
+                           "suspicious first "
                            "message\n",
                            admin_user);
                 }
             } else {
-                printf("\033[1G[[mail] notified %s about suspicious first message from "
+                printf("\033[1G[[mail] notified %s about suspicious first "
+                       "message from "
                        "%s\n",
                        admin_user, ctx->user.name);
             }
@@ -680,8 +686,9 @@ static void session_handle_suspicious_first_message(session_ctx_t *ctx,
     ctx->user_data_loaded = false;
     memset(&ctx->user_data, 0, sizeof(ctx->user_data));
 
-    session_force_disconnect(ctx, "\033[1G[Suspicious command activity detected. You "
-                                  "have been permanently banned.");
+    session_force_disconnect(
+        ctx, "\033[1G[Suspicious command activity detected. You "
+             "have been permanently banned.");
 }
 
 static bool session_detect_provider_ip(const char *ip, char *label,
@@ -877,16 +884,18 @@ static void session_blocklist_show(session_ctx_t *ctx)
         char line[SSH_CHATTER_MESSAGE_LIMIT];
         if (entry->ip_wide && entry->ip[0] != '\0') {
             if (entry->username[0] != '\0') {
-                snprintf(line, sizeof(line),
-                         "\033[1G[- %s (all users from this IP, originally [%s])",
-                         entry->ip, entry->username);
+                snprintf(
+                    line, sizeof(line),
+                    "\033[1G[- %s (all users from this IP, originally [%s])",
+                    entry->ip, entry->username);
             } else {
-                snprintf(line, sizeof(line), "\033[1G[- %s (all users from this IP)",
-                         entry->ip);
+                snprintf(line, sizeof(line),
+                         "\033[1G[- %s (all users from this IP)", entry->ip);
             }
         } else if (entry->username[0] != '\0') {
             if (entry->ip[0] != '\0') {
-                snprintf(line, sizeof(line), "\033[1G[- [%s] (only this user, IP %s)",
+                snprintf(line, sizeof(line),
+                         "\033[1G[- [%s] (only this user, IP %s)",
                          entry->username, entry->ip);
             } else {
                 snprintf(line, sizeof(line), "\033[1G[- [%s]", entry->username);
@@ -1247,7 +1256,8 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message)
     }
 
     char prefixed_message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(prefixed_message, sizeof(prefixed_message), "\033[1G+ %s", message);
+    snprintf(prefixed_message, sizeof(prefixed_message), "\033[1G+ %s",
+             message);
 
     session_send_plain_line(ctx, prefixed_message);
 }
@@ -1408,18 +1418,19 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post,
     }
 
     char title_line[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(title_line, sizeof(title_line), "\033[1G#%" PRIu64 ": %s", post->id,
-             post->title);
+    snprintf(title_line, sizeof(title_line), "\033[1G#%" PRIu64 ": %s",
+             post->id, post->title);
 
     char author_line[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(author_line, sizeof(author_line), "\033[1GAuthor: %s", post->author);
+    snprintf(author_line, sizeof(author_line), "\033[1GAuthor: %s",
+             post->author);
 
     char created_line[SSH_CHATTER_MESSAGE_LIMIT];
     time_t created = (time_t)post->created_at;
     struct tm created_tm;
     localtime_r(&created, &created_tm);
-    strftime(created_line, sizeof(created_line), "\033[1GCreated: %Y-%m-%d %H:%M:%S",
-             &created_tm);
+    strftime(created_line, sizeof(created_line),
+             "\033[1GCreated: %Y-%m-%d %H:%M:%S", &created_tm);
 
     char bumped_line[SSH_CHATTER_MESSAGE_LIMIT];
     time_t bumped = (time_t)post->bumped_at;

@@ -17,7 +17,6 @@
 #include <string.h>
 #include <stdbool.h>
 
-
 #include <locale.h>
 #include <time.h>
 #include <signal.h>
@@ -98,7 +97,8 @@ int main(int argc, char **argv)
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = signal_handler;
-    sa.sa_flags = 0;  // Do NOT use SA_RESTART - we want signals to interrupt accept()
+    sa.sa_flags =
+        0; // Do NOT use SA_RESTART - we want signals to interrupt accept()
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
