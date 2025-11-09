@@ -3174,8 +3174,7 @@ static void session_send_history_entry(session_ctx_t *ctx,
         const char *bold = entry->user_is_bold ? ANSI_BOLD : "";
 
         char name_block[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(name_block, sizeof(name_block), "\033[1G%s%s%s%s", color, bold,
-                 entry->username, ANSI_RESET);
+        snprintf(name_block, sizeof(name_block), "\033[1G%s%s[%s] <%lu>%s", color, bold, entry->username, entry->message_id, ANSI_RESET);
         strncat(formatted, name_block,
                 sizeof(formatted) - strlen(formatted) - 1U);
 
