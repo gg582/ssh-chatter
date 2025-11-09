@@ -4,6 +4,7 @@
 #include "lib/ssh_chatter_sync.h"
 #include "lib/headers/user_data.h"
 #include "lib/headers/memory_manager.h"
+#include "lib/headers/translator.h"
 
 #include <libssh/libssh.h>
 
@@ -432,4 +433,5 @@ int main(int argc, char **argv)
             sleep_before_restart(restart_attempts);
         }
     }
+    translator_global_cleanup();
 }

@@ -955,6 +955,16 @@ void translator_global_init(void)
     pthread_mutex_unlock(&g_init_mutex);
 }
 
+void translator_global_cleanup(void)
+{
+    pthread_mutex_lock(&g_init_mutex);
+    if (g_curl_initialised) {
+        curl_global_cleanup();
+        g_curl_initialised = false;
+    }
+    pthread_mutex_unlock(&g_init_mutex);
+}
+
 static size_t translator_write_callback(void *contents, size_t size,
                                         size_t nmemb, void *userp)
 {
@@ -1886,6 +1896,12 @@ static bool translator_try_gemini(const translator_candidate_t *candidate,
         }
     }
 
+    if (stream_buffer.data != NULL) {
+        free(stream_buffer.data);
+    }
+    if (buffer.data != NULL) {
+        free(buffer.data);
+    }
     curl_easy_cleanup(curl);
 
     return success;
@@ -2080,6 +2096,9 @@ static bool translator_try_gemini_eliza(const translator_candidate_t *candidate,
         }
     }
 
+    if (buffer.data != NULL) {
+        free(buffer.data);
+    }
     curl_easy_cleanup(curl);
 
     return success;
@@ -2242,6 +2261,9 @@ translator_try_gemini_moderation(const translator_candidate_t *candidate,
         }
     }
 
+    if (buffer.data != NULL) {
+        free(buffer.data);
+    }
     curl_easy_cleanup(curl);
 
     return success;
@@ -2420,6 +2442,9 @@ static bool translator_try_ollama(const translator_candidate_t *candidate,
         }
     }
 
+    if (buffer.data != NULL) {
+        free(buffer.data);
+    }
     curl_easy_cleanup(curl);
 
     return success;
@@ -2547,6 +2572,9 @@ static bool translator_try_ollama_eliza(const translator_candidate_t *candidate,
         }
     }
 
+    if (buffer.data != NULL) {
+        free(buffer.data);
+    }
     curl_easy_cleanup(curl);
 
     return success;
@@ -2698,6 +2726,9 @@ translator_try_ollama_moderation(const translator_candidate_t *candidate,
         }
     }
 
+    if (buffer.data != NULL) {
+        free(buffer.data);
+    }
     curl_easy_cleanup(curl);
 
     return success;

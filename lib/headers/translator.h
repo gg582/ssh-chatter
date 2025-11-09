@@ -6,6 +6,7 @@
 #include <time.h>
 
 void translator_global_init(void);
+void translator_global_cleanup(void);
 
 bool translator_translate(const char *text, const char *target_language,
                           char *translation, size_t translation_len,
