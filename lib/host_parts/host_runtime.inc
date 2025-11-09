@@ -94,9 +94,9 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments)
             static char palette_line_group[SSH_CHATTER_MESSAGE_LIMIT * 16];
             if (descriptor->is_256_color) {
                 snprintf(palette_line, sizeof(palette_line),
-                         "  %s - %s (256-color)", name, description);
+                         "\033[1G  %s\n\033[1G   - %s (256-color)\n", name, description);
             } else {
-                snprintf(palette_line, sizeof(palette_line), "  %s - %s", name,
+                snprintf(palette_line, sizeof(palette_line), "\033[1G  %s\n\033[1G   - %s\n", name,
                          description);
             }
             strncat(palette_line_group, palette_line,
