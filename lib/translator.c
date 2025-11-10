@@ -420,8 +420,6 @@ static int translator_progress_abort(void *clientp, curl_off_t dltotal,
     return translator_cancel_requested((const volatile bool *)clientp) ? 1 : 0;
 }
 
-
-
 static void
 translator_configure_cancel_callback(CURL *curl,
                                      const volatile bool *cancel_flag)

@@ -94,10 +94,11 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments)
             static char palette_line_group[SSH_CHATTER_MESSAGE_LIMIT * 16];
             if (descriptor->is_256_color) {
                 snprintf(palette_line, sizeof(palette_line),
-                         "\033[1G  %s\033[1G\n   - %s (256-color)\n", name, description);
-            } else {
-                snprintf(palette_line, sizeof(palette_line), "\033[1G  %s\033[1G\n   - %s\n", name,
+                         "\033[1G  %s\033[1G\n   - %s (256-color)\n", name,
                          description);
+            } else {
+                snprintf(palette_line, sizeof(palette_line),
+                         "\033[1G  %s\033[1G\n   - %s\n", name, description);
             }
             strncat(palette_line_group, palette_line,
                     strnlen(palette_line, SSH_CHATTER_MESSAGE_LIMIT));
@@ -2995,7 +2996,8 @@ static void *session_thread(void *arg)
     if (existing != NULL && !banned_username && !reserved_username) {
         if (strcmp(existing->client_ip, ctx->client_ip) == 0) {
             should_kick_existing = true;
-            printf("[reconnect] same IP+nickname detected: %s from %s, kicking existing session\n",
+            printf("[reconnect] same IP+nickname detected: %s from %s, kicking "
+                   "existing session\n",
                    ctx->user.name, ctx->client_ip);
         }
     }
@@ -3004,13 +3006,15 @@ static void *session_thread(void *arg)
         // Kick the existing session
         char kick_message[SSH_CHATTER_MESSAGE_LIMIT];
         snprintf(kick_message, sizeof(kick_message),
-                 "You have been disconnected because a new connection from the same IP is joining.");
+                 "You have been disconnected because a new connection from the "
+                 "same IP is joining.");
         session_force_disconnect(existing, kick_message);
-        
+
         // Wait a moment for the disconnect to process
-        struct timespec disconnect_delay = {.tv_sec = 0, .tv_nsec = 100000000L}; // 100ms
+        struct timespec disconnect_delay = {.tv_sec = 0,
+                                            .tv_nsec = 100000000L}; // 100ms
         nanosleep(&disconnect_delay, NULL);
-        
+
         // Clear the existing reference as it's being disconnected
         existing = NULL;
     }
