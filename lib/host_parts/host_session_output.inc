@@ -3196,6 +3196,17 @@ static void session_send_history_entry(session_ctx_t *ctx,
         } else {
             session_send_plain_line(ctx, formatted);
         }
+
+        // Display attachment URL if present, similar to reply format
+        if (entry->attachment_type != CHAT_ATTACHMENT_NONE &&
+            entry->attachment_target[0] != '\0') {
+            const char *label = chat_attachment_type_label(entry->attachment_type);
+            char attachment_line[SSH_CHATTER_MESSAGE_LIMIT + 160];
+            snprintf(attachment_line, sizeof(attachment_line), "    (%s) %s", 
+                     label, entry->attachment_target);
+            session_send_plain_line(ctx, attachment_line);
+        }
+
         return;
     }
 
