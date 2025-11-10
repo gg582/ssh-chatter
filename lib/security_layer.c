@@ -644,7 +644,96 @@ bool security_layer_decrypt_message(const security_layer_t *layer,
     }
     plaintext[current_len] = '\0';
 
-    OPENSSL_cleanse(current_cipher, current_len);
-    free(current_cipher);
-    return true;
-}
+        OPENSSL_cleanse(current_cipher, current_len);
+
+        free(current_cipher);
+
+        return true;
+
+    }
+
+    
+
+    void security_layer_generate_salt(uint8_t *salt) {
+
+        if (salt == NULL) {
+
+            return;
+
+        }
+
+        RAND_bytes(salt, 16);
+
+    }
+
+    
+
+    void security_layer_hash_password(const char *password, const uint8_t *salt,
+
+                                      uint8_t *hash_output) {
+
+        if (password == NULL || salt == NULL || hash_output == NULL) {
+
+            return;
+
+        }
+
+    
+
+        EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+
+        if (mdctx == NULL) {
+
+            return;
+
+        }
+
+    
+
+        if (EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL) != 1) {
+
+            EVP_MD_CTX_free(mdctx);
+
+            return;
+
+        }
+
+    
+
+        if (EVP_DigestUpdate(mdctx, salt, 16) != 1) {
+
+            EVP_MD_CTX_free(mdctx);
+
+            return;
+
+        }
+
+    
+
+        if (EVP_DigestUpdate(mdctx, password, strlen(password)) != 1) {
+
+            EVP_MD_CTX_free(mdctx);
+
+            return;
+
+        }
+
+    
+
+        unsigned int digest_len;
+
+        if (EVP_DigestFinal_ex(mdctx, hash_output, &digest_len) != 1 || digest_len != 32) {
+
+            EVP_MD_CTX_free(mdctx);
+
+            return;
+
+        }
+
+    
+
+        EVP_MD_CTX_free(mdctx);
+
+    }
+
+    

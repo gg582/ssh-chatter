@@ -2114,6 +2114,8 @@ static bool session_parse_birthday(const char *input, char *normalized,
                                    size_t length);
 static void session_handle_birthday(session_ctx_t *ctx, const char *arguments);
 static void session_handle_soulmate(session_ctx_t *ctx);
+static void session_handle_setpw(session_ctx_t *ctx, const char *arguments);
+static void session_handle_delpw(session_ctx_t *ctx, const char *arguments);
 static void session_handle_grant(session_ctx_t *ctx, const char *arguments);
 static void session_handle_revoke(session_ctx_t *ctx, const char *arguments);
 static void session_handle_delete_message(session_ctx_t *ctx,

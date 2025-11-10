@@ -64,7 +64,9 @@ typedef struct user_data_record {
     uint64_t last_updated;
     char ssh_chat_server_url[SSH_CHAT_SERVER_URL_LEN];
     uint16_t ssh_chat_server_port;
-    uint8_t reserved[64];
+    uint8_t password_salt[16];
+    uint8_t password_hash[32];
+    uint8_t reserved[16];
 } user_data_record_t;
 
 bool user_data_sanitize_username(const char *username, char *sanitized,

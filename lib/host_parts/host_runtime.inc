@@ -1240,6 +1240,12 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line)
             session_handle_soulmate(ctx);
         }
         return;
+    } else if (session_parse_command_any(ctx, "/setpw", effective_line, &args)) {
+        session_handle_setpw(ctx, args);
+        return;
+    } else if (session_parse_command_any(ctx, "/delpw", effective_line, &args)) {
+        session_handle_delpw(ctx, args);
+        return;
     } else if (session_parse_command_any(ctx, "/grant", effective_line,
                                          &args)) {
         session_handle_grant(ctx, args);

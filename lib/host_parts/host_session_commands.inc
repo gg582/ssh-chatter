@@ -1,4 +1,5 @@
 #include "../ssh_chatter_sync.h"
+#include "../headers/security_layer.h"
 // Command handlers for chat interactions, media, and user utilities.
 
 static void session_handle_reply(session_ctx_t *ctx, const char *arguments)
@@ -1356,6 +1357,119 @@ static void session_handle_soulmate(session_ctx_t *ctx)
 
     session_send_system_line(ctx, "Birthday soulmates:");
     session_send_system_line(ctx, matches);
+}
+
+static void session_handle_setpw(session_ctx_t *ctx, const char *arguments) {
+    if (ctx == NULL || ctx->owner == NULL) {
+        return;
+    }
+
+    if (arguments == NULL || arguments[0] == '\0') {
+        session_send_system_line(ctx, "Usage: /setpw <password>");
+        return;
+    }
+
+    if (strlen(arguments) > 128) {
+        session_send_system_line(ctx, "Password is too long (max 128 characters).");
+        return;
+    }
+
+    if (!session_user_data_load(ctx)) {
+        session_send_system_line(ctx, "Unable to load user data.");
+        return;
+    }
+
+    security_layer_generate_salt(ctx->user_data.password_salt);
+    security_layer_hash_password(arguments, ctx->user_data.password_salt, ctx->user_data.password_hash);
+
+    if (session_user_data_commit(ctx)) {
+        session_send_system_line(ctx, "Password set successfully.");
+    } else {
+        session_send_system_line(ctx, "Failed to save password.");
+    }
+}
+
+static void session_handle_delpw(session_ctx_t *ctx, const char *arguments) {
+    if (ctx == NULL || ctx->owner == NULL) {
+        return;
+    }
+
+    char target_user[SSH_CHATTER_USERNAME_LEN];
+    bool self_delete = (arguments == NULL || arguments[0] == '\0' || strcasecmp(arguments, ctx->user.name) == 0);
+
+    if (self_delete) {
+        snprintf(target_user, sizeof(target_user), "%s", ctx->user.name);
+    } else {
+        snprintf(target_user, sizeof(target_user), "%s", arguments);
+        trim_whitespace_inplace(target_user);
+    }
+
+    if (!self_delete && !ctx->user.is_operator && !ctx->user.is_lan_operator) {
+        session_send_system_line(ctx, "Only operators may remove other users' passwords.");
+        return;
+    }
+
+    user_data_record_t user_data;
+    bool data_loaded = false;
+    if (self_delete) {
+        if (session_user_data_load(ctx)) {
+            user_data = ctx->user_data;
+            data_loaded = true;
+        }
+    } else {
+        data_loaded = host_user_data_load_existing(ctx->owner, target_user, NULL, &user_data, false);
+    }
+
+    if (!data_loaded) {
+        if (self_delete) {
+            session_send_system_line(ctx, "Unable to load your user data.");
+        } else {
+            session_send_system_line(ctx, "User not found.");
+        }
+        return;
+    }
+
+    bool was_set = false;
+    for (size_t i = 0; i < sizeof(user_data.password_hash); ++i) {
+        if (user_data.password_hash[i] != 0) {
+            was_set = true;
+            break;
+        }
+    }
+
+    if (!was_set) {
+        if (self_delete) {
+            session_send_system_line(ctx, "You do not have a password set.");
+        } else {
+            char message[SSH_CHATTER_MESSAGE_LIMIT];
+            snprintf(message, sizeof(message), "User %s does not have a password set.", target_user);
+            session_send_system_line(ctx, message);
+        }
+        return;
+    }
+
+    memset(user_data.password_salt, 0, sizeof(user_data.password_salt));
+    memset(user_data.password_hash, 0, sizeof(user_data.password_hash));
+
+    bool success;
+    if (self_delete) {
+        ctx->user_data = user_data;
+        success = session_user_data_commit(ctx);
+    } else {
+        success = user_data_save(ctx->owner->user_data_root, &user_data, user_data.last_ip);
+    }
+
+    if (success) {
+        if (self_delete) {
+            session_send_system_line(ctx, "Your password has been removed.");
+        } else {
+            char message[SSH_CHATTER_MESSAGE_LIMIT];
+            snprintf(message, sizeof(message), "Password for %s has been removed.", target_user);
+            session_send_system_line(ctx, message);
+        }
+    } else {
+        session_send_system_line(ctx, "Failed to remove password.");
+    }
 }
 
 static void session_handle_grant(session_ctx_t *ctx, const char *arguments)

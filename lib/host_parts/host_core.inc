@@ -1395,6 +1395,7 @@ static const char *const kSessionCommandNames[] = {
     "revoke",
     "rss",
     "search",
+    "setpw",
     "set-target-lang",
     "set-trans-lang",
     "set-ui-lang",
@@ -2330,6 +2331,16 @@ static const session_command_alias_t kSessionCommandAliases[] = {
     {
         .canonical = "/set-sync-url",
     },
+    {
+        .canonical = "/setpw",
+        .localized =
+            {
+                [SESSION_UI_LANGUAGE_KO] = "/비밀번호설정",
+                [SESSION_UI_LANGUAGE_JP] = "/パスワード設定",
+                [SESSION_UI_LANGUAGE_ZH] = "/设置密码",
+                [SESSION_UI_LANGUAGE_RU] = "/установить-пароль",
+            },
+    },
 };
 
 static const size_t kSessionCommandAliasCount =
@@ -2488,6 +2499,44 @@ static const session_help_entry_t kSessionHelpEssential[] = {
                 [SESSION_UI_LANGUAGE_JP] = "/ニックネ <ネーム>",
                 [SESSION_UI_LANGUAGE_ZH] = "/昵称 <网名>",
                 [SESSION_UI_LANGUAGE_RU] = "/ник <имя>",
+            },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "setpw <password>",
+        .description =
+            {
+                "Set a password for your nickname.",
+                "닉네임에 비밀번호를 설정합니다.",
+                "ニックネームにパスワードを設定します。",
+                "为你的昵称设置密码。",
+                "Установить пароль для вашего ника.",
+            },
+        .label_translations =
+            {
+                [SESSION_UI_LANGUAGE_KO] = "비밀번호설정 <비밀번호>",
+                [SESSION_UI_LANGUAGE_JP] = "パスワード設定 <パスワード>",
+                [SESSION_UI_LANGUAGE_ZH] = "设置密码 <密码>",
+                [SESSION_UI_LANGUAGE_RU] = "установить-пароль <пароль>",
+            },
+    },
+    {
+        .kind = SESSION_HELP_ENTRY_COMMAND,
+        .label = "delpw [username]",
+        .description =
+            {
+                "Remove your nickname's password, or another user's (operator only).",
+                "닉네임 비밀번호를 제거하거나, 다른 사용자의 비밀번호를 제거합니다 (운영자 전용).",
+                "ニックネームのパスワードを削除、または他のユーザーのパスワードを削除します（オペレーター専用）。",
+                "删除你的昵称密码，或删除其他用户的密码（仅限管理员）。",
+                "Удалить пароль вашего ника, или другого пользователя (только оператор).",
+            },
+        .label_translations =
+            {
+                [SESSION_UI_LANGUAGE_KO] = "비밀번호삭제 [사용자이름]",
+                [SESSION_UI_LANGUAGE_JP] = "パスワード削除 [ユーザー名]",
+                [SESSION_UI_LANGUAGE_ZH] = "删除密码 [用户名]",
+                [SESSION_UI_LANGUAGE_RU] = "удалить-пароль [имяпользователя]",
             },
     },
     {

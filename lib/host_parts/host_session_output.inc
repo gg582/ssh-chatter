@@ -1555,8 +1555,14 @@ static size_t session_editor_body_capacity(const session_ctx_t *ctx)
 
 static size_t session_editor_max_lines(const session_ctx_t *ctx)
 {
-    if (ctx != NULL && ctx->editor_mode == SESSION_EDITOR_MODE_ASCIIART) {
-        return SSH_CHATTER_ASCIIART_MAX_LINES;
+    if (ctx != NULL) {
+        if (ctx->editor_mode == SESSION_EDITOR_MODE_ASCIIART) {
+            return SSH_CHATTER_ASCIIART_MAX_LINES;
+        }
+        if (ctx->editor_mode == SESSION_EDITOR_MODE_BBS_CREATE ||
+            ctx->editor_mode == SESSION_EDITOR_MODE_BBS_EDIT) {
+            return SSH_CHATTER_BBS_MAX_LINES;
+        }
     }
 
     return SIZE_MAX;

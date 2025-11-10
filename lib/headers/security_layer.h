@@ -26,4 +26,8 @@ bool security_layer_decrypt_message(const security_layer_t *layer,
                                     const char *envelope, char *plaintext,
                                     size_t plaintext_len);
 
+void security_layer_generate_salt(uint8_t *salt);
+void security_layer_hash_password(const char *password, const uint8_t *salt,
+                                  uint8_t *hash_output);
+
 #endif
