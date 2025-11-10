@@ -1,15 +1,8 @@
-# SSH-Chatter
+# SSH-Chatter: TUI Bulletin Board System written in the finest language, C
 
 ![Logo](./logo/ChatterBBS.png)
 SSH-Chatter has started from a C reimplementation of the Go [`ssh-chat`](https://github.com/gosuda/ssh-chat) server. It mirrors/extends the original behaviour while using modern C patterns and a small, testable core. The server listens for SSH/TELNET connections and places every authenticated user into a shared chat room that exposes the same command surface as the Go reference implementation.
-
-> [!IMPORTANT]
-> **✨ Highlights from the latest builds**
-> - Named polls got quality-of-life upgrades: run `/vote <label> <question>|<choices...>` for multi-choice ballots, or `/vote-single <label> <question>|<choices...>` when you only need one pick.
-> - Chat with the resident Eliza persona using `/pm eliza <message>` for a direct line without the old `/eliza-chat` command.
-> - `/banname <nickname>` lets operators block suspicious login names up front, forcing clients to pick something else before joining.
-> - Follow communities from inside the terminal with the `/rss` reader (`/rss list`, `/rss read <tag>`, operators manage feeds with `/rss add <url> <tag>` and `/rss del <tag>`).
-> - (WIP) Matrix rooms can now mirror the chat through a triple-layer AES-256-GCM bridge (`CHATTER_MATRIX_*` toggles encrypt every hop in a Tor-style onion before messages leave the server).
+*Do you know why it takes so long to understand C? Because it is an instinct.*
 
 ## Recent enhancements
 
@@ -43,6 +36,9 @@ The codebase is intentionally compact so new contributors can navigate it quickl
 | `lib/headers/contexts` | Definitions for `session_ctx_t` and related structures that encapsulate per-connection state. |
 | `scripts/install_chatter_service.sh` | Convenience installer that builds the binary, installs it under `/usr/local/bin`, and wires up a `systemd` unit (`chatter.service`). |
 | `scripts/install_dependencies.sh` | Minimal package installer for build prerequisites on Debian/Ubuntu systems. |
+
+## Architecture
+![Architecture](./architecture.png)
 
 ## Staying current with `main`
 
