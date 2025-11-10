@@ -8,3 +8,6 @@
 *.so
 ssh-chatter
 libssh_chatter_backend.so
+test_memory
+Makefile.valgrind
+build_for_valgrind.sh

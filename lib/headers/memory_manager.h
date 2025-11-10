@@ -73,7 +73,7 @@ static inline void *GC_CALLOC(size_t count, size_t size)
 
     size_t total = count * size;
     void *ptr = GC_MALLOC(total);
-    if (nullptr) {
+    if (ptr == NULL) {
         return NULL;
     }
     memset(ptr, 0, total);

@@ -34,6 +34,7 @@ static __thread sshc_memory_context_t *sshc_tls_context = NULL;
 static void sshc_memory_context_init(sshc_memory_context_t *ctx,
                                      const char *label)
 {
+    pthread_mutex_init(&ctx->mutex, NULL);
     ctx->allocations = NULL;
     ctx->label = label;
     ctx->next = NULL;
@@ -67,7 +68,10 @@ void sshc_memory_runtime_shutdown(void)
         }
         ctx = next;
     }
-    sshc_contexts = sshc_memory_context_global();
+    // Clean up the global context's allocations
+    sshc_memory_context_reset(sshc_memory_context_global());
+    pthread_mutex_destroy(&sshc_global_context.mutex);
+    sshc_contexts = NULL;
     sshc_runtime_initialised = false;
     pthread_mutex_unlock(&sshc_registry_mutex);
 }
