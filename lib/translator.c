@@ -420,18 +420,7 @@ static int translator_progress_abort(void *clientp, curl_off_t dltotal,
     return translator_cancel_requested((const volatile bool *)clientp) ? 1 : 0;
 }
 
-#if LIBCURL_VERSION_NUM < 0x072000
-static int translator_progress_abort_legacy(void *clientp, double dltotal,
-                                            double dlnow, double ultotal,
-                                            double ulnow)
-{
-    (void)dltotal;
-    (void)dlnow;
-    (void)ultotal;
-    (void)ulnow;
-    return translator_cancel_requested((const volatile bool *)clientp) ? 1 : 0;
-}
-#endif
+
 
 static void
 translator_configure_cancel_callback(CURL *curl,
@@ -443,24 +432,13 @@ translator_configure_cancel_callback(CURL *curl,
 
     if (cancel_flag != NULL) {
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-#if LIBCURL_VERSION_NUM >= 0x072000
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION,
                          translator_progress_abort);
         curl_easy_setopt(curl, CURLOPT_XFERINFODATA, (void *)cancel_flag);
-#else
-        curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION,
-                         translator_progress_abort_legacy);
-        curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, (void *)cancel_flag);
-#endif
     } else {
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
-#if LIBCURL_VERSION_NUM >= 0x072000
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, NULL);
         curl_easy_setopt(curl, CURLOPT_XFERINFODATA, NULL);
-#else
-        curl_easy_setopt(curl, CURLOPT_PROGRESSFUNCTION, NULL);
-        curl_easy_setopt(curl, CURLOPT_PROGRESSDATA, NULL);
-#endif
     }
 }
 
