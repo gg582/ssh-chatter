@@ -1,0 +1,125 @@
+@startuml
+title ssh-chatter Core Architecture
+
+' Actors
+class Client <<actor>>
+class RSSFeedServer <<actor>>
+
+' Entry
+class Main {
+  +init_config()
+  +load_motd()
+  +start_servers()
+}
+
+' Network entry points
+class SSHServer {
+  +listen()
+  +accept()
+}
+class TelnetServer {
+  +listen()
+  +accept()
+}
+
+' Core hub
+class Host {
+  +add_session(sc: SessionContext)
+  +remove_session(sc: SessionContext)
+  +broadcast(msg: Message)
+  sessions : List<SessionContext>
+}
+
+' Per-connection state
+class SessionContext {
+  +read_loop()
+  +write(msg: Message)
+  nickname : string
+  authenticated : bool
+  transport_handle : Handle
+  buffer_in : Buffer
+  buffer_out : Buffer
+}
+
+' Message system
+class MessageBus {
+  +enqueue(msg: Message, from: SessionContext)
+  +dispatch()
+  queue : Queue<Message>
+}
+class Message {
+  content : string
+  from : SessionContext
+  timestamp : Time
+}
+
+' Commands & features
+class CommandProcessor {
+  +handle(msg: Message, session: SessionContext)
+  commands : Map<string, Function>
+}
+
+class VoteSystem {
+  +vote_up(key: string)
+  +vote_down(key: string)
+  +get_results() : Result
+}
+
+class RSSFetcher {
+  +fetch_feed(url: string) : Feed
+}
+
+class BBS {
+  +load_posts() : List<Post>
+  +save_post(p: Post)
+}
+
+class AsciiArt {
+  +render(mode: string) : string
+}
+
+' Logging
+class Logger {
+  +info(msg: string)
+  +warn(msg: string)
+  +error(msg: string)
+}
+
+' Relations
+Client --> SSHServer : SSH connect
+Client --> TelnetServer : Telnet connect
+
+Main --> SSHServer
+Main --> TelnetServer
+
+SSHServer --> Host
+TelnetServer --> Host
+
+Host --> SessionContext : create/manage
+SessionContext --> Host : deregister
+
+SessionContext --> MessageBus : send
+MessageBus --> Host : dispatch
+Host --> SessionContext : deliver
+
+SessionContext --> CommandProcessor : "/command"
+CommandProcessor --> Host : state/broadcast
+
+CommandProcessor --> VoteSystem
+CommandProcessor --> RSSFetcher
+CommandProcessor --> BBS
+CommandProcessor --> AsciiArt
+
+Main --> Logger
+Host --> Logger
+SessionContext --> Logger
+CommandProcessor --> Logger
+
+' === External RSS Interaction ===
+RSSFetcher --> RSSFeedServer : HTTP GET (libcurl)
+
+note right of RSSFetcher
+uses libcurl
+pulls XML/Atom/JSON feeds
+end note
+@enduml
