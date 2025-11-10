@@ -433,5 +433,12 @@ int main(int argc, char **argv)
             sleep_before_restart(restart_attempts);
         }
     }
+    
+    // Cleanup before exit
+    ssh_chatter_sync_stop();
+    ssh_chatter_sync_free_history();
     translator_global_cleanup();
+    sshc_memory_runtime_shutdown();
+    
+    return EXIT_SUCCESS;
 }
