@@ -136,6 +136,20 @@ static void session_handle_reply(session_ctx_t *ctx, const char *arguments)
         return;
     }
 
+    // Add reply to chat history
+    const char *target_prefix = (stored.parent_reply_id == 0U) ? "#" : "r#";
+    uint64_t target_id = (stored.parent_reply_id == 0U)
+                             ? stored.parent_message_id
+                             : stored.parent_reply_id;
+    
+    char reply_message[SSH_CHATTER_MESSAGE_LIMIT + 160];
+    snprintf(reply_message, sizeof(reply_message), 
+             "↳ [r#%" PRIu64 " → %s%" PRIu64 "] %s: %s",
+             stored.reply_id, target_prefix, target_id, 
+             stored.username, stored.message);
+    
+    host_history_record_system(ctx->owner, reply_message);
+
     host_broadcast_reply(ctx->owner, &stored);
 }
 
