@@ -1359,7 +1359,8 @@ static void session_handle_soulmate(session_ctx_t *ctx)
     session_send_system_line(ctx, matches);
 }
 
-static void session_handle_setpw(session_ctx_t *ctx, const char *arguments) {
+static void session_handle_setpw(session_ctx_t *ctx, const char *arguments)
+{
     if (ctx == NULL || ctx->owner == NULL) {
         return;
     }
@@ -1370,7 +1371,8 @@ static void session_handle_setpw(session_ctx_t *ctx, const char *arguments) {
     }
 
     if (strlen(arguments) > 128) {
-        session_send_system_line(ctx, "Password is too long (max 128 characters).");
+        session_send_system_line(ctx,
+                                 "Password is too long (max 128 characters).");
         return;
     }
 
@@ -1380,7 +1382,8 @@ static void session_handle_setpw(session_ctx_t *ctx, const char *arguments) {
     }
 
     security_layer_generate_salt(ctx->user_data.password_salt);
-    security_layer_hash_password(arguments, ctx->user_data.password_salt, ctx->user_data.password_hash);
+    security_layer_hash_password(arguments, ctx->user_data.password_salt,
+                                 ctx->user_data.password_hash);
 
     if (session_user_data_commit(ctx)) {
         session_send_system_line(ctx, "Password set successfully.");
@@ -1389,13 +1392,15 @@ static void session_handle_setpw(session_ctx_t *ctx, const char *arguments) {
     }
 }
 
-static void session_handle_delpw(session_ctx_t *ctx, const char *arguments) {
+static void session_handle_delpw(session_ctx_t *ctx, const char *arguments)
+{
     if (ctx == NULL || ctx->owner == NULL) {
         return;
     }
 
     char target_user[SSH_CHATTER_USERNAME_LEN];
-    bool self_delete = (arguments == NULL || arguments[0] == '\0' || strcasecmp(arguments, ctx->user.name) == 0);
+    bool self_delete = (arguments == NULL || arguments[0] == '\0' ||
+                        strcasecmp(arguments, ctx->user.name) == 0);
 
     if (self_delete) {
         snprintf(target_user, sizeof(target_user), "%s", ctx->user.name);
@@ -1405,7 +1410,8 @@ static void session_handle_delpw(session_ctx_t *ctx, const char *arguments) {
     }
 
     if (!self_delete && !ctx->user.is_operator && !ctx->user.is_lan_operator) {
-        session_send_system_line(ctx, "Only operators may remove other users' passwords.");
+        session_send_system_line(
+            ctx, "Only operators may remove other users' passwords.");
         return;
     }
 
@@ -1417,7 +1423,8 @@ static void session_handle_delpw(session_ctx_t *ctx, const char *arguments) {
             data_loaded = true;
         }
     } else {
-        data_loaded = host_user_data_load_existing(ctx->owner, target_user, NULL, &user_data, false);
+        data_loaded = host_user_data_load_existing(ctx->owner, target_user,
+                                                   NULL, &user_data, false);
     }
 
     if (!data_loaded) {
@@ -1442,7 +1449,8 @@ static void session_handle_delpw(session_ctx_t *ctx, const char *arguments) {
             session_send_system_line(ctx, "You do not have a password set.");
         } else {
             char message[SSH_CHATTER_MESSAGE_LIMIT];
-            snprintf(message, sizeof(message), "User %s does not have a password set.", target_user);
+            snprintf(message, sizeof(message),
+                     "User %s does not have a password set.", target_user);
             session_send_system_line(ctx, message);
         }
         return;
@@ -1456,7 +1464,8 @@ static void session_handle_delpw(session_ctx_t *ctx, const char *arguments) {
         ctx->user_data = user_data;
         success = session_user_data_commit(ctx);
     } else {
-        success = user_data_save(ctx->owner->user_data_root, &user_data, user_data.last_ip);
+        success = user_data_save(ctx->owner->user_data_root, &user_data,
+                                 user_data.last_ip);
     }
 
     if (success) {
@@ -1464,7 +1473,8 @@ static void session_handle_delpw(session_ctx_t *ctx, const char *arguments) {
             session_send_system_line(ctx, "Your password has been removed.");
         } else {
             char message[SSH_CHATTER_MESSAGE_LIMIT];
-            snprintf(message, sizeof(message), "Password for %s has been removed.", target_user);
+            snprintf(message, sizeof(message),
+                     "Password for %s has been removed.", target_user);
             session_send_system_line(ctx, message);
         }
     } else {

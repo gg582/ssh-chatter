@@ -1240,10 +1240,12 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line)
             session_handle_soulmate(ctx);
         }
         return;
-    } else if (session_parse_command_any(ctx, "/setpw", effective_line, &args)) {
+    } else if (session_parse_command_any(ctx, "/setpw", effective_line,
+                                         &args)) {
         session_handle_setpw(ctx, args);
         return;
-    } else if (session_parse_command_any(ctx, "/delpw", effective_line, &args)) {
+    } else if (session_parse_command_any(ctx, "/delpw", effective_line,
+                                         &args)) {
         session_handle_delpw(ctx, args);
         return;
     } else if (session_parse_command_any(ctx, "/grant", effective_line,
@@ -2936,7 +2938,9 @@ static void *session_thread(void *arg)
             }
             authenticated = true;
             if (ctx->password_not_set) {
-                session_send_raw_text(ctx, "Welcome! Your account has no password set. Please use the /password command to set one.\r\n");
+                session_send_raw_text(
+                    ctx, "Welcome! Your account has no password set. Please "
+                         "use the /password command to set one.\r\n");
             }
         }
 

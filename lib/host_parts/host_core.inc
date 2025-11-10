@@ -2525,11 +2525,15 @@ static const session_help_entry_t kSessionHelpEssential[] = {
         .label = "delpw [username]",
         .description =
             {
-                "Remove your nickname's password, or another user's (operator only).",
-                "닉네임 비밀번호를 제거하거나, 다른 사용자의 비밀번호를 제거합니다 (운영자 전용).",
-                "ニックネームのパスワードを削除、または他のユーザーのパスワードを削除します（オペレーター専用）。",
+                "Remove your nickname's password, or another user's (operator "
+                "only).",
+                "닉네임 비밀번호를 제거하거나, 다른 사용자의 비밀번호를 "
+                "제거합니다 (운영자 전용).",
+                "ニックネームのパスワードを削除、または他のユーザーのパスワード"
+                "を削除します（オペレーター専用）。",
                 "删除你的昵称密码，或删除其他用户的密码（仅限管理员）。",
-                "Удалить пароль вашего ника, или другого пользователя (только оператор).",
+                "Удалить пароль вашего ника, или другого пользователя (только "
+                "оператор).",
             },
         .label_translations =
             {
