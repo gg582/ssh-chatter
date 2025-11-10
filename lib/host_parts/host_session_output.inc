@@ -653,11 +653,10 @@ static void session_handle_suspicious_first_message(session_ctx_t *ctx,
             }
 
             char notification[USER_DATA_MAILBOX_MESSAGE_LEN];
-            snprintf(
-                notification, sizeof(notification),
-                "Suspicious first message ban: [%s] from %s sent '%s'.",
-                ctx->user.name, address,
-                trimmed[0] != '\0' ? trimmed : "(empty)");
+            snprintf(notification, sizeof(notification),
+                     "Suspicious first message ban: [%s] from %s sent '%s'.",
+                     ctx->user.name, address,
+                     trimmed[0] != '\0' ? trimmed : "(empty)");
 
             char mail_error[128];
             if (!host_user_data_send_mail(
@@ -686,9 +685,8 @@ static void session_handle_suspicious_first_message(session_ctx_t *ctx,
     ctx->user_data_loaded = false;
     memset(&ctx->user_data, 0, sizeof(ctx->user_data));
 
-    session_force_disconnect(
-        ctx, "Suspicious command activity detected. You "
-             "have been permanently banned.");
+    session_force_disconnect(ctx, "Suspicious command activity detected. You "
+                                  "have been permanently banned.");
 }
 
 static bool session_detect_provider_ip(const char *ip, char *label,
@@ -884,18 +882,16 @@ static void session_blocklist_show(session_ctx_t *ctx)
         char line[SSH_CHATTER_MESSAGE_LIMIT];
         if (entry->ip_wide && entry->ip[0] != '\0') {
             if (entry->username[0] != '\0') {
-                snprintf(
-                    line, sizeof(line),
-                    "- %s (all users from this IP, originally [%s])",
-                    entry->ip, entry->username);
-            } else {
                 snprintf(line, sizeof(line),
-                         "- %s (all users from this IP)", entry->ip);
+                         "- %s (all users from this IP, originally [%s])",
+                         entry->ip, entry->username);
+            } else {
+                snprintf(line, sizeof(line), "- %s (all users from this IP)",
+                         entry->ip);
             }
         } else if (entry->username[0] != '\0') {
             if (entry->ip[0] != '\0') {
-                snprintf(line, sizeof(line),
-                         "- [%s] (only this user, IP %s)",
+                snprintf(line, sizeof(line), "- [%s] (only this user, IP %s)",
                          entry->username, entry->ip);
             } else {
                 snprintf(line, sizeof(line), "- [%s]", entry->username);
@@ -1256,8 +1252,7 @@ static void session_send_system_line(session_ctx_t *ctx, const char *message)
     }
 
     char prefixed_message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(prefixed_message, sizeof(prefixed_message), "+ %s",
-             message);
+    snprintf(prefixed_message, sizeof(prefixed_message), "+ %s", message);
 
     session_send_plain_line(ctx, prefixed_message);
 }
@@ -1418,19 +1413,18 @@ static void session_bbs_render_post(session_ctx_t *ctx, const bbs_post_t *post,
     }
 
     char title_line[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(title_line, sizeof(title_line), "#%" PRIu64 ": %s",
-             post->id, post->title);
+    snprintf(title_line, sizeof(title_line), "#%" PRIu64 ": %s", post->id,
+             post->title);
 
     char author_line[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(author_line, sizeof(author_line), "Author: %s",
-             post->author);
+    snprintf(author_line, sizeof(author_line), "Author: %s", post->author);
 
     char created_line[SSH_CHATTER_MESSAGE_LIMIT];
     time_t created = (time_t)post->created_at;
     struct tm created_tm;
     localtime_r(&created, &created_tm);
-    strftime(created_line, sizeof(created_line),
-             "Created: %Y-%m-%d %H:%M:%S", &created_tm);
+    strftime(created_line, sizeof(created_line), "Created: %Y-%m-%d %H:%M:%S",
+             &created_tm);
 
     char bumped_line[SSH_CHATTER_MESSAGE_LIMIT];
     time_t bumped = (time_t)post->bumped_at;
@@ -3173,7 +3167,8 @@ static void session_send_history_entry(session_ctx_t *ctx,
         const char *bold = entry->user_is_bold ? ANSI_BOLD : "";
 
         char name_block[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(name_block, sizeof(name_block), "%s%s[%s] <%lu>%s", color, bold, entry->username, entry->message_id, ANSI_RESET);
+        snprintf(name_block, sizeof(name_block), "%s%s[%s] <%lu>%s", color,
+                 bold, entry->username, entry->message_id, ANSI_RESET);
         strncat(formatted, name_block,
                 sizeof(formatted) - strlen(formatted) - 1U);
 
@@ -3200,9 +3195,10 @@ static void session_send_history_entry(session_ctx_t *ctx,
         // Display attachment URL if present, similar to reply format
         if (entry->attachment_type != CHAT_ATTACHMENT_NONE &&
             entry->attachment_target[0] != '\0') {
-            const char *label = chat_attachment_type_label(entry->attachment_type);
+            const char *label =
+                chat_attachment_type_label(entry->attachment_type);
             char attachment_line[SSH_CHATTER_MESSAGE_LIMIT + 160];
-            snprintf(attachment_line, sizeof(attachment_line), "    (%s) %s", 
+            snprintf(attachment_line, sizeof(attachment_line), "    (%s) %s",
                      label, entry->attachment_target);
             session_send_plain_line(ctx, attachment_line);
         }
