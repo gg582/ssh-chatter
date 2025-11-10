@@ -18,14 +18,6 @@
 
 #define USER_DATA_MAGIC 0x4D424F58U /* 'MBOX' */
 #define USER_DATA_VERSION 5U
-#define USER_DATA_VERSION_V4 4U
-#define USER_DATA_VERSION_V3 3U
-#define USER_DATA_VERSION_V2 2U
-#define USER_DATA_VERSION_LEGACY 1U
-
-#define USER_DATA_PROFILE_PICTURE_V1_LEN 512U
-#define USER_DATA_PROFILE_PICTURE_V2_LEN 4096U
-#define USER_DATA_PROFILE_PICTURE_V3_LEN 10240U
 
 #define USER_DATA_PROFILE_DIRECTORY "profiles"
 #define USER_DATA_VARIANT_LIMIT 32U
@@ -40,68 +32,6 @@ static void user_data_profile_picture_overlay(const char *root,
                                               user_data_record_t *record);
 static bool user_data_profile_picture_store(const char *root,
                                             const user_data_record_t *record);
-
-static size_t user_data_column_reset_sequence_length(const char *text);
-
-typedef struct user_data_record_v1 {
-    uint32_t magic;
-    uint32_t version;
-    char username[SSH_CHATTER_USERNAME_LEN];
-    uint32_t mailbox_count;
-    user_data_mail_entry_t mailbox[USER_DATA_MAILBOX_LIMIT];
-    char profile_picture[USER_DATA_PROFILE_PICTURE_V1_LEN];
-    alpha_centauri_save_t alpha;
-    uint32_t flag_count;
-    uint32_t flag_history_count;
-    uint64_t flag_history[USER_DATA_FLAG_HISTORY_LIMIT];
-    uint64_t last_updated;
-    uint8_t reserved[64];
-} user_data_record_v1_t;
-
-typedef struct user_data_record_v2 {
-    uint32_t magic;
-    uint32_t version;
-    char username[SSH_CHATTER_USERNAME_LEN];
-    uint32_t mailbox_count;
-    user_data_mail_entry_t mailbox[USER_DATA_MAILBOX_LIMIT];
-    char profile_picture[USER_DATA_PROFILE_PICTURE_V2_LEN];
-    alpha_centauri_save_t alpha;
-    uint32_t flag_count;
-    uint32_t flag_history_count;
-    uint64_t flag_history[USER_DATA_FLAG_HISTORY_LIMIT];
-    uint64_t last_updated;
-    uint8_t reserved[64];
-} user_data_record_v2_t;
-
-typedef struct user_data_record_v3 {
-    uint32_t magic;
-    uint32_t version;
-    char username[SSH_CHATTER_USERNAME_LEN];
-    uint32_t mailbox_count;
-    user_data_mail_entry_t mailbox[USER_DATA_MAILBOX_LIMIT];
-    char profile_picture[USER_DATA_PROFILE_PICTURE_V3_LEN];
-    alpha_centauri_save_t alpha;
-    uint32_t flag_count;
-    uint32_t flag_history_count;
-    uint64_t flag_history[USER_DATA_FLAG_HISTORY_LIMIT];
-    uint64_t last_updated;
-    uint8_t reserved[64];
-} user_data_record_v3_t;
-
-typedef struct user_data_record_v4 {
-    uint32_t magic;
-    uint32_t version;
-    char username[SSH_CHATTER_USERNAME_LEN];
-    uint32_t mailbox_count;
-    user_data_mail_entry_t mailbox[USER_DATA_MAILBOX_LIMIT];
-    char profile_picture[USER_DATA_PROFILE_PICTURE_LEN];
-    alpha_centauri_save_t alpha;
-    uint32_t flag_count;
-    uint32_t flag_history_count;
-    uint64_t flag_history[USER_DATA_FLAG_HISTORY_LIMIT];
-    uint64_t last_updated;
-    uint8_t reserved[64];
-} user_data_record_v4_t;
 
 static size_t user_data_column_reset_sequence_length(const char *text)
 {
@@ -249,121 +179,15 @@ static bool user_data_load_raw(const char *path, user_data_record_t *record,
 
     const size_t file_size = (size_t)st.st_size;
     const size_t expected_size = sizeof(user_data_record_t);
-    const size_t v4_size = sizeof(user_data_record_v4_t);
-    const size_t v3_size = sizeof(user_data_record_v3_t);
-    const size_t v2_size = sizeof(user_data_record_v2_t);
-    const size_t legacy_size = sizeof(user_data_record_v1_t);
 
     user_data_record_t temp;
-    bool upgrade = false;
     bool loaded = false;
 
-    // curent  userdata
+    // current userdata
     if (file_size == expected_size) {
         size_t read = fread(&temp, sizeof(temp), 1U, fp);
         if (read == 1U && temp.magic == USER_DATA_MAGIC &&
             temp.version == USER_DATA_VERSION) {
-            loaded = true;
-        }
-    } else if (file_size == v4_size) {
-        user_data_record_v4_t legacy4;
-        size_t read = fread(&legacy4, sizeof(legacy4), 1U, fp);
-        if (read == 1U && legacy4.magic == USER_DATA_MAGIC &&
-            legacy4.version == USER_DATA_VERSION_V4) {
-            memset(&temp, 0, sizeof(temp));
-            temp.magic = USER_DATA_MAGIC;
-            temp.version = USER_DATA_VERSION;
-            snprintf(temp.username, sizeof(temp.username), "%s",
-                     legacy4.username);
-            temp.last_ip[0] = '\0';
-            temp.mailbox_count = legacy4.mailbox_count;
-            memcpy(temp.mailbox, legacy4.mailbox, sizeof(temp.mailbox));
-            memcpy(temp.profile_picture, legacy4.profile_picture,
-                   sizeof(legacy4.profile_picture));
-            temp.alpha = legacy4.alpha;
-            temp.flag_count = legacy4.flag_count;
-            temp.flag_history_count = legacy4.flag_history_count;
-            memcpy(temp.flag_history, legacy4.flag_history,
-                   sizeof(temp.flag_history));
-            temp.last_updated = legacy4.last_updated;
-            memset(temp.reserved, 0, sizeof(temp.reserved));
-            upgrade = true;
-            loaded = true;
-        }
-    } else if (file_size ==
-               v3_size) { //legacy userdata; profile picture size is different
-        user_data_record_v3_t legacy3;
-        size_t read = fread(&legacy3, sizeof(legacy3), 1U, fp);
-        if (read == 1U && legacy3.magic == USER_DATA_MAGIC &&
-            legacy3.version == USER_DATA_VERSION_V3) {
-            memset(&temp, 0, sizeof(temp));
-            temp.magic = USER_DATA_MAGIC;
-            temp.version = USER_DATA_VERSION;
-            snprintf(temp.username, sizeof(temp.username), "%s",
-                     legacy3.username);
-            temp.last_ip[0] = '\0';
-            temp.mailbox_count = legacy3.mailbox_count;
-            memcpy(temp.mailbox, legacy3.mailbox, sizeof(temp.mailbox));
-            memcpy(temp.profile_picture, legacy3.profile_picture,
-                   sizeof(legacy3.profile_picture));
-            temp.alpha = legacy3.alpha;
-            temp.flag_count = legacy3.flag_count;
-            temp.flag_history_count = legacy3.flag_history_count;
-            memcpy(temp.flag_history, legacy3.flag_history,
-                   sizeof(temp.flag_history));
-            temp.last_updated = legacy3.last_updated;
-            memset(temp.reserved, 0, sizeof(temp.reserved));
-            upgrade = true;
-            loaded = true;
-        }
-    } else if (file_size == v2_size) {
-        user_data_record_v2_t legacy2;
-        size_t read = fread(&legacy2, sizeof(legacy2), 1U, fp);
-        if (read == 1U && legacy2.magic == USER_DATA_MAGIC &&
-            legacy2.version == USER_DATA_VERSION_V2) {
-            memset(&temp, 0, sizeof(temp));
-            temp.magic = USER_DATA_MAGIC;
-            temp.version = USER_DATA_VERSION;
-            snprintf(temp.username, sizeof(temp.username), "%s",
-                     legacy2.username);
-            temp.last_ip[0] = '\0';
-            temp.mailbox_count = legacy2.mailbox_count;
-            memcpy(temp.mailbox, legacy2.mailbox, sizeof(temp.mailbox));
-            memcpy(temp.profile_picture, legacy2.profile_picture,
-                   sizeof(legacy2.profile_picture));
-            temp.alpha = legacy2.alpha;
-            temp.flag_count = legacy2.flag_count;
-            temp.flag_history_count = legacy2.flag_history_count;
-            memcpy(temp.flag_history, legacy2.flag_history,
-                   sizeof(temp.flag_history));
-            temp.last_updated = legacy2.last_updated;
-            memset(temp.reserved, 0, sizeof(temp.reserved));
-            upgrade = true;
-            loaded = true;
-        }
-    } else if (file_size == legacy_size) {
-        user_data_record_v1_t legacy1;
-        size_t read = fread(&legacy1, sizeof(legacy1), 1U, fp);
-        if (read == 1U && legacy1.magic == USER_DATA_MAGIC &&
-            legacy1.version == USER_DATA_VERSION_LEGACY) {
-            memset(&temp, 0, sizeof(temp));
-            temp.magic = USER_DATA_MAGIC;
-            temp.version = USER_DATA_VERSION;
-            snprintf(temp.username, sizeof(temp.username), "%s",
-                     legacy1.username);
-            temp.last_ip[0] = '\0';
-            temp.mailbox_count = legacy1.mailbox_count;
-            memcpy(temp.mailbox, legacy1.mailbox, sizeof(temp.mailbox));
-            memcpy(temp.profile_picture, legacy1.profile_picture,
-                   sizeof(legacy1.profile_picture));
-            temp.alpha = legacy1.alpha;
-            temp.flag_count = legacy1.flag_count;
-            temp.flag_history_count = legacy1.flag_history_count;
-            memcpy(temp.flag_history, legacy1.flag_history,
-                   sizeof(temp.flag_history));
-            temp.last_updated = legacy1.last_updated;
-            memset(temp.reserved, 0, sizeof(temp.reserved));
-            upgrade = true;
             loaded = true;
         }
     }
@@ -375,7 +199,7 @@ static bool user_data_load_raw(const char *path, user_data_record_t *record,
     }
 
     if (needs_upgrade != NULL) {
-        *needs_upgrade = upgrade;
+        *needs_upgrade = false;
     }
 
     *record = temp;
@@ -482,8 +306,7 @@ bool user_data_path_for(const char *root, const char *username, const char *ip,
                                               sizeof(existing.username)) == 0;
                 bool ip_match =
                     strncmp(existing.last_ip, ip, SSH_CHATTER_IP_LEN) == 0;
-                bool legacy_match = existing.last_ip[0] == '\0';
-                if (username_match && (ip_match || legacy_match)) {
+                if (username_match && ip_match) {
                     if ((size_t)written < length) {
                         memcpy(path, candidate_path, (size_t)written + 1U);
                         return true;
