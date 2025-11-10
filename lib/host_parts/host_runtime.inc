@@ -2935,6 +2935,9 @@ static void *session_thread(void *arg)
                 SESSION_THREAD_RETURN(NULL);
             }
             authenticated = true;
+            if (ctx->password_not_set) {
+                session_send_raw_text(ctx, "Welcome! Your account has no password set. Please use the /password command to set one.\r\n");
+            }
         }
 
         if (session_accept_channel(ctx) != 0) {

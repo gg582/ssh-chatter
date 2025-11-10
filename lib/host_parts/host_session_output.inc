@@ -1,3 +1,6 @@
+#include "../headers/user_data.h"
+#include "../headers/security_layer.h"
+
 // Session output, history delivery, and client-facing helpers.
 
 static void session_game_show_camouflage(session_ctx_t *ctx);
@@ -3173,7 +3176,7 @@ static void session_send_history_entry(session_ctx_t *ctx,
         const char *bold = entry->user_is_bold ? ANSI_BOLD : "";
 
         char name_block[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(name_block, sizeof(name_block), "%s%s[%s] <%lu>%s", color,
+        snprintf(name_block, sizeof(name_block), "%s%s %s [%lu]%s", color,
                  bold, entry->username, entry->message_id, ANSI_RESET);
         strncat(formatted, name_block,
                 sizeof(formatted) - strlen(formatted) - 1U);
@@ -3182,13 +3185,13 @@ static void session_send_history_entry(session_ctx_t *ctx,
             const bool multiline = strchr(entry->message, '\n') != NULL;
             if (multiline) {
                 // For multiline messages, send the username first, then each line separately
-                strncat(formatted, ":",
+                strncat(formatted, " ",
                         sizeof(formatted) - strlen(formatted) - 1U);
                 session_send_plain_line(ctx, formatted);
                 session_send_multiline_message(ctx, entry->message);
             } else {
                 // For single-line messages, send as before
-                strncat(formatted, ": ",
+                strncat(formatted, "  ",
                         sizeof(formatted) - strlen(formatted) - 1U);
                 strncat(formatted, entry->message,
                         sizeof(formatted) - strlen(formatted) - 1U);
@@ -3467,6 +3470,9 @@ static int session_authenticate(session_ctx_t *ctx)
         ctx->lan_operator_credentials_valid = false;
     }
 
+    // Declare credential here to ensure it's in scope for all uses
+    lan_operator_credential_t *credential = NULL;
+
     while (!authenticated &&
            (message = ssh_message_get(ctx->session)) != NULL) {
         const int message_type = ssh_message_type(message);
@@ -3483,48 +3489,94 @@ static int session_authenticate(session_ctx_t *ctx)
                          SSH_CHATTER_USERNAME_LEN - 1, username);
             }
 
+            // Load user data
+            pthread_mutex_lock(&ctx->owner->user_data_lock);
+            user_data_ensure_exists(ctx->owner->user_data_root, ctx->user.name,
+                                    ctx->client_ip, &ctx->user_data);
+            pthread_mutex_unlock(&ctx->owner->user_data_lock);
+
+            // Check if a password is set for this user
+            bool password_is_set = !security_layer_is_zero_hash(
+                ctx->user_data.password_hash, sizeof(ctx->user_data.password_hash));
+
+            // Handle LAN operator authentication
             bool reserved_name = false;
-            lan_operator_credential_t *credential = NULL;
+            // credential variable is already declared at the beginning of the function
             if (ctx->owner != NULL) {
                 credential = host_find_lan_operator_credential(ctx->owner,
                                                                ctx->user.name);
                 reserved_name = credential != NULL;
             }
 
-            if (!reserved_name) {
+            if (reserved_name) {
+                if (!session_is_lan_client(ctx->client_ip)) {
+                    ssh_message_auth_set_methods(message, SSH_AUTH_METHOD_PASSWORD);
+                    ssh_message_reply_default(message);
+                    break; // Break from switch, continue while loop
+                }
+
+                const int auth_method = ssh_message_subtype(message);
+                if (auth_method != SSH_AUTH_METHOD_PASSWORD) {
+                    ssh_message_auth_set_methods(message, SSH_AUTH_METHOD_PASSWORD);
+                    ssh_message_reply_default(message);
+                    break; // Break from switch, continue while loop
+                }
+
+                const char *password = ssh_message_auth_password(message);
+                if (credential == NULL || password == NULL ||
+                    credential->password[0] == '\0' ||
+                    strcmp(credential->password, password) != 0) {
+                    ssh_message_auth_set_methods(message, SSH_AUTH_METHOD_PASSWORD);
+                    ssh_message_reply_default(message);
+                    break; // Break from switch, continue while loop
+                }
+                ctx->lan_operator_credentials_valid = true;
+                snprintf(ctx->user.name, sizeof(ctx->user.name), "%s",
+                         credential->nickname);
                 ssh_message_auth_reply_success(message, 0);
-                authenticated = true;
-                break;
+                authenticated = true; // This will break the while loop
+                break; // Break from switch
             }
 
-            if (!session_is_lan_client(ctx->client_ip)) {
-                ssh_message_auth_set_methods(message, SSH_AUTH_METHOD_PASSWORD);
-                ssh_message_reply_default(message);
-                break;
-            }
+            // Regular user authentication
+            if (!password_is_set) {
+                // No password set, allow login but flag for password creation
+                ctx->password_not_set = true;
+                ssh_message_auth_reply_success(message, 0);
+                authenticated = true; // This will break the while loop
+                break; // Break from switch
+            } else {
+                // Password is set, require password authentication
+                const int auth_method = ssh_message_subtype(message);
+                if (auth_method != SSH_AUTH_METHOD_PASSWORD) {
+                    ssh_message_auth_set_methods(message, SSH_AUTH_METHOD_PASSWORD);
+                    ssh_message_reply_default(message);
+                    break; // Break from switch, continue while loop
+                }
 
-            const int auth_method = ssh_message_subtype(message);
-            if (auth_method != SSH_AUTH_METHOD_PASSWORD) {
-                ssh_message_auth_set_methods(message, SSH_AUTH_METHOD_PASSWORD);
-                ssh_message_reply_default(message);
-                break;
-            }
+                const char *password = ssh_message_auth_password(message);
+                if (password == NULL) {
+                    ssh_message_auth_set_methods(message, SSH_AUTH_METHOD_PASSWORD);
+                    ssh_message_reply_default(message);
+                    break; // Break from switch, continue while loop
+                }
 
-            const char *password = ssh_message_auth_password(message);
-            if (credential == NULL || password == NULL ||
-                credential->password[0] == '\0' ||
-                strcmp(credential->password, password) != 0) {
-                ssh_message_auth_set_methods(message, SSH_AUTH_METHOD_PASSWORD);
-                ssh_message_reply_default(message);
-                break;
-            }
+                uint8_t provided_password_hash[32];
+                security_layer_hash_password(password, ctx->user_data.password_salt,
+                                             provided_password_hash);
 
-            ctx->lan_operator_credentials_valid = true;
-            snprintf(ctx->user.name, sizeof(ctx->user.name), "%s",
-                     credential->nickname);
-            ssh_message_auth_reply_success(message, 0);
-            authenticated = true;
-        } break;
+                if (memcmp(provided_password_hash, ctx->user_data.password_hash,
+                           sizeof(provided_password_hash)) == 0) {
+                    ssh_message_auth_reply_success(message, 0);
+                    authenticated = true; // This will break the while loop
+                    break; // Break from switch
+                } else {
+                    ssh_message_auth_set_methods(message, SSH_AUTH_METHOD_PASSWORD);
+                    ssh_message_reply_default(message);
+                    break; // Break from switch, continue while loop
+                }
+            }
+        }
         default:
             ssh_message_reply_default(message);
             break;

@@ -736,4 +736,16 @@ bool security_layer_decrypt_message(const security_layer_t *layer,
 
     }
 
+    bool security_layer_is_zero_hash(const uint8_t *hash, size_t len) {
+        if (hash == NULL || len == 0) {
+            return true; // Treat null or empty hash as zero
+        }
+        for (size_t i = 0; i < len; ++i) {
+            if (hash[i] != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     

@@ -575,6 +575,7 @@ typedef struct session_ctx {
     session_rss_view_t rss_view;
     bool user_data_loaded;
     user_data_record_t user_data;
+    bool password_not_set; // Flag to indicate if user needs to set a password
     const session_ops_t *ops;
     bool history_oldest_notified;
     bool history_latest_notified;
