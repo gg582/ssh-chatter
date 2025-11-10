@@ -2990,6 +2990,31 @@ static void *session_thread(void *arg)
     session_ctx_t *existing =
         chat_room_find_user(&ctx->owner->room, ctx->user.name);
 
+    // Check if same IP and nickname - allow reconnection by kicking existing session
+    bool should_kick_existing = false;
+    if (existing != NULL && !banned_username && !reserved_username) {
+        if (strcmp(existing->client_ip, ctx->client_ip) == 0) {
+            should_kick_existing = true;
+            printf("[reconnect] same IP+nickname detected: %s from %s, kicking existing session\n",
+                   ctx->user.name, ctx->client_ip);
+        }
+    }
+
+    if (should_kick_existing) {
+        // Kick the existing session
+        char kick_message[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(kick_message, sizeof(kick_message),
+                 "You have been disconnected because a new connection from the same IP is joining.");
+        session_force_disconnect(existing, kick_message);
+        
+        // Wait a moment for the disconnect to process
+        struct timespec disconnect_delay = {.tv_sec = 0, .tv_nsec = 100000000L}; // 100ms
+        nanosleep(&disconnect_delay, NULL);
+        
+        // Clear the existing reference as it's being disconnected
+        existing = NULL;
+    }
+
     if (banned_username || reserved_username || existing != NULL) {
         ctx->username_conflict = true;
         session_render_banner(ctx);
@@ -3561,7 +3586,7 @@ void host_init(host_t *host, auth_profile_t *auth)
     }
     host_load_lan_operator_credentials(host);
     const palette_descriptor_t *default_palette =
-        palette_find_descriptor("monokai");
+        palette_find_descriptor("clean");
     if (default_palette != NULL) {
         host_apply_palette_descriptor(host, default_palette);
     } else {
