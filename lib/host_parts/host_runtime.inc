@@ -4276,6 +4276,9 @@ void host_shutdown(host_t *host)
         return;
     }
 
+    // Terminate all child processes in the same process group
+    kill(0, SIGTERM);
+
     sshc_memory_context_t *memory_scope =
         sshc_memory_context_push(host->memory_context);
 
