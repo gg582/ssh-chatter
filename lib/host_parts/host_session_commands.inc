@@ -1365,12 +1365,7 @@ static void session_handle_setpw(session_ctx_t *ctx, const char *arguments)
         return;
     }
 
-    if (arguments == NULL || arguments[0] == '\0') {
-        session_send_system_line(ctx, "Usage: /setpw <password>");
-        return;
-    }
-
-    if (strlen(arguments) > 128) {
+    if (arguments != NULL && strlen(arguments) > 128) {
         session_send_system_line(ctx,
                                  "Password is too long (max 128 characters).");
         return;
@@ -1378,6 +1373,18 @@ static void session_handle_setpw(session_ctx_t *ctx, const char *arguments)
 
     if (!session_user_data_load(ctx)) {
         session_send_system_line(ctx, "Unable to load user data.");
+        return;
+    }
+
+    if (arguments == NULL || arguments[0] == '\0') {
+        memset(ctx->user_data.password_salt, 0, sizeof(ctx->user_data.password_salt));
+        memset(ctx->user_data.password_hash, 0, sizeof(ctx->user_data.password_hash));
+
+        if (session_user_data_commit(ctx)) {
+            session_send_system_line(ctx, "Password removed.");
+        } else {
+            session_send_system_line(ctx, "Failed to remove password.");
+        }
         return;
     }
 

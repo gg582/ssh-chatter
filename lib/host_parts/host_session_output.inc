@@ -3462,6 +3462,17 @@ static bool session_handle_service_request(ssh_message message)
     return false;
 }
 
+static bool is_nullarray(uint8_t *arr, size_t len) {
+    int _sum = 0;
+    for(size_t i = 0; i < len; i++) {
+        _sum += arr[i];
+    }
+    if(_sum != 0) {
+        return false;
+    }
+    return true;
+}
+
 static int session_authenticate(session_ctx_t *ctx)
 {
     ssh_message message = NULL;
@@ -3499,6 +3510,7 @@ static int session_authenticate(session_ctx_t *ctx)
             bool password_is_set = !security_layer_is_zero_hash(
                 ctx->user_data.password_hash,
                 sizeof(ctx->user_data.password_hash));
+            password_is_set = is_nullarray((uint8_t *)ctx->user_data.password_hash, 32) ? false:true;
 
             // Handle LAN operator authentication
             bool reserved_name = false;

@@ -568,8 +568,7 @@ bool user_data_init(user_data_record_t *record, const char *username,
 
     // Initialize password salt and hash
     security_layer_generate_salt(record->password_salt);
-    security_layer_hash_password("", record->password_salt,
-                                 record->password_hash);
+    memset(record->password_hash, 0, sizeof(record->password_hash));
 
     return true;
 }
