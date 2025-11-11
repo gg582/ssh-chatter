@@ -207,7 +207,7 @@ static bool user_data_load_raw(const char *path, user_data_record_t *record,
     return true;
 }
 
-bool user_data_ensure_root(const char *root)
+bool user_data_ensure_root(const char *restrict root)
 {
     if (root == NULL || root[0] == '\0') {
         return false;
@@ -226,7 +226,7 @@ bool user_data_ensure_root(const char *root)
     return user_data_create_directory(profile_root);
 }
 
-bool user_data_sanitize_username(const char *username, char *sanitized,
+bool user_data_sanitize_username(const char *restrict username, char *restrict sanitized,
                                  size_t length)
 {
     if (sanitized == NULL || length == 0U) {
@@ -268,8 +268,8 @@ bool user_data_sanitize_username(const char *username, char *sanitized,
     return true;
 }
 
-bool user_data_path_for(const char *root, const char *username, const char *ip,
-                        bool create_if_missing, char *path, size_t length)
+bool user_data_path_for(const char *restrict root, const char *restrict username, const char *restrict ip,
+                        bool create_if_missing, char *restrict path, size_t length)
 {
     if (path == NULL || length == 0U || root == NULL || root[0] == '\0') {
         return false;
@@ -533,8 +533,8 @@ static void user_data_normalize_record(user_data_record_t *record,
     }
 }
 
-bool user_data_init(user_data_record_t *record, const char *username,
-                    const char *ip)
+bool user_data_init(user_data_record_t *restrict record, const char *restrict username,
+                    const char *restrict ip)
 {
     if (record == NULL) {
         return false;
@@ -573,8 +573,8 @@ bool user_data_init(user_data_record_t *record, const char *username,
     return true;
 }
 
-bool user_data_load(const char *root, const char *username, const char *ip,
-                    user_data_record_t *record)
+bool user_data_load(const char *restrict root, const char *restrict username, const char *restrict ip,
+                    user_data_record_t *restrict record)
 {
     if (record == NULL) {
         return false;
@@ -603,8 +603,8 @@ bool user_data_load(const char *root, const char *username, const char *ip,
     return true;
 }
 
-bool user_data_save(const char *root, const user_data_record_t *record,
-                    const char *ip)
+bool user_data_save(const char *restrict root, const user_data_record_t *restrict record,
+                    const char *restrict ip)
 {
     if (record == NULL) {
         return false;
@@ -692,8 +692,8 @@ bool user_data_save(const char *root, const user_data_record_t *record,
     return true;
 }
 
-bool user_data_ensure_exists(const char *root, const char *username,
-                             const char *ip, user_data_record_t *record)
+bool user_data_ensure_exists(const char *restrict root, const char *restrict username,
+                             const char *restrict ip, user_data_record_t *restrict record)
 {
     if (record != NULL && user_data_load(root, username, ip, record)) {
         return true;
@@ -714,8 +714,8 @@ bool user_data_ensure_exists(const char *root, const char *username,
     return true;
 }
 
-void user_data_set_ssh_chat_server_config(user_data_record_t *record,
-                                          const char *url, uint16_t port)
+void user_data_set_ssh_chat_server_config(user_data_record_t *restrict record,
+                                          const char *restrict url, uint16_t port)
 {
     if (record == NULL) {
         return;
@@ -731,9 +731,9 @@ void user_data_set_ssh_chat_server_config(user_data_record_t *record,
     record->ssh_chat_server_port = port;
 }
 
-void user_data_get_ssh_chat_server_config(const user_data_record_t *record,
-                                          char *url, size_t url_len,
-                                          uint16_t *port)
+void user_data_get_ssh_chat_server_config(const user_data_record_t *restrict record,
+                                          char *restrict url, size_t url_len,
+                                          uint16_t *restrict port)
 {
     if (record == NULL) {
         if (url != NULL && url_len > 0) {

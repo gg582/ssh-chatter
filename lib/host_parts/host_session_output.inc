@@ -339,7 +339,7 @@ double calculate_chi_squared(const char *str)
 
 bool is_string_random(const char *str)
 {
-    static const double CRITICAL_THRESHOLD = 50.0;
+    static const double CRITICAL_THRESHOLD = 25.0;
 
     double chi_squared = calculate_chi_squared(str);
 
