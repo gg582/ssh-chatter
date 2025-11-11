@@ -3463,14 +3463,9 @@ static bool session_handle_service_request(ssh_message message)
 }
 
 static bool is_nullarray(uint8_t *arr, size_t len) {
-    int _sum = 0;
-    for(size_t i = 0; i < len; i++) {
-        _sum += arr[i];
-    }
-    if(_sum != 0) {
-        return false;
-    }
-    return true;
+    uint8_t zeros[len];
+    memset(zeros, 0, len);
+    return memcmp(arr, zeros, len) == 0;
 }
 
 static int session_authenticate(session_ctx_t *ctx)
