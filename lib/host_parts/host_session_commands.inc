@@ -143,7 +143,7 @@ static void session_handle_reply(session_ctx_t *ctx, const char *arguments)
                              ? stored.parent_message_id
                              : stored.parent_reply_id;
 
-    char reply_message[SSH_CHATTER_MESSAGE_LIMIT + 160];
+    char reply_message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(reply_message, sizeof(reply_message),
              "↳ [r#%" PRIu64 " → %s%" PRIu64 "] %s: %s", stored.reply_id,
              target_prefix, target_id, stored.username, stored.message);

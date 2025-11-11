@@ -3972,7 +3972,7 @@ static void chat_room_broadcast_entry(chat_room_t *room,
 
     if (entry->is_user_message) {
         const char *message_text = entry->message;
-        char fallback[SSH_CHATTER_MESSAGE_LIMIT + 64];
+        char fallback[SSH_CHATTER_MESSAGE_LIMIT];
         if ((message_text == NULL || message_text[0] == '\0') &&
             entry->attachment_type != CHAT_ATTACHMENT_NONE) {
             const char *label =
@@ -4010,7 +4010,7 @@ chat_room_broadcast_reaction_update(host_t *host,
         return;
     }
 
-    char line[SSH_CHATTER_MESSAGE_LIMIT + 64];
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
     if (entry->message_id > 0U) {
         snprintf(line, sizeof(line), "    ↳ [#%" PRIu64 "] reactions: %s",
                  entry->message_id, summary);
@@ -4032,7 +4032,7 @@ static void host_broadcast_reply(host_t *host, const chat_reply_entry_t *entry)
                              ? entry->parent_message_id
                              : entry->parent_reply_id;
 
-    char line[SSH_CHATTER_MESSAGE_LIMIT + 160];
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(line, sizeof(line), "↳ [r#%" PRIu64 " → %s%" PRIu64 "] %s: %s",
              entry->reply_id, target_prefix, target_id, entry->username,
              entry->message);

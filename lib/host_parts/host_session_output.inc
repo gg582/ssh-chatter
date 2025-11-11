@@ -83,7 +83,7 @@ static void session_send_reply_tree(session_ctx_t *ctx,
         memset(indent, ' ', indent_len);
         indent[indent_len] = '\0';
 
-        char line[SSH_CHATTER_MESSAGE_LIMIT + 160];
+        char line[SSH_CHATTER_MESSAGE_LIMIT];
         snprintf(line, sizeof(line), "%s(r#%" PRIu64 ") %s", indent,
                  reply->reply_id, reply->message);
         session_send_plain_line(ctx, line);
@@ -3245,7 +3245,7 @@ static void session_send_poll_summary_generic(session_ctx_t *ctx,
         return;
     }
 
-    char header[SSH_CHATTER_MESSAGE_LIMIT + 64];
+    char header[SSH_CHATTER_MESSAGE_LIMIT];
     const char *mode_suffix = poll->allow_multiple ? " (multiple choice)" : "";
     if (label == NULL) {
         snprintf(header, sizeof(header), "Poll #%" PRIu64 ": %s%s", poll->id,
@@ -3257,7 +3257,7 @@ static void session_send_poll_summary_generic(session_ctx_t *ctx,
     session_send_system_line(ctx, header);
 
     for (size_t idx = 0U; idx < poll->option_count; ++idx) {
-        char option_line[SSH_CHATTER_MESSAGE_LIMIT + 64];
+        char option_line[SSH_CHATTER_MESSAGE_LIMIT];
         uint32_t votes = poll->options[idx].votes;
         if (label == NULL) {
             snprintf(option_line, sizeof(option_line),

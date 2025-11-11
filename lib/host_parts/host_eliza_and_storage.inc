@@ -4612,12 +4612,12 @@ static void session_send_line(session_ctx_t *ctx, const char *message)
         return;
     }
 
-    char buffer[SSH_CHATTER_MESSAGE_LIMIT + 1U];
+    char buffer[SSH_CHATTER_MESSAGE_LIMIT];
     memset(buffer, 0, sizeof(buffer));
     strncpy(buffer, message, SSH_CHATTER_MESSAGE_LIMIT);
-    buffer[SSH_CHATTER_MESSAGE_LIMIT] = '\0';
+    buffer[SSH_CHATTER_MESSAGE_LIMIT - 1] = '\0';
 
-    char stripped[SSH_CHATTER_MESSAGE_LIMIT + 1U];
+    char stripped[SSH_CHATTER_MESSAGE_LIMIT];
     bool suppress_translation = translation_strip_no_translate_prefix(
         buffer, stripped, sizeof(stripped));
     const char *render_text = suppress_translation ? stripped : buffer;
