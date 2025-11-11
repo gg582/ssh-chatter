@@ -3191,7 +3191,7 @@ static void session_send_history_entry(session_ctx_t *ctx,
                 session_send_multiline_message(ctx, entry->message);
             } else {
                 // For single-line messages, send as before
-                strncat(formatted, "  ",
+                strncat(formatted, " ",
                         sizeof(formatted) - strlen(formatted) - 1U);
                 strncat(formatted, entry->message,
                         sizeof(formatted) - strlen(formatted) - 1U);

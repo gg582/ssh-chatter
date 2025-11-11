@@ -97,6 +97,7 @@ sshc_memory_context_t *sshc_memory_context_current(void);
 void GC_INIT(void);
 void *GC_MALLOC(size_t size);
 void GC_free(void *ptr);
+#define GC_FREE(x) GC_free(x)
 void *GC_CALLOC(size_t count, size_t size);
 
 #endif

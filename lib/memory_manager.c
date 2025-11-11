@@ -274,7 +274,7 @@ void *GC_CALLOC(size_t count, size_t size)
                                      count * size, true);
 }
 
-void GC_free(void *ptr)
+void GC_FREE(void *ptr)
 {
     if (ptr == NULL) {
         return;

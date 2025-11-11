@@ -1,11 +1,16 @@
 #define LIBSSH_STATIC
 #include "ssh_chatter_sync.h"
+#include "memory_manager.h"
 #include <libssh/libssh.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 #include <unistd.h>
+
+#if defined(SSH_CHATTER_USE_GC) && SSH_CHATTER_USE_GC
+#    include<gc/gc.h>
+#endif
 
 static ssh_session session = NULL;
 static ssh_channel channel = NULL;
@@ -83,7 +88,7 @@ void ssh_chatter_sync_add_message_to_history(const chat_message_t *new_msg)
         return;
     }
 
-    chat_message_t *node = malloc(sizeof(chat_message_t));
+    chat_message_t *node = GC_MALLOC(sizeof(chat_message_t));
     if (!node) {
         pthread_mutex_unlock(&history_mutex);
         return;
@@ -104,9 +109,9 @@ void ssh_chatter_sync_add_message_to_history(const chat_message_t *new_msg)
             cur = cur->next;
         }
         if (prev && cur) {
-            free(cur->username);
-            free(cur->message_body);
-            free(cur);
+            GC_FREE(cur->username);
+            GC_FREE(cur->message_body);
+            GC_FREE(cur);
             prev->next = NULL;
             chat_history_size--;
         }
@@ -121,9 +126,9 @@ void ssh_chatter_sync_free_history()
     chat_message_t *cur = chat_history_head;
     while (cur) {
         chat_message_t *next = cur->next;
-        free(cur->username);
-        free(cur->message_body);
-        free(cur);
+        GC_FREE(cur->username);
+        GC_FREE(cur->message_body);
+        GC_FREE(cur);
         cur = next;
     }
     chat_history_head = NULL;
@@ -321,7 +326,7 @@ void ssh_chatter_sync_send_message(const char *message)
         return;
 
     size_t len = strlen(message) + 2;
-    char *msg = malloc(len);
+    char *msg = GC_MALLOC(len);
     if (!msg)
         return;
 
@@ -329,7 +334,7 @@ void ssh_chatter_sync_send_message(const char *message)
     strcat(msg, "\n");
 
     ssh_channel_write(channel, msg, (uint32_t)strlen(msg));
-    free(msg);
+    GC_FREE(msg);
 }
 
 void ssh_chatter_sync_set_message_received_callback(
