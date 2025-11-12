@@ -458,3 +458,12 @@ char **wrap_text_to_width(const char *text, int max_width, size_t *line_count)
     *line_count = current_line_count;
     return lines;
 }
+
+void to_lowercase(char *str) {
+    if (str == NULL) {
+        return;
+    }
+    for (size_t i = 0; str[i] != '\0'; ++i) {
+        str[i] = (char)tolower((unsigned char)str[i]);
+    }
+}

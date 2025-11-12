@@ -5,10 +5,14 @@
 static session_ctx_t *session_create(void)
 {
 #if defined(SSH_CHATTER_USE_GC) && SSH_CHATTER_USE_GC
-    return (session_ctx_t *)GC_CALLOC(1U, sizeof(session_ctx_t));
+    session_ctx_t *ctx = (session_ctx_t *)GC_CALLOC(1U, sizeof(session_ctx_t));
 #else
-    return (session_ctx_t *)calloc(1U, sizeof(session_ctx_t));
+    session_ctx_t *ctx = (session_ctx_t *)calloc(1U, sizeof(session_ctx_t));
 #endif
+    if (ctx != NULL) {
+        ctx->user.is_authenticated = false;
+    }
+    return ctx;
 }
 
 static void session_destroy(session_ctx_t *ctx);
@@ -166,6 +170,23 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments)
     }
 }
 
+static bool find_reserved_names(session_ctx_t *ctx, const char *nick) {
+    if (ctx == NULL || ctx->owner == NULL || nick == NULL || nick[0] == '\0') {
+        return false;
+    }
+
+    bool found = false;
+    pthread_mutex_lock(&ctx->owner->nickname_reserve_lock);
+    for (size_t i = 0; i < ctx->owner->reserved_nicknames_len; ++i) {
+        if (strncmp(nick, ctx->owner->reserved_nicknames[i], SSH_CHATTER_USERNAME_LEN) == 0) {
+            found = true;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&ctx->owner->nickname_reserve_lock);
+    return found;
+}
+
 static void session_handle_nick(session_ctx_t *ctx, const char *arguments)
 {
     if (ctx == NULL) {
@@ -191,18 +212,39 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments)
         return;
     }
 
-    for (size_t idx = 0; new_name[idx] != '\0'; ++idx) {
-        const unsigned char ch = (unsigned char)new_name[idx];
-        if (ch <= 0x1FU || ch == 0x7FU || ch == ' ' || ch == '\t') {
-            session_send_system_line(
-                ctx, "Names may not include control characters or whitespace.");
+    mbstate_t state;
+    memset(&state, 0, sizeof(state));
+    const char *cursor = new_name;
+    while (*cursor != '\0') {
+        wchar_t wc;
+        size_t consumed = mbrtowc(&wc, cursor, (size_t)-1, &state);
+        if (consumed == (size_t)-1 || consumed == (size_t)-2) {
+            // Invalid UTF-8 sequence
+            session_send_system_line(ctx, "Names may not contain invalid UTF-8 sequences.");
             return;
         }
+        if (consumed == 0) { // Should not happen with valid UTF-8, but as a safeguard
+            cursor++;
+            continue;
+        }
+
+        // Check if the character is a control character, DEL, space, or tab
+        if (wc < 0x20 || wc == 0x7F || wc == L' ' || wc == L'\t') {
+            session_send_system_line(ctx, "Names may not include control characters, DEL, space, or tab.");
+            return;
+        }
+        cursor += consumed;
     }
 
     if (host_is_username_banned(ctx->owner, new_name)) {
         session_send_system_line(
             ctx, "That nickname is blocked for bot detection. Choose another.");
+        return;
+    }
+
+    if(find_reserved_names(ctx, new_name)) {
+        session_send_system_line(ctx,
+                                 "That name is reserved.");
         return;
     }
 
@@ -324,11 +366,16 @@ static session_ctx_t *chat_room_find_user(chat_room_t *room,
 
 static bool host_username_reserved(host_t *host, const char *username)
 {
-    if (host == NULL || username == NULL) {
+    if (host == NULL || username == NULL || username[0] == '\0') {
         return false;
     }
 
-    return host_is_lan_operator_username(host, username);
+    // Check if it's a LAN operator username
+    if (host_is_lan_operator_username(host, username)) {
+        return true;
+    }
+
+    return false;
 }
 
 static join_activity_entry_t *host_find_join_activity_locked(host_t *host,
@@ -910,6 +957,16 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line)
         return;
     }
 
+    else if (session_parse_command_any(ctx, "/grant", effective_line, &args)) {
+        session_handle_grant(ctx, args);
+        return;
+    }
+
+    else if (session_parse_command_any(ctx, "/kick", effective_line, &args)) {
+        session_handle_kick(ctx, args);
+        return;
+    }
+
     else if (session_parse_command_any(ctx, "/set-sync-url", effective_line,
                                        &args)) {
         if (args == NULL || *args == '\0') {
@@ -1314,8 +1371,9 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line)
         return;
     }
 
-    else if (session_parse_command_any(ctx, "/kick", effective_line, &args)) {
-        session_handle_kick(ctx, args);
+    else if (session_parse_command_any(ctx, "/resetpw", effective_line,
+                                       &args)) {
+        session_handle_resetpw(ctx, args);
         return;
     }
 
@@ -2937,6 +2995,7 @@ static void *session_thread(void *arg)
                 SESSION_THREAD_RETURN(NULL);
             }
             authenticated = true;
+            ctx->user.is_authenticated = true;
             if (ctx->password_not_set) {
                 session_send_raw_text(
                     ctx, "Welcome! Your account has no password set. Please "
@@ -2980,6 +3039,16 @@ static void *session_thread(void *arg)
     session_apply_granted_privileges(ctx);
     session_apply_saved_preferences(ctx);
 
+    // Auto-nick for pure ASCII names if a preferred nickname is available
+    if (ctx->user.is_authenticated && is_pure_ascii(ctx->user.name) &&
+        ctx->user_data_loaded && ctx->user_data.preferred_nickname[0] != '\0' &&
+        strcasecmp(ctx->user.name, ctx->user_data.preferred_nickname) != 0) {
+        char nick_command[SSH_CHATTER_MAX_INPUT_LEN];
+        snprintf(nick_command, sizeof(nick_command), "/nick %s",
+                 ctx->user_data.preferred_nickname);
+        ctx->ops->dispatch_command(ctx, nick_command);
+    }
+
     bool captcha_enabled = false;
     if (ctx->owner != NULL) {
         captcha_enabled = atomic_load(&ctx->owner->captcha_enabled);
@@ -2998,15 +3067,17 @@ static void *session_thread(void *arg)
 
     const bool banned_username =
         host_is_username_banned(ctx->owner, ctx->user.name);
-    const bool reserved_username =
-        host_username_reserved(ctx->owner, ctx->user.name) &&
-        !ctx->user.is_lan_operator;
+    const bool system_reserved_username =
+        host_is_system_reserved_username(ctx->owner, ctx->user.name);
+    const bool lan_operator_reserved_username =
+        host_is_lan_operator_username(ctx->owner, ctx->user.name);
     session_ctx_t *existing =
         chat_room_find_user(&ctx->owner->room, ctx->user.name);
 
     // Check if same IP and nickname - allow reconnection by kicking existing session
     bool should_kick_existing = false;
-    if (existing != NULL && !banned_username && !reserved_username) {
+    if (existing != NULL && !banned_username && !system_reserved_username &&
+        !lan_operator_reserved_username) {
         if (strcmp(existing->client_ip, ctx->client_ip) == 0) {
             should_kick_existing = true;
             printf("[reconnect] same IP+nickname detected: %s from %s, kicking "
@@ -3032,7 +3103,9 @@ static void *session_thread(void *arg)
         existing = NULL;
     }
 
-    if (banned_username || reserved_username || existing != NULL) {
+    if (banned_username || system_reserved_username ||
+        (lan_operator_reserved_username && !ctx->user.is_lan_operator) ||
+        existing != NULL) {
         ctx->username_conflict = true;
         session_render_banner(ctx);
 
@@ -3047,22 +3120,37 @@ static void *session_thread(void *arg)
                 ctx,
                 "Reconnect with a different nickname before logging in again.");
             session_send_system_line(ctx, "Type /exit to quit.");
+        } else if (system_reserved_username) {
+            printf("[reject] system reserved username requested: %s\n",
+                   ctx->user.name);
+            char message[SSH_CHATTER_MESSAGE_LIMIT];
+            snprintf(message, sizeof(message),
+                     "The username '%s' is reserved for system use.",
+                     ctx->user.name);
+            session_send_system_line(ctx, message);
+            session_send_system_line(
+                ctx, "Reconnect with a different username by running: ssh "
+                     "newname@<server> (or ssh -l newname <server>).");
+            session_send_system_line(ctx, "Type /exit to quit.");
+        } else if (lan_operator_reserved_username && !ctx->user.is_lan_operator) {
+            printf("[reject] LAN operator reserved username requested: %s\n",
+                   ctx->user.name);
+            char message[SSH_CHATTER_MESSAGE_LIMIT];
+            snprintf(message, sizeof(message),
+                     "The username '%s' is reserved for LAN operators.",
+                     ctx->user.name);
+            session_send_system_line(ctx, message);
+            session_send_system_line(
+                ctx, "Reconnect with a different username by running: ssh "
+                     "newname@<server> (or ssh -l newname <server>).");
+            session_send_system_line(ctx, "Type /exit to quit.");
         } else {
-            if (reserved_username) {
-                printf("[reject] reserved username requested: %s\n",
-                       ctx->user.name);
-                char message[SSH_CHATTER_MESSAGE_LIMIT];
-                snprintf(message, sizeof(message),
-                         "The username '%s' is reserved.", ctx->user.name);
-                session_send_system_line(ctx, message);
-            } else {
-                printf("[reject] username in use: %s\n", ctx->user.name);
-                char message[SSH_CHATTER_MESSAGE_LIMIT];
-                snprintf(message, sizeof(message),
-                         "The username '%s' is already in use.",
-                         ctx->user.name);
-                session_send_system_line(ctx, message);
-            }
+            printf("[reject] username in use: %s\n", ctx->user.name);
+            char message[SSH_CHATTER_MESSAGE_LIMIT];
+            snprintf(message, sizeof(message),
+                     "The username '%s' is already in use.",
+                     ctx->user.name);
+            session_send_system_line(ctx, message);
             session_send_system_line(
                 ctx, "Reconnect with a different username by running: ssh "
                      "newname@<server> (or ssh -l newname <server>).");

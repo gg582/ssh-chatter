@@ -4509,7 +4509,10 @@ static bool session_telnet_prompt_initial_nickname(session_ctx_t *ctx)
             continue;
         }
 
-        snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", nickname);
+        if (is_pure_ascii(nickname)) {
+            to_lowercase(nickname);
+        }
+        ctx->ops->handle_nick(ctx, nickname);
         return true;
     }
 

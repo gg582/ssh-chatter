@@ -238,12 +238,23 @@ bool user_data_sanitize_username(const char *restrict username, char *restrict s
         return false;
     }
 
+    char temp_username[SSH_CHATTER_USERNAME_LEN + 1]; // +1 for null terminator
+    strncpy(temp_username, username, SSH_CHATTER_USERNAME_LEN);
+    temp_username[SSH_CHATTER_USERNAME_LEN] = '\0'; // Ensure null termination
+
+    // Convert all ASCII uppercase characters to lowercase
+    for (size_t idx = 0U; temp_username[idx] != '\0'; ++idx) {
+        if (temp_username[idx] >= 'A' && temp_username[idx] <= 'Z') {
+            temp_username[idx] = (char)tolower((unsigned char)temp_username[idx]);
+        }
+    }
+
     size_t out_idx = 0U;
-    for (size_t idx = 0U; username[idx] != '\0'; ++idx) {
-        unsigned char ch = (unsigned char)username[idx];
+    for (size_t idx = 0U; temp_username[idx] != '\0'; ++idx) {
+        unsigned char ch = (unsigned char)temp_username[idx];
         if (isalnum(ch)) {
             if (out_idx + 1U < length) {
-                sanitized[out_idx++] = (char)tolower(ch);
+                sanitized[out_idx++] = (char)ch; // Already lowercased if it was uppercase
             }
         } else if (ch == '-' || ch == '_' || ch == '.') {
             if (out_idx + 1U < length) {

@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include "host.h"
 
 #ifndef SSH_CHATTER_MAX_TRANSLATION_PLACEHOLDERS
 #define SSH_CHATTER_MAX_TRANSLATION_PLACEHOLDERS 32U
@@ -14,10 +15,6 @@
 
 #ifndef SSH_CHATTER_PLACEHOLDER_SEQUENCE_LEN
 #define SSH_CHATTER_PLACEHOLDER_SEQUENCE_LEN 64U
-#endif
-
-#ifndef SSH_CHATTER_MESSAGE_LIMIT
-#define SSH_CHATTER_MESSAGE_LIMIT 1024
 #endif
 
 #ifndef SSH_CHATTER_TRANSLATION_WORKING_LEN
@@ -54,5 +51,8 @@ bool translation_restore_text(const char *translated, char *output,
 
 bool translation_strip_no_translate_prefix(const char *message, char *stripped,
                                            size_t stripped_len);
+
+bool is_pure_ascii(const char *str);
+void to_lowercase(char *str);
 
 #endif

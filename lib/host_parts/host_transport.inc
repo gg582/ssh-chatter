@@ -2087,6 +2087,60 @@ static void session_handle_weather(session_ctx_t *ctx, const char *arguments);
 static void session_handle_pardon(session_ctx_t *ctx, const char *arguments);
 static void session_handle_ban_name(session_ctx_t *ctx, const char *arguments);
 static void session_handle_ban_list(session_ctx_t *ctx, const char *arguments);
+static bool host_add_operator_grant_locked(host_t *host, const char *ip);
+static void host_apply_grant_to_ip(host_t *host, const char *ip);
+static void host_state_save_locked(host_t *host);
+static void session_handle_grant(session_ctx_t *ctx, const char *arguments)
+{
+    if (ctx == NULL || ctx->owner == NULL) {
+        return;
+    }
+
+    if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
+        session_send_system_line(
+            ctx, "Only operators may grant operator privileges.");
+        return;
+    }
+
+    if (arguments == NULL) {
+        session_send_system_line(ctx, "Usage: /grant <ip-address>");
+        return;
+    }
+
+    char ip[SSH_CHATTER_IP_LEN];
+    snprintf(ip, sizeof(ip), "%s", arguments);
+    trim_whitespace_inplace(ip);
+    if (ip[0] == '\0') {
+        session_send_system_line(ctx, "Usage: /grant <ip-address>");
+        return;
+    }
+
+    unsigned char buf[sizeof(struct in6_addr)];
+    if (inet_pton(AF_INET, ip, buf) != 1 && inet_pton(AF_INET6, ip, buf) != 1) {
+        session_send_system_line(ctx, "Provide a valid IPv4 or IPv6 address.");
+        return;
+    }
+
+    pthread_mutex_lock(&ctx->owner->lock);
+    bool added = host_add_operator_grant_locked(ctx->owner, ip);
+    if (added) {
+        host_state_save_locked(ctx->owner);
+    }
+    pthread_mutex_unlock(&ctx->owner->lock);
+
+    if (!added) {
+        session_send_system_line(ctx, "That IP address already has a grant.");
+        return;
+    }
+
+    host_apply_grant_to_ip(ctx->owner, ip);
+
+    char message[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(message, sizeof(message), "Operator privileges granted to %s.", ip);
+    session_send_system_line(ctx, message);
+}
+
+static void session_handle_grant(session_ctx_t *ctx, const char *arguments);
 static void session_handle_kick(session_ctx_t *ctx, const char *arguments);
 static void session_handle_usercount(session_ctx_t *ctx);
 static bool host_username_reserved(host_t *host, const char *username);
@@ -2116,7 +2170,6 @@ static void session_handle_birthday(session_ctx_t *ctx, const char *arguments);
 static void session_handle_soulmate(session_ctx_t *ctx);
 static void session_handle_setpw(session_ctx_t *ctx, const char *arguments);
 static void session_handle_delpw(session_ctx_t *ctx, const char *arguments);
-static void session_handle_grant(session_ctx_t *ctx, const char *arguments);
 static void session_handle_revoke(session_ctx_t *ctx, const char *arguments);
 static void session_handle_delete_message(session_ctx_t *ctx,
                                           const char *arguments);
@@ -2234,9 +2287,7 @@ static void host_store_translation_preferences(host_t *host,
 static void host_store_ui_language(host_t *host, const session_ctx_t *ctx);
 static bool host_ip_has_grant_locked(host_t *host, const char *ip);
 static bool host_ip_has_grant(host_t *host, const char *ip);
-static bool host_add_operator_grant_locked(host_t *host, const char *ip);
 static bool host_remove_operator_grant_locked(host_t *host, const char *ip);
-static void host_apply_grant_to_ip(host_t *host, const char *ip);
 static void host_refresh_motd_locked(host_t *host);
 static void host_refresh_motd(host_t *host);
 static void host_build_birthday_notice_locked(host_t *host, char *line,

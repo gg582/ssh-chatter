@@ -53,6 +53,7 @@ typedef struct user_data_record {
     uint32_t magic;
     uint32_t version;
     char username[SSH_CHATTER_USERNAME_LEN];
+    char preferred_nickname[SSH_CHATTER_USERNAME_LEN];
     char last_ip[SSH_CHATTER_IP_LEN];
     uint32_t mailbox_count;
     user_data_mail_entry_t mailbox[USER_DATA_MAILBOX_LIMIT];

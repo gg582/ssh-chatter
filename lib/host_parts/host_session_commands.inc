@@ -1388,12 +1388,35 @@ static void session_handle_setpw(session_ctx_t *ctx, const char *arguments)
         return;
     }
 
+    pthread_mutex_lock(&ctx->nickname_reserve_lock);
+    strncpy(ctx->reserved_nicknames[ctx->reserved_nicknames_len], ctx->user.name, SSH_CHATTER_USERNAME_LEN);
+    ctx->reserved_nicknames_len++;
+    pthread_mutex_unlock(&ctx->nickname_reserve_lock);
     security_layer_generate_salt(ctx->user_data.password_salt);
     security_layer_hash_password(arguments, ctx->user_data.password_salt,
                                  ctx->user_data.password_hash);
 
     if (session_user_data_commit(ctx)) {
         session_send_system_line(ctx, "Password set successfully.");
+
+        // Add user's nickname to reserved list if password was set
+        if (ctx->owner != NULL && ctx->owner->reserved_nicknames_len < SSH_CHATTER_MAX_RESERVED_NAMES) {
+            pthread_mutex_lock(&ctx->owner->nickname_reserve_lock);
+            // Check if nickname is already reserved to avoid duplicates
+            bool already_reserved = false;
+            for (size_t i = 0; i < ctx->owner->reserved_nicknames_len; ++i) {
+                if (strncmp(ctx->owner->reserved_nicknames[i], ctx->user.name, SSH_CHATTER_USERNAME_LEN) == 0) {
+                    already_reserved = true;
+                    break;
+                }
+            }
+            if (!already_reserved) {
+                strncpy(ctx->owner->reserved_nicknames[ctx->owner->reserved_nicknames_len], ctx->user.name, SSH_CHATTER_USERNAME_LEN);
+                ctx->owner->reserved_nicknames_len++;
+            }
+            pthread_mutex_unlock(&ctx->owner->nickname_reserve_lock);
+        }
+
     } else {
         session_send_system_line(ctx, "Failed to save password.");
     }
@@ -1484,73 +1507,111 @@ static void session_handle_delpw(session_ctx_t *ctx, const char *arguments)
                      "Password for %s has been removed.", target_user);
             session_send_system_line(ctx, message);
         }
+
+        // Remove from reserved nicknames if password was deleted
+        if (ctx->owner != NULL && ctx->owner->reserved_nicknames_len > 0) {
+            pthread_mutex_lock(&ctx->owner->nickname_reserve_lock);
+            for (size_t i = 0; i < ctx->owner->reserved_nicknames_len; ++i) {
+                if (strncmp(ctx->owner->reserved_nicknames[i], target_user, SSH_CHATTER_USERNAME_LEN) == 0) {
+                    // Shift elements to the left to fill the gap
+                    memmove(&ctx->owner->reserved_nicknames[i], &ctx->owner->reserved_nicknames[i + 1],
+                            (ctx->owner->reserved_nicknames_len - i - 1) * sizeof(ctx->owner->reserved_nicknames[0]));
+                    // Decrement the count
+                    ctx->owner->reserved_nicknames_len--;
+                    // Zero out the last used slot to prevent stale data
+                    memset(&ctx->owner->reserved_nicknames[ctx->owner->reserved_nicknames_len], 0, sizeof(ctx->owner->reserved_nicknames[0]));
+                    break; // Found and removed, exit loop
+                }
+            }
+            pthread_mutex_unlock(&ctx->owner->nickname_reserve_lock);
+        }
+
     } else {
         session_send_system_line(ctx, "Failed to remove password.");
     }
 }
 
-static void session_handle_grant(session_ctx_t *ctx, const char *arguments)
+static void session_handle_resetpw(session_ctx_t *ctx, const char *arguments)
 {
     if (ctx == NULL || ctx->owner == NULL) {
         return;
     }
 
-    if (!ctx->user.is_lan_operator) {
-        session_send_system_line(
-            ctx, "Only LAN operators may grant operator privileges.");
+    // Only operators can reset passwords
+    if (!ctx->user.is_operator) {
+        session_send_system_line(ctx, "Only operators can reset passwords.");
         return;
     }
 
-    if (arguments == NULL) {
-        session_send_system_line(ctx, "Usage: /grant <ip-address>");
+    if (arguments == NULL || arguments[0] == '\0') {
+        session_send_system_line(ctx, "Usage: /resetpw <nickname>");
         return;
     }
 
-    char ip[SSH_CHATTER_IP_LEN];
-    snprintf(ip, sizeof(ip), "%s", arguments);
-    trim_whitespace_inplace(ip);
-    if (ip[0] == '\0') {
-        session_send_system_line(ctx, "Usage: /grant <ip-address>");
+    char target_nickname[SSH_CHATTER_USERNAME_LEN];
+    snprintf(target_nickname, sizeof(target_nickname), "%s", arguments);
+    trim_whitespace_inplace(target_nickname);
+
+    if (target_nickname[0] == '\0') {
+        session_send_system_line(ctx, "Usage: /resetpw <nickname>");
         return;
     }
 
-    unsigned char buf[sizeof(struct in6_addr)];
-    if (inet_pton(AF_INET, ip, buf) != 1 && inet_pton(AF_INET6, ip, buf) != 1) {
-        session_send_system_line(ctx, "Provide a valid IPv4 or IPv6 address.");
+    // Load the target user's data
+    user_data_record_t user_data;
+    // We need to find the user's IP to load their data correctly if they are offline.
+    // First, try to find the user in the current session list.
+    session_ctx_t *target_session = chat_room_find_user(&ctx->owner->room, target_nickname);
+    const char *target_ip = NULL;
+
+    if (target_session != NULL) {
+        target_ip = target_session->client_ip;
+    } else {
+        // If offline, try to find their last known IP from user data
+        char last_ip[SSH_CHATTER_IP_LEN];
+        if (host_lookup_last_ip(ctx->owner, target_nickname, last_ip, sizeof(last_ip))) {
+            target_ip = last_ip;
+        }
+    }
+
+    if (target_ip == NULL || target_ip[0] == '\0') {
+        char message[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(message, sizeof(message), "Could not find IP for user '%s'. Cannot reset password.", target_nickname);
+        session_send_system_line(ctx, message);
         return;
     }
 
-    bool already_granted = false;
-    bool added = false;
-    pthread_mutex_lock(&ctx->owner->lock);
-    already_granted = host_ip_has_grant_locked(ctx->owner, ip);
-    if (!already_granted) {
-        added = host_add_operator_grant_locked(ctx->owner, ip);
-        if (added) {
-            host_state_save_locked(ctx->owner);
+    if (!host_user_data_load_existing(ctx->owner, target_nickname, target_ip, &user_data, false)) {
+        char message[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(message, sizeof(message), "Failed to load data for user '%s'.", target_nickname);
+        session_send_system_line(ctx, message);
+        return;
+    }
+
+    // Clear the password salt and hash
+    memset(user_data.password_salt, 0, sizeof(user_data.password_salt));
+    memset(user_data.password_hash, 0, sizeof(user_data.password_hash));
+
+    // Save the modified user data
+    bool success = user_data_save(ctx->owner->user_data_root, &user_data, target_ip);
+
+    if (success) {
+        char message[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(message, sizeof(message), "Password for '%s' has been reset.", target_nickname);
+        session_send_system_line(ctx, message);
+
+        // If the user is currently online, notify them or clear their session password state
+        if (target_session != NULL) {
+            // Ideally, we'd also clear the password state in the session_ctx if it's cached,
+            // but for now, just notifying the operator is sufficient.
+            // A more robust solution might involve a signal to the target_session.
         }
     } else {
-        added = true;
-    }
-    pthread_mutex_unlock(&ctx->owner->lock);
-
-    if (!added) {
-        session_send_system_line(ctx, "Cannot store more grants right now.");
-        return;
-    }
-
-    if (already_granted) {
-        session_send_system_line(ctx,
-                                 "That IP already has operator privileges.");
-    } else {
         char message[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(message, sizeof(message),
-                 "Operator privileges will be applied to %s.", ip);
+        snprintf(message, sizeof(message), "Failed to reset password for '%s'.", target_nickname);
         session_send_system_line(ctx, message);
     }
-    host_apply_grant_to_ip(ctx->owner, ip);
 }
-
 static void session_handle_revoke(session_ctx_t *ctx, const char *arguments)
 {
     if (ctx == NULL || ctx->owner == NULL) {

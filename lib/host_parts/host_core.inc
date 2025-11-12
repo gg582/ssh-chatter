@@ -1,3 +1,34 @@
+static bool host_is_system_reserved_username(host_t *host, const char *username)
+{
+    if (host == NULL || username == NULL || username[0] == '\0') {
+        return false;
+    }
+
+    // List of system-reserved usernames that even authenticated users cannot use
+    static const char *const system_reserved_names[] = {
+        "Guest",
+        "Admin",
+        "Operator",
+        "System",
+        "Root",
+        "Moderator",
+        "Chatter",
+        "ssh-chatter",
+        "bot",
+        "Bot",
+        "BOT",
+    };
+    static const size_t system_reserved_names_count =
+        sizeof(system_reserved_names) / sizeof(system_reserved_names[0]);
+
+    for (size_t i = 0; i < system_reserved_names_count; ++i) {
+        if (strcasecmp(username, system_reserved_names[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Core host definitions, constants, and low-level helpers.
 
 #ifndef _GNU_SOURCE

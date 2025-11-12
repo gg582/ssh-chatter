@@ -94,6 +94,7 @@
 #define SSH_CHATTER_VERSION_NOTE_LEN 96
 #define SSH_CHATTER_CIDR_TEXT_LEN 64
 #define SSH_CHATTER_MAX_PROTECTED_IPS 16
+#define SSH_CHATTER_MAX_RESERVED_NAMES 16384
 
 #include "user_data.h"
 
@@ -144,6 +145,7 @@ typedef struct chat_user {
     char name[SSH_CHATTER_USERNAME_LEN];
     bool is_operator;
     bool is_lan_operator;
+    bool is_authenticated;
 } chat_user_t;
 
 typedef struct lan_operator_credential {
@@ -555,6 +557,9 @@ typedef struct session_ctx {
     bool translation_thread_started;
     bool translation_thread_stop;
     pthread_t translation_thread;
+    char reserved_nicknames[SSH_CHATTER_MAX_RESERVED_NAMES][SSH_CHATTER_USERNAME_LEN];
+    size_t reserved_nicknames_len;
+    pthread_mutex_t nickname_reserve_lock;
     struct translation_job *translation_pending_head;
     struct translation_job *translation_pending_tail;
     struct translation_result *translation_ready_head;
@@ -805,6 +810,10 @@ typedef struct host {
     _Atomic bool rss_thread_running;
     _Atomic bool rss_thread_stop;
     struct timespec rss_last_run;
+    // Add members for managing reserved nicknames
+    char reserved_nicknames[SSH_CHATTER_MAX_RESERVED_NAMES][SSH_CHATTER_USERNAME_LEN];
+    size_t reserved_nicknames_len;
+    pthread_mutex_t nickname_reserve_lock;
     volatile sig_atomic_t *shutdown_flag;
 } host_t;
 
@@ -827,4 +836,6 @@ bool host_snapshot_last_captcha(host_t *host, char *question,
                                 size_t question_length, char *answer,
                                 size_t answer_length,
                                 struct timespec *timestamp);
+bool is_pure_ascii(const char *str);
+bool is_nullarray(uint8_t *arr, size_t len);
 #endif

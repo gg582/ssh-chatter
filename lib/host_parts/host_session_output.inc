@@ -224,7 +224,7 @@ static void session_copy_lowercase(const char *source, char *dest,
     dest[write] = '\0';
 }
 
-static bool is_pure_ascii(const char *str)
+bool is_pure_ascii(const char *str)
 {
     size_t len = strlen(str);
     for (size_t i = 0; i < len; i++) {
@@ -3462,7 +3462,7 @@ static bool session_handle_service_request(ssh_message message)
     return false;
 }
 
-static bool is_nullarray(uint8_t *arr, size_t len) {
+bool is_nullarray(uint8_t *arr, size_t len) {
     uint8_t zeros[len];
     memset(zeros, 0, len);
     return memcmp(arr, zeros, len) == 0;

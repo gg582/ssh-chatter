@@ -1,6 +1,7 @@
 // This file now stitches together the host implementation from smaller parts.
 // See lib/host_parts/ for the individual sections.
 
+#include "headers/translation_helpers.h"
 #include "host_parts/host_core.inc"
 #include "host_parts/host_transport.inc"
 #include "host_parts/host_security_and_moderation.inc"
