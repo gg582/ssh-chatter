@@ -5,6 +5,7 @@
 #include "lib/headers/user_data.h"
 #include "lib/headers/memory_manager.h"
 #include "lib/headers/translator.h"
+#include "lib/headers/ssh_chatter_backend.h" // backend functions that is external should be located here
 
 #include <libssh/libssh.h>
 
@@ -25,6 +26,7 @@
 #define HOST_STABLE_RESET_SECONDS 10.0
 
 static volatile sig_atomic_t g_shutdown_flag = 0;
+static char *g_welcome_banner_content = NULL;
 
 static void signal_handler(int signum)
 {
@@ -356,6 +358,19 @@ int main(int argc, char **argv)
         sshc_memory_context_t *serve_scope =
             sshc_memory_context_push(host->memory_context);
 
+        const char *welcome_banner_path = getenv("CHATTER_WELCOME_BANNER");
+        g_welcome_banner_content =
+            session_show_welcome_banner(welcome_banner_path);
+        if (g_welcome_banner_content == NULL) {
+            // Optionally log an error if banner path is set but file is not found/readable
+            if (welcome_banner_path != NULL) {
+                fprintf(
+                    stderr,
+                    "[main] Warning: Could not load welcome banner from %s\n",
+                    welcome_banner_path);
+            }
+        }
+
         const int serve_result =
             host_serve(host, bind_address, bind_port, host_key_dir,
                        telnet_bind_address, telnet_port);
@@ -435,6 +450,10 @@ int main(int argc, char **argv)
     }
 
     // Cleanup before exit
+    if (g_welcome_banner_content != NULL) {
+        free(g_welcome_banner_content);
+        g_welcome_banner_content = NULL;
+    }
     ssh_chatter_sync_stop();
     ssh_chatter_sync_free_history();
     translator_global_cleanup();

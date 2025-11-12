@@ -226,8 +226,8 @@ bool user_data_ensure_root(const char *restrict root)
     return user_data_create_directory(profile_root);
 }
 
-bool user_data_sanitize_username(const char *restrict username, char *restrict sanitized,
-                                 size_t length)
+bool user_data_sanitize_username(const char *restrict username,
+                                 char *restrict sanitized, size_t length)
 {
     if (sanitized == NULL || length == 0U) {
         return false;
@@ -245,7 +245,8 @@ bool user_data_sanitize_username(const char *restrict username, char *restrict s
     // Convert all ASCII uppercase characters to lowercase
     for (size_t idx = 0U; temp_username[idx] != '\0'; ++idx) {
         if (temp_username[idx] >= 'A' && temp_username[idx] <= 'Z') {
-            temp_username[idx] = (char)tolower((unsigned char)temp_username[idx]);
+            temp_username[idx] =
+                (char)tolower((unsigned char)temp_username[idx]);
         }
     }
 
@@ -254,7 +255,8 @@ bool user_data_sanitize_username(const char *restrict username, char *restrict s
         unsigned char ch = (unsigned char)temp_username[idx];
         if (isalnum(ch)) {
             if (out_idx + 1U < length) {
-                sanitized[out_idx++] = (char)ch; // Already lowercased if it was uppercase
+                sanitized[out_idx++] =
+                    (char)ch; // Already lowercased if it was uppercase
             }
         } else if (ch == '-' || ch == '_' || ch == '.') {
             if (out_idx + 1U < length) {
@@ -279,8 +281,10 @@ bool user_data_sanitize_username(const char *restrict username, char *restrict s
     return true;
 }
 
-bool user_data_path_for(const char *restrict root, const char *restrict username, const char *restrict ip,
-                        bool create_if_missing, char *restrict path, size_t length)
+bool user_data_path_for(const char *restrict root,
+                        const char *restrict username, const char *restrict ip,
+                        bool create_if_missing, char *restrict path,
+                        size_t length)
 {
     if (path == NULL || length == 0U || root == NULL || root[0] == '\0') {
         return false;
@@ -544,8 +548,8 @@ static void user_data_normalize_record(user_data_record_t *record,
     }
 }
 
-bool user_data_init(user_data_record_t *restrict record, const char *restrict username,
-                    const char *restrict ip)
+bool user_data_init(user_data_record_t *restrict record,
+                    const char *restrict username, const char *restrict ip)
 {
     if (record == NULL) {
         return false;
@@ -584,7 +588,8 @@ bool user_data_init(user_data_record_t *restrict record, const char *restrict us
     return true;
 }
 
-bool user_data_load(const char *restrict root, const char *restrict username, const char *restrict ip,
+bool user_data_load(const char *restrict root, const char *restrict username,
+                    const char *restrict ip,
                     user_data_record_t *restrict record)
 {
     if (record == NULL) {
@@ -614,7 +619,8 @@ bool user_data_load(const char *restrict root, const char *restrict username, co
     return true;
 }
 
-bool user_data_save(const char *restrict root, const user_data_record_t *restrict record,
+bool user_data_save(const char *restrict root,
+                    const user_data_record_t *restrict record,
                     const char *restrict ip)
 {
     if (record == NULL) {
@@ -703,8 +709,10 @@ bool user_data_save(const char *restrict root, const user_data_record_t *restric
     return true;
 }
 
-bool user_data_ensure_exists(const char *restrict root, const char *restrict username,
-                             const char *restrict ip, user_data_record_t *restrict record)
+bool user_data_ensure_exists(const char *restrict root,
+                             const char *restrict username,
+                             const char *restrict ip,
+                             user_data_record_t *restrict record)
 {
     if (record != NULL && user_data_load(root, username, ip, record)) {
         return true;
@@ -726,7 +734,8 @@ bool user_data_ensure_exists(const char *restrict root, const char *restrict use
 }
 
 void user_data_set_ssh_chat_server_config(user_data_record_t *restrict record,
-                                          const char *restrict url, uint16_t port)
+                                          const char *restrict url,
+                                          uint16_t port)
 {
     if (record == NULL) {
         return;
@@ -742,9 +751,9 @@ void user_data_set_ssh_chat_server_config(user_data_record_t *restrict record,
     record->ssh_chat_server_port = port;
 }
 
-void user_data_get_ssh_chat_server_config(const user_data_record_t *restrict record,
-                                          char *restrict url, size_t url_len,
-                                          uint16_t *restrict port)
+void user_data_get_ssh_chat_server_config(
+    const user_data_record_t *restrict record, char *restrict url,
+    size_t url_len, uint16_t *restrict port)
 {
     if (record == NULL) {
         if (url != NULL && url_len > 0) {

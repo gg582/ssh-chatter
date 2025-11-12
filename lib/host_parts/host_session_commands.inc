@@ -1377,8 +1377,10 @@ static void session_handle_setpw(session_ctx_t *ctx, const char *arguments)
     }
 
     if (arguments == NULL || arguments[0] == '\0') {
-        memset(ctx->user_data.password_salt, 0, sizeof(ctx->user_data.password_salt));
-        memset(ctx->user_data.password_hash, 0, sizeof(ctx->user_data.password_hash));
+        memset(ctx->user_data.password_salt, 0,
+               sizeof(ctx->user_data.password_salt));
+        memset(ctx->user_data.password_hash, 0,
+               sizeof(ctx->user_data.password_hash));
 
         if (session_user_data_commit(ctx)) {
             session_send_system_line(ctx, "Password removed.");
@@ -1389,7 +1391,8 @@ static void session_handle_setpw(session_ctx_t *ctx, const char *arguments)
     }
 
     pthread_mutex_lock(&ctx->nickname_reserve_lock);
-    strncpy(ctx->reserved_nicknames[ctx->reserved_nicknames_len], ctx->user.name, SSH_CHATTER_USERNAME_LEN);
+    strncpy(ctx->reserved_nicknames[ctx->reserved_nicknames_len],
+            ctx->user.name, SSH_CHATTER_USERNAME_LEN);
     ctx->reserved_nicknames_len++;
     pthread_mutex_unlock(&ctx->nickname_reserve_lock);
     security_layer_generate_salt(ctx->user_data.password_salt);
@@ -1400,18 +1403,22 @@ static void session_handle_setpw(session_ctx_t *ctx, const char *arguments)
         session_send_system_line(ctx, "Password set successfully.");
 
         // Add user's nickname to reserved list if password was set
-        if (ctx->owner != NULL && ctx->owner->reserved_nicknames_len < SSH_CHATTER_MAX_RESERVED_NAMES) {
+        if (ctx->owner != NULL && ctx->owner->reserved_nicknames_len <
+                                      SSH_CHATTER_MAX_RESERVED_NAMES) {
             pthread_mutex_lock(&ctx->owner->nickname_reserve_lock);
             // Check if nickname is already reserved to avoid duplicates
             bool already_reserved = false;
             for (size_t i = 0; i < ctx->owner->reserved_nicknames_len; ++i) {
-                if (strncmp(ctx->owner->reserved_nicknames[i], ctx->user.name, SSH_CHATTER_USERNAME_LEN) == 0) {
+                if (strncmp(ctx->owner->reserved_nicknames[i], ctx->user.name,
+                            SSH_CHATTER_USERNAME_LEN) == 0) {
                     already_reserved = true;
                     break;
                 }
             }
             if (!already_reserved) {
-                strncpy(ctx->owner->reserved_nicknames[ctx->owner->reserved_nicknames_len], ctx->user.name, SSH_CHATTER_USERNAME_LEN);
+                strncpy(ctx->owner->reserved_nicknames
+                            [ctx->owner->reserved_nicknames_len],
+                        ctx->user.name, SSH_CHATTER_USERNAME_LEN);
                 ctx->owner->reserved_nicknames_len++;
             }
             pthread_mutex_unlock(&ctx->owner->nickname_reserve_lock);
@@ -1512,14 +1519,19 @@ static void session_handle_delpw(session_ctx_t *ctx, const char *arguments)
         if (ctx->owner != NULL && ctx->owner->reserved_nicknames_len > 0) {
             pthread_mutex_lock(&ctx->owner->nickname_reserve_lock);
             for (size_t i = 0; i < ctx->owner->reserved_nicknames_len; ++i) {
-                if (strncmp(ctx->owner->reserved_nicknames[i], target_user, SSH_CHATTER_USERNAME_LEN) == 0) {
+                if (strncmp(ctx->owner->reserved_nicknames[i], target_user,
+                            SSH_CHATTER_USERNAME_LEN) == 0) {
                     // Shift elements to the left to fill the gap
-                    memmove(&ctx->owner->reserved_nicknames[i], &ctx->owner->reserved_nicknames[i + 1],
-                            (ctx->owner->reserved_nicknames_len - i - 1) * sizeof(ctx->owner->reserved_nicknames[0]));
+                    memmove(&ctx->owner->reserved_nicknames[i],
+                            &ctx->owner->reserved_nicknames[i + 1],
+                            (ctx->owner->reserved_nicknames_len - i - 1) *
+                                sizeof(ctx->owner->reserved_nicknames[0]));
                     // Decrement the count
                     ctx->owner->reserved_nicknames_len--;
                     // Zero out the last used slot to prevent stale data
-                    memset(&ctx->owner->reserved_nicknames[ctx->owner->reserved_nicknames_len], 0, sizeof(ctx->owner->reserved_nicknames[0]));
+                    memset(&ctx->owner->reserved_nicknames
+                                [ctx->owner->reserved_nicknames_len],
+                           0, sizeof(ctx->owner->reserved_nicknames[0]));
                     break; // Found and removed, exit loop
                 }
             }
@@ -1561,7 +1573,8 @@ static void session_handle_resetpw(session_ctx_t *ctx, const char *arguments)
     user_data_record_t user_data;
     // We need to find the user's IP to load their data correctly if they are offline.
     // First, try to find the user in the current session list.
-    session_ctx_t *target_session = chat_room_find_user(&ctx->owner->room, target_nickname);
+    session_ctx_t *target_session =
+        chat_room_find_user(&ctx->owner->room, target_nickname);
     const char *target_ip = NULL;
 
     if (target_session != NULL) {
@@ -1569,21 +1582,26 @@ static void session_handle_resetpw(session_ctx_t *ctx, const char *arguments)
     } else {
         // If offline, try to find their last known IP from user data
         char last_ip[SSH_CHATTER_IP_LEN];
-        if (host_lookup_last_ip(ctx->owner, target_nickname, last_ip, sizeof(last_ip))) {
+        if (host_lookup_last_ip(ctx->owner, target_nickname, last_ip,
+                                sizeof(last_ip))) {
             target_ip = last_ip;
         }
     }
 
     if (target_ip == NULL || target_ip[0] == '\0') {
         char message[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(message, sizeof(message), "Could not find IP for user '%s'. Cannot reset password.", target_nickname);
+        snprintf(message, sizeof(message),
+                 "Could not find IP for user '%s'. Cannot reset password.",
+                 target_nickname);
         session_send_system_line(ctx, message);
         return;
     }
 
-    if (!host_user_data_load_existing(ctx->owner, target_nickname, target_ip, &user_data, false)) {
+    if (!host_user_data_load_existing(ctx->owner, target_nickname, target_ip,
+                                      &user_data, false)) {
         char message[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(message, sizeof(message), "Failed to load data for user '%s'.", target_nickname);
+        snprintf(message, sizeof(message), "Failed to load data for user '%s'.",
+                 target_nickname);
         session_send_system_line(ctx, message);
         return;
     }
@@ -1593,11 +1611,13 @@ static void session_handle_resetpw(session_ctx_t *ctx, const char *arguments)
     memset(user_data.password_hash, 0, sizeof(user_data.password_hash));
 
     // Save the modified user data
-    bool success = user_data_save(ctx->owner->user_data_root, &user_data, target_ip);
+    bool success =
+        user_data_save(ctx->owner->user_data_root, &user_data, target_ip);
 
     if (success) {
         char message[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(message, sizeof(message), "Password for '%s' has been reset.", target_nickname);
+        snprintf(message, sizeof(message), "Password for '%s' has been reset.",
+                 target_nickname);
         session_send_system_line(ctx, message);
 
         // If the user is currently online, notify them or clear their session password state
@@ -1608,7 +1628,8 @@ static void session_handle_resetpw(session_ctx_t *ctx, const char *arguments)
         }
     } else {
         char message[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(message, sizeof(message), "Failed to reset password for '%s'.", target_nickname);
+        snprintf(message, sizeof(message), "Failed to reset password for '%s'.",
+                 target_nickname);
         session_send_system_line(ctx, message);
     }
 }

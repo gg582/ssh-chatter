@@ -8,6 +8,8 @@
 extern "C" {
 #endif
 
+char *session_show_welcome_banner(const char *path);
+
 void ssh_chatter_backend_init(void);
 
 bool ssh_chatter_backend_translate_line(const char *message,

@@ -557,7 +557,8 @@ typedef struct session_ctx {
     bool translation_thread_started;
     bool translation_thread_stop;
     pthread_t translation_thread;
-    char reserved_nicknames[SSH_CHATTER_MAX_RESERVED_NAMES][SSH_CHATTER_USERNAME_LEN];
+    char reserved_nicknames[SSH_CHATTER_MAX_RESERVED_NAMES]
+                           [SSH_CHATTER_USERNAME_LEN];
     size_t reserved_nicknames_len;
     pthread_mutex_t nickname_reserve_lock;
     struct translation_job *translation_pending_head;
@@ -811,7 +812,8 @@ typedef struct host {
     _Atomic bool rss_thread_stop;
     struct timespec rss_last_run;
     // Add members for managing reserved nicknames
-    char reserved_nicknames[SSH_CHATTER_MAX_RESERVED_NAMES][SSH_CHATTER_USERNAME_LEN];
+    char reserved_nicknames[SSH_CHATTER_MAX_RESERVED_NAMES]
+                           [SSH_CHATTER_USERNAME_LEN];
     size_t reserved_nicknames_len;
     pthread_mutex_t nickname_reserve_lock;
     volatile sig_atomic_t *shutdown_flag;

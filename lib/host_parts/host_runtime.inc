@@ -170,7 +170,8 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments)
     }
 }
 
-static bool find_reserved_names(session_ctx_t *ctx, const char *nick) {
+static bool find_reserved_names(session_ctx_t *ctx, const char *nick)
+{
     if (ctx == NULL || ctx->owner == NULL || nick == NULL || nick[0] == '\0') {
         return false;
     }
@@ -178,7 +179,8 @@ static bool find_reserved_names(session_ctx_t *ctx, const char *nick) {
     bool found = false;
     pthread_mutex_lock(&ctx->owner->nickname_reserve_lock);
     for (size_t i = 0; i < ctx->owner->reserved_nicknames_len; ++i) {
-        if (strncmp(nick, ctx->owner->reserved_nicknames[i], SSH_CHATTER_USERNAME_LEN) == 0) {
+        if (strncmp(nick, ctx->owner->reserved_nicknames[i],
+                    SSH_CHATTER_USERNAME_LEN) == 0) {
             found = true;
             break;
         }
@@ -220,17 +222,20 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments)
         size_t consumed = mbrtowc(&wc, cursor, (size_t)-1, &state);
         if (consumed == (size_t)-1 || consumed == (size_t)-2) {
             // Invalid UTF-8 sequence
-            session_send_system_line(ctx, "Names may not contain invalid UTF-8 sequences.");
+            session_send_system_line(
+                ctx, "Names may not contain invalid UTF-8 sequences.");
             return;
         }
-        if (consumed == 0) { // Should not happen with valid UTF-8, but as a safeguard
+        if (consumed ==
+            0) { // Should not happen with valid UTF-8, but as a safeguard
             cursor++;
             continue;
         }
 
         // Check if the character is a control character, DEL, space, or tab
         if (wc < 0x20 || wc == 0x7F || wc == L' ' || wc == L'\t') {
-            session_send_system_line(ctx, "Names may not include control characters, DEL, space, or tab.");
+            session_send_system_line(ctx, "Names may not include control "
+                                          "characters, DEL, space, or tab.");
             return;
         }
         cursor += consumed;
@@ -242,9 +247,8 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments)
         return;
     }
 
-    if(find_reserved_names(ctx, new_name)) {
-        session_send_system_line(ctx,
-                                 "That name is reserved.");
+    if (find_reserved_names(ctx, new_name)) {
+        session_send_system_line(ctx, "That name is reserved.");
         return;
     }
 
@@ -3132,7 +3136,8 @@ static void *session_thread(void *arg)
                 ctx, "Reconnect with a different username by running: ssh "
                      "newname@<server> (or ssh -l newname <server>).");
             session_send_system_line(ctx, "Type /exit to quit.");
-        } else if (lan_operator_reserved_username && !ctx->user.is_lan_operator) {
+        } else if (lan_operator_reserved_username &&
+                   !ctx->user.is_lan_operator) {
             printf("[reject] LAN operator reserved username requested: %s\n",
                    ctx->user.name);
             char message[SSH_CHATTER_MESSAGE_LIMIT];
@@ -3148,8 +3153,7 @@ static void *session_thread(void *arg)
             printf("[reject] username in use: %s\n", ctx->user.name);
             char message[SSH_CHATTER_MESSAGE_LIMIT];
             snprintf(message, sizeof(message),
-                     "The username '%s' is already in use.",
-                     ctx->user.name);
+                     "The username '%s' is already in use.", ctx->user.name);
             session_send_system_line(ctx, message);
             session_send_system_line(
                 ctx, "Reconnect with a different username by running: ssh "

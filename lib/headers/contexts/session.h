@@ -6,7 +6,6 @@
 
 #include "host.h"
 
-
 game_ctx_t game;
 char chosen_camouflage_language[32];
 bool is_camouflaged;

@@ -2136,7 +2136,8 @@ static void session_handle_grant(session_ctx_t *ctx, const char *arguments)
     host_apply_grant_to_ip(ctx->owner, ip);
 
     char message[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(message, sizeof(message), "Operator privileges granted to %s.", ip);
+    snprintf(message, sizeof(message), "Operator privileges granted to %s.",
+             ip);
     session_send_system_line(ctx, message);
 }
 

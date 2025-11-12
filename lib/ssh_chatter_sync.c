@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 #if defined(SSH_CHATTER_USE_GC) && SSH_CHATTER_USE_GC
-#    include<gc/gc.h>
+#include <gc/gc.h>
 #endif
 
 static ssh_session session = NULL;
