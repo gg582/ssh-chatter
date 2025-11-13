@@ -2960,6 +2960,67 @@ static void session_destroy(session_ctx_t *ctx)
 #endif
 }
 
+session_ctx_t *host_session_create_for_testing(host_t *host,
+                                               const char *username,
+                                               const char *ip,
+                                               bool is_operator)
+{
+    if (host == NULL) {
+        return NULL;
+    }
+
+    session_ctx_t *ctx = session_create();
+    if (ctx == NULL) {
+        return NULL;
+    }
+
+    ctx->owner = host;
+    ctx->ops = &ssh_session_ops;
+    ctx->transport_kind = SESSION_TRANSPORT_SSH;
+    ctx->telnet_fd = -1;
+    ctx->input_mode = SESSION_INPUT_MODE_CHAT;
+    ctx->has_joined_room = true;
+    ctx->user.is_authenticated = true;
+    ctx->user.is_operator = is_operator;
+    ctx->ui_language = SESSION_UI_LANGUAGE_EN;
+
+    const char *resolved_name =
+        (username != NULL && username[0] != '\0') ? username : "tester";
+    snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", resolved_name);
+
+    if (ip != NULL && ip[0] != '\0') {
+        snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%s", ip);
+    } else {
+        snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%s", "127.0.0.1");
+    }
+
+    pthread_mutexattr_t lock_attr;
+    pthread_mutexattr_init(&lock_attr);
+    pthread_mutexattr_settype(&lock_attr, PTHREAD_MUTEX_RECURSIVE);
+    if (pthread_mutex_init(&ctx->output_lock, &lock_attr) != 0) {
+        pthread_mutexattr_destroy(&lock_attr);
+        session_destroy(ctx);
+        return NULL;
+    }
+    pthread_mutexattr_destroy(&lock_attr);
+    ctx->output_lock_initialized = true;
+
+    if (pthread_mutex_init(&ctx->channel_mutex, NULL) != 0) {
+        session_destroy(ctx);
+        return NULL;
+    }
+    ctx->channel_mutex_initialized = true;
+
+    session_apply_theme_defaults(ctx);
+
+    return ctx;
+}
+
+void host_session_destroy_for_testing(session_ctx_t *ctx)
+{
+    session_destroy(ctx);
+}
+
 static void *session_thread(void *arg)
 {
     session_ctx_t *ctx = (session_ctx_t *)arg;
@@ -4378,17 +4439,21 @@ static void host_sleep_after_error(host_t *host)
     host_sleep_uninterruptible(&delay);
 }
 
-void host_shutdown(host_t *host)
+static void host_shutdown_internal(host_t *host, bool send_sigterm)
 {
     if (host == NULL) {
         return;
     }
 
-    // Terminate all child processes in the same process group
-    kill(0, SIGTERM);
+    if (send_sigterm) {
+        // Terminate all child processes in the same process group
+        kill(0, SIGTERM);
+    }
 
-    sshc_memory_context_t *memory_scope =
-        sshc_memory_context_push(host->memory_context);
+    sshc_memory_context_t *memory_scope = NULL;
+    if (host->memory_context != NULL) {
+        memory_scope = sshc_memory_context_push(host->memory_context);
+    }
 
     host_eliza_worker_shutdown(host);
     host_moderation_shutdown(host);
@@ -4476,7 +4541,19 @@ void host_shutdown(host_t *host)
         host->security_layer_initialized = false;
     }
 
-    sshc_memory_context_pop(memory_scope);
+    if (memory_scope != NULL) {
+        sshc_memory_context_pop(memory_scope);
+    }
+}
+
+void host_shutdown(host_t *host)
+{
+    host_shutdown_internal(host, true);
+}
+
+void host_shutdown_for_testing(host_t *host)
+{
+    host_shutdown_internal(host, false);
 }
 
 int host_serve(host_t *host, const char *bind_addr, const char *port,

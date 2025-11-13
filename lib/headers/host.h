@@ -838,10 +838,19 @@ bool host_post_client_message(host_t *host, const char *username,
                               const char *message, const char *color_name,
                               const char *highlight_name, bool is_bold);
 void host_shutdown(host_t *host);
+void host_shutdown_for_testing(host_t *host);
 bool host_snapshot_last_captcha(host_t *host, char *question,
                                 size_t question_length, char *answer,
                                 size_t answer_length,
                                 struct timespec *timestamp);
 bool is_pure_ascii(const char *str);
 bool is_nullarray(uint8_t *arr, size_t len);
+
+session_ctx_t *host_session_create_for_testing(host_t *host,
+                                               const char *username,
+                                               const char *ip,
+                                               bool is_operator);
+void host_session_destroy_for_testing(session_ctx_t *ctx);
+void host_session_process_line_for_testing(session_ctx_t *ctx,
+                                           const char *line);
 #endif

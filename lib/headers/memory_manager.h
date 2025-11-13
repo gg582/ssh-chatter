@@ -80,6 +80,14 @@ static inline void *GC_CALLOC(size_t count, size_t size)
     return ptr;
 }
 
+static inline char *sshc_strdup(const char *text)
+{
+    if (text == NULL) {
+        return NULL;
+    }
+    return GC_strdup(text);
+}
+
 #else
 
 #include <stdbool.h>
@@ -99,6 +107,22 @@ void *GC_MALLOC(size_t size);
 void GC_free(void *ptr);
 #define GC_FREE(x) GC_free(x)
 void *GC_CALLOC(size_t count, size_t size);
+
+static inline char *sshc_strdup(const char *text)
+{
+    if (text == NULL) {
+        return NULL;
+    }
+
+    size_t length = strlen(text) + 1U;
+    char *copy = (char *)GC_MALLOC(length);
+    if (copy == NULL) {
+        return NULL;
+    }
+
+    memcpy(copy, text, length);
+    return copy;
+}
 
 #endif
 

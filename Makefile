@@ -85,8 +85,12 @@ SHARED_SRC := lib/translator.c lib/translation_helpers.c lib/ssh_chatter_backend
 SHARED_OBJ := $(SHARED_SRC:.c=.o)
 DEP := $(OBJ:.o=.d)
 
+STRESS_TARGET := stress-test
+STRESS_SRC := tests/stress_main.c
+STRESS_OBJ := $(STRESS_SRC:.c=.o)
 
-.PHONY: all clean run
+
+.PHONY: all clean run stress-test
 
 # ==============================================================================
 # BUILD RULES (Single Stage)
@@ -103,6 +107,9 @@ $(TARGET): $(OBJ)
 $(SHARED_TARGET): $(SHARED_OBJ)
 	$(CC) $(CFLAGS) -shared -o $@ $^ $(COMMON_LDFLAGS)
 
+$(STRESS_TARGET): $(filter-out main.o,$(OBJ)) $(STRESS_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
 # Rule for compiling object files
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -111,8 +118,8 @@ run: $(TARGET)
 	./$(TARGET)
 
 clean:
-	# Cleanup only for LTO/standard build files
-	rm -f $(OBJ) $(TARGET) $(SHARED_TARGET) $(DEP)
+# Cleanup only for LTO/standard build files
+	rm -f $(OBJ) $(TARGET) $(SHARED_TARGET) $(DEP) $(STRESS_OBJ) $(STRESS_TARGET)
 
 # Include dependency files
 -include $(DEP)
