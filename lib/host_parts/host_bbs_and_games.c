@@ -1997,6 +1997,74 @@ static void session_game_othello_handle_line_multiplayer(session_ctx_t *ctx,
     }
 }
 
+bool session_game_othello_handle_forced_exit(session_ctx_t *ctx)
+{
+    if (ctx == NULL || ctx->owner == NULL) {
+        return false;
+    }
+
+    if (!ctx->game.active || ctx->game.type != SESSION_GAME_OTHELLO) {
+        return false;
+    }
+
+    othello_game_state_t *state = &ctx->game.othello;
+    if (!state->multiplayer || state->slot_index <= 0) {
+        return false;
+    }
+
+    host_t *host = ctx->owner;
+    pthread_mutex_lock(&host->lock);
+    othello_multiplayer_slot_t *slot =
+        host_othello_slot_by_id_locked(host, state->slot_index);
+    if (slot == NULL || !slot->in_use || !slot->active) {
+        pthread_mutex_unlock(&host->lock);
+        return false;
+    }
+
+    bool is_player_one = slot->players[0] == ctx;
+    bool is_player_two = slot->players[1] == ctx;
+    session_ctx_t *opponent = NULL;
+    if (is_player_one) {
+        opponent = slot->players[1];
+    } else if (is_player_two) {
+        opponent = slot->players[0];
+    } else {
+        pthread_mutex_unlock(&host->lock);
+        return false;
+    }
+
+    slot->state.game_over = true;
+    session_game_othello_count_scores(&slot->state, &slot->state.red_score,
+                                      &slot->state.green_score);
+    pthread_mutex_unlock(&host->lock);
+
+    const char *resigner_name =
+        (ctx->user.name[0] != '\0') ? ctx->user.name : "Opponent";
+
+    char reason_p1[64];
+    char reason_p2[64];
+    if (is_player_one) {
+        snprintf(reason_p1, sizeof(reason_p1), "You resigned.");
+        if (opponent != NULL) {
+            snprintf(reason_p2, sizeof(reason_p2), "%s resigned.",
+                     resigner_name);
+        } else {
+            snprintf(reason_p2, sizeof(reason_p2), "Opponent resigned.");
+        }
+    } else {
+        if (opponent != NULL) {
+            snprintf(reason_p1, sizeof(reason_p1), "%s resigned.",
+                     resigner_name);
+        } else {
+            snprintf(reason_p1, sizeof(reason_p1), "Opponent resigned.");
+        }
+        snprintf(reason_p2, sizeof(reason_p2), "You resigned.");
+    }
+
+    session_game_othello_finish_multiplayer(host, slot, reason_p1, reason_p2);
+    return true;
+}
+
 static void session_game_othello_render(session_ctx_t *ctx)
 {
     if (ctx == NULL || ctx->game.type != SESSION_GAME_OTHELLO) {

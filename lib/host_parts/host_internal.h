@@ -57,4 +57,6 @@
 #include "../ssh_chatter_sync.h"
 #include "humanized/humanized.h"
 
+bool session_game_othello_handle_forced_exit(session_ctx_t *ctx);
+
 #endif // SSH_CHATTER_HOST_INTERNAL_H

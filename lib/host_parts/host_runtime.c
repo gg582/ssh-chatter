@@ -3557,7 +3557,14 @@ static void *session_thread(void *arg)
                     }
                     session_render_prompt(ctx, false);
                 } else if (ctx->game.active) {
-                    session_game_suspend(ctx, "Game suspended.");
+                    bool handled = false;
+                    if (ctx->game.type == SESSION_GAME_OTHELLO &&
+                        ctx->game.othello.multiplayer) {
+                        handled = session_game_othello_handle_forced_exit(ctx);
+                    }
+                    if (!handled) {
+                        session_game_suspend(ctx, "Game suspended.");
+                    }
                     session_clear_input_without_prompt(ctx);
                     if (ctx->should_exit) {
                         break;
