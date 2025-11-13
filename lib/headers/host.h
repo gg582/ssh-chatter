@@ -30,6 +30,7 @@
 #define SSH_CHATTER_SOUND_URL_LEN 1024
 #define SSH_CHATTER_MESSAGE_LIMIT 4096
 #define SSH_CHATTER_MOTD_MAX_NOTIFICATION_LEN 16384
+#define SSH_CHATTER_BANNER_MAX_LEN SSH_CHATTER_MOTD_MAX_NOTIFICATION_LEN
 #define SSH_CHATTER_MAX_INPUT_LEN 1024
 #define SSH_CHATTER_USERNAME_LEN 24
 #define SSH_CHATTER_IP_LEN 64
@@ -706,6 +707,8 @@ typedef struct host {
     char motd_path[PATH_MAX];
     bool motd_has_file;
     struct timespec motd_last_modified;
+    char welcome_banner[SSH_CHATTER_BANNER_MAX_LEN];
+    bool welcome_banner_loaded;
     bool translation_quota_exhausted;
     size_t connection_count;
     chat_history_entry_t *history;
@@ -827,6 +830,7 @@ typedef struct {
 void session_send_raw_text(session_ctx_t *ctx, const char *text);
 void host_init(host_t *host, auth_profile_t *auth);
 void host_set_motd(host_t *host, const char *motd);
+void host_set_welcome_banner(host_t *host, const char *banner);
 int host_serve(host_t *host, const char *bind_addr, const char *port,
                const char *key_directory, const char *telnet_bind_addr,
                const char *telnet_port);

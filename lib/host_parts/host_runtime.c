@@ -1,4 +1,5 @@
 // Remaining operator commands, ban management, and host lifecycle entry points.
+#include "host_internal.h"
 
 #define TELNET_STABLE_RESET_SECONDS 10.0
 
@@ -3756,6 +3757,8 @@ void host_init(host_t *host, auth_profile_t *auth)
     host->motd_has_file = false;
     host->motd_last_modified.tv_sec = 0;
     host->motd_last_modified.tv_nsec = 0L;
+    host->welcome_banner[0] = '\0';
+    host->welcome_banner_loaded = false;
 
     host->translation_quota_exhausted = false;
     host->connection_count = 0U;

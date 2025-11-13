@@ -1,3 +1,4 @@
+#include "host_internal.h"
 #include "../ssh_chatter_sync.h"
 #include "../headers/security_layer.h"
 // Command handlers for chat interactions, media, and user utilities.

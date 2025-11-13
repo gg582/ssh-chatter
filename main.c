@@ -104,6 +104,7 @@ int main(int argc, char **argv)
         0; // Do NOT use SA_RESTART - we want signals to interrupt accept()
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+    signal(SIGPIPE, SIG_IGN);
 
     setlocale(LC_ALL, "");
 
@@ -369,6 +370,8 @@ int main(int argc, char **argv)
                     "[main] Warning: Could not load welcome banner from %s\n",
                     welcome_banner_path);
             }
+        } else {
+            host_set_welcome_banner(host, g_welcome_banner_content);
         }
 
         const int serve_result =

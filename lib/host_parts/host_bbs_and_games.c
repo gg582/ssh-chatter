@@ -1,4 +1,5 @@
 // BBS workflows plus interactive mini-games.
+#include "host_internal.h"
 
 // Handle the /bbs command entry point.
 static void session_handle_bbs(session_ctx_t *ctx, const char *arguments)
