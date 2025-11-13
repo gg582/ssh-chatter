@@ -18,6 +18,11 @@ static session_ctx_t *session_create(void)
 
 static void session_destroy(session_ctx_t *ctx);
 
+static bool host_user_data_load_existing(host_t *host, const char *username,
+                                         const char *ip,
+                                         user_data_record_t *record,
+                                         bool create_if_missing);
+
 static void session_handle_gemini_unfreeze(session_ctx_t *ctx)
 {
     if (ctx == NULL || ctx->owner == NULL) {
@@ -180,14 +185,74 @@ static bool find_reserved_names(session_ctx_t *ctx, const char *nick)
     bool found = false;
     pthread_mutex_lock(&ctx->owner->nickname_reserve_lock);
     for (size_t i = 0; i < ctx->owner->reserved_nicknames_len; ++i) {
-        if (strncmp(nick, ctx->owner->reserved_nicknames[i],
-                    SSH_CHATTER_USERNAME_LEN) == 0) {
+        if (strcasecmp(nick, ctx->owner->reserved_nicknames[i]) == 0) {
             found = true;
             break;
         }
     }
     pthread_mutex_unlock(&ctx->owner->nickname_reserve_lock);
     return found;
+}
+
+static bool host_username_has_password(host_t *host, const char *nick)
+{
+    if (host == NULL || nick == NULL || nick[0] == '\0') {
+        return false;
+    }
+
+    user_data_record_t record;
+    if (host_user_data_load_existing(host, nick, NULL, &record, false) &&
+        !security_layer_is_zero_hash(record.password_hash,
+                                     sizeof(record.password_hash))) {
+        return true;
+    }
+
+    if (host->pw_auth_file_path[0] == '\0') {
+        return false;
+    }
+
+    FILE *fp = fopen(host->pw_auth_file_path, "rb");
+    if (fp == NULL) {
+        return false;
+    }
+
+    bool protected_name = false;
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    while (!protected_name && fgets(line, sizeof(line), fp) != NULL) {
+        size_t length = strcspn(line, "\r\n");
+        line[length] = '\0';
+
+        char *first_separator = strchr(line, ':');
+        if (first_separator == NULL) {
+            continue;
+        }
+
+        size_t name_length = (size_t)(first_separator - line);
+        if (name_length == 0U) {
+            continue;
+        }
+
+        char existing[SSH_CHATTER_USERNAME_LEN];
+        if (name_length >= sizeof(existing)) {
+            name_length = sizeof(existing) - 1U;
+        }
+
+        memcpy(existing, line, name_length);
+        existing[name_length] = '\0';
+
+        if (strcasecmp(existing, nick) == 0) {
+            protected_name = true;
+        }
+    }
+
+    int read_error = ferror(fp);
+    fclose(fp);
+
+    if (read_error != 0) {
+        return false;
+    }
+
+    return protected_name;
 }
 
 static void session_handle_nick(session_ctx_t *ctx, const char *arguments)
@@ -257,6 +322,23 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments)
         !ctx->user.is_lan_operator) {
         session_send_system_line(ctx,
                                  "That name is reserved for LAN operators.");
+        return;
+    }
+
+    if (!ctx->user_data_loaded) {
+        (void)session_user_data_load(ctx);
+    }
+
+    bool owns_requested_name =
+        strcasecmp(ctx->user.name, new_name) == 0;
+    if (!owns_requested_name && ctx->user_data_loaded) {
+        owns_requested_name =
+            strcasecmp(ctx->user_data.username, new_name) == 0;
+    }
+
+    if (!owns_requested_name && host_username_has_password(ctx->owner, new_name)) {
+        session_send_system_line(
+            ctx, "That nickname is password-protected. Log in as that user.");
         return;
     }
 
