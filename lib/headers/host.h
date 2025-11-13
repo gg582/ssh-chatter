@@ -97,6 +97,9 @@
 #define SSH_CHATTER_MAX_PROTECTED_IPS 16
 #define SSH_CHATTER_MAX_RESERVED_NAMES 16384
 #define SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE 4096
+#define SSH_CHATTER_OTHELLO_BOARD_SIZE 8
+#define SSH_CHATTER_OTHELLO_MAX_MOVES \
+    (SSH_CHATTER_OTHELLO_BOARD_SIZE * SSH_CHATTER_OTHELLO_BOARD_SIZE)
 
 
 #include "user_data.h"
@@ -296,6 +299,7 @@ typedef enum session_game_type {
     SESSION_GAME_TETRIS,
     SESSION_GAME_LIARGAME,
     SESSION_GAME_ALPHA,
+    SESSION_GAME_OTHELLO,
 } session_game_type_t;
 
 typedef struct tetris_game_state {
@@ -330,6 +334,26 @@ typedef struct liar_game_state {
     unsigned liar_index;
     bool awaiting_guess;
 } liar_game_state_t;
+
+typedef enum othello_cell_type {
+    OTHELLO_CELL_EMPTY = 0,
+    OTHELLO_CELL_RED,
+    OTHELLO_CELL_GREEN,
+} othello_cell_type_t;
+
+typedef struct othello_game_state {
+    uint8_t board[SSH_CHATTER_OTHELLO_BOARD_SIZE]
+                 [SSH_CHATTER_OTHELLO_BOARD_SIZE];
+    bool player_turn;
+    bool game_over;
+    unsigned consecutive_passes;
+    unsigned red_score;
+    unsigned green_score;
+    int last_player_row;
+    int last_player_col;
+    int last_ai_row;
+    int last_ai_col;
+} othello_game_state_t;
 
 typedef struct alpha_gravity_source {
     int x;
@@ -386,9 +410,11 @@ typedef struct session_game_state {
     tetris_game_state_t saved_tetris_state;
     liar_game_state_t saved_liar_state;
     alpha_centauri_game_state_t saved_alpha_state;
+    othello_game_state_t saved_othello_state;
     char chosen_camouflage_language[16];
     liar_game_state_t liar;
     alpha_centauri_game_state_t alpha;
+    othello_game_state_t othello;
     uint64_t rng_state;
     bool rng_seeded;
 } session_game_state_t;
@@ -734,6 +760,7 @@ typedef struct host {
     char vote_state_file_path[PATH_MAX];
     char ban_state_file_path[PATH_MAX];
     char reply_state_file_path[PATH_MAX];
+    char pw_auth_file_path[PATH_MAX];
     char alpha_landers_file_path[PATH_MAX];
     char user_data_root[PATH_MAX];
     bool user_data_ready;

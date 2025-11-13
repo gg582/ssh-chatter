@@ -1359,6 +1359,180 @@ static void session_handle_soulmate(session_ctx_t *ctx)
     session_send_system_line(ctx, matches);
 }
 
+static void session_pw_auth_hex_encode(const uint8_t *input, size_t length,
+                                       char *output, size_t output_length)
+{
+    if (output == NULL || output_length == 0U) {
+        return;
+    }
+
+    if (input == NULL || length == 0U) {
+        output[0] = '\0';
+        return;
+    }
+
+    static const char kHexDigits[] = "0123456789abcdef";
+    size_t offset = 0U;
+    for (size_t idx = 0U; idx < length && offset + 2U < output_length; ++idx) {
+        uint8_t value = input[idx];
+        output[offset++] = kHexDigits[(value >> 4U) & 0x0FU];
+        output[offset++] = kHexDigits[value & 0x0FU];
+    }
+
+    if (offset >= output_length) {
+        offset = output_length - 1U;
+    }
+    output[offset] = '\0';
+}
+
+static bool session_pw_auth_format_line(const char *username,
+                                        const uint8_t *salt, size_t salt_length,
+                                        const uint8_t *hash, size_t hash_length,
+                                        char *buffer, size_t buffer_length)
+{
+    if (username == NULL || buffer == NULL || buffer_length == 0U) {
+        return false;
+    }
+
+    char salt_hex[64];
+    char hash_hex[128];
+    session_pw_auth_hex_encode(salt, salt_length, salt_hex, sizeof(salt_hex));
+    session_pw_auth_hex_encode(hash, hash_length, hash_hex, sizeof(hash_hex));
+
+    int written = snprintf(buffer, buffer_length, "%s:%s:%s", username,
+                           salt_hex, hash_hex);
+    return written >= 0 && (size_t)written < buffer_length;
+}
+
+static bool session_pw_auth_update(host_t *host, const char *username,
+                                   const uint8_t *salt, size_t salt_length,
+                                   const uint8_t *hash, size_t hash_length,
+                                   bool has_password)
+{
+    if (host == NULL || username == NULL || username[0] == '\0') {
+        return false;
+    }
+
+    if (host->pw_auth_file_path[0] == '\0') {
+        return false;
+    }
+
+    if (!host_ensure_private_data_path(host, host->pw_auth_file_path, true)) {
+        return false;
+    }
+
+    char temp_path[PATH_MAX];
+    int written = snprintf(temp_path, sizeof(temp_path), "%s.tmp",
+                           host->pw_auth_file_path);
+    if (written < 0 || (size_t)written >= sizeof(temp_path)) {
+        return false;
+    }
+
+    FILE *output = fopen(temp_path, "wb");
+    if (output == NULL) {
+        return false;
+    }
+
+    bool success = true;
+    bool replaced = false;
+    FILE *input = fopen(host->pw_auth_file_path, "rb");
+    if (input != NULL) {
+        char line[SSH_CHATTER_MESSAGE_LIMIT];
+        while (success && fgets(line, sizeof(line), input) != NULL) {
+            size_t length = strcspn(line, "\r\n");
+            line[length] = '\0';
+
+            char existing_name[SSH_CHATTER_USERNAME_LEN];
+            size_t separator = strcspn(line, ":");
+            if (separator >= length) {
+                if (fprintf(output, "%s\n", line) < 0) {
+                    success = false;
+                }
+                continue;
+            }
+
+            size_t copy_length = separator;
+            if (copy_length >= sizeof(existing_name)) {
+                copy_length = sizeof(existing_name) - 1U;
+            }
+            memcpy(existing_name, line, copy_length);
+            existing_name[copy_length] = '\0';
+
+            if (strncmp(existing_name, username, sizeof(existing_name)) == 0) {
+                if (has_password && !replaced) {
+                    char formatted[256];
+                    if (!session_pw_auth_format_line(username, salt, salt_length,
+                                                     hash, hash_length,
+                                                     formatted,
+                                                     sizeof(formatted)) ||
+                        fprintf(output, "%s\n", formatted) < 0) {
+                        success = false;
+                    }
+                    replaced = true;
+                }
+                continue;
+            }
+
+            if (fprintf(output, "%s\n", line) < 0) {
+                success = false;
+            }
+        }
+
+        if (input != NULL) {
+            int read_error = ferror(input);
+            if (fclose(input) != 0) {
+                success = false;
+            }
+            if (read_error != 0) {
+                success = false;
+            }
+        }
+    } else if (errno != ENOENT) {
+        success = false;
+    }
+
+    if (success && has_password && !replaced) {
+        char formatted[256];
+        if (!session_pw_auth_format_line(username, salt, salt_length, hash,
+                                         hash_length, formatted,
+                                         sizeof(formatted)) ||
+            fprintf(output, "%s\n", formatted) < 0) {
+            success = false;
+        }
+    }
+
+    if (success && fflush(output) != 0) {
+        success = false;
+    }
+
+    if (success) {
+        int fd = fileno(output);
+        if (fd >= 0 && fsync(fd) != 0) {
+            success = false;
+        }
+    }
+
+    if (fclose(output) != 0) {
+        success = false;
+    }
+
+    if (!success) {
+        unlink(temp_path);
+        return false;
+    }
+
+    if (rename(temp_path, host->pw_auth_file_path) != 0) {
+        unlink(temp_path);
+        return false;
+    }
+
+    if (chmod(host->pw_auth_file_path, S_IRUSR | S_IWUSR) != 0) {
+        return false;
+    }
+
+    return true;
+}
+
 static void session_handle_setpw(session_ctx_t *ctx, const char *arguments)
 {
     if (ctx == NULL || ctx->owner == NULL) {
@@ -1384,6 +1558,11 @@ static void session_handle_setpw(session_ctx_t *ctx, const char *arguments)
 
         if (session_user_data_commit(ctx)) {
             session_send_system_line(ctx, "Password removed.");
+            if (!session_pw_auth_update(ctx->owner, ctx->user.name, NULL, 0U,
+                                        NULL, 0U, false)) {
+                session_send_system_line(
+                    ctx, "Warning: unable to update pw_auth.dat.");
+            }
         } else {
             session_send_system_line(ctx, "Failed to remove password.");
         }
@@ -1401,6 +1580,15 @@ static void session_handle_setpw(session_ctx_t *ctx, const char *arguments)
 
     if (session_user_data_commit(ctx)) {
         session_send_system_line(ctx, "Password set successfully.");
+        if (!session_pw_auth_update(ctx->owner, ctx->user.name,
+                                    ctx->user_data.password_salt,
+                                    sizeof(ctx->user_data.password_salt),
+                                    ctx->user_data.password_hash,
+                                    sizeof(ctx->user_data.password_hash),
+                                    true)) {
+            session_send_system_line(ctx,
+                                     "Warning: unable to update pw_auth.dat.");
+        }
 
         // Add user's nickname to reserved list if password was set
         if (ctx->owner != NULL && ctx->owner->reserved_nicknames_len <
@@ -1538,6 +1726,12 @@ static void session_handle_delpw(session_ctx_t *ctx, const char *arguments)
             pthread_mutex_unlock(&ctx->owner->nickname_reserve_lock);
         }
 
+        if (!session_pw_auth_update(ctx->owner, target_user, NULL, 0U, NULL, 0U,
+                                    false)) {
+            session_send_system_line(ctx,
+                                     "Warning: unable to update pw_auth.dat.");
+        }
+
     } else {
         session_send_system_line(ctx, "Failed to remove password.");
     }
@@ -1619,6 +1813,12 @@ static void session_handle_resetpw(session_ctx_t *ctx, const char *arguments)
         snprintf(message, sizeof(message), "Password for '%s' has been reset.",
                  target_nickname);
         session_send_system_line(ctx, message);
+
+        if (!session_pw_auth_update(ctx->owner, target_nickname, NULL, 0U, NULL,
+                                    0U, false)) {
+            session_send_system_line(ctx,
+                                     "Warning: unable to update pw_auth.dat.");
+        }
 
         // If the user is currently online, notify them or clear their session password state
         if (target_session != NULL) {
