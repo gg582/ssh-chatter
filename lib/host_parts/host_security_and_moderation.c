@@ -1619,6 +1619,26 @@ static void host_reply_state_resolve_path(host_t *host)
     }
 }
 
+static void host_pw_auth_resolve_path(host_t *host)
+{
+    if (host == NULL) {
+        return;
+    }
+
+    const char *pw_path = getenv("CHATTER_PW_AUTH_FILE");
+    if (pw_path == NULL || pw_path[0] == '\0') {
+        pw_path = "pw_auth.dat";
+    }
+
+    int written = snprintf(host->pw_auth_file_path,
+                           sizeof(host->pw_auth_file_path), "%s", pw_path);
+    if (written < 0 || (size_t)written >= sizeof(host->pw_auth_file_path)) {
+        humanized_log_error("host", "pw auth file path is too long",
+                            ENAMETOOLONG);
+        host->pw_auth_file_path[0] = '\0';
+    }
+}
+
 static void host_alpha_landers_resolve_path(host_t *host)
 {
     if (host == NULL) {

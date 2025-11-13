@@ -2461,6 +2461,8 @@ static void session_reset_for_retry(session_ctx_t *ctx)
     ctx->game.liar.awaiting_guess = false;
     ctx->game.liar.round_number = 0U;
     ctx->game.liar.score = 0U;
+    ctx->game.othello = (othello_game_state_t){0};
+    ctx->game.saved_othello_state = (othello_game_state_t){0};
     ctx->game.active = false;
     ctx->game.type = SESSION_GAME_NONE;
     ctx->game.rng_seeded = false;
@@ -3839,6 +3841,8 @@ void host_init(host_t *host, auth_profile_t *auth)
     host_ban_resolve_path(host);
     host->reply_state_file_path[0] = '\0';
     host_reply_state_resolve_path(host);
+    host->pw_auth_file_path[0] = '\0';
+    host_pw_auth_resolve_path(host);
     host->alpha_landers_file_path[0] = '\0';
     host_alpha_landers_resolve_path(host);
     snprintf(host->user_data_root, sizeof(host->user_data_root), "%s",

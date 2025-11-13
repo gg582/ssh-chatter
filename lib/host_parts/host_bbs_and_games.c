@@ -1342,6 +1342,543 @@ static void session_game_liar_handle_line(session_ctx_t *ctx, const char *line)
     session_game_liar_present_round(ctx);
 }
 
+static const int kOthelloDirections[8][2] = {
+    {-1, -1}, {-1, 0}, {-1, 1}, {0, -1},
+    {0, 1},   {1, -1}, {1, 0},  {1, 1},
+};
+
+typedef struct othello_move {
+    int row;
+    int col;
+    int flipped;
+} othello_move_t;
+
+static bool session_game_othello_in_bounds(int row, int col)
+{
+    return row >= 0 && row < SSH_CHATTER_OTHELLO_BOARD_SIZE && col >= 0 &&
+           col < SSH_CHATTER_OTHELLO_BOARD_SIZE;
+}
+
+static int session_game_othello_direction_count(const othello_game_state_t *state,
+                                                int row, int col, int drow,
+                                                int dcol,
+                                                othello_cell_type_t player)
+{
+    if (state == NULL) {
+        return 0;
+    }
+
+    othello_cell_type_t opponent =
+        (player == OTHELLO_CELL_RED) ? OTHELLO_CELL_GREEN : OTHELLO_CELL_RED;
+    int count = 0;
+    int r = row + drow;
+    int c = col + dcol;
+
+    while (session_game_othello_in_bounds(r, c)) {
+        uint8_t cell = state->board[r][c];
+        if (cell == (uint8_t)opponent) {
+            ++count;
+            r += drow;
+            c += dcol;
+            continue;
+        }
+
+        if (cell == (uint8_t)player && count > 0) {
+            return count;
+        }
+
+        break;
+    }
+
+    return 0;
+}
+
+static int session_game_othello_count_flips(const othello_game_state_t *state,
+                                            int row, int col,
+                                            othello_cell_type_t player)
+{
+    if (state == NULL || !session_game_othello_in_bounds(row, col)) {
+        return 0;
+    }
+
+    if (state->board[row][col] != OTHELLO_CELL_EMPTY) {
+        return 0;
+    }
+
+    int total = 0;
+    for (size_t idx = 0U; idx < sizeof(kOthelloDirections) / sizeof(kOthelloDirections[0]);
+         ++idx) {
+        total += session_game_othello_direction_count(state, row, col,
+                                                      kOthelloDirections[idx][0],
+                                                      kOthelloDirections[idx][1],
+                                                      player);
+    }
+
+    return total;
+}
+
+static void session_game_othello_count_scores(const othello_game_state_t *state,
+                                              unsigned *red, unsigned *green)
+{
+    if (red != NULL) {
+        *red = 0U;
+    }
+    if (green != NULL) {
+        *green = 0U;
+    }
+
+    if (state == NULL) {
+        return;
+    }
+
+    unsigned red_count = 0U;
+    unsigned green_count = 0U;
+    for (int row = 0; row < SSH_CHATTER_OTHELLO_BOARD_SIZE; ++row) {
+        for (int col = 0; col < SSH_CHATTER_OTHELLO_BOARD_SIZE; ++col) {
+            if (state->board[row][col] == OTHELLO_CELL_RED) {
+                ++red_count;
+            } else if (state->board[row][col] == OTHELLO_CELL_GREEN) {
+                ++green_count;
+            }
+        }
+    }
+
+    if (red != NULL) {
+        *red = red_count;
+    }
+    if (green != NULL) {
+        *green = green_count;
+    }
+}
+
+static void session_game_othello_reset_state(othello_game_state_t *state)
+{
+    if (state == NULL) {
+        return;
+    }
+
+    memset(state, 0, sizeof(*state));
+    for (int row = 0; row < SSH_CHATTER_OTHELLO_BOARD_SIZE; ++row) {
+        for (int col = 0; col < SSH_CHATTER_OTHELLO_BOARD_SIZE; ++col) {
+            state->board[row][col] = OTHELLO_CELL_EMPTY;
+        }
+    }
+
+    int mid = SSH_CHATTER_OTHELLO_BOARD_SIZE / 2;
+    state->board[mid - 1][mid - 1] = OTHELLO_CELL_GREEN;
+    state->board[mid][mid] = OTHELLO_CELL_GREEN;
+    state->board[mid - 1][mid] = OTHELLO_CELL_RED;
+    state->board[mid][mid - 1] = OTHELLO_CELL_RED;
+    state->player_turn = true;
+    state->game_over = false;
+    state->consecutive_passes = 0U;
+    state->last_player_row = -1;
+    state->last_player_col = -1;
+    state->last_ai_row = -1;
+    state->last_ai_col = -1;
+    session_game_othello_count_scores(state, &state->red_score,
+                                      &state->green_score);
+}
+
+static void session_game_othello_apply_move(othello_game_state_t *state, int row,
+                                            int col, othello_cell_type_t player)
+{
+    if (state == NULL || !session_game_othello_in_bounds(row, col)) {
+        return;
+    }
+
+    state->board[row][col] = (uint8_t)player;
+    for (size_t idx = 0U; idx < sizeof(kOthelloDirections) / sizeof(kOthelloDirections[0]);
+         ++idx) {
+        int drow = kOthelloDirections[idx][0];
+        int dcol = kOthelloDirections[idx][1];
+        int count =
+            session_game_othello_direction_count(state, row, col, drow, dcol,
+                                                 player);
+        if (count <= 0) {
+            continue;
+        }
+
+        int r = row + drow;
+        int c = col + dcol;
+        for (int step = 0; step < count && session_game_othello_in_bounds(r, c);
+             ++step) {
+            state->board[r][c] = (uint8_t)player;
+            r += drow;
+            c += dcol;
+        }
+    }
+
+    session_game_othello_count_scores(state, &state->red_score,
+                                      &state->green_score);
+}
+
+static unsigned session_game_othello_collect_moves(
+    const othello_game_state_t *state, othello_cell_type_t player,
+    othello_move_t *moves, unsigned max_moves)
+{
+    if (state == NULL) {
+        return 0U;
+    }
+
+    unsigned count = 0U;
+    for (int row = 0; row < SSH_CHATTER_OTHELLO_BOARD_SIZE; ++row) {
+        for (int col = 0; col < SSH_CHATTER_OTHELLO_BOARD_SIZE; ++col) {
+            int flipped = session_game_othello_count_flips(state, row, col, player);
+            if (flipped <= 0) {
+                continue;
+            }
+
+            if (moves != NULL && count < max_moves) {
+                moves[count].row = row;
+                moves[count].col = col;
+                moves[count].flipped = flipped;
+            }
+            ++count;
+        }
+    }
+
+    return count;
+}
+
+static void session_game_othello_format_coordinate(int row, int col,
+                                                    char *buffer,
+                                                    size_t length)
+{
+    if (buffer == NULL || length == 0U) {
+        return;
+    }
+
+    if (!session_game_othello_in_bounds(row, col)) {
+        snprintf(buffer, length, "-");
+        return;
+    }
+
+    char file = (char)('a' + col);
+    char rank = (char)('1' + row);
+    snprintf(buffer, length, "%c%c", file, rank);
+}
+
+static void session_game_othello_render(session_ctx_t *ctx)
+{
+    if (ctx == NULL || ctx->game.type != SESSION_GAME_OTHELLO) {
+        return;
+    }
+
+    othello_game_state_t *state = &ctx->game.othello;
+    session_game_othello_count_scores(state, &state->red_score,
+                                      &state->green_score);
+
+    bool previous_translation = ctx->translation_suppress_output;
+    ctx->translation_suppress_output = true;
+
+    session_render_separator(ctx, "Othello");
+    session_send_system_line(ctx, "    a b c d e f g h");
+    for (int row = 0; row < SSH_CHATTER_OTHELLO_BOARD_SIZE; ++row) {
+        char line[256];
+        int offset = snprintf(line, sizeof(line), " %d ", row + 1);
+        for (int col = 0; col < SSH_CHATTER_OTHELLO_BOARD_SIZE; ++col) {
+            const char *symbol = ".";
+            if (state->board[row][col] == OTHELLO_CELL_RED) {
+                symbol = "\033[31m●\033[0m";
+            } else if (state->board[row][col] == OTHELLO_CELL_GREEN) {
+                symbol = "\033[32m●\033[0m";
+            }
+
+            offset += snprintf(line + offset, sizeof(line) - (size_t)offset,
+                               "%s ", symbol);
+            if (offset >= (int)sizeof(line)) {
+                break;
+            }
+        }
+        snprintf(line + (size_t)offset, sizeof(line) - (size_t)offset, "%d",
+                 row + 1);
+        session_send_raw_text(ctx, line);
+    }
+    session_send_system_line(ctx, "    a b c d e f g h");
+
+    char score_line[128];
+    snprintf(score_line, sizeof(score_line),
+             "Score — Red %u : Green %u", state->red_score, state->green_score);
+    session_send_system_line(ctx, score_line);
+
+    char red_coord[8];
+    char green_coord[8];
+    session_game_othello_format_coordinate(state->last_player_row,
+                                            state->last_player_col, red_coord,
+                                            sizeof(red_coord));
+    session_game_othello_format_coordinate(state->last_ai_row,
+                                            state->last_ai_col, green_coord,
+                                            sizeof(green_coord));
+
+    if (state->last_player_row >= 0 || state->last_ai_row >= 0) {
+        char last_line[128];
+        snprintf(last_line, sizeof(last_line),
+                 "Last moves — Red: %s  Green: %s", red_coord, green_coord);
+        session_send_system_line(ctx, last_line);
+    }
+
+    ctx->translation_suppress_output = previous_translation;
+}
+
+static void session_game_othello_finish(session_ctx_t *ctx, const char *reason)
+{
+    if (ctx == NULL || ctx->game.type != SESSION_GAME_OTHELLO) {
+        return;
+    }
+
+    othello_game_state_t *state = &ctx->game.othello;
+    if (!state->game_over) {
+        session_game_othello_count_scores(state, &state->red_score,
+                                          &state->green_score);
+        state->game_over = true;
+    }
+
+    const char *message =
+        (reason != NULL && reason[0] != '\0') ? reason : "Othello finished.";
+    session_game_suspend(ctx, message);
+}
+
+static void session_game_othello_handle_ai_turn(session_ctx_t *ctx);
+
+static void session_game_othello_prepare_next_turn(session_ctx_t *ctx)
+{
+    if (ctx == NULL || ctx->game.type != SESSION_GAME_OTHELLO) {
+        return;
+    }
+
+    othello_game_state_t *state = &ctx->game.othello;
+    if (state->game_over) {
+        return;
+    }
+
+    unsigned player_moves =
+        session_game_othello_collect_moves(state, OTHELLO_CELL_RED, NULL, 0U);
+    unsigned ai_moves =
+        session_game_othello_collect_moves(state, OTHELLO_CELL_GREEN, NULL, 0U);
+
+    if (player_moves == 0U && ai_moves == 0U) {
+        session_game_othello_finish(ctx, "No more moves available.");
+        return;
+    }
+
+    if (player_moves == 0U) {
+        state->consecutive_passes++;
+        if (state->consecutive_passes >= 2U) {
+            session_game_othello_finish(ctx, "No more moves available.");
+            return;
+        }
+
+        session_send_system_line(ctx,
+                                 "You have no legal moves and must pass.");
+        state->player_turn = false;
+        session_game_othello_handle_ai_turn(ctx);
+        return;
+    }
+
+    if (ai_moves == 0U) {
+        state->consecutive_passes++;
+        if (state->consecutive_passes >= 2U) {
+            session_game_othello_finish(ctx, "No more moves available.");
+            return;
+        }
+
+        session_send_system_line(ctx,
+                                 "Green has no legal moves and passes.");
+        state->player_turn = true;
+        session_send_system_line(
+            ctx, "Enter your move (e.g., d3). Type 'pass' if no moves.");
+        return;
+    }
+
+    state->player_turn = true;
+    session_send_system_line(ctx,
+                             "Enter your move (e.g., d3). Type 'pass' if no moves.");
+}
+
+static void session_game_othello_handle_ai_turn(session_ctx_t *ctx)
+{
+    if (ctx == NULL || ctx->game.type != SESSION_GAME_OTHELLO) {
+        return;
+    }
+
+    othello_game_state_t *state = &ctx->game.othello;
+    if (state->game_over) {
+        return;
+    }
+
+    othello_move_t moves[SSH_CHATTER_OTHELLO_MAX_MOVES];
+    unsigned move_count = session_game_othello_collect_moves(
+        state, OTHELLO_CELL_GREEN, moves, SSH_CHATTER_OTHELLO_MAX_MOVES);
+
+    if (move_count == 0U) {
+        state->consecutive_passes++;
+        session_send_system_line(ctx,
+                                 "Green has no legal moves and passes.");
+        if (state->consecutive_passes >= 2U) {
+            session_game_othello_finish(ctx, "No more moves available.");
+            return;
+        }
+
+        state->player_turn = true;
+        session_game_othello_prepare_next_turn(ctx);
+        return;
+    }
+
+    session_game_seed_rng(ctx);
+
+    int best_flips = -1;
+    size_t best_indexes[SSH_CHATTER_OTHELLO_MAX_MOVES];
+    size_t best_count = 0U;
+    for (unsigned idx = 0U; idx < move_count; ++idx) {
+        if (moves[idx].flipped > best_flips) {
+            best_flips = moves[idx].flipped;
+            best_indexes[0] = idx;
+            best_count = 1U;
+        } else if (moves[idx].flipped == best_flips &&
+                   best_count < SSH_CHATTER_OTHELLO_MAX_MOVES) {
+            best_indexes[best_count++] = idx;
+        }
+    }
+
+    size_t choice_index = 0U;
+    if (best_count > 1U) {
+        choice_index =
+            (size_t)session_game_random_range(ctx, (int)best_count);
+    }
+    othello_move_t chosen = moves[best_indexes[choice_index]];
+
+    session_game_othello_apply_move(state, chosen.row, chosen.col,
+                                    OTHELLO_CELL_GREEN);
+    state->last_ai_row = chosen.row;
+    state->last_ai_col = chosen.col;
+    state->consecutive_passes = 0U;
+    state->player_turn = true;
+
+    char coord[8];
+    session_game_othello_format_coordinate(chosen.row, chosen.col, coord,
+                                            sizeof(coord));
+    char move_message[64];
+    snprintf(move_message, sizeof(move_message), "Green plays %s.", coord);
+
+    session_game_othello_render(ctx);
+    session_send_system_line(ctx, move_message);
+
+    session_game_othello_prepare_next_turn(ctx);
+}
+
+static void session_game_othello_handle_line(session_ctx_t *ctx,
+                                             const char *line)
+{
+    if (ctx == NULL || ctx->game.type != SESSION_GAME_OTHELLO || line == NULL) {
+        return;
+    }
+
+    othello_game_state_t *state = &ctx->game.othello;
+    if (state->game_over) {
+        session_send_system_line(ctx,
+                                 "The game is over. Use /game to start again.");
+        return;
+    }
+
+    if (!state->player_turn) {
+        session_send_system_line(ctx, "Please wait for your turn.");
+        return;
+    }
+
+    char working[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(working, sizeof(working), "%s", line);
+    trim_whitespace_inplace(working);
+    if (working[0] == '\0') {
+        return;
+    }
+
+    for (size_t idx = 0U; working[idx] != '\0'; ++idx) {
+        if (isalpha((unsigned char)working[idx])) {
+            working[idx] = (char)tolower((unsigned char)working[idx]);
+        }
+    }
+
+    unsigned player_moves =
+        session_game_othello_collect_moves(state, OTHELLO_CELL_RED, NULL, 0U);
+    if (strcasecmp(working, "pass") == 0) {
+        if (player_moves > 0U) {
+            session_send_system_line(ctx,
+                                     "You still have legal moves available.");
+            return;
+        }
+
+        state->consecutive_passes++;
+        session_send_system_line(ctx, "You pass your turn.");
+        if (state->consecutive_passes >= 2U) {
+            session_game_othello_finish(ctx, "No more moves available.");
+            return;
+        }
+
+        state->player_turn = false;
+        session_game_othello_handle_ai_turn(ctx);
+        return;
+    }
+
+    if (strcasecmp(working, "resign") == 0 || strcasecmp(working, "quit") == 0) {
+        session_game_othello_count_scores(state, &state->red_score,
+                                          &state->green_score);
+        session_game_othello_finish(ctx, "You resigned.");
+        return;
+    }
+
+    int row = -1;
+    int col = -1;
+    if (isalpha((unsigned char)working[0]) && isdigit((unsigned char)working[1])) {
+        col = working[0] - 'a';
+        row = working[1] - '1';
+    } else if (isdigit((unsigned char)working[0]) &&
+               isalpha((unsigned char)working[1])) {
+        row = working[0] - '1';
+        col = working[1] - 'a';
+    }
+
+    if (!session_game_othello_in_bounds(row, col)) {
+        session_send_system_line(ctx,
+                                 "Invalid move. Use coordinates like d3.");
+        return;
+    }
+
+    int flips = session_game_othello_count_flips(state, row, col, OTHELLO_CELL_RED);
+    if (flips <= 0) {
+        session_send_system_line(ctx, "That square is not a legal move.");
+        return;
+    }
+
+    session_game_othello_apply_move(state, row, col, OTHELLO_CELL_RED);
+    state->last_player_row = row;
+    state->last_player_col = col;
+    state->player_turn = false;
+    state->consecutive_passes = 0U;
+
+    session_game_othello_render(ctx);
+
+    session_game_othello_handle_ai_turn(ctx);
+}
+
+static void session_game_start_othello(session_ctx_t *ctx)
+{
+    if (ctx == NULL) {
+        return;
+    }
+
+    ctx->game.active = true;
+    ctx->game.type = SESSION_GAME_OTHELLO;
+    ctx->game.is_camouflaged = false;
+    session_game_seed_rng(ctx);
+    session_game_othello_reset_state(&ctx->game.othello);
+    session_game_othello_render(ctx);
+    session_send_system_line(ctx,
+                             "You are Red (\033[31m●\033[0m). Green (\033[32m●\033[0m) "
+                             "will respond after your move.");
+    session_game_othello_prepare_next_turn(ctx);
+}
+
 static void
 session_game_alpha_add_gravity_source(alpha_centauri_game_state_t *state, int x,
                                       int y, double mu, int influence_radius,
@@ -2957,7 +3494,8 @@ static void session_handle_game(session_ctx_t *ctx, const char *arguments)
     }
 
     if (arguments == NULL) {
-        session_send_system_line(ctx, "Usage: /game <tetris|liargame|alpha>");
+        session_send_system_line(ctx,
+                                 "Usage: /game <tetris|liargame|alpha|othello>");
         return;
     }
 
@@ -2965,7 +3503,8 @@ static void session_handle_game(session_ctx_t *ctx, const char *arguments)
     snprintf(working, sizeof(working), "%s", arguments);
     trim_whitespace_inplace(working);
     if (working[0] == '\0') {
-        session_send_system_line(ctx, "Usage: /game <tetris|liargame|alpha>");
+        session_send_system_line(ctx,
+                                 "Usage: /game <tetris|liargame|alpha|othello>");
         return;
     }
 
@@ -2980,9 +3519,12 @@ static void session_handle_game(session_ctx_t *ctx, const char *arguments)
     } else if (strcmp(working, "alpha") == 0 ||
                strcmp(working, "alphacentauri") == 0) {
         session_game_start_alpha(ctx);
+    } else if (strcmp(working, "othello") == 0) {
+        session_game_start_othello(ctx);
     } else {
         session_send_system_line(
-            ctx, "Unknown game. Available options: tetris, liargame, alpha.");
+            ctx,
+            "Unknown game. Available options: tetris, liargame, alpha, othello.");
     }
 }
 
@@ -3036,6 +3578,26 @@ static void session_game_suspend(session_ctx_t *ctx, const char *reason)
         session_send_system_line(ctx, summary);
         session_game_alpha_reset(ctx);
         session_game_alpha_sync_to_save(ctx);
+    } else if (ctx->game.type == SESSION_GAME_OTHELLO) {
+        unsigned red = ctx->game.othello.red_score;
+        unsigned green = ctx->game.othello.green_score;
+        if (red == 0U && green == 0U) {
+            session_game_othello_count_scores(&ctx->game.othello, &red, &green);
+        }
+
+        const char *outcome = "It's a draw.";
+        if (red > green) {
+            outcome = "You win!";
+        } else if (green > red) {
+            outcome = "Green wins.";
+        }
+
+        char summary[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(summary, sizeof(summary),
+                 "Othello final score: Red %u vs Green %u — %s", red, green,
+                 outcome);
+        session_send_system_line(ctx, summary);
+        session_game_othello_reset_state(&ctx->game.othello);
     }
 
     ctx->game.active = false;

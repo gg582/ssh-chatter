@@ -2560,6 +2560,16 @@ static void
 session_game_alpha_add_gravity_source(alpha_centauri_game_state_t *state, int x,
                                       int y, double mu, int influence_radius,
                                       char symbol, const char *name);
+static void session_game_start_othello(session_ctx_t *ctx);
+static void session_game_othello_handle_line(session_ctx_t *ctx,
+                                             const char *line);
+static void session_game_othello_prepare_next_turn(session_ctx_t *ctx);
+static void session_game_othello_finish(session_ctx_t *ctx, const char *reason);
+static void session_game_othello_render(session_ctx_t *ctx);
+static void session_game_othello_count_scores(const othello_game_state_t *state,
+                                              unsigned *red, unsigned *green);
+static void session_game_othello_reset_state(othello_game_state_t *state);
+static void session_game_othello_handle_ai_turn(session_ctx_t *ctx);
 static void session_game_alpha_configure_gravity(session_ctx_t *ctx);
 static void
 session_game_alpha_apply_gravity(alpha_centauri_game_state_t *state);

@@ -4337,6 +4337,10 @@ static void session_process_line(session_ctx_t *ctx, const char *line)
                 } else if (ctx->game.type == SESSION_GAME_ALPHA) {
                     ctx->game.alpha = ctx->game.saved_alpha_state;
                     session_game_alpha_present_stage(ctx);
+                } else if (ctx->game.type == SESSION_GAME_OTHELLO) {
+                    ctx->game.othello = ctx->game.saved_othello_state;
+                    session_game_othello_render(ctx);
+                    session_game_othello_prepare_next_turn(ctx);
                 }
             } else {
                 ctx->game.is_camouflaged = true;
@@ -4352,6 +4356,8 @@ static void session_process_line(session_ctx_t *ctx, const char *line)
                     ctx->game.saved_liar_state = ctx->game.liar;
                 } else if (ctx->game.type == SESSION_GAME_ALPHA) {
                     ctx->game.saved_alpha_state = ctx->game.alpha;
+                } else if (ctx->game.type == SESSION_GAME_OTHELLO) {
+                    ctx->game.saved_othello_state = ctx->game.othello;
                 }
                 session_game_show_camouflage(ctx);
             }
@@ -4370,6 +4376,8 @@ static void session_process_line(session_ctx_t *ctx, const char *line)
             session_game_liar_handle_line(ctx, normalized);
         } else if (ctx->game.type == SESSION_GAME_ALPHA) {
             session_game_alpha_handle_line(ctx, normalized);
+        } else if (ctx->game.type == SESSION_GAME_OTHELLO) {
+            session_game_othello_handle_line(ctx, normalized);
         }
         return;
     }
