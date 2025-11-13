@@ -4451,9 +4451,9 @@ static void session_game_suspend(session_ctx_t *ctx, const char *reason)
 
         const char *outcome = "It's a draw.";
         if (red > green) {
-            outcome = "You win!";
+            outcome = "Rdd wins!";
         } else if (green > red) {
-            outcome = "Green wins.";
+            outcome = "Green wins!";
         }
 
         char summary[SSH_CHATTER_MESSAGE_LIMIT];
