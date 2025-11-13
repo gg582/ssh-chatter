@@ -2156,6 +2156,8 @@ static void session_handle_files(session_ctx_t *ctx, const char *arguments);
 static void session_handle_reaction(session_ctx_t *ctx, size_t reaction_index,
                                     const char *arguments);
 static void session_handle_gameopt(session_ctx_t *ctx, const char *arguments);
+static void session_handle_othello_command(session_ctx_t *ctx,
+                                           const char *arguments);
 static void session_handle_mail(session_ctx_t *ctx, const char *arguments);
 static void session_handle_profile_picture(session_ctx_t *ctx,
                                            const char *arguments);
