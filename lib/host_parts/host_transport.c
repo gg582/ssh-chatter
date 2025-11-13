@@ -1796,7 +1796,7 @@ static const palette_descriptor_t PALETTE_DEFINITIONS[] = {
      "xterm:229", "xterm-bg:16", "xterm-bg:123", false, true},
     {"stoneage-korea-256", &PALETTE_NAME_STONEAGE_KOREA_256,
      &PALETTE_DESC_STONEAGE_KOREA_256, "xterm:231", "xterm-bg:16", false,
-     "xterm:229", "xterm-bg:16", "xterm-bg:15", false, true},
+     "xterm:235", "xterm-bg:229", "xterm-bg:229", false, true},
     {"flame-and-blood-256", &PALETTE_NAME_FLAME_AND_BLOOD_256,
      &PALETTE_DESC_FLAME_AND_BLOOD_256, "xterm:81", "xterm-bg:16", true,
      "xterm:229", "xterm-bg:16", "xterm-bg:196", true, true},
