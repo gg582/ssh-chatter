@@ -201,12 +201,58 @@ static bool host_username_has_password(host_t *host, const char *nick)
     }
 
     user_data_record_t record;
-    if (!host_user_data_load_existing(host, nick, NULL, &record, false)) {
+    if (host_user_data_load_existing(host, nick, NULL, &record, false) &&
+        !security_layer_is_zero_hash(record.password_hash,
+                                     sizeof(record.password_hash))) {
+        return true;
+    }
+
+    if (host->pw_auth_file_path[0] == '\0') {
         return false;
     }
 
-    return !security_layer_is_zero_hash(record.password_hash,
-                                        sizeof(record.password_hash));
+    FILE *fp = fopen(host->pw_auth_file_path, "rb");
+    if (fp == NULL) {
+        return false;
+    }
+
+    bool protected_name = false;
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    while (!protected_name && fgets(line, sizeof(line), fp) != NULL) {
+        size_t length = strcspn(line, "\r\n");
+        line[length] = '\0';
+
+        char *first_separator = strchr(line, ':');
+        if (first_separator == NULL) {
+            continue;
+        }
+
+        size_t name_length = (size_t)(first_separator - line);
+        if (name_length == 0U) {
+            continue;
+        }
+
+        char existing[SSH_CHATTER_USERNAME_LEN];
+        if (name_length >= sizeof(existing)) {
+            name_length = sizeof(existing) - 1U;
+        }
+
+        memcpy(existing, line, name_length);
+        existing[name_length] = '\0';
+
+        if (strcasecmp(existing, nick) == 0) {
+            protected_name = true;
+        }
+    }
+
+    int read_error = ferror(fp);
+    fclose(fp);
+
+    if (read_error != 0) {
+        return false;
+    }
+
+    return protected_name;
 }
 
 static void session_handle_nick(session_ctx_t *ctx, const char *arguments)
@@ -279,7 +325,18 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments)
         return;
     }
 
-    if (host_username_has_password(ctx->owner, new_name)) {
+    if (!ctx->user_data_loaded) {
+        (void)session_user_data_load(ctx);
+    }
+
+    bool owns_requested_name =
+        strcasecmp(ctx->user.name, new_name) == 0;
+    if (!owns_requested_name && ctx->user_data_loaded) {
+        owns_requested_name =
+            strcasecmp(ctx->user_data.username, new_name) == 0;
+    }
+
+    if (!owns_requested_name && host_username_has_password(ctx->owner, new_name)) {
         session_send_system_line(
             ctx, "That nickname is password-protected. Log in as that user.");
         return;
