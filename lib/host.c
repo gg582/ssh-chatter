@@ -1,12 +1,15 @@
-// This file now stitches together the host implementation from smaller parts.
-// See lib/host_parts/ for the individual sections.
+// This file stitches the host implementation together from modular C sources.
+// Each component lives in lib/host_parts/ and is included here so the compiler
+// still sees a single translation unit, preserving the existing static helper
+// relationships while keeping the source tree organized.
 
 #include "headers/translation_helpers.h"
-#include "host_parts/host_core.inc"
-#include "host_parts/host_transport.inc"
-#include "host_parts/host_security_and_moderation.inc"
-#include "host_parts/host_eliza_and_storage.inc"
-#include "host_parts/host_session_output.inc"
-#include "host_parts/host_session_commands.inc"
-#include "host_parts/host_bbs_and_games.inc"
-#include "host_parts/host_runtime.inc"
+
+#include "host_parts/host_core.c"
+#include "host_parts/host_transport.c"
+#include "host_parts/host_security_and_moderation.c"
+#include "host_parts/host_eliza_and_storage.c"
+#include "host_parts/host_session_output.c"
+#include "host_parts/host_session_commands.c"
+#include "host_parts/host_bbs_and_games.c"
+#include "host_parts/host_runtime.c"

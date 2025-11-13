@@ -1,7 +1,65 @@
+#include "host_internal.h"
 #include "../headers/user_data.h"
 #include "../headers/security_layer.h"
 
 // Session output, history delivery, and client-facing helpers.
+
+static void session_render_banner_text(session_ctx_t *ctx, const char *banner)
+{
+    if (ctx == NULL || banner == NULL) {
+        return;
+    }
+
+    bool locked = session_output_lock(ctx);
+
+    const char *cursor = banner;
+    while (true) {
+        const char *newline = strchr(cursor, '\n');
+        size_t length = newline != NULL ? (size_t)(newline - cursor)
+                                        : strnlen(cursor, SSH_CHATTER_MESSAGE_LIMIT);
+        while (length > 0U && cursor[length - 1U] == '\r') {
+            --length;
+        }
+
+        session_fill_line_with_theme(ctx);
+        static const char column_reset[] = "\033[1G";
+        session_channel_write(ctx, column_reset, sizeof(column_reset) - 1U);
+        if (length > 0U) {
+            session_channel_write(ctx, cursor, length);
+        }
+        session_channel_write(ctx, ANSI_RESET, sizeof(ANSI_RESET) - 1U);
+        session_channel_write(ctx, "\r\n", 2U);
+
+        if (newline == NULL) {
+            break;
+        }
+
+        cursor = newline + 1;
+        if (*cursor == '\0') {
+            break;
+        }
+    }
+
+    if (locked) {
+        session_output_unlock(ctx);
+    }
+}
+
+void host_set_welcome_banner(host_t *host, const char *banner)
+{
+    if (host == NULL) {
+        return;
+    }
+
+    if (banner == NULL || banner[0] == '\0') {
+        host->welcome_banner[0] = '\0';
+        host->welcome_banner_loaded = false;
+        return;
+    }
+
+    snprintf(host->welcome_banner, sizeof(host->welcome_banner), "%s", banner);
+    host->welcome_banner_loaded = true;
+}
 
 static void session_game_show_camouflage(session_ctx_t *ctx);
 
@@ -1994,7 +2052,13 @@ static void session_render_banner_ascii(session_ctx_t *ctx)
         return;
     }
 
-    session_send_system_line(ctx, "Welcome to CHATTER!");
+    const char *banner_text = "Welcome to CHATTER!";
+    if (ctx->owner != NULL && ctx->owner->welcome_banner_loaded &&
+        ctx->owner->welcome_banner[0] != '\0') {
+        banner_text = ctx->owner->welcome_banner;
+    }
+
+    session_render_banner_text(ctx, banner_text);
 }
 
 static void session_render_prelogin_banner(session_ctx_t *ctx)

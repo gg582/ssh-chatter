@@ -1,4 +1,5 @@
 // Eliza memory management, BBS persistence, and rendering helpers.
+#include "host_internal.h"
 
 static void __attribute__((unused))
 host_eliza_memory_store(host_t *host, const char *prompt, const char *reply)
@@ -4076,8 +4077,10 @@ static void session_telnet_handle_option(session_ctx_t *ctx,
 
     switch (command) {
     case TELNET_CMD_DO:
-        if (option == TELNET_OPT_SUPPRESS_GO_AHEAD ||
-            option == TELNET_OPT_ECHO) {
+        if (option == TELNET_OPT_BINARY) {
+            session_telnet_send_option(ctx, TELNET_CMD_WILL, option);
+        } else if (option == TELNET_OPT_SUPPRESS_GO_AHEAD ||
+                   option == TELNET_OPT_ECHO) {
             session_telnet_send_option(ctx, TELNET_CMD_WILL, option);
         } else if (option == TELNET_OPT_TERMINAL_TYPE) {
             session_telnet_send_option(ctx, TELNET_CMD_WONT, option);
@@ -4089,7 +4092,7 @@ static void session_telnet_handle_option(session_ctx_t *ctx,
         session_telnet_send_option(ctx, TELNET_CMD_WONT, option);
         break;
     case TELNET_CMD_WILL:
-        if (option == TELNET_OPT_SUPPRESS_GO_AHEAD) {
+        if (option == TELNET_OPT_BINARY || option == TELNET_OPT_SUPPRESS_GO_AHEAD) {
             session_telnet_send_option(ctx, TELNET_CMD_DO, option);
         } else if (option == TELNET_OPT_TERMINAL_TYPE) {
             session_telnet_send_option(ctx, TELNET_CMD_DO, option);
@@ -4112,6 +4115,8 @@ static void session_telnet_initialize(session_ctx_t *ctx)
         return;
     }
 
+    session_telnet_send_option(ctx, TELNET_CMD_WILL, TELNET_OPT_BINARY);
+    session_telnet_send_option(ctx, TELNET_CMD_DO, TELNET_OPT_BINARY);
     session_telnet_send_option(ctx, TELNET_CMD_WILL, TELNET_OPT_ECHO);
     session_telnet_send_option(ctx, TELNET_CMD_WILL,
                                TELNET_OPT_SUPPRESS_GO_AHEAD);

@@ -1,3 +1,5 @@
+#include "host_internal.h"
+
 static bool host_is_system_reserved_username(host_t *host, const char *username)
 {
     if (host == NULL || username == NULL || username[0] == '\0') {
@@ -19,60 +21,6 @@ static bool host_is_system_reserved_username(host_t *host, const char *username)
     }
     return false;
 }
-
-// Core host definitions, constants, and low-level helpers.
-
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-
-#ifndef _XOPEN_SOURCE
-#define _XOPEN_SOURCE 700
-#endif
-
-#include "host.h"
-#include <libssh/libssh.h>
-#include <libssh/server.h>
-#include "client.h"
-#include "webssh_client.h"
-#include "matrix_client.h"
-#include "translator.h"
-#include "translation_helpers.h"
-
-#include <curl/curl.h>
-#include "memory_manager.h"
-#include <iconv.h>
-#include <ctype.h>
-#include <dirent.h>
-#include <dlfcn.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <inttypes.h>
-#include <math.h>
-#include <libgen.h>
-#include <limits.h>
-#include <signal.h>
-#include <wchar.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <netdb.h>
-#include <poll.h>
-#include <pthread.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <strings.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <time.h>
-#include <unistd.h>
-
-#include "humanized/humanized.h"
 
 static void session_dispatch_command(session_ctx_t *ctx, const char *line);
 static void session_handle_mode(session_ctx_t *ctx, const char *arguments);
@@ -648,6 +596,7 @@ static const char *const kAlphaWaystationNames[] = {
 #define TELNET_CMD_DO 253
 #define TELNET_CMD_DONT 254
 #define TELNET_CMD_SB 250
+#define TELNET_OPT_BINARY 0
 #define TELNET_OPT_ECHO 1
 #define TELNET_OPT_SUPPRESS_GO_AHEAD 3
 #define TELNET_OPT_STATUS 5

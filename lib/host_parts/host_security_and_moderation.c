@@ -1,4 +1,5 @@
 // Host security pipeline, moderation workers, and persistence utilities.
+#include "host_internal.h"
 
 static host_security_scan_result_t
 host_security_scan_payload(host_t *host, const char *category,
