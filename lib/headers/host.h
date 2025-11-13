@@ -30,7 +30,7 @@
 #define SSH_CHATTER_SOUND_URL_LEN 1024
 #define SSH_CHATTER_MESSAGE_LIMIT 4096
 #define SSH_CHATTER_MOTD_MAX_NOTIFICATION_LEN 16384
-#define SSH_CHATTER_BANNER_MAX_LEN SSH_CHATTER_MOTD_MAX_NOTIFICATION_LEN
+#define SSH_CHATTER_BANNER_MAX_LEN SSH_CHATTER_MOTD_MAX_NOTIFICATION_LEN * 4
 #define SSH_CHATTER_MAX_INPUT_LEN 1024
 #define SSH_CHATTER_USERNAME_LEN 24
 #define SSH_CHATTER_IP_LEN 64
@@ -96,6 +96,8 @@
 #define SSH_CHATTER_CIDR_TEXT_LEN 64
 #define SSH_CHATTER_MAX_PROTECTED_IPS 16
 #define SSH_CHATTER_MAX_RESERVED_NAMES 16384
+#define SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE 4096
+
 
 #include "user_data.h"
 
@@ -583,6 +585,8 @@ typedef struct session_ctx {
     bool user_data_loaded;
     user_data_record_t user_data;
     bool password_not_set; // Flag to indicate if user needs to set a password
+    char tetris_screen_buffer[SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE];
+    char tetris_prev_screen_buffer[SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE];
     const session_ops_t *ops;
     bool history_oldest_notified;
     bool history_latest_notified;
@@ -814,6 +818,7 @@ typedef struct host {
     _Atomic bool rss_thread_running;
     _Atomic bool rss_thread_stop;
     struct timespec rss_last_run;
+
     // Add members for managing reserved nicknames
     char reserved_nicknames[SSH_CHATTER_MAX_RESERVED_NAMES]
                            [SSH_CHATTER_USERNAME_LEN];

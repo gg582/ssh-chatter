@@ -992,8 +992,15 @@ static void session_game_tetris_render(session_ctx_t *ctx)
     ctx->translation_suppress_output = true;
 
     tetris_game_state_t *state = &ctx->game.tetris;
-    printf("\033[K");
-    session_render_separator(ctx, "Tetris");
+
+    char *buffer = ctx->tetris_screen_buffer;
+    size_t offset = 0;
+
+    // Clear screen and move cursor to home position
+    offset += (size_t) snprintf(buffer + offset, SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE - offset, "\033[H\033[2J");
+
+    offset += (size_t) snprintf(buffer + offset, SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE - offset, "\n");
+    offset += (size_t) snprintf(buffer + offset, SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE - offset, "--- Tetris ---\n");
 
     char header[SSH_CHATTER_MESSAGE_LIMIT];
     char next_char = TETROMINO_DISPLAY_CHARS[state->next_piece % 7];
@@ -1021,7 +1028,7 @@ static void session_game_tetris_render(session_ctx_t *ctx)
     }
     border[SSH_CHATTER_TETRIS_WIDTH + 1] = '+';
     border[SSH_CHATTER_TETRIS_WIDTH + 2] = '\0';
-    session_send_system_line(ctx, border);
+    offset += (size_t) snprintf(buffer + offset, SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE - offset, "%s\n", border);
 
     for (int row = 0; row < SSH_CHATTER_TETRIS_HEIGHT; ++row) {
         char line_buffer[SSH_CHATTER_TETRIS_WIDTH + 3];
@@ -1049,13 +1056,20 @@ static void session_game_tetris_render(session_ctx_t *ctx)
         }
         line_buffer[SSH_CHATTER_TETRIS_WIDTH + 1] = '|';
         line_buffer[SSH_CHATTER_TETRIS_WIDTH + 2] = '\0';
-        session_send_system_line(ctx, line_buffer);
+        offset += (size_t) snprintf(buffer + offset, SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE - offset, "%s\n", line_buffer);
     }
 
-    session_send_system_line(ctx, border);
-    session_send_system_line(ctx, header);
-    session_send_system_line(ctx, "Controls: left, right, down, Ctrl+R or up: "
-                                  "rotate, drop. Blank line = down.");
+    offset += (size_t) snprintf(buffer + offset, SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE - offset, "%s\n", border);
+    offset += (size_t) snprintf(buffer + offset, SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE - offset, "%s\n", header);
+    offset += (size_t) snprintf(buffer + offset, SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE - offset, "Controls: left, right, down, Ctrl+R or up: "
+                                  "rotate, drop. Blank line = down.\n");
+
+    // Only send if the buffer has changed
+    if (strcmp(ctx->tetris_screen_buffer, ctx->tetris_prev_screen_buffer) != 0) {
+        session_send_raw_text(ctx, ctx->tetris_screen_buffer);
+        strncpy(ctx->tetris_prev_screen_buffer, ctx->tetris_screen_buffer, SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE);
+        ctx->tetris_prev_screen_buffer[SSH_CHATTER_TETRIS_SCREEN_BUFFER_SIZE - 1] = '\0';
+    }
 
     ctx->translation_suppress_output = previous_translation_suppress;
 }
@@ -1190,24 +1204,19 @@ static void session_game_start_tetris(session_ctx_t *ctx)
     ctx->game.tetris.game_over = false;
     bool previous_translation_suppress = ctx->translation_suppress_output;
     if (!session_game_tetris_spawn_piece(ctx)) {
-        ctx->translation_suppress_output = true;
         session_send_system_line(ctx, "Unable to start Tetris right now.");
-        ctx->translation_suppress_output = previous_translation_suppress;
         ctx->game.active = false;
         ctx->game.type = SESSION_GAME_NONE;
         return;
     }
 
-    ctx->translation_suppress_output = true;
+    memset(ctx->tetris_screen_buffer, 0, sizeof(ctx->tetris_screen_buffer));
+    memset(ctx->tetris_prev_screen_buffer, 0, sizeof(ctx->tetris_prev_screen_buffer));
 
-    // Enable alternate screen buffer to prevent scrolling and flickering
-    session_enable_alternate_screen(ctx);
-
-    session_send_system_line(
-        ctx, "Tetris started. Pieces fall on their own — use "
-             "WASD or the arrow keys (W/Up rotate, S/Down soft"
-             " drop, A/Left, D/Right), space for a hard drop, "
-             "and Ctrl+R to rotate. Ctrl+Z or /suspend! exits.");
+    session_send_system_line(ctx, "Tetris started. Pieces fall on their own — use "
+                                  "WASD or arrow keys to move, Ctrl+R or Up to "
+                                  "rotate, Down to soft drop, Space to hard "
+                                  "drop. Blank line = soft drop.");
     char round_message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(round_message, sizeof(round_message),
              "Round 1/%u: Clear %u lines to reach the next round.",
