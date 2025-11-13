@@ -1,21 +1,24 @@
 // Host security pipeline, moderation workers, and persistence utilities.
 #include "host_internal.h"
 
-static host_security_scan_result_t
-host_security_scan_payload(host_t *host, const char *category,
-                           const char *payload, size_t length, char *diagnostic,
-                           size_t diagnostic_length)
+static void host_security_reset_diagnostic(char *diagnostic,
+                                           size_t diagnostic_length)
 {
     if (diagnostic != NULL && diagnostic_length > 0U) {
         diagnostic[0] = '\0';
     }
+}
 
-    if (host == NULL || payload == NULL || length == 0U) {
-        return HOST_SECURITY_SCAN_CLEAN;
-    }
+static bool host_security_scan_input_invalid(host_t *host, const char *payload,
+                                             size_t length)
+{
+    return (host == NULL || payload == NULL || length == 0U);
+}
 
+static bool host_security_moderation_available(host_t *host)
+{
     if (!atomic_load(&host->security_filter_enabled)) {
-        return HOST_SECURITY_SCAN_CLEAN;
+        return false;
     }
 
     bool clamav_active = atomic_load(&host->security_clamav_enabled);
@@ -23,7 +26,7 @@ host_security_scan_payload(host_t *host, const char *category,
 
     if (!clamav_active && !ai_active) {
         atomic_store(&host->security_filter_enabled, false);
-        return HOST_SECURITY_SCAN_CLEAN;
+        return false;
     }
 
     if (clamav_active) {
@@ -31,19 +34,21 @@ host_security_scan_payload(host_t *host, const char *category,
         clamav_active = false;
     }
 
-    ai_active = atomic_load(&host->security_ai_enabled);
-    if (!ai_active) {
-        return HOST_SECURITY_SCAN_CLEAN;
+    if (!atomic_load(&host->security_ai_enabled)) {
+        return false;
     }
 
-    if (!atomic_load(&host->eliza_enabled)) {
-        return HOST_SECURITY_SCAN_CLEAN;
-    }
+    return atomic_load(&host->eliza_enabled);
+}
 
-    char snippet[1024];
+static size_t host_security_copy_sanitized_snippet(char *snippet,
+                                                   size_t snippet_size,
+                                                   const char *payload,
+                                                   size_t length)
+{
     size_t copy_length = length;
-    if (copy_length >= sizeof(snippet)) {
-        copy_length = sizeof(snippet) - 1U;
+    if (copy_length >= snippet_size) {
+        copy_length = snippet_size - 1U;
     }
 
     memcpy(snippet, payload, copy_length);
@@ -58,36 +63,37 @@ host_security_scan_payload(host_t *host, const char *category,
         }
     }
     snippet[copy_length] = '\0';
+    return copy_length;
+}
 
-    bool blocked = false;
-    char reason[256];
-    reason[0] = '\0';
-
-    bool success = translator_moderate_text(category, snippet, &blocked, reason,
-                                            sizeof(reason));
-    if (!success) {
-        const char *error = translator_last_error();
-        if (diagnostic != NULL && diagnostic_length > 0U) {
-            if (error != NULL && error[0] != '\0') {
-                snprintf(diagnostic, diagnostic_length, "%s", error);
-            } else {
-                snprintf(diagnostic, diagnostic_length, "%s",
-                         "moderation unavailable");
-            }
+static host_security_scan_result_t
+host_security_handle_moderation_failure(host_t *host, const char *error,
+                                        char *diagnostic,
+                                        size_t diagnostic_length)
+{
+    if (diagnostic != NULL && diagnostic_length > 0U) {
+        if (error != NULL && error[0] != '\0') {
+            snprintf(diagnostic, diagnostic_length, "%s", error);
+        } else {
+            snprintf(diagnostic, diagnostic_length, "%s",
+                     "moderation unavailable");
         }
-        host_security_disable_filter(host, "moderation pipeline unavailable");
-        return HOST_SECURITY_SCAN_ERROR;
     }
+    host_security_disable_filter(host, "moderation pipeline unavailable");
+    return HOST_SECURITY_SCAN_ERROR;
+}
 
+static host_security_scan_result_t
+host_security_finalize_scan(bool blocked, const char *reason,
+                            char *diagnostic, size_t diagnostic_length)
+{
     if (!blocked) {
-        if (diagnostic != NULL && diagnostic_length > 0U) {
-            diagnostic[0] = '\0';
-        }
+        host_security_reset_diagnostic(diagnostic, diagnostic_length);
         return HOST_SECURITY_SCAN_CLEAN;
     }
 
     if (diagnostic != NULL && diagnostic_length > 0U) {
-        if (reason[0] != '\0') {
+        if (reason != NULL && reason[0] != '\0') {
             snprintf(diagnostic, diagnostic_length, "%s", reason);
         } else {
             snprintf(diagnostic, diagnostic_length, "%s",
@@ -98,101 +104,219 @@ host_security_scan_payload(host_t *host, const char *category,
     return HOST_SECURITY_SCAN_BLOCKED;
 }
 
+static host_security_scan_result_t
+host_security_scan_payload(host_t *host, const char *category,
+                           const char *payload, size_t length, char *diagnostic,
+                           size_t diagnostic_length)
+{
+    host_security_reset_diagnostic(diagnostic, diagnostic_length);
+
+    if (host_security_scan_input_invalid(host, payload, length)) {
+        return HOST_SECURITY_SCAN_CLEAN;
+    }
+
+    if (!host_security_moderation_available(host)) {
+        return HOST_SECURITY_SCAN_CLEAN;
+    }
+
+    char snippet[1024];
+    (void)host_security_copy_sanitized_snippet(snippet, sizeof(snippet), payload,
+                                               length);
+
+    bool blocked = false;
+    char reason[256];
+    reason[0] = '\0';
+
+    bool success = translator_moderate_text(category, snippet, &blocked, reason,
+                                            sizeof(reason));
+    if (!success) {
+        const char *error = translator_last_error();
+        return host_security_handle_moderation_failure(host, error, diagnostic,
+                                                       diagnostic_length);
+    }
+
+    return host_security_finalize_scan(blocked, reason, diagnostic,
+                                       diagnostic_length);
+}
+
+typedef struct host_security_blocked_identity_s {
+    const char *label;
+    const char *name;
+    char resolved_ip[SSH_CHATTER_IP_LEN];
+    const char *address;
+    const char *register_ip;
+} host_security_blocked_identity_t;
+
+static void host_security_blocked_identity_set_label_name(
+    host_security_blocked_identity_t *identity, const char *category,
+    const char *username)
+{
+    identity->label =
+        (category != NULL && category[0] != '\0') ? category : "submission";
+    identity->name =
+        (username != NULL && username[0] != '\0') ? username : "unknown";
+}
+
+static void host_security_blocked_identity_resolve_ip(
+    host_security_blocked_identity_t *identity, host_t *host,
+    const char *username, const char *ip)
+{
+    identity->resolved_ip[0] = '\0';
+
+    if (ip != NULL && ip[0] != '\0' &&
+        strncmp(ip, "unknown", SSH_CHATTER_IP_LEN) != 0) {
+        snprintf(identity->resolved_ip, sizeof(identity->resolved_ip), "%s", ip);
+        return;
+    }
+
+    if (host != NULL && username != NULL && username[0] != '\0') {
+        host_lookup_last_ip(host, username, identity->resolved_ip,
+                            sizeof(identity->resolved_ip));
+    }
+}
+
+static void host_security_blocked_identity_choose_addresses(
+    host_security_blocked_identity_t *identity, const char *ip)
+{
+    if (identity->resolved_ip[0] != '\0') {
+        identity->address = identity->resolved_ip;
+        identity->register_ip = identity->resolved_ip;
+        return;
+    }
+
+    if (ip != NULL && ip[0] != '\0') {
+        identity->address = ip;
+        if (strncmp(ip, "unknown", SSH_CHATTER_IP_LEN) != 0) {
+            identity->register_ip = ip;
+            return;
+        }
+    }
+
+    identity->address = "unknown";
+    identity->register_ip = NULL;
+}
+
+static void host_security_blocked_identity_init(
+    host_security_blocked_identity_t *identity, host_t *host,
+    const char *category, const char *username, const char *ip)
+{
+    host_security_blocked_identity_set_label_name(identity, category,
+                                                  username);
+    host_security_blocked_identity_resolve_ip(identity, host, username, ip);
+    host_security_blocked_identity_choose_addresses(identity, ip);
+}
+
+static const char *host_security_select_diagnostic(const char *diagnostic,
+                                                   char *buffer,
+                                                   size_t buffer_length)
+{
+    if (diagnostic != NULL && diagnostic[0] != '\0') {
+        return diagnostic;
+    }
+
+    snprintf(buffer, buffer_length, "%s", "suspected intrusion content");
+    return buffer;
+}
+
+static void host_security_log_blocked(const host_security_blocked_identity_t *id,
+                                      const char *diagnostic)
+{
+    printf("[security] blocked %s from %s: %s\n", id->label, id->name,
+           diagnostic);
+}
+
+static void host_security_notify_session_blocked(session_ctx_t *session,
+                                                 const char *label,
+                                                 const char *diagnostic,
+                                                 bool post_send)
+{
+    if (session == NULL) {
+        return;
+    }
+
+    char message[512];
+    if (post_send) {
+        snprintf(message, sizeof(message),
+                 "Security filter flagged your %s after delivery: %s", label,
+                 diagnostic);
+    } else {
+        snprintf(message, sizeof(message),
+                 "Security filter rejected your %s: %s", label, diagnostic);
+    }
+    session_send_system_line(session, message);
+}
+
+static void host_security_handle_suspicious_activity(
+    host_t *host, const host_security_blocked_identity_t *identity,
+    session_ctx_t *session)
+{
+    size_t attempts = 0U;
+    bool banned = false;
+
+    if (host != NULL) {
+        const char *register_ip =
+            (identity->register_ip != NULL) ? identity->register_ip : "";
+        banned = host_register_suspicious_activity(host, identity->name,
+                                                   register_ip, &attempts);
+    }
+
+    if (attempts > 0U) {
+        printf("[security] suspicious payload counter for %s (%s): %zu/%u\n",
+               identity->name, identity->address, attempts,
+               (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
+    }
+
+    if (!banned) {
+        if (attempts > 0U && session != NULL) {
+            char warning[256];
+            snprintf(warning, sizeof(warning),
+                     "Further suspicious activity will result in a ban (%zu/%u).",
+                     attempts,
+                     (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
+            session_send_system_line(session, warning);
+        }
+        return;
+    }
+
+    printf("[security] auto-banned %s (%s) for repeated suspicious payloads\n",
+           identity->name, identity->address);
+    if (session != NULL) {
+        char notice[256];
+        snprintf(notice, sizeof(notice),
+                 "Repeated suspicious activity detected. You have been banned.");
+        session_force_disconnect(session, notice);
+    }
+}
+
+static void host_security_apply_eliza_intervention(session_ctx_t *session,
+                                                   const char *content,
+                                                   const char *diagnostic)
+{
+    if (session != NULL) {
+        (void)host_eliza_intervene(session, content, diagnostic, true);
+    }
+}
+
 static void host_security_process_blocked(host_t *host, const char *category,
                                           const char *diagnostic,
                                           const char *username, const char *ip,
                                           session_ctx_t *session,
                                           bool post_send, const char *content)
 {
-    const char *label =
-        (category != NULL && category[0] != '\0') ? category : "submission";
-    const char *name =
-        (username != NULL && username[0] != '\0') ? username : "unknown";
-
-    char resolved_ip[SSH_CHATTER_IP_LEN];
-    resolved_ip[0] = '\0';
-    if (ip != NULL && ip[0] != '\0' &&
-        strncmp(ip, "unknown", SSH_CHATTER_IP_LEN) != 0) {
-        snprintf(resolved_ip, sizeof(resolved_ip), "%s", ip);
-    }
-    if (resolved_ip[0] == '\0' && host != NULL && username != NULL &&
-        username[0] != '\0') {
-        host_lookup_last_ip(host, username, resolved_ip, sizeof(resolved_ip));
-    }
-
-    const char *address =
-        resolved_ip[0] != '\0'
-            ? resolved_ip
-            : ((ip != NULL && ip[0] != '\0') ? ip : "unknown");
+    host_security_blocked_identity_t identity;
+    host_security_blocked_identity_init(&identity, host, category, username,
+                                        ip);
 
     char diagnostic_buffer[256];
-    const char *use_diagnostic = diagnostic;
-    if (use_diagnostic == NULL || use_diagnostic[0] == '\0') {
-        snprintf(diagnostic_buffer, sizeof(diagnostic_buffer), "%s",
-                 "suspected intrusion content");
-        use_diagnostic = diagnostic_buffer;
-    }
+    const char *use_diagnostic =
+        host_security_select_diagnostic(diagnostic, diagnostic_buffer,
+                                        sizeof(diagnostic_buffer));
 
-    printf("[security] blocked %s from %s: %s\n", label, name, use_diagnostic);
-
-    if (session != NULL) {
-        char message[512];
-        if (post_send) {
-            snprintf(message, sizeof(message),
-                     "Security filter flagged your %s after delivery: %s",
-                     label, use_diagnostic);
-        } else {
-            snprintf(message, sizeof(message),
-                     "Security filter rejected your %s: %s", label,
-                     use_diagnostic);
-        }
-        session_send_system_line(session, message);
-    }
-
-    const char *register_ip = NULL;
-    if (resolved_ip[0] != '\0') {
-        register_ip = resolved_ip;
-    } else if (ip != NULL && ip[0] != '\0' &&
-               strncmp(ip, "unknown", SSH_CHATTER_IP_LEN) != 0) {
-        register_ip = ip;
-    }
-
-    size_t attempts = 0U;
-    bool banned = false;
-    if (host != NULL) {
-        banned = host_register_suspicious_activity(
-            host, name, register_ip != NULL ? register_ip : "", &attempts);
-    }
-
-    if (attempts > 0U) {
-        printf("[security] suspicious payload counter for %s (%s): %zu/%u\n",
-               name, address, attempts,
-               (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
-    }
-
-    if (banned) {
-        printf(
-            "[security] auto-banned %s (%s) for repeated suspicious payloads\n",
-            name, address);
-        if (session != NULL) {
-            char notice[256];
-            snprintf(
-                notice, sizeof(notice),
-                "Repeated suspicious activity detected. You have been banned.");
-            session_force_disconnect(session, notice);
-        }
-    } else if (attempts > 0U && session != NULL) {
-        char warning[256];
-        snprintf(warning, sizeof(warning),
-                 "Further suspicious activity will result in a ban (%zu/%u).",
-                 attempts,
-                 (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
-        session_send_system_line(session, warning);
-    }
-
-    if (session != NULL) {
-        (void)host_eliza_intervene(session, content, use_diagnostic, true);
-    }
+    host_security_log_blocked(&identity, use_diagnostic);
+    host_security_notify_session_blocked(session, identity.label,
+                                         use_diagnostic, post_send);
+    host_security_handle_suspicious_activity(host, &identity, session);
+    host_security_apply_eliza_intervention(session, content, use_diagnostic);
 }
 
 static void host_security_process_error(host_t *host, const char *category,
@@ -2814,6 +2938,659 @@ static void host_vote_state_save_locked(host_t *host)
     }
 }
 
+static bool host_state_read_base_header(FILE *fp,
+                                        host_state_header_v1_t *base_header)
+{
+    if (fp == NULL || base_header == NULL) {
+        return false;
+    }
+
+    if (fread(base_header, sizeof(*base_header), 1U, fp) != 1U) {
+        return false;
+    }
+
+    if (base_header->magic != HOST_STATE_MAGIC) {
+        return false;
+    }
+
+    if (base_header->version == 0U || base_header->version > HOST_STATE_VERSION) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool host_state_read_metadata(FILE *fp, uint32_t version,
+                                     uint64_t *next_message_id,
+                                     uint32_t *grant_count,
+                                     uint8_t *captcha_enabled_raw)
+{
+    if (fp == NULL || next_message_id == NULL || grant_count == NULL ||
+        captcha_enabled_raw == NULL) {
+        return false;
+    }
+
+    *next_message_id = 1U;
+    *grant_count = 0U;
+    *captcha_enabled_raw = 0U;
+
+    if (version >= 2U) {
+        uint32_t sound_count_raw = 0U;
+        uint32_t grant_count_raw = 0U;
+        uint64_t next_id_raw = 0U;
+        if (fread(&sound_count_raw, sizeof(sound_count_raw), 1U, fp) != 1U ||
+            fread(&grant_count_raw, sizeof(grant_count_raw), 1U, fp) != 1U ||
+            fread(&next_id_raw, sizeof(next_id_raw), 1U, fp) != 1U) {
+            return false;
+        }
+        *next_message_id = next_id_raw;
+        if (version >= 5U) {
+            *grant_count = grant_count_raw;
+        }
+    }
+
+    if (version >= 8U) {
+        uint8_t reserved_bytes[7] = {0};
+        if (fread(captcha_enabled_raw, sizeof(*captcha_enabled_raw), 1U, fp) !=
+                1U ||
+            fread(reserved_bytes, sizeof(reserved_bytes), 1U, fp) != 1U) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool host_state_read_history_entry_from_stream(FILE *fp,
+                                                      uint32_t version,
+                                                      chat_history_entry_t *entry_value)
+{
+    if (fp == NULL || entry_value == NULL) {
+        return false;
+    }
+
+    memset(entry_value, 0, sizeof(*entry_value));
+
+    if (version >= 3U) {
+        host_state_history_entry_v3_t serialized = {0};
+        if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+            return false;
+        }
+
+        entry_value->is_user_message = serialized.base.is_user_message != 0U;
+        entry_value->user_is_bold = serialized.base.user_is_bold != 0U;
+        snprintf(entry_value->username, sizeof(entry_value->username), "%s",
+                 serialized.base.username);
+        snprintf(entry_value->message, sizeof(entry_value->message), "%s",
+                 serialized.base.message);
+        snprintf(entry_value->user_color_name,
+                 sizeof(entry_value->user_color_name), "%s",
+                 serialized.base.user_color_name);
+        snprintf(entry_value->user_highlight_name,
+                 sizeof(entry_value->user_highlight_name), "%s",
+                 serialized.base.user_highlight_name);
+        entry_value->message_id = serialized.message_id;
+        if (serialized.attachment_type > CHAT_ATTACHMENT_FILE) {
+            entry_value->attachment_type = CHAT_ATTACHMENT_NONE;
+        } else {
+            entry_value->attachment_type =
+                (chat_attachment_type_t)serialized.attachment_type;
+        }
+        snprintf(entry_value->attachment_target,
+                 sizeof(entry_value->attachment_target), "%s",
+                 serialized.attachment_target);
+        snprintf(entry_value->attachment_caption,
+                 sizeof(entry_value->attachment_caption), "%s",
+                 serialized.attachment_caption);
+        memcpy(entry_value->reaction_counts, serialized.reaction_counts,
+               sizeof(entry_value->reaction_counts));
+    } else if (version == 2U) {
+        host_state_history_entry_v2_t serialized = {0};
+        if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+            return false;
+        }
+
+        entry_value->is_user_message = serialized.base.is_user_message != 0U;
+        entry_value->user_is_bold = serialized.base.user_is_bold != 0U;
+        snprintf(entry_value->username, sizeof(entry_value->username), "%s",
+                 serialized.base.username);
+        snprintf(entry_value->message, sizeof(entry_value->message), "%s",
+                 serialized.base.message);
+        snprintf(entry_value->user_color_name,
+                 sizeof(entry_value->user_color_name), "%s",
+                 serialized.base.user_color_name);
+        snprintf(entry_value->user_highlight_name,
+                 sizeof(entry_value->user_highlight_name), "%s",
+                 serialized.base.user_highlight_name);
+        entry_value->message_id = serialized.message_id;
+        if (serialized.attachment_type > CHAT_ATTACHMENT_AUDIO) {
+            entry_value->attachment_type = CHAT_ATTACHMENT_NONE;
+        } else {
+            entry_value->attachment_type =
+                (chat_attachment_type_t)serialized.attachment_type;
+        }
+        snprintf(entry_value->attachment_target,
+                 sizeof(entry_value->attachment_target), "%s",
+                 serialized.attachment_target);
+        snprintf(entry_value->attachment_caption,
+                 sizeof(entry_value->attachment_caption), "%s",
+                 serialized.attachment_caption);
+        memcpy(entry_value->reaction_counts, serialized.reaction_counts,
+               sizeof(entry_value->reaction_counts));
+        if (serialized.sound_alias[0] != '\0' &&
+            entry_value->attachment_caption[0] == '\0') {
+            snprintf(entry_value->attachment_caption,
+                     sizeof(entry_value->attachment_caption), "%s",
+                     serialized.sound_alias);
+        }
+    } else {
+        host_state_history_entry_v1_t serialized = {0};
+        if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+            return false;
+        }
+
+        entry_value->is_user_message = serialized.is_user_message != 0U;
+        entry_value->user_is_bold = serialized.user_is_bold != 0U;
+        snprintf(entry_value->username, sizeof(entry_value->username), "%s",
+                 serialized.username);
+        snprintf(entry_value->message, sizeof(entry_value->message), "%s",
+                 serialized.message);
+        snprintf(entry_value->user_color_name,
+                 sizeof(entry_value->user_color_name), "%s",
+                 serialized.user_color_name);
+        snprintf(entry_value->user_highlight_name,
+                 sizeof(entry_value->user_highlight_name), "%s",
+                 serialized.user_highlight_name);
+        entry_value->attachment_type = CHAT_ATTACHMENT_NONE;
+        entry_value->message_id = 0U;
+    }
+
+    return true;
+}
+
+static bool host_state_load_history_entries(FILE *fp, host_t *host,
+                                            uint32_t version,
+                                            uint32_t history_count)
+{
+    if (host == NULL) {
+        return false;
+    }
+
+    size_t cache_limit = SSH_CHATTER_HISTORY_CACHE_LIMIT;
+    size_t keep_start = 0U;
+    size_t keep_count = history_count;
+    if (cache_limit > 0U && keep_count > cache_limit) {
+        keep_start = keep_count - cache_limit;
+        keep_count = cache_limit;
+    }
+
+    if (keep_count > 0U && !host_history_reserve_locked(host, keep_count)) {
+        host->history_count = 0U;
+        return false;
+    }
+
+    host->history_count = 0U;
+
+    for (uint32_t idx = 0; idx < history_count; ++idx) {
+        chat_history_entry_t entry_value = {0};
+        if (!host_state_read_history_entry_from_stream(fp, version,
+                                                       &entry_value)) {
+            return false;
+        }
+
+        host_history_normalize_entry(host, &entry_value);
+        if ((uint32_t)idx >= keep_start) {
+            size_t target_index = host->history_count;
+            if (target_index < host->history_capacity) {
+                host->history[target_index] = entry_value;
+                ++host->history_count;
+            }
+        }
+    }
+
+    host->history_start_index = keep_start;
+    host->history_total = history_count;
+    return true;
+}
+
+static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
+                                             host_state_preference_entry_t *out)
+{
+    if (fp == NULL || out == NULL) {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    if (version >= 10U) {
+        if (fread(out, sizeof(*out), 1U, fp) != 1U) {
+            return false;
+        }
+        return true;
+    }
+
+    if (version >= 9U) {
+        host_state_preference_entry_v8_t legacy8 = {0};
+        if (fread(&legacy8, sizeof(legacy8), 1U, fp) != 1U) {
+            return false;
+        }
+        out->has_user_theme = legacy8.has_user_theme;
+        out->has_system_theme = legacy8.has_system_theme;
+        out->user_is_bold = legacy8.user_is_bold;
+        out->system_is_bold = legacy8.system_is_bold;
+        snprintf(out->username, sizeof(out->username), "%s",
+                 legacy8.username);
+        snprintf(out->user_color_name, sizeof(out->user_color_name), "%s",
+                 legacy8.user_color_name);
+        snprintf(out->user_highlight_name, sizeof(out->user_highlight_name),
+                 "%s", legacy8.user_highlight_name);
+        snprintf(out->system_fg_name, sizeof(out->system_fg_name), "%s",
+                 legacy8.system_fg_name);
+        snprintf(out->system_bg_name, sizeof(out->system_bg_name), "%s",
+                 legacy8.system_bg_name);
+        snprintf(out->system_highlight_name,
+                 sizeof(out->system_highlight_name), "%s",
+                 legacy8.system_highlight_name);
+        snprintf(out->os_name, sizeof(out->os_name), "%s",
+                 legacy8.os_name);
+        out->daily_year = legacy8.daily_year;
+        out->daily_yday = legacy8.daily_yday;
+        snprintf(out->daily_function, sizeof(out->daily_function), "%s",
+                 legacy8.daily_function);
+        out->last_poll_id = legacy8.last_poll_id;
+        out->last_poll_choice = legacy8.last_poll_choice;
+        out->has_birthday = legacy8.has_birthday;
+        out->translation_caption_spacing = legacy8.translation_caption_spacing;
+        out->translation_enabled = legacy8.translation_enabled;
+        out->output_translation_enabled = legacy8.output_translation_enabled;
+        out->input_translation_enabled = legacy8.input_translation_enabled;
+        out->translation_master_explicit =
+            legacy8.translation_master_explicit;
+        snprintf(out->birthday, sizeof(out->birthday), "%s",
+                 legacy8.birthday);
+        snprintf(out->output_translation_language,
+                 sizeof(out->output_translation_language), "%s",
+                 legacy8.output_translation_language);
+        snprintf(out->input_translation_language,
+                 sizeof(out->input_translation_language), "%s",
+                 legacy8.input_translation_language);
+        snprintf(out->ui_language, sizeof(out->ui_language), "%s",
+                 legacy8.ui_language);
+        out->breaking_alerts_enabled = 0U;
+        memset(out->reserved2, 0, sizeof(out->reserved2));
+        return true;
+    }
+
+    if (version >= 7U) {
+        host_state_preference_entry_v7_t legacy7 = {0};
+        if (fread(&legacy7, sizeof(legacy7), 1U, fp) != 1U) {
+            return false;
+        }
+        out->has_user_theme = legacy7.has_user_theme;
+        out->has_system_theme = legacy7.has_system_theme;
+        out->user_is_bold = legacy7.user_is_bold;
+        out->system_is_bold = legacy7.system_is_bold;
+        snprintf(out->username, sizeof(out->username), "%s",
+                 legacy7.username);
+        snprintf(out->user_color_name, sizeof(out->user_color_name), "%s",
+                 legacy7.user_color_name);
+        snprintf(out->user_highlight_name, sizeof(out->user_highlight_name),
+                 "%s", legacy7.user_highlight_name);
+        snprintf(out->system_fg_name, sizeof(out->system_fg_name), "%s",
+                 legacy7.system_fg_name);
+        snprintf(out->system_bg_name, sizeof(out->system_bg_name), "%s",
+                 legacy7.system_bg_name);
+        snprintf(out->system_highlight_name,
+                 sizeof(out->system_highlight_name), "%s",
+                 legacy7.system_highlight_name);
+        snprintf(out->os_name, sizeof(out->os_name), "%s",
+                 legacy7.os_name);
+        out->daily_year = legacy7.daily_year;
+        out->daily_yday = legacy7.daily_yday;
+        snprintf(out->daily_function, sizeof(out->daily_function), "%s",
+                 legacy7.daily_function);
+        out->last_poll_id = legacy7.last_poll_id;
+        out->last_poll_choice = legacy7.last_poll_choice;
+        out->has_birthday = legacy7.has_birthday;
+        out->translation_caption_spacing = legacy7.translation_caption_spacing;
+        out->translation_enabled = legacy7.translation_enabled;
+        out->output_translation_enabled = legacy7.output_translation_enabled;
+        out->input_translation_enabled = legacy7.input_translation_enabled;
+        out->translation_master_explicit =
+            legacy7.translation_master_explicit;
+        snprintf(out->birthday, sizeof(out->birthday), "%s",
+                 legacy7.birthday);
+        snprintf(out->output_translation_language,
+                 sizeof(out->output_translation_language), "%s",
+                 legacy7.output_translation_language);
+        snprintf(out->input_translation_language,
+                 sizeof(out->input_translation_language), "%s",
+                 legacy7.input_translation_language);
+        out->ui_language[0] = '\0';
+        out->breaking_alerts_enabled = 0U;
+        memset(out->reserved2, 0, sizeof(out->reserved2));
+        return true;
+    }
+
+    if (version == 6U) {
+        host_state_preference_entry_v6_t legacy6 = {0};
+        if (fread(&legacy6, sizeof(legacy6), 1U, fp) != 1U) {
+            return false;
+        }
+        out->has_user_theme = legacy6.has_user_theme;
+        out->has_system_theme = legacy6.has_system_theme;
+        out->user_is_bold = legacy6.user_is_bold;
+        out->system_is_bold = legacy6.system_is_bold;
+        snprintf(out->username, sizeof(out->username), "%s",
+                 legacy6.username);
+        snprintf(out->user_color_name, sizeof(out->user_color_name), "%s",
+                 legacy6.user_color_name);
+        snprintf(out->user_highlight_name, sizeof(out->user_highlight_name),
+                 "%s", legacy6.user_highlight_name);
+        snprintf(out->system_fg_name, sizeof(out->system_fg_name), "%s",
+                 legacy6.system_fg_name);
+        snprintf(out->system_bg_name, sizeof(out->system_bg_name), "%s",
+                 legacy6.system_bg_name);
+        snprintf(out->system_highlight_name,
+                 sizeof(out->system_highlight_name), "%s",
+                 legacy6.system_highlight_name);
+        snprintf(out->os_name, sizeof(out->os_name), "%s",
+                 legacy6.os_name);
+        out->daily_year = legacy6.daily_year;
+        out->daily_yday = legacy6.daily_yday;
+        snprintf(out->daily_function, sizeof(out->daily_function), "%s",
+                 legacy6.daily_function);
+        out->last_poll_id = legacy6.last_poll_id;
+        out->last_poll_choice = legacy6.last_poll_choice;
+        out->has_birthday = legacy6.has_birthday;
+        out->translation_caption_spacing = legacy6.translation_caption_spacing;
+        out->translation_enabled = legacy6.translation_enabled;
+        out->output_translation_enabled = legacy6.output_translation_enabled;
+        out->input_translation_enabled = legacy6.input_translation_enabled;
+        out->translation_master_explicit = legacy6.translation_enabled;
+        snprintf(out->birthday, sizeof(out->birthday), "%s",
+                 legacy6.birthday);
+        snprintf(out->output_translation_language,
+                 sizeof(out->output_translation_language), "%s",
+                 legacy6.output_translation_language);
+        snprintf(out->input_translation_language,
+                 sizeof(out->input_translation_language), "%s",
+                 legacy6.input_translation_language);
+        out->ui_language[0] = '\0';
+        out->breaking_alerts_enabled = 0U;
+        memset(out->reserved2, 0, sizeof(out->reserved2));
+        return true;
+    }
+
+    if (version == 5U) {
+        host_state_preference_entry_v5_t legacy5 = {0};
+        if (fread(&legacy5, sizeof(legacy5), 1U, fp) != 1U) {
+            return false;
+        }
+        out->has_user_theme = legacy5.has_user_theme;
+        out->has_system_theme = legacy5.has_system_theme;
+        out->user_is_bold = legacy5.user_is_bold;
+        out->system_is_bold = legacy5.system_is_bold;
+        snprintf(out->username, sizeof(out->username), "%s",
+                 legacy5.username);
+        snprintf(out->user_color_name, sizeof(out->user_color_name), "%s",
+                 legacy5.user_color_name);
+        snprintf(out->user_highlight_name, sizeof(out->user_highlight_name),
+                 "%s", legacy5.user_highlight_name);
+        snprintf(out->system_fg_name, sizeof(out->system_fg_name), "%s",
+                 legacy5.system_fg_name);
+        snprintf(out->system_bg_name, sizeof(out->system_bg_name), "%s",
+                 legacy5.system_bg_name);
+        snprintf(out->system_highlight_name,
+                 sizeof(out->system_highlight_name), "%s",
+                 legacy5.system_highlight_name);
+        snprintf(out->os_name, sizeof(out->os_name), "%s",
+                 legacy5.os_name);
+        out->daily_year = legacy5.daily_year;
+        out->daily_yday = legacy5.daily_yday;
+        snprintf(out->daily_function, sizeof(out->daily_function), "%s",
+                 legacy5.daily_function);
+        out->last_poll_id = legacy5.last_poll_id;
+        out->last_poll_choice = legacy5.last_poll_choice;
+        out->has_birthday = legacy5.has_birthday;
+        out->translation_caption_spacing = legacy5.reserved[0];
+        out->translation_enabled = 0U;
+        out->output_translation_enabled = 0U;
+        out->input_translation_enabled = 0U;
+        out->translation_master_explicit = 0U;
+        snprintf(out->birthday, sizeof(out->birthday), "%s",
+                 legacy5.birthday);
+        out->output_translation_language[0] = '\0';
+        out->input_translation_language[0] = '\0';
+        out->ui_language[0] = '\0';
+        out->breaking_alerts_enabled = 0U;
+        memset(out->reserved2, 0, sizeof(out->reserved2));
+        return true;
+    }
+
+    if (version == 4U) {
+        host_state_preference_entry_v4_t legacy4 = {0};
+        if (fread(&legacy4, sizeof(legacy4), 1U, fp) != 1U) {
+            return false;
+        }
+        out->has_user_theme = legacy4.has_user_theme;
+        out->has_system_theme = legacy4.has_system_theme;
+        out->user_is_bold = legacy4.user_is_bold;
+        out->system_is_bold = legacy4.system_is_bold;
+        snprintf(out->username, sizeof(out->username), "%s",
+                 legacy4.username);
+        snprintf(out->user_color_name, sizeof(out->user_color_name), "%s",
+                 legacy4.user_color_name);
+        snprintf(out->user_highlight_name, sizeof(out->user_highlight_name),
+                 "%s", legacy4.user_highlight_name);
+        snprintf(out->system_fg_name, sizeof(out->system_fg_name), "%s",
+                 legacy4.system_fg_name);
+        snprintf(out->system_bg_name, sizeof(out->system_bg_name), "%s",
+                 legacy4.system_bg_name);
+        snprintf(out->system_highlight_name,
+                 sizeof(out->system_highlight_name), "%s",
+                 legacy4.system_highlight_name);
+        snprintf(out->os_name, sizeof(out->os_name), "%s",
+                 legacy4.os_name);
+        out->daily_year = legacy4.daily_year;
+        out->daily_yday = legacy4.daily_yday;
+        snprintf(out->daily_function, sizeof(out->daily_function), "%s",
+                 legacy4.daily_function);
+        out->last_poll_id = legacy4.last_poll_id;
+        out->last_poll_choice = legacy4.last_poll_choice;
+        out->has_birthday = 0U;
+        out->translation_caption_spacing = 0U;
+        out->translation_enabled = 0U;
+        out->output_translation_enabled = 0U;
+        out->input_translation_enabled = 0U;
+        out->translation_master_explicit = 0U;
+        out->birthday[0] = '\0';
+        out->output_translation_language[0] = '\0';
+        out->input_translation_language[0] = '\0';
+        out->ui_language[0] = '\0';
+        out->breaking_alerts_enabled = 0U;
+        memset(out->reserved2, 0, sizeof(out->reserved2));
+        return true;
+    }
+
+    host_state_preference_entry_v3_t legacy = {0};
+    if (fread(&legacy, sizeof(legacy), 1U, fp) != 1U) {
+        return false;
+    }
+    out->has_user_theme = legacy.has_user_theme;
+    out->has_system_theme = legacy.has_system_theme;
+    out->user_is_bold = legacy.user_is_bold;
+    out->system_is_bold = legacy.system_is_bold;
+    snprintf(out->username, sizeof(out->username), "%s",
+             legacy.username);
+    snprintf(out->user_color_name, sizeof(out->user_color_name), "%s",
+             legacy.user_color_name);
+    snprintf(out->user_highlight_name, sizeof(out->user_highlight_name), "%s",
+             legacy.user_highlight_name);
+    snprintf(out->system_fg_name, sizeof(out->system_fg_name), "%s",
+             legacy.system_fg_name);
+    snprintf(out->system_bg_name, sizeof(out->system_bg_name), "%s",
+             legacy.system_bg_name);
+    snprintf(out->system_highlight_name,
+             sizeof(out->system_highlight_name), "%s",
+             legacy.system_highlight_name);
+    out->os_name[0] = '\0';
+    out->daily_year = 0;
+    out->daily_yday = 0;
+    out->daily_function[0] = '\0';
+    out->last_poll_id = 0U;
+    out->last_poll_choice = -1;
+    out->has_birthday = 0U;
+    out->translation_caption_spacing = 0U;
+    out->translation_enabled = 0U;
+    out->output_translation_enabled = 0U;
+    out->input_translation_enabled = 0U;
+    out->translation_master_explicit = 0U;
+    out->birthday[0] = '\0';
+    out->output_translation_language[0] = '\0';
+    out->input_translation_language[0] = '\0';
+    out->ui_language[0] = '\0';
+    out->breaking_alerts_enabled = 0U;
+    memset(out->reserved2, 0, sizeof(out->reserved2));
+    return true;
+}
+
+static void host_state_apply_preference_entry(host_t *host,
+                                              const host_state_preference_entry_t *serialized)
+{
+    if (host == NULL || serialized == NULL) {
+        return;
+    }
+
+    if (host->preference_count >= SSH_CHATTER_MAX_PREFERENCES) {
+        return;
+    }
+
+    user_preference_t *pref = &host->preferences[host->preference_count];
+    memset(pref, 0, sizeof(*pref));
+    pref->in_use = true;
+    pref->has_user_theme = serialized->has_user_theme != 0U;
+    pref->has_system_theme = serialized->has_system_theme != 0U;
+    pref->user_is_bold = serialized->user_is_bold != 0U;
+    pref->system_is_bold = serialized->system_is_bold != 0U;
+    snprintf(pref->username, sizeof(pref->username), "%s",
+             serialized->username);
+    snprintf(pref->user_color_name, sizeof(pref->user_color_name), "%s",
+             serialized->user_color_name);
+    snprintf(pref->user_highlight_name, sizeof(pref->user_highlight_name), "%s",
+             serialized->user_highlight_name);
+    snprintf(pref->system_fg_name, sizeof(pref->system_fg_name), "%s",
+             serialized->system_fg_name);
+    snprintf(pref->system_bg_name, sizeof(pref->system_bg_name), "%s",
+             serialized->system_bg_name);
+    snprintf(pref->system_highlight_name,
+             sizeof(pref->system_highlight_name), "%s",
+             serialized->system_highlight_name);
+    snprintf(pref->os_name, sizeof(pref->os_name), "%s",
+             serialized->os_name);
+    pref->daily_year = serialized->daily_year;
+    pref->daily_yday = serialized->daily_yday;
+    snprintf(pref->daily_function, sizeof(pref->daily_function), "%s",
+             serialized->daily_function);
+    pref->last_poll_id = serialized->last_poll_id;
+    pref->last_poll_choice = serialized->last_poll_choice;
+    pref->has_birthday = serialized->has_birthday != 0U;
+    snprintf(pref->birthday, sizeof(pref->birthday), "%s",
+             serialized->birthday);
+    pref->translation_caption_spacing = serialized->translation_caption_spacing;
+    pref->translation_master_enabled = serialized->translation_enabled != 0U;
+    pref->translation_master_explicit =
+        serialized->translation_master_explicit != 0U;
+    pref->output_translation_enabled =
+        serialized->output_translation_enabled != 0U;
+    pref->input_translation_enabled =
+        serialized->input_translation_enabled != 0U;
+    snprintf(pref->output_translation_language,
+             sizeof(pref->output_translation_language), "%s",
+             serialized->output_translation_language);
+    snprintf(pref->input_translation_language,
+             sizeof(pref->input_translation_language), "%s",
+             serialized->input_translation_language);
+    pref->breaking_alerts_enabled = serialized->breaking_alerts_enabled != 0U;
+    ++host->preference_count;
+}
+
+static bool host_state_load_preferences(FILE *fp, host_t *host, uint32_t version,
+                                        uint32_t preference_count)
+{
+    if (host == NULL) {
+        return false;
+    }
+
+    memset(host->preferences, 0, sizeof(host->preferences));
+    host->preference_count = 0U;
+
+    for (uint32_t idx = 0; idx < preference_count; ++idx) {
+        host_state_preference_entry_t serialized = {0};
+        if (!host_state_read_preference_entry(fp, version, &serialized)) {
+            return false;
+        }
+
+        host_state_apply_preference_entry(host, &serialized);
+    }
+
+    return true;
+}
+
+static bool host_state_load_grants(FILE *fp, host_t *host, uint32_t grant_count)
+{
+    if (fp == NULL || host == NULL) {
+        return false;
+    }
+
+    memset(host->operator_grants, 0, HOST_GRANTS_CLEAR_SIZE);
+    host->operator_grant_count = 0U;
+
+    for (uint32_t idx = 0; idx < grant_count; ++idx) {
+        host_state_grant_entry_t serialized = {0};
+        if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+            return false;
+        }
+        if (serialized.ip[0] == '\0') {
+            continue;
+        }
+        if (host->operator_grant_count >= SSH_CHATTER_MAX_GRANTS) {
+            continue;
+        }
+        snprintf(host->operator_grants[host->operator_grant_count].ip,
+                 sizeof(host->operator_grants[host->operator_grant_count].ip),
+                 "%s", serialized.ip);
+        ++host->operator_grant_count;
+    }
+
+    return true;
+}
+
+static void host_state_reset_loaded_data(host_t *host)
+{
+    if (host == NULL) {
+        return;
+    }
+
+    if (host->history != NULL && host->history_capacity > 0U) {
+        memset(host->history, 0,
+               host->history_capacity * sizeof(chat_history_entry_t));
+    }
+    host->history_count = 0U;
+    host->preference_count = 0U;
+    memset(host->preferences, 0, sizeof(host->preferences));
+}
+
+static uint64_t host_state_normalize_next_message_id(uint64_t requested,
+                                                     size_t history_total)
+{
+    uint64_t minimum_allowed = (uint64_t)history_total + 1U;
+    if (requested < minimum_allowed) {
+        return minimum_allowed;
+    }
+    return requested;
+}
+
 static void host_state_load(host_t *host)
 {
     if (host == NULL) {
@@ -2830,52 +3607,22 @@ static void host_state_load(host_t *host)
     }
 
     host_state_header_v1_t base_header = {0};
-    if (fread(&base_header, sizeof(base_header), 1U, fp) != 1U) {
-        fclose(fp);
-        return;
-    }
-
-    if (base_header.magic != HOST_STATE_MAGIC) {
+    if (!host_state_read_base_header(fp, &base_header)) {
         fclose(fp);
         return;
     }
 
     uint32_t version = base_header.version;
-    if (version == 0U || version > HOST_STATE_VERSION) {
-        fclose(fp);
-        return;
-    }
-
     uint32_t history_count = base_header.history_count;
     uint32_t preference_count = base_header.preference_count;
     uint64_t next_message_id = 1U;
-
     uint32_t grant_count = 0U;
     uint8_t captcha_enabled_raw = 0U;
-    if (version >= 2U) {
-        uint32_t sound_count_raw = 0U;
-        uint32_t grant_count_raw = 0U;
-        uint64_t next_id_raw = 0U;
-        if (fread(&sound_count_raw, sizeof(sound_count_raw), 1U, fp) != 1U ||
-            fread(&grant_count_raw, sizeof(grant_count_raw), 1U, fp) != 1U ||
-            fread(&next_id_raw, sizeof(next_id_raw), 1U, fp) != 1U) {
-            fclose(fp);
-            return;
-        }
-        next_message_id = next_id_raw;
-        if (version >= 5U) {
-            grant_count = grant_count_raw;
-        }
-    }
 
-    if (version >= 8U) {
-        uint8_t reserved_bytes[7] = {0};
-        if (fread(&captcha_enabled_raw, sizeof(captcha_enabled_raw), 1U, fp) !=
-                1U ||
-            fread(reserved_bytes, sizeof(reserved_bytes), 1U, fp) != 1U) {
-            fclose(fp);
-            return;
-        }
+    if (!host_state_read_metadata(fp, version, &next_message_id, &grant_count,
+                                  &captcha_enabled_raw)) {
+        fclose(fp);
+        return;
     }
 
     if (preference_count > SSH_CHATTER_MAX_PREFERENCES) {
@@ -2888,551 +3635,26 @@ static void host_state_load(host_t *host)
         atomic_store(&host->captcha_enabled, captcha_enabled_raw != 0U);
     }
 
-    bool success = true;
+    bool success = host_state_load_history_entries(fp, host, version,
+                                                   history_count);
 
-    size_t cache_limit = SSH_CHATTER_HISTORY_CACHE_LIMIT;
-    size_t keep_start = 0U;
-    size_t keep_count = history_count;
-    if (cache_limit > 0U && keep_count > cache_limit) {
-        keep_start = keep_count - cache_limit;
-        keep_count = cache_limit;
+    if (success) {
+        success = host_state_load_preferences(fp, host, version,
+                                              preference_count);
     }
 
-    if (keep_count > 0U) {
-        success = host_history_reserve_locked(host, keep_count);
-    }
-    host->history_count = 0U;
-
-    for (uint32_t idx = 0; success && idx < history_count; ++idx) {
-        chat_history_entry_t entry_value = {0};
-
-        if (version >= 3U) {
-            host_state_history_entry_v3_t serialized = {0};
-            if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
-                success = false;
-                break;
-            }
-
-            entry_value.is_user_message = serialized.base.is_user_message != 0U;
-            entry_value.user_is_bold = serialized.base.user_is_bold != 0U;
-            snprintf(entry_value.username, sizeof(entry_value.username), "%s",
-                     serialized.base.username);
-            snprintf(entry_value.message, sizeof(entry_value.message), "%s",
-                     serialized.base.message);
-            snprintf(entry_value.user_color_name,
-                     sizeof(entry_value.user_color_name), "%s",
-                     serialized.base.user_color_name);
-            snprintf(entry_value.user_highlight_name,
-                     sizeof(entry_value.user_highlight_name), "%s",
-                     serialized.base.user_highlight_name);
-            entry_value.message_id = serialized.message_id;
-            if (serialized.attachment_type > CHAT_ATTACHMENT_FILE) {
-                entry_value.attachment_type = CHAT_ATTACHMENT_NONE;
-            } else {
-                entry_value.attachment_type =
-                    (chat_attachment_type_t)serialized.attachment_type;
-            }
-            snprintf(entry_value.attachment_target,
-                     sizeof(entry_value.attachment_target), "%s",
-                     serialized.attachment_target);
-            snprintf(entry_value.attachment_caption,
-                     sizeof(entry_value.attachment_caption), "%s",
-                     serialized.attachment_caption);
-            memcpy(entry_value.reaction_counts, serialized.reaction_counts,
-                   sizeof(entry_value.reaction_counts));
-        } else if (version == 2U) {
-            host_state_history_entry_v2_t serialized = {0};
-            if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
-                success = false;
-                break;
-            }
-
-            entry_value.is_user_message = serialized.base.is_user_message != 0U;
-            entry_value.user_is_bold = serialized.base.user_is_bold != 0U;
-            snprintf(entry_value.username, sizeof(entry_value.username), "%s",
-                     serialized.base.username);
-            snprintf(entry_value.message, sizeof(entry_value.message), "%s",
-                     serialized.base.message);
-            snprintf(entry_value.user_color_name,
-                     sizeof(entry_value.user_color_name), "%s",
-                     serialized.base.user_color_name);
-            snprintf(entry_value.user_highlight_name,
-                     sizeof(entry_value.user_highlight_name), "%s",
-                     serialized.base.user_highlight_name);
-            entry_value.message_id = serialized.message_id;
-            if (serialized.attachment_type > CHAT_ATTACHMENT_AUDIO) {
-                entry_value.attachment_type = CHAT_ATTACHMENT_NONE;
-            } else {
-                entry_value.attachment_type =
-                    (chat_attachment_type_t)serialized.attachment_type;
-            }
-            snprintf(entry_value.attachment_target,
-                     sizeof(entry_value.attachment_target), "%s",
-                     serialized.attachment_target);
-            snprintf(entry_value.attachment_caption,
-                     sizeof(entry_value.attachment_caption), "%s",
-                     serialized.attachment_caption);
-            memcpy(entry_value.reaction_counts, serialized.reaction_counts,
-                   sizeof(entry_value.reaction_counts));
-            if (serialized.sound_alias[0] != '\0' &&
-                entry_value.attachment_caption[0] == '\0') {
-                snprintf(entry_value.attachment_caption,
-                         sizeof(entry_value.attachment_caption), "%s",
-                         serialized.sound_alias);
-            }
-        } else {
-            host_state_history_entry_v1_t serialized = {0};
-            if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
-                success = false;
-                break;
-            }
-
-            entry_value.is_user_message = serialized.is_user_message != 0U;
-            entry_value.user_is_bold = serialized.user_is_bold != 0U;
-            snprintf(entry_value.username, sizeof(entry_value.username), "%s",
-                     serialized.username);
-            snprintf(entry_value.message, sizeof(entry_value.message), "%s",
-                     serialized.message);
-            snprintf(entry_value.user_color_name,
-                     sizeof(entry_value.user_color_name), "%s",
-                     serialized.user_color_name);
-            snprintf(entry_value.user_highlight_name,
-                     sizeof(entry_value.user_highlight_name), "%s",
-                     serialized.user_highlight_name);
-            entry_value.attachment_type = CHAT_ATTACHMENT_NONE;
-            entry_value.message_id = 0U;
-        }
-
-        host_history_normalize_entry(host, &entry_value);
-        if ((uint32_t)idx >= keep_start) {
-            size_t target_index = host->history_count;
-            if (target_index < host->history_capacity) {
-                host->history[target_index] = entry_value;
-                ++host->history_count;
-            }
-        }
-    }
-
-    host->history_start_index = keep_start;
-    host->history_total = history_count;
-    memset(host->preferences, 0, sizeof(host->preferences));
-    host->preference_count = 0U;
-
-    for (uint32_t idx = 0; success && idx < preference_count; ++idx) {
-        host_state_preference_entry_t serialized = {0};
-        if (version >= 10U) {
-            if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
-                success = false;
-                break;
-            }
-        } else if (version >= 9U) {
-            host_state_preference_entry_v8_t legacy8 = {0};
-            if (fread(&legacy8, sizeof(legacy8), 1U, fp) != 1U) {
-                success = false;
-                break;
-            }
-            serialized.has_user_theme = legacy8.has_user_theme;
-            serialized.has_system_theme = legacy8.has_system_theme;
-            serialized.user_is_bold = legacy8.user_is_bold;
-            serialized.system_is_bold = legacy8.system_is_bold;
-            snprintf(serialized.username, sizeof(serialized.username), "%s",
-                     legacy8.username);
-            snprintf(serialized.user_color_name,
-                     sizeof(serialized.user_color_name), "%s",
-                     legacy8.user_color_name);
-            snprintf(serialized.user_highlight_name,
-                     sizeof(serialized.user_highlight_name), "%s",
-                     legacy8.user_highlight_name);
-            snprintf(serialized.system_fg_name,
-                     sizeof(serialized.system_fg_name), "%s",
-                     legacy8.system_fg_name);
-            snprintf(serialized.system_bg_name,
-                     sizeof(serialized.system_bg_name), "%s",
-                     legacy8.system_bg_name);
-            snprintf(serialized.system_highlight_name,
-                     sizeof(serialized.system_highlight_name), "%s",
-                     legacy8.system_highlight_name);
-            snprintf(serialized.os_name, sizeof(serialized.os_name), "%s",
-                     legacy8.os_name);
-            serialized.daily_year = legacy8.daily_year;
-            serialized.daily_yday = legacy8.daily_yday;
-            snprintf(serialized.daily_function,
-                     sizeof(serialized.daily_function), "%s",
-                     legacy8.daily_function);
-            serialized.last_poll_id = legacy8.last_poll_id;
-            serialized.last_poll_choice = legacy8.last_poll_choice;
-            serialized.has_birthday = legacy8.has_birthday;
-            serialized.translation_caption_spacing =
-                legacy8.translation_caption_spacing;
-            serialized.translation_enabled = legacy8.translation_enabled;
-            serialized.output_translation_enabled =
-                legacy8.output_translation_enabled;
-            serialized.input_translation_enabled =
-                legacy8.input_translation_enabled;
-            serialized.translation_master_explicit =
-                legacy8.translation_master_explicit;
-            snprintf(serialized.birthday, sizeof(serialized.birthday), "%s",
-                     legacy8.birthday);
-            snprintf(serialized.output_translation_language,
-                     sizeof(serialized.output_translation_language), "%s",
-                     legacy8.output_translation_language);
-            snprintf(serialized.input_translation_language,
-                     sizeof(serialized.input_translation_language), "%s",
-                     legacy8.input_translation_language);
-            snprintf(serialized.ui_language, sizeof(serialized.ui_language),
-                     "%s", legacy8.ui_language);
-            serialized.breaking_alerts_enabled = 0U;
-            memset(serialized.reserved2, 0, sizeof(serialized.reserved2));
-        } else if (version >= 7U) {
-            host_state_preference_entry_v7_t legacy7 = {0};
-            if (fread(&legacy7, sizeof(legacy7), 1U, fp) != 1U) {
-                success = false;
-                break;
-            }
-            serialized.has_user_theme = legacy7.has_user_theme;
-            serialized.has_system_theme = legacy7.has_system_theme;
-            serialized.user_is_bold = legacy7.user_is_bold;
-            serialized.system_is_bold = legacy7.system_is_bold;
-            snprintf(serialized.username, sizeof(serialized.username), "%s",
-                     legacy7.username);
-            snprintf(serialized.user_color_name,
-                     sizeof(serialized.user_color_name), "%s",
-                     legacy7.user_color_name);
-            snprintf(serialized.user_highlight_name,
-                     sizeof(serialized.user_highlight_name), "%s",
-                     legacy7.user_highlight_name);
-            snprintf(serialized.system_fg_name,
-                     sizeof(serialized.system_fg_name), "%s",
-                     legacy7.system_fg_name);
-            snprintf(serialized.system_bg_name,
-                     sizeof(serialized.system_bg_name), "%s",
-                     legacy7.system_bg_name);
-            snprintf(serialized.system_highlight_name,
-                     sizeof(serialized.system_highlight_name), "%s",
-                     legacy7.system_highlight_name);
-            snprintf(serialized.os_name, sizeof(serialized.os_name), "%s",
-                     legacy7.os_name);
-            serialized.daily_year = legacy7.daily_year;
-            serialized.daily_yday = legacy7.daily_yday;
-            snprintf(serialized.daily_function,
-                     sizeof(serialized.daily_function), "%s",
-                     legacy7.daily_function);
-            serialized.last_poll_id = legacy7.last_poll_id;
-            serialized.last_poll_choice = legacy7.last_poll_choice;
-            serialized.has_birthday = legacy7.has_birthday;
-            serialized.translation_caption_spacing =
-                legacy7.translation_caption_spacing;
-            serialized.translation_enabled = legacy7.translation_enabled;
-            serialized.output_translation_enabled =
-                legacy7.output_translation_enabled;
-            serialized.input_translation_enabled =
-                legacy7.input_translation_enabled;
-            serialized.translation_master_explicit =
-                legacy7.translation_master_explicit;
-            snprintf(serialized.birthday, sizeof(serialized.birthday), "%s",
-                     legacy7.birthday);
-            snprintf(serialized.output_translation_language,
-                     sizeof(serialized.output_translation_language), "%s",
-                     legacy7.output_translation_language);
-            snprintf(serialized.input_translation_language,
-                     sizeof(serialized.input_translation_language), "%s",
-                     legacy7.input_translation_language);
-            serialized.ui_language[0] = '\0';
-            serialized.breaking_alerts_enabled = 0U;
-            memset(serialized.reserved2, 0, sizeof(serialized.reserved2));
-        } else if (version == 6U) {
-            host_state_preference_entry_v6_t legacy6 = {0};
-            if (fread(&legacy6, sizeof(legacy6), 1U, fp) != 1U) {
-                success = false;
-                break;
-            }
-            serialized.has_user_theme = legacy6.has_user_theme;
-            serialized.has_system_theme = legacy6.has_system_theme;
-            serialized.user_is_bold = legacy6.user_is_bold;
-            serialized.system_is_bold = legacy6.system_is_bold;
-            snprintf(serialized.username, sizeof(serialized.username), "%s",
-                     legacy6.username);
-            snprintf(serialized.user_color_name,
-                     sizeof(serialized.user_color_name), "%s",
-                     legacy6.user_color_name);
-            snprintf(serialized.user_highlight_name,
-                     sizeof(serialized.user_highlight_name), "%s",
-                     legacy6.user_highlight_name);
-            snprintf(serialized.system_fg_name,
-                     sizeof(serialized.system_fg_name), "%s",
-                     legacy6.system_fg_name);
-            snprintf(serialized.system_bg_name,
-                     sizeof(serialized.system_bg_name), "%s",
-                     legacy6.system_bg_name);
-            snprintf(serialized.system_highlight_name,
-                     sizeof(serialized.system_highlight_name), "%s",
-                     legacy6.system_highlight_name);
-            snprintf(serialized.os_name, sizeof(serialized.os_name), "%s",
-                     legacy6.os_name);
-            serialized.daily_year = legacy6.daily_year;
-            serialized.daily_yday = legacy6.daily_yday;
-            snprintf(serialized.daily_function,
-                     sizeof(serialized.daily_function), "%s",
-                     legacy6.daily_function);
-            serialized.last_poll_id = legacy6.last_poll_id;
-            serialized.last_poll_choice = legacy6.last_poll_choice;
-            serialized.has_birthday = legacy6.has_birthday;
-            serialized.translation_caption_spacing =
-                legacy6.translation_caption_spacing;
-            serialized.translation_enabled = legacy6.translation_enabled;
-            serialized.output_translation_enabled =
-                legacy6.output_translation_enabled;
-            serialized.input_translation_enabled =
-                legacy6.input_translation_enabled;
-            serialized.translation_master_explicit =
-                legacy6.translation_enabled;
-            snprintf(serialized.birthday, sizeof(serialized.birthday), "%s",
-                     legacy6.birthday);
-            snprintf(serialized.output_translation_language,
-                     sizeof(serialized.output_translation_language), "%s",
-                     legacy6.output_translation_language);
-            snprintf(serialized.input_translation_language,
-                     sizeof(serialized.input_translation_language), "%s",
-                     legacy6.input_translation_language);
-            serialized.ui_language[0] = '\0';
-            serialized.breaking_alerts_enabled = 0U;
-            memset(serialized.reserved2, 0, sizeof(serialized.reserved2));
-        } else if (version == 5U) {
-            host_state_preference_entry_v5_t legacy5 = {0};
-            if (fread(&legacy5, sizeof(legacy5), 1U, fp) != 1U) {
-                success = false;
-                break;
-            }
-            serialized.has_user_theme = legacy5.has_user_theme;
-            serialized.has_system_theme = legacy5.has_system_theme;
-            serialized.user_is_bold = legacy5.user_is_bold;
-            serialized.system_is_bold = legacy5.system_is_bold;
-            snprintf(serialized.username, sizeof(serialized.username), "%s",
-                     legacy5.username);
-            snprintf(serialized.user_color_name,
-                     sizeof(serialized.user_color_name), "%s",
-                     legacy5.user_color_name);
-            snprintf(serialized.user_highlight_name,
-                     sizeof(serialized.user_highlight_name), "%s",
-                     legacy5.user_highlight_name);
-            snprintf(serialized.system_fg_name,
-                     sizeof(serialized.system_fg_name), "%s",
-                     legacy5.system_fg_name);
-            snprintf(serialized.system_bg_name,
-                     sizeof(serialized.system_bg_name), "%s",
-                     legacy5.system_bg_name);
-            snprintf(serialized.system_highlight_name,
-                     sizeof(serialized.system_highlight_name), "%s",
-                     legacy5.system_highlight_name);
-            snprintf(serialized.os_name, sizeof(serialized.os_name), "%s",
-                     legacy5.os_name);
-            serialized.daily_year = legacy5.daily_year;
-            serialized.daily_yday = legacy5.daily_yday;
-            snprintf(serialized.daily_function,
-                     sizeof(serialized.daily_function), "%s",
-                     legacy5.daily_function);
-            serialized.last_poll_id = legacy5.last_poll_id;
-            serialized.last_poll_choice = legacy5.last_poll_choice;
-            serialized.has_birthday = legacy5.has_birthday;
-            serialized.translation_caption_spacing = legacy5.reserved[0];
-            serialized.translation_enabled = 0U;
-            serialized.output_translation_enabled = 0U;
-            serialized.input_translation_enabled = 0U;
-            serialized.translation_master_explicit = 0U;
-            snprintf(serialized.birthday, sizeof(serialized.birthday), "%s",
-                     legacy5.birthday);
-            serialized.output_translation_language[0] = '\0';
-            serialized.input_translation_language[0] = '\0';
-            serialized.ui_language[0] = '\0';
-            serialized.breaking_alerts_enabled = 0U;
-            memset(serialized.reserved2, 0, sizeof(serialized.reserved2));
-        } else if (version == 4U) {
-            host_state_preference_entry_v4_t legacy4 = {0};
-            if (fread(&legacy4, sizeof(legacy4), 1U, fp) != 1U) {
-                success = false;
-                break;
-            }
-            serialized.has_user_theme = legacy4.has_user_theme;
-            serialized.has_system_theme = legacy4.has_system_theme;
-            serialized.user_is_bold = legacy4.user_is_bold;
-            serialized.system_is_bold = legacy4.system_is_bold;
-            snprintf(serialized.username, sizeof(serialized.username), "%s",
-                     legacy4.username);
-            snprintf(serialized.user_color_name,
-                     sizeof(serialized.user_color_name), "%s",
-                     legacy4.user_color_name);
-            snprintf(serialized.user_highlight_name,
-                     sizeof(serialized.user_highlight_name), "%s",
-                     legacy4.user_highlight_name);
-            snprintf(serialized.system_fg_name,
-                     sizeof(serialized.system_fg_name), "%s",
-                     legacy4.system_fg_name);
-            snprintf(serialized.system_bg_name,
-                     sizeof(serialized.system_bg_name), "%s",
-                     legacy4.system_bg_name);
-            snprintf(serialized.system_highlight_name,
-                     sizeof(serialized.system_highlight_name), "%s",
-                     legacy4.system_highlight_name);
-            snprintf(serialized.os_name, sizeof(serialized.os_name), "%s",
-                     legacy4.os_name);
-            serialized.daily_year = legacy4.daily_year;
-            serialized.daily_yday = legacy4.daily_yday;
-            snprintf(serialized.daily_function,
-                     sizeof(serialized.daily_function), "%s",
-                     legacy4.daily_function);
-            serialized.last_poll_id = legacy4.last_poll_id;
-            serialized.last_poll_choice = legacy4.last_poll_choice;
-            serialized.has_birthday = 0U;
-            serialized.translation_caption_spacing = 0U;
-            serialized.translation_enabled = 0U;
-            serialized.output_translation_enabled = 0U;
-            serialized.input_translation_enabled = 0U;
-            serialized.translation_master_explicit = 0U;
-            serialized.birthday[0] = '\0';
-            serialized.output_translation_language[0] = '\0';
-            serialized.input_translation_language[0] = '\0';
-            serialized.ui_language[0] = '\0';
-            serialized.breaking_alerts_enabled = 0U;
-            memset(serialized.reserved2, 0, sizeof(serialized.reserved2));
-        } else {
-            host_state_preference_entry_v3_t legacy = {0};
-            if (fread(&legacy, sizeof(legacy), 1U, fp) != 1U) {
-                success = false;
-                break;
-            }
-            serialized.has_user_theme = legacy.has_user_theme;
-            serialized.has_system_theme = legacy.has_system_theme;
-            serialized.user_is_bold = legacy.user_is_bold;
-            serialized.system_is_bold = legacy.system_is_bold;
-            snprintf(serialized.username, sizeof(serialized.username), "%s",
-                     legacy.username);
-            snprintf(serialized.user_color_name,
-                     sizeof(serialized.user_color_name), "%s",
-                     legacy.user_color_name);
-            snprintf(serialized.user_highlight_name,
-                     sizeof(serialized.user_highlight_name), "%s",
-                     legacy.user_highlight_name);
-            snprintf(serialized.system_fg_name,
-                     sizeof(serialized.system_fg_name), "%s",
-                     legacy.system_fg_name);
-            snprintf(serialized.system_bg_name,
-                     sizeof(serialized.system_bg_name), "%s",
-                     legacy.system_bg_name);
-            snprintf(serialized.system_highlight_name,
-                     sizeof(serialized.system_highlight_name), "%s",
-                     legacy.system_highlight_name);
-            serialized.os_name[0] = '\0';
-            serialized.daily_year = 0;
-            serialized.daily_yday = 0;
-            serialized.daily_function[0] = '\0';
-            serialized.last_poll_id = 0U;
-            serialized.last_poll_choice = -1;
-            serialized.has_birthday = 0U;
-            serialized.translation_caption_spacing = 0U;
-            serialized.translation_enabled = 0U;
-            serialized.output_translation_enabled = 0U;
-            serialized.input_translation_enabled = 0U;
-            serialized.translation_master_explicit = 0U;
-            serialized.birthday[0] = '\0';
-            serialized.output_translation_language[0] = '\0';
-            serialized.input_translation_language[0] = '\0';
-            serialized.ui_language[0] = '\0';
-            serialized.breaking_alerts_enabled = 0U;
-            memset(serialized.reserved2, 0, sizeof(serialized.reserved2));
-        }
-
-        if (host->preference_count >= SSH_CHATTER_MAX_PREFERENCES) {
-            continue;
-        }
-
-        user_preference_t *pref = &host->preferences[host->preference_count];
-        memset(pref, 0, sizeof(*pref));
-        pref->in_use = true;
-        pref->has_user_theme = serialized.has_user_theme != 0U;
-        pref->has_system_theme = serialized.has_system_theme != 0U;
-        pref->user_is_bold = serialized.user_is_bold != 0U;
-        pref->system_is_bold = serialized.system_is_bold != 0U;
-        snprintf(pref->username, sizeof(pref->username), "%s",
-                 serialized.username);
-        snprintf(pref->user_color_name, sizeof(pref->user_color_name), "%s",
-                 serialized.user_color_name);
-        snprintf(pref->user_highlight_name, sizeof(pref->user_highlight_name),
-                 "%s", serialized.user_highlight_name);
-        snprintf(pref->system_fg_name, sizeof(pref->system_fg_name), "%s",
-                 serialized.system_fg_name);
-        snprintf(pref->system_bg_name, sizeof(pref->system_bg_name), "%s",
-                 serialized.system_bg_name);
-        snprintf(pref->system_highlight_name,
-                 sizeof(pref->system_highlight_name), "%s",
-                 serialized.system_highlight_name);
-        snprintf(pref->os_name, sizeof(pref->os_name), "%s",
-                 serialized.os_name);
-        pref->daily_year = serialized.daily_year;
-        pref->daily_yday = serialized.daily_yday;
-        snprintf(pref->daily_function, sizeof(pref->daily_function), "%s",
-                 serialized.daily_function);
-        pref->last_poll_id = serialized.last_poll_id;
-        pref->last_poll_choice = serialized.last_poll_choice;
-        pref->has_birthday = serialized.has_birthday != 0U;
-        snprintf(pref->birthday, sizeof(pref->birthday), "%s",
-                 serialized.birthday);
-        pref->translation_caption_spacing =
-            serialized.translation_caption_spacing;
-        pref->translation_master_enabled = serialized.translation_enabled != 0U;
-        pref->translation_master_explicit =
-            serialized.translation_master_explicit != 0U;
-        pref->output_translation_enabled =
-            serialized.output_translation_enabled != 0U;
-        pref->input_translation_enabled =
-            serialized.input_translation_enabled != 0U;
-        snprintf(pref->output_translation_language,
-                 sizeof(pref->output_translation_language), "%s",
-                 serialized.output_translation_language);
-        snprintf(pref->input_translation_language,
-                 sizeof(pref->input_translation_language), "%s",
-                 serialized.input_translation_language);
-        pref->breaking_alerts_enabled =
-            serialized.breaking_alerts_enabled != 0U;
-        ++host->preference_count;
-    }
-
-    memset(host->operator_grants, 0, HOST_GRANTS_CLEAR_SIZE);
-    host->operator_grant_count = 0U;
-    for (uint32_t idx = 0; success && idx < grant_count; ++idx) {
-        host_state_grant_entry_t serialized = {0};
-        if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
-            success = false;
-            break;
-        }
-        if (serialized.ip[0] == '\0') {
-            continue;
-        }
-        if (host->operator_grant_count >= SSH_CHATTER_MAX_GRANTS) {
-            continue;
-        }
-        snprintf(host->operator_grants[host->operator_grant_count].ip,
-                 sizeof(host->operator_grants[host->operator_grant_count].ip),
-                 "%s", serialized.ip);
-        ++host->operator_grant_count;
+    if (success) {
+        success = host_state_load_grants(fp, host, grant_count);
     }
 
     if (!success) {
-        if (host->history != NULL && host->history_capacity > 0U) {
-            memset(host->history, 0,
-                   host->history_capacity * sizeof(chat_history_entry_t));
-        }
-        host->history_count = 0U;
-        host->preference_count = 0U;
-        memset(host->preferences, 0, sizeof(host->preferences));
+        host_state_reset_loaded_data(host);
     }
 
-    if (next_message_id == 0U) {
-        next_message_id = (uint64_t)host->history_total + 1U;
-    }
-    if (next_message_id <= (uint64_t)host->history_total) {
-        next_message_id = (uint64_t)host->history_total + 1U;
-    }
-    host->next_message_id = next_message_id;
+    host->next_message_id = host_state_normalize_next_message_id(
+        next_message_id == 0U ? (uint64_t)host->history_total + 1U
+                              : next_message_id,
+        host->history_total);
 
     pthread_mutex_unlock(&host->lock);
     fclose(fp);
