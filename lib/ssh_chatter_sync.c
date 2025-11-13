@@ -94,8 +94,8 @@ void ssh_chatter_sync_add_message_to_history(const chat_message_t *new_msg)
         return;
     }
 
-    node->username = strdup(new_msg->username);
-    node->message_body = strdup(new_msg->message_body);
+    node->username = sshc_strdup(new_msg->username);
+    node->message_body = sshc_strdup(new_msg->message_body);
     node->timestamp = new_msg->timestamp;
     node->next = chat_history_head;
     chat_history_head = node;

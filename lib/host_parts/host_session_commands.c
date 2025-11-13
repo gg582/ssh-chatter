@@ -1,5 +1,4 @@
 #include "host_internal.h"
-#include "../ssh_chatter_sync.h"
 #include "../headers/security_layer.h"
 // Command handlers for chat interactions, media, and user utilities.
 
@@ -2459,419 +2458,6 @@ session_handle_gameopt(session_ctx_t *ctx, const char *arguments)
     session_send_system_line(ctx, usage);
 }
 
-static void session_handle_sync_trigger(session_ctx_t *ctx,
-                                        const char *arguments)
-{
-    if (ctx == NULL || ctx->owner == NULL) {
-        return;
-    }
-
-    if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
-        session_send_system_line(
-            ctx, "Only operators may trigger SSH synchronization.");
-        return;
-    }
-
-    (void)arguments; // Suppress unused parameter warning
-
-    session_send_system_line(
-        ctx, "Attempting to manually trigger SSH synchronization...");
-    ssh_chatter_sync_manual_trigger();
-    session_send_system_line(ctx, "SSH synchronization trigger initiated.");
-}
-
-static bool session_parse_port_token(const char *token, uint16_t *out)
-{
-    if (token == NULL || out == NULL) {
-        return false;
-    }
-
-    char *endptr = NULL;
-    long value = strtol(token, &endptr, 10);
-    if (endptr == NULL || *endptr != '\0' || value <= 0 || value > UINT16_MAX) {
-        return false;
-    }
-
-    *out = (uint16_t)value;
-    return true;
-}
-
-static bool session_parse_ssh_url(const char *input, char *host_out,
-                                  size_t host_len, uint16_t *port_out)
-{
-    if (input == NULL || host_out == NULL || host_len == 0U) {
-        return false;
-    }
-
-    const char kScheme[] = "ssh://";
-    size_t scheme_len = sizeof(kScheme) - 1U;
-    if (strncasecmp(input, kScheme, scheme_len) != 0) {
-        return false;
-    }
-
-    const char *cursor = input + scheme_len;
-    if (*cursor == '\0') {
-        return false;
-    }
-
-    char host_buffer[SSH_CHATTER_MESSAGE_LIMIT];
-    size_t host_size = 0U;
-
-    if (*cursor == '[') {
-        ++cursor;
-        const char *closing = strchr(cursor, ']');
-        if (closing == NULL || closing == cursor) {
-            return false;
-        }
-        host_size = (size_t)(closing - cursor);
-        if (host_size >= sizeof(host_buffer)) {
-            return false;
-        }
-        memcpy(host_buffer, cursor, host_size);
-        host_buffer[host_size] = '\0';
-        cursor = closing + 1;
-    } else {
-        const char *start = cursor;
-        while (*cursor != '\0' && *cursor != ':' && *cursor != '/' &&
-               *cursor != '?' && *cursor != '#') {
-            ++cursor;
-        }
-        if (cursor == start) {
-            return false;
-        }
-        host_size = (size_t)(cursor - start);
-        if (host_size >= sizeof(host_buffer)) {
-            return false;
-        }
-        memcpy(host_buffer, start, host_size);
-        host_buffer[host_size] = '\0';
-    }
-
-    uint16_t parsed_port = 0U;
-    if (*cursor == ':') {
-        ++cursor;
-        if (*cursor == '\0') {
-            return false;
-        }
-        const char *port_start = cursor;
-        while (*cursor != '\0' && isdigit((unsigned char)*cursor)) {
-            ++cursor;
-        }
-        if (cursor == port_start) {
-            return false;
-        }
-        if (*cursor != '\0' && *cursor != '/' && *cursor != '?' &&
-            *cursor != '#') {
-            return false;
-        }
-
-        char port_buffer[8];
-        size_t port_length = (size_t)(cursor - port_start);
-        if (port_length >= sizeof(port_buffer)) {
-            return false;
-        }
-        memcpy(port_buffer, port_start, port_length);
-        port_buffer[port_length] = '\0';
-
-        if (!session_parse_port_token(port_buffer, &parsed_port)) {
-            return false;
-        }
-    }
-
-    if (*cursor != '\0' && !(*cursor == '/' && cursor[1] == '\0')) {
-        return false;
-    }
-
-    if (host_size + 1U > host_len) {
-        return false;
-    }
-
-    memcpy(host_out, host_buffer, host_size + 1U);
-    if (port_out != NULL) {
-        *port_out = parsed_port;
-    }
-
-    return true;
-}
-
-static void session_handle_ssh_chat_server(session_ctx_t *ctx,
-                                           const char *arguments)
-{
-    if (ctx == NULL || ctx->owner == NULL) {
-        return;
-    }
-
-    if (!ctx->user.is_operator && !ctx->user.is_lan_operator) {
-        session_send_system_line(
-            ctx,
-            "Only operators may configure the /ssh-chat-server integration.");
-        return;
-    }
-
-    static const char *kUsage =
-        "Usage: /ssh-chat-server "
-        "<set|port|credentials|enable|disable|status|trigger|stop> ...";
-
-    char usage[SSH_CHATTER_MESSAGE_LIMIT];
-    session_command_format_usage(ctx, "/ssh-chat-server", kUsage, usage,
-                                 sizeof(usage));
-
-    if (arguments == NULL) {
-        session_send_system_line(ctx, usage);
-        return;
-    }
-
-    char working[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(working, sizeof(working), "%s", arguments);
-    trim_whitespace_inplace(working);
-
-    if (working[0] == '\0') {
-        session_send_system_line(ctx, usage);
-        return;
-    }
-
-    char *saveptr = NULL;
-    char *action = strtok_r(working, " 	", &saveptr);
-
-    if (action == NULL) {
-        session_send_system_line(ctx, usage);
-        return;
-    }
-
-    if (strcasecmp(action, "set") == 0 || strcasecmp(action, "host") == 0) {
-        char *url_str = strtok_r(NULL, " 	", &saveptr);
-        char *port_str = strtok_r(NULL, " 	", &saveptr);
-
-        if (url_str == NULL) {
-            session_send_system_line(ctx, usage);
-            return;
-        }
-
-        char host[SSH_CHATTER_MESSAGE_LIMIT];
-        uint16_t url_port = 0U;
-        if (!session_parse_ssh_url(url_str, host, sizeof(host), &url_port)) {
-            session_send_system_line(ctx, "Invalid ssh:// URL.");
-            return;
-        }
-
-        uint16_t port = url_port;
-        if (port_str != NULL) {
-            if (!session_parse_port_token(port_str, &port)) {
-                session_send_system_line(ctx, "Invalid port number.");
-                return;
-            }
-        }
-
-        if (port == 0U) {
-            port = 22U;
-        }
-
-        if (!session_user_data_load(ctx)) {
-            session_send_system_line(ctx, "Failed to load user data.");
-            return;
-        }
-
-        user_data_set_ssh_chat_server_config(&ctx->user_data, host, port);
-
-        if (!session_user_data_commit(ctx)) {
-            session_send_system_line(
-                ctx, "Failed to save ssh-chat server configuration.");
-            return;
-        }
-
-        sync_settings_t settings = ssh_chatter_sync_get_settings();
-        const char *username = settings.go_chat_username[0] != '\0'
-                                   ? settings.go_chat_username
-                                   : "chatter_sync";
-        const char *password = settings.go_chat_password[0] != '\0'
-                                   ? settings.go_chat_password
-                                   : "password";
-
-        ssh_chatter_sync_set_connection_details(host, (int)port, username,
-                                                password);
-
-        char message[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(message, sizeof(message),
-                 "ssh-chat server configured: URL='ssh://%s', Port=%hu", host,
-                 port);
-        session_send_system_line(ctx, message);
-        session_send_system_line(
-            ctx,
-            "Use /ssh-chat-server trigger to reconnect with the new settings.");
-        return;
-    }
-
-    if (strcasecmp(action, "port") == 0) {
-        char *port_str = strtok_r(NULL, " 	", &saveptr);
-
-        if (port_str == NULL) {
-            session_send_system_line(ctx, usage);
-            return;
-        }
-
-        uint16_t port = 0U;
-        if (!session_parse_port_token(port_str, &port)) {
-            session_send_system_line(ctx, "Invalid port number.");
-            return;
-        }
-
-        if (!session_user_data_load(ctx)) {
-            session_send_system_line(ctx, "Failed to load user data.");
-            return;
-        }
-
-        sync_settings_t settings = ssh_chatter_sync_get_settings();
-        const char *host = settings.go_chat_host[0] != '\0'
-                               ? settings.go_chat_host
-                               : ctx->user_data.ssh_chat_server_url;
-        const char *username = settings.go_chat_username[0] != '\0'
-                                   ? settings.go_chat_username
-                                   : "chatter_sync";
-        const char *password = settings.go_chat_password[0] != '\0'
-                                   ? settings.go_chat_password
-                                   : "password";
-
-        if (host == NULL || host[0] == '\0') {
-            session_send_system_line(
-                ctx, "Set a server URL before adjusting the port.");
-            return;
-        }
-
-        user_data_set_ssh_chat_server_config(&ctx->user_data, host, port);
-
-        if (!session_user_data_commit(ctx)) {
-            session_send_system_line(
-                ctx, "Failed to save ssh-chat server configuration.");
-            return;
-        }
-
-        ssh_chatter_sync_set_connection_details(host, (int)port, username,
-                                                password);
-
-        char message[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(message, sizeof(message),
-                 "ssh-chat server port updated: Port=%hu", port);
-        session_send_system_line(ctx, message);
-        session_send_system_line(
-            ctx,
-            "Use /ssh-chat-server trigger to reconnect with the new settings.");
-        return;
-    }
-
-    if (strcasecmp(action, "credentials") == 0) {
-        char *username = strtok_r(NULL, " 	", &saveptr);
-        char *password = strtok_r(NULL, " 	", &saveptr);
-
-        if (username == NULL || password == NULL) {
-            session_send_system_line(ctx,
-                                     "Username and password are required.");
-            return;
-        }
-
-        sync_settings_t settings = ssh_chatter_sync_get_settings();
-        const char *host = settings.go_chat_host[0] != '\0'
-                               ? settings.go_chat_host
-                               : "127.0.0.1";
-        int port = settings.go_chat_port > 0 ? settings.go_chat_port : 22;
-
-        ssh_chatter_sync_set_connection_details(host, port, username, password);
-
-        session_send_system_line(
-            ctx, "ssh-chat synchronization credentials updated.");
-        session_send_system_line(
-            ctx,
-            "Use /ssh-chat-server trigger to reconnect with the new settings.");
-        return;
-    }
-
-    if (strcasecmp(action, "enable") == 0 ||
-        strcasecmp(action, "disable") == 0) {
-        bool enable = (strcasecmp(action, "enable") == 0);
-        char *direction = strtok_r(NULL, " 	", &saveptr);
-
-        bool toggle_in = false;
-        bool toggle_out = false;
-
-        if (direction == NULL || strcasecmp(direction, "both") == 0 ||
-            strcasecmp(direction, "all") == 0) {
-            toggle_in = true;
-            toggle_out = true;
-        } else if (strcasecmp(direction, "in") == 0 ||
-                   strcasecmp(direction, "incoming") == 0) {
-            toggle_in = true;
-        } else if (strcasecmp(direction, "out") == 0 ||
-                   strcasecmp(direction, "outgoing") == 0) {
-            toggle_out = true;
-        } else {
-            session_send_system_line(
-                ctx, "Unknown sync direction. Use in, out, or both.");
-            return;
-        }
-
-        if (toggle_in) {
-            ssh_chatter_sync_set_in_enabled(enable);
-            session_send_system_line(
-                ctx, enable ? "Incoming synchronization enabled."
-                            : "Incoming synchronization disabled.");
-        }
-
-        if (toggle_out) {
-            ssh_chatter_sync_set_out_enabled(enable);
-            session_send_system_line(
-                ctx, enable ? "Outgoing synchronization enabled."
-                            : "Outgoing synchronization disabled.");
-        }
-
-        return;
-    }
-
-    if (strcasecmp(action, "status") == 0) {
-        sync_settings_t settings = ssh_chatter_sync_get_settings();
-
-        session_send_system_line(ctx, "ssh-chat synchronization status:");
-
-        char connection[SSH_CHATTER_MESSAGE_LIMIT];
-        const char *host = settings.go_chat_host[0] != '\0'
-                               ? settings.go_chat_host
-                               : "(not set)";
-        snprintf(connection, sizeof(connection), "  Server: ssh://%s:%d", host,
-                 settings.go_chat_port);
-        session_send_system_line(ctx, connection);
-
-        char auth_line[SSH_CHATTER_MESSAGE_LIMIT];
-        const char *username = settings.go_chat_username[0] != '\0'
-                                   ? settings.go_chat_username
-                                   : "(not set)";
-        snprintf(auth_line, sizeof(auth_line), "  Username: %s", username);
-        session_send_system_line(ctx, auth_line);
-
-        session_send_system_line(ctx, settings.sync_in_enabled
-                                          ? "  Incoming sync: enabled"
-                                          : "  Incoming sync: disabled");
-        session_send_system_line(ctx, settings.sync_out_enabled
-                                          ? "  Outgoing sync: enabled"
-                                          : "  Outgoing sync: disabled");
-        return;
-    }
-
-    if (strcasecmp(action, "trigger") == 0 ||
-        strcasecmp(action, "start") == 0) {
-        session_send_system_line(
-            ctx, "Attempting to reconnect ssh-chat synchronization...");
-        ssh_chatter_sync_manual_trigger();
-        session_send_system_line(ctx, "Synchronization trigger initiated.");
-        return;
-    }
-
-    if (strcasecmp(action, "stop") == 0) {
-        ssh_chatter_sync_stop();
-        session_send_system_line(ctx, "ssh-chat synchronization stopped.");
-        return;
-    }
-
-    session_send_system_line(ctx, usage);
-}
-
 static void session_handle_advanced(session_ctx_t *ctx, const char *arguments)
 {
     if (ctx == NULL || ctx->owner == NULL) {
@@ -5255,3 +4841,252 @@ static void session_asciiart_capture_line(session_ctx_t *ctx, const char *line)
     ctx->asciiart_buffer[ctx->asciiart_length] = '\0';
     ctx->asciiart_line_count += 1U;
 }
+
+
+static void session_synchronet_show_status(session_ctx_t *ctx)
+{
+    if (ctx == NULL || ctx->owner == NULL) {
+        return;
+    }
+
+    host_t *host = ctx->owner;
+    bool ingress = false;
+    bool egress = false;
+    size_t count = 0U;
+    char urls[SSH_CHATTER_SYNCHRONET_MAX_URLS][SSH_CHATTER_SYNCHRONET_URL_LEN];
+
+    pthread_mutex_lock(&host->lock);
+    ingress = host->synchronet_ingress_enabled;
+    egress = host->synchronet_egress_enabled;
+    count = host->synchronet_url_count;
+    for (size_t idx = 0U; idx < count; ++idx) {
+        snprintf(urls[idx], sizeof(urls[idx]), "%s", host->synchronet_urls[idx]);
+    }
+    pthread_mutex_unlock(&host->lock);
+
+    char status_line[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(status_line, sizeof(status_line),
+             "Synchronet ingress: %s, egress: %s.",
+             ingress ? "enabled" : "disabled",
+             egress ? "enabled" : "disabled");
+    session_send_system_line(ctx, status_line);
+
+    if (count == 0U) {
+        session_send_system_line(ctx, "No Synchronet endpoints configured.");
+        return;
+    }
+
+    for (size_t idx = 0U; idx < count; ++idx) {
+        char line[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(line, sizeof(line), "%zu. %s", idx + 1U, urls[idx]);
+        session_send_system_line(ctx, line);
+    }
+}
+
+static bool session_synchronet_parse_bool(const char *token, bool *value)
+{
+    if (token == NULL || value == NULL) {
+        return false;
+    }
+    if (strcasecmp(token, "on") == 0 || strcasecmp(token, "enable") == 0 ||
+        strcasecmp(token, "enabled") == 0 || strcasecmp(token, "true") == 0) {
+        *value = true;
+        return true;
+    }
+    if (strcasecmp(token, "off") == 0 || strcasecmp(token, "disable") == 0 ||
+        strcasecmp(token, "disabled") == 0 || strcasecmp(token, "false") == 0) {
+        *value = false;
+        return true;
+    }
+    return false;
+}
+
+static void session_handle_synchronet(session_ctx_t *ctx, const char *arguments)
+{
+    if (ctx == NULL || ctx->owner == NULL) {
+        return;
+    }
+
+    host_t *host = ctx->owner;
+    char working[SSH_CHATTER_MESSAGE_LIMIT];
+    if (arguments != NULL) {
+        size_t copy_len = strnlen(arguments, sizeof(working) - 1U);
+        memcpy(working, arguments, copy_len);
+        working[copy_len] = '\0';
+    } else {
+        working[0] = '\0';
+    }
+    trim_whitespace_inplace(working);
+
+    char command_token[32];
+    char *rest = NULL;
+    if (working[0] != '\0') {
+        char *cursor = working;
+        size_t idx = 0U;
+        while (*cursor != '\0' && !isspace((unsigned char)*cursor) &&
+               idx + 1U < sizeof(command_token)) {
+            command_token[idx++] = *cursor++;
+        }
+        command_token[idx] = '\0';
+        if (*cursor != '\0') {
+            *cursor = '\0';
+            rest = cursor + 1;
+            trim_whitespace_inplace(rest);
+        }
+    } else {
+        command_token[0] = '\0';
+    }
+
+    for (size_t idx = 0U; command_token[idx] != '\0'; ++idx) {
+        command_token[idx] = (char)tolower((unsigned char)command_token[idx]);
+    }
+
+    bool is_operator = ctx->user.is_operator || ctx->user.is_lan_operator;
+
+    if (command_token[0] == '\0' || strcmp(command_token, "status") == 0 ||
+        strcmp(command_token, "list") == 0) {
+        session_synchronet_show_status(ctx);
+        return;
+    }
+
+    if (strcmp(command_token, "add") == 0) {
+        if (rest == NULL || rest[0] == '\0') {
+            session_send_system_line(ctx, "Usage: /synchronet add <url>");
+            return;
+        }
+        char url[SSH_CHATTER_SYNCHRONET_URL_LEN];
+        snprintf(url, sizeof(url), "%s", rest);
+        trim_whitespace_inplace(url);
+        if (url[0] == '\0') {
+            session_send_system_line(ctx, "URL cannot be empty.");
+            return;
+        }
+        pthread_mutex_lock(&host->lock);
+        if (host->synchronet_url_count >= SSH_CHATTER_SYNCHRONET_MAX_URLS) {
+            pthread_mutex_unlock(&host->lock);
+            session_send_system_line(ctx,
+                                     "Synchronet list is full; please ask an operator to prune it.");
+            return;
+        }
+        for (size_t idx = 0U; idx < host->synchronet_url_count; ++idx) {
+            if (strcasecmp(host->synchronet_urls[idx], url) == 0) {
+                pthread_mutex_unlock(&host->lock);
+                session_send_system_line(ctx, "That URL is already configured.");
+                return;
+            }
+        }
+        snprintf(host->synchronet_urls[host->synchronet_url_count++],
+                 SSH_CHATTER_SYNCHRONET_URL_LEN, "%s", url);
+        pthread_mutex_unlock(&host->lock);
+        char line[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(line, sizeof(line), "Added Synchronet endpoint: %s", url);
+        session_send_system_line(ctx, line);
+        return;
+    }
+
+    if (strcmp(command_token, "remove") == 0 || strcmp(command_token, "delete") == 0) {
+        if (!is_operator) {
+            session_send_system_line(ctx, "Only operators may remove Synchronet endpoints.");
+            return;
+        }
+        if (rest == NULL || rest[0] == '\0') {
+            session_send_system_line(ctx, "Usage: /synchronet remove <url|index>");
+            return;
+        }
+        char target[SSH_CHATTER_SYNCHRONET_URL_LEN];
+        snprintf(target, sizeof(target), "%s", rest);
+        trim_whitespace_inplace(target);
+        pthread_mutex_lock(&host->lock);
+        size_t index = SIZE_MAX;
+        char *endptr = NULL;
+        unsigned long parsed = strtoul(target, &endptr, 10);
+        if (endptr != target && *endptr == '\0' && parsed > 0U &&
+            parsed <= host->synchronet_url_count) {
+            index = (size_t)(parsed - 1U);
+        } else {
+            for (size_t idx = 0U; idx < host->synchronet_url_count; ++idx) {
+                if (strcasecmp(host->synchronet_urls[idx], target) == 0) {
+                    index = idx;
+                    break;
+                }
+            }
+        }
+        bool removed = false;
+        if (index < host->synchronet_url_count) {
+            for (size_t move = index; move + 1U < host->synchronet_url_count; ++move) {
+                snprintf(host->synchronet_urls[move], SSH_CHATTER_SYNCHRONET_URL_LEN, "%s",
+                         host->synchronet_urls[move + 1U]);
+            }
+            host->synchronet_urls[host->synchronet_url_count - 1U][0] = '\0';
+            --host->synchronet_url_count;
+            removed = true;
+        }
+        pthread_mutex_unlock(&host->lock);
+        if (removed) {
+            session_send_system_line(ctx, "Synchronet endpoint removed.");
+        } else {
+            session_send_system_line(ctx, "No matching Synchronet endpoint found.");
+        }
+        return;
+    }
+
+    if (strcmp(command_token, "ingress") == 0 || strcmp(command_token, "egress") == 0) {
+        if (!is_operator) {
+            session_send_system_line(ctx,
+                                     "Only operators may toggle Synchronet integration.");
+            return;
+        }
+        bool enable = false;
+        if (rest == NULL || !session_synchronet_parse_bool(rest, &enable)) {
+            session_send_system_line(ctx,
+                                     "Usage: /synchronet ingress|egress <on|off>");
+            return;
+        }
+        pthread_mutex_lock(&host->lock);
+        bool *flag = (strcmp(command_token, "ingress") == 0)
+                          ? &host->synchronet_ingress_enabled
+                          : &host->synchronet_egress_enabled;
+        *flag = enable;
+        pthread_mutex_unlock(&host->lock);
+        char line[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(line, sizeof(line),
+                 "Synchronet %s integration %s.", command_token,
+                 enable ? "enabled" : "disabled");
+        session_send_system_line(ctx, line);
+        return;
+    }
+
+    if (strcmp(command_token, "on") == 0 || strcmp(command_token, "enable") == 0) {
+        if (!is_operator) {
+            session_send_system_line(ctx,
+                                     "Only operators may toggle Synchronet integration.");
+            return;
+        }
+        pthread_mutex_lock(&host->lock);
+        host->synchronet_ingress_enabled = true;
+        host->synchronet_egress_enabled = true;
+        pthread_mutex_unlock(&host->lock);
+        session_send_system_line(ctx,
+                                 "Synchronet integration enabled (ingress and egress).");
+        return;
+    }
+
+    if (strcmp(command_token, "off") == 0 || strcmp(command_token, "disable") == 0) {
+        if (!is_operator) {
+            session_send_system_line(ctx,
+                                     "Only operators may toggle Synchronet integration.");
+            return;
+        }
+        pthread_mutex_lock(&host->lock);
+        host->synchronet_ingress_enabled = false;
+        host->synchronet_egress_enabled = false;
+        pthread_mutex_unlock(&host->lock);
+        session_send_system_line(ctx,
+                                 "Synchronet integration disabled (ingress and egress).");
+        return;
+    }
+
+    session_send_system_line(ctx,
+                             "Unknown /synchronet option. Try status, add, remove, ingress, or egress.");
+}
+

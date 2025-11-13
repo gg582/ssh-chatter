@@ -4521,6 +4521,11 @@ static void session_process_line(session_ctx_t *ctx, const char *line)
     session_deliver_outgoing_message(ctx, normalized, true);
 }
 
+void host_session_process_line_for_testing(session_ctx_t *ctx, const char *line)
+{
+    session_process_line(ctx, line);
+}
+
 static void session_handle_kick(session_ctx_t *ctx, const char *arguments)
 {
     if (ctx == NULL || ctx->owner == NULL) {
