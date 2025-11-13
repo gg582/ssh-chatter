@@ -100,6 +100,7 @@
 #define SSH_CHATTER_OTHELLO_BOARD_SIZE 8
 #define SSH_CHATTER_OTHELLO_MAX_MOVES \
     (SSH_CHATTER_OTHELLO_BOARD_SIZE * SSH_CHATTER_OTHELLO_BOARD_SIZE)
+#define SSH_CHATTER_OTHELLO_MAX_SLOTS 1024
 
 
 #include "user_data.h"
@@ -353,6 +354,11 @@ typedef struct othello_game_state {
     int last_player_col;
     int last_ai_row;
     int last_ai_col;
+    bool awaiting_mode_selection;
+    bool multiplayer;
+    bool awaiting_opponent;
+    int slot_index;
+    unsigned player_number;
 } othello_game_state_t;
 
 typedef struct alpha_gravity_source {
@@ -418,6 +424,16 @@ typedef struct session_game_state {
     uint64_t rng_state;
     bool rng_seeded;
 } session_game_state_t;
+
+typedef struct othello_multiplayer_slot {
+    bool in_use;
+    bool active;
+    bool awaiting_second_player;
+    uint16_t slot_id;
+    char owner[SSH_CHATTER_USERNAME_LEN];
+    othello_game_state_t state;
+    struct session_ctx *players[2];
+} othello_multiplayer_slot_t;
 
 typedef enum session_transport_kind {
     SESSION_TRANSPORT_SSH = 0,
@@ -794,6 +810,7 @@ typedef struct host {
     uint64_t next_bbs_id;
     rss_feed_t rss_feeds[SSH_CHATTER_RSS_MAX_FEEDS];
     size_t rss_feed_count;
+    othello_multiplayer_slot_t othello_games[SSH_CHATTER_OTHELLO_MAX_SLOTS];
     bool random_seeded;
     client_manager_t *clients;
     webssh_client_t *web_client;

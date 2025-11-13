@@ -1155,6 +1155,12 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line)
         return;
     }
 
+    else if (session_parse_command_any(ctx, "/othello", effective_line,
+                                       &args)) {
+        session_handle_othello_command(ctx, args);
+        return;
+    }
+
     else if (session_parse_command_any(ctx, "/banlist", effective_line,
                                        &args)) {
         session_handle_ban_list(ctx, args);
@@ -3918,6 +3924,18 @@ void host_init(host_t *host, auth_profile_t *auth)
         host_clear_rss_feed(&host->rss_feeds[idx]);
     }
     host->rss_feed_count = 0U;
+    for (size_t idx = 0U; idx < SSH_CHATTER_OTHELLO_MAX_SLOTS; ++idx) {
+        othello_multiplayer_slot_t *slot = &host->othello_games[idx];
+        slot->in_use = false;
+        slot->active = false;
+        slot->awaiting_second_player = false;
+        slot->slot_id = (uint16_t)(idx + 1U);
+        slot->owner[0] = '\0';
+        slot->players[0] = NULL;
+        slot->players[1] = NULL;
+        slot->state = (othello_game_state_t){0};
+        slot->state.slot_index = -1;
+    }
     host->random_seeded = false;
     memset(host->operator_grants, 0, sizeof(host->operator_grants));
     host->operator_grant_count = 0U;
