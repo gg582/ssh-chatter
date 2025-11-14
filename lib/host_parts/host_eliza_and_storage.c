@@ -1390,7 +1390,17 @@ static void session_refresh_output_encoding(session_ctx_t *ctx)
     }
 
     const bool previous_cp437 = ctx->prefer_cp437_output;
+    const bool previous_cp437_input = ctx->cp437_input_enabled;
+    const bool has_client_identity =
+        (ctx->terminal_type[0] != '\0') || (ctx->client_banner[0] != '\0');
+
     bool use_cp437 = session_detect_retro_client(ctx);
+
+    if (!has_client_identity &&
+        ctx->cp437_override == SESSION_CP437_OVERRIDE_NONE && previous_cp437) {
+        use_cp437 = true;
+        ctx->cp437_input_enabled = previous_cp437_input;
+    }
 
     if (ctx->cp437_override == SESSION_CP437_OVERRIDE_FORCE_ON) {
         use_cp437 = true;
