@@ -352,7 +352,7 @@ static bool find_reserved_names(session_ctx_t *ctx, const char *nick)
     return found;
 }
 
-static bool host_username_has_password(host_t *host, const char *nick)
+bool host_username_has_password(host_t *host, const char *nick)
 {
     if (host == NULL || nick == NULL || nick[0] == '\0') {
         return false;

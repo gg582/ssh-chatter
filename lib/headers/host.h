@@ -886,6 +886,7 @@ typedef struct {
 
 bool session_telnet_login_prompt(session_ctx_t *ctx);
 bool host_user_data_load_existing(host_t *host, const char *username, const char *ip, user_data_record_t *record, bool create_if_missing);
+bool host_username_has_password(host_t *host, const char *nick);
 void trim_whitespace_inplace(char *text);
 
 void session_send_raw_text(session_ctx_t *ctx, const char *text);
