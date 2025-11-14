@@ -18,6 +18,99 @@ static session_ctx_t *session_create(void)
 
 static void session_destroy(session_ctx_t *ctx);
 
+static size_t session_encode_utf8_codepoint(uint32_t codepoint, char *output,
+                                            size_t capacity)
+{
+    if (output == NULL || capacity == 0U) {
+        return 0U;
+    }
+
+    if (codepoint <= 0x7FU) {
+        if (capacity < 1U) {
+            return 0U;
+        }
+        output[0] = (char)codepoint;
+        return 1U;
+    }
+
+    if (codepoint <= 0x7FFU) {
+        if (capacity < 2U) {
+            return 0U;
+        }
+        output[0] = (char)(0xC0U | ((codepoint >> 6U) & 0x1FU));
+        output[1] = (char)(0x80U | (codepoint & 0x3FU));
+        return 2U;
+    }
+
+    if (codepoint <= 0xFFFFU) {
+        if (capacity < 3U) {
+            return 0U;
+        }
+        output[0] = (char)(0xE0U | ((codepoint >> 12U) & 0x0FU));
+        output[1] = (char)(0x80U | ((codepoint >> 6U) & 0x3FU));
+        output[2] = (char)(0x80U | (codepoint & 0x3FU));
+        return 3U;
+    }
+
+    if (codepoint <= 0x10FFFFU) {
+        if (capacity < 4U) {
+            return 0U;
+        }
+        output[0] = (char)(0xF0U | ((codepoint >> 18U) & 0x07U));
+        output[1] = (char)(0x80U | ((codepoint >> 12U) & 0x3FU));
+        output[2] = (char)(0x80U | ((codepoint >> 6U) & 0x3FU));
+        output[3] = (char)(0x80U | (codepoint & 0x3FU));
+        return 4U;
+    }
+
+    if (capacity < 1U) {
+        return 0U;
+    }
+    output[0] = '?';
+    return 1U;
+}
+
+static size_t session_cp437_byte_to_utf8(unsigned char byte, char *output,
+                                         size_t capacity)
+{
+    if (output == NULL || capacity == 0U) {
+        return 0U;
+    }
+
+    if (byte < 0x80U) {
+        output[0] = (char)byte;
+        return 1U;
+    }
+
+    static const uint16_t kCp437ToUnicode[128] = {
+        0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7,
+        0x00EA, 0x00EB, 0x00E8, 0x00EF, 0x00EE, 0x00EC, 0x00C4, 0x00C5,
+        0x00C9, 0x00E6, 0x00C6, 0x00F4, 0x00F6, 0x00F2, 0x00FB, 0x00F9,
+        0x00FF, 0x00D6, 0x00DC, 0x00A2, 0x00A3, 0x00A5, 0x20A7, 0x0192,
+        0x00E1, 0x00ED, 0x00F3, 0x00FA, 0x00F1, 0x00D1, 0x00AA, 0x00BA,
+        0x00BF, 0x2310, 0x00AC, 0x00BD, 0x00BC, 0x00A1, 0x00AB, 0x00BB,
+        0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561, 0x2562, 0x2556,
+        0x2555, 0x2563, 0x2551, 0x2557, 0x255D, 0x255C, 0x255B, 0x2510,
+        0x2514, 0x2534, 0x252C, 0x251C, 0x2500, 0x253C, 0x255E, 0x255F,
+        0x255A, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256C, 0x2567,
+        0x2568, 0x2564, 0x2565, 0x2559, 0x2558, 0x2552, 0x2553, 0x256B,
+        0x256A, 0x2518, 0x250C, 0x2588, 0x2584, 0x258C, 0x2590, 0x2580,
+        0x03B1, 0x00DF, 0x0393, 0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4,
+        0x03A6, 0x0398, 0x03A9, 0x03B4, 0x221E, 0x03C6, 0x03B5, 0x2229,
+        0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248,
+        0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0,
+    };
+
+    const uint32_t codepoint = kCp437ToUnicode[byte - 0x80U];
+    size_t produced = session_encode_utf8_codepoint(codepoint, output, capacity);
+    if (produced == 0U) {
+        output[0] = '?';
+        return 1U;
+    }
+
+    return produced;
+}
+
 static bool host_user_data_load_existing(host_t *host, const char *username,
                                          const char *ip,
                                          user_data_record_t *record,
@@ -174,6 +267,71 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments)
         host_store_user_theme(ctx->owner, ctx);
         host_store_system_theme(ctx->owner, ctx);
     }
+}
+
+static void session_handle_retro(session_ctx_t *ctx, const char *arguments)
+{
+    static const char *kUsage = "Usage: /retro <on|off|auto|status>";
+
+    if (ctx == NULL) {
+        return;
+    }
+
+    char working[SSH_CHATTER_MESSAGE_LIMIT];
+    if (arguments != NULL) {
+        snprintf(working, sizeof(working), "%s", arguments);
+        trim_whitespace_inplace(working);
+    } else {
+        working[0] = '\0';
+    }
+
+    if (working[0] == '\0' || strcasecmp(working, "status") == 0) {
+        const char *mode = "automatic";
+        if (ctx->cp437_override == SESSION_CP437_OVERRIDE_FORCE_ON) {
+            mode = "forced on";
+        } else if (ctx->cp437_override == SESSION_CP437_OVERRIDE_FORCE_OFF) {
+            mode = "forced off";
+        }
+
+        char message[SSH_CHATTER_MESSAGE_LIMIT];
+        snprintf(message, sizeof(message),
+                 "Retro encoding mode: %s (input: %s, output: %s).",
+                 mode, ctx->cp437_input_enabled ? "CP437" : "UTF-8",
+                 ctx->prefer_cp437_output ? "CP437" : "UTF-8");
+        session_send_system_line(ctx, message);
+        session_send_system_line(ctx,
+                                 "Toggle with /retro on, /retro off, or /retro auto.");
+        return;
+    }
+
+    if (strcasecmp(working, "on") == 0) {
+        ctx->cp437_override = SESSION_CP437_OVERRIDE_FORCE_ON;
+        session_refresh_output_encoding(ctx);
+        session_send_system_line(
+            ctx,
+            "Retro encoding enabled. CP437 input and output are forced on.");
+        return;
+    }
+
+    if (strcasecmp(working, "off") == 0) {
+        ctx->cp437_override = SESSION_CP437_OVERRIDE_FORCE_OFF;
+        session_refresh_output_encoding(ctx);
+        session_send_system_line(
+            ctx,
+            "Retro encoding disabled. CP437 input and output are forced off.");
+        return;
+    }
+
+    if (strcasecmp(working, "auto") == 0) {
+        ctx->cp437_override = SESSION_CP437_OVERRIDE_NONE;
+        session_refresh_output_encoding(ctx);
+        session_send_system_line(
+            ctx,
+            "Retro encoding returned to automatic detection.");
+        return;
+    }
+
+    session_send_system_line(ctx, kUsage);
 }
 
 static bool find_reserved_names(session_ctx_t *ctx, const char *nick)
@@ -1338,6 +1496,11 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line)
     } else if (session_parse_command_any(ctx, "/chat-spacing", effective_line,
                                          &args)) {
         session_handle_chat_spacing(ctx, args);
+        return;
+    }
+
+    else if (session_parse_command_any(ctx, "/retro", effective_line, &args)) {
+        session_handle_retro(ctx, args);
         return;
     }
 
@@ -2541,6 +2704,8 @@ static void session_reset_for_retry(session_ctx_t *ctx)
     ctx->telnet_terminal_type_requested = false;
     ctx->terminal_type[0] = '\0';
     ctx->prefer_cp437_output = false;
+    ctx->cp437_override = SESSION_CP437_OVERRIDE_NONE;
+    ctx->cp437_input_enabled = false;
     session_asciiart_reset(ctx);
     ctx->asciiart_has_cooldown = false;
     ctx->last_asciiart_post.tv_sec = 0;
@@ -3753,7 +3918,20 @@ static void *session_thread(void *arg)
                 continue;
             }
 
-            if (ctx->input_length + 1U >= sizeof(ctx->input_buffer)) {
+            char encoded[4];
+            size_t encoded_len = 1U;
+            if (ctx->cp437_input_enabled) {
+                encoded_len = session_cp437_byte_to_utf8(
+                    (unsigned char)ch, encoded, sizeof(encoded));
+                if (encoded_len == 0U) {
+                    encoded[0] = '?';
+                    encoded_len = 1U;
+                }
+            } else {
+                encoded[0] = ch;
+            }
+
+            if (ctx->input_length + encoded_len >= sizeof(ctx->input_buffer)) {
                 ctx->input_buffer[sizeof(ctx->input_buffer) - 1U] = '\0';
                 session_history_record(ctx, ctx->input_buffer);
                 session_process_line(ctx, ctx->input_buffer);
@@ -3764,11 +3942,15 @@ static void *session_thread(void *arg)
                 session_render_prompt(ctx, false);
             }
 
-            if (ctx->input_length + 1U < sizeof(ctx->input_buffer)) {
+            if (ctx->input_length + encoded_len < sizeof(ctx->input_buffer)) {
                 ctx->input_history_position = -1;
                 session_scrollback_reset_position(ctx);
-                ctx->input_buffer[ctx->input_length++] = ch;
-                session_local_echo_char(ctx, ch);
+                memcpy(&ctx->input_buffer[ctx->input_length], encoded, encoded_len);
+                ctx->input_length += encoded_len;
+                ctx->input_buffer[ctx->input_length] = '\0';
+                for (size_t echo_idx = 0U; echo_idx < encoded_len; ++echo_idx) {
+                    session_local_echo_char(ctx, encoded[echo_idx]);
+                }
             }
         }
 
