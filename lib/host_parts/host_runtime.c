@@ -70,8 +70,8 @@ static size_t session_encode_utf8_codepoint(uint32_t codepoint, char *output,
     return 1U;
 }
 
-static size_t session_cp437_byte_to_utf8(unsigned char byte, char *output,
-                                         size_t capacity)
+size_t session_cp437_byte_to_utf8(unsigned char byte, char *output,
+                                  size_t capacity)
 {
     if (output == NULL || capacity == 0U) {
         return 0U;

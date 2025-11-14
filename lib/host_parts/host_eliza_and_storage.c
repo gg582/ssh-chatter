@@ -1,6 +1,10 @@
 // Eliza memory management, BBS persistence, and rendering helpers.
 #include "host_internal.h"
 
+#ifndef MSG_DONTWAIT
+#define MSG_DONTWAIT 0
+#endif
+
 static void __attribute__((unused))
 host_eliza_memory_store(host_t *host, const char *prompt, const char *reply)
 {
@@ -1476,7 +1480,6 @@ static bool session_detect_retro_client(session_ctx_t *ctx)
     const char *label = NULL;
     const char *identity_label = NULL;
     bool detected = false;
-    bool syncterm_detected = false;
 
     for (size_t source_idx = 0U;
          source_idx < sizeof(sources) / sizeof(sources[0]) && !detected;
@@ -1504,7 +1507,6 @@ static bool session_detect_retro_client(session_ctx_t *ctx)
             label = "SyncTERM";
             identity_label = label;
             detected = true;
-            syncterm_detected = true;
         } else if (string_contains_token_case_insensitive(type, "ANSI-BBS")) {
             label = "ANSI-BBS terminal";
             identity_label = label;
@@ -1559,7 +1561,6 @@ static bool session_detect_retro_client(session_ctx_t *ctx)
             label = "SyncTERM";
             identity_label = label;
             detected = true;
-            syncterm_detected = true;
         } else if (string_contains_token_case_insensitive(banner, "ANSI-BBS") ||
                    string_contains_token_case_insensitive(banner, "PC-ANSI")) {
             label = "ANSI-BBS banner";
@@ -1599,7 +1600,7 @@ static bool session_detect_retro_client(session_ctx_t *ctx)
 
     session_format_telnet_identity(ctx, detected ? identity_label : NULL);
 
-    ctx->cp437_input_enabled = syncterm_detected;
+    ctx->cp437_input_enabled = detected;
 
     return detected;
 }
@@ -4388,9 +4389,24 @@ static int session_telnet_read_byte(session_ctx_t *ctx, unsigned char *out,
         }
 
         if (byte == '\r') {
-            unsigned char next = 0U;
-            ssize_t next_result = recv(ctx->telnet_fd, &next, 1, MSG_PEEK);
-            if (next_result > 0) {
+            for (;;) {
+                unsigned char next = 0U;
+                ssize_t next_result =
+                    recv(ctx->telnet_fd, &next, 1, MSG_PEEK | MSG_DONTWAIT);
+                if (next_result < 0) {
+                    if (errno == EINTR) {
+                        continue;
+                    }
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        break;
+                    }
+                    return SSH_ERROR;
+                }
+                if (next_result == 0) {
+                    ctx->telnet_eof = true;
+                    break;
+                }
+
                 if (next == '\n' || next == '\0') {
                     recv(ctx->telnet_fd, &next, 1, 0);
                 } else {
@@ -4398,9 +4414,11 @@ static int session_telnet_read_byte(session_ctx_t *ctx, unsigned char *out,
                     ctx->telnet_pending_char = (int)next;
                     ctx->telnet_pending_valid = true;
                 }
+                break;
             }
 
-            *out = '\n';
+            ctx->telnet_consume_next_lf = true;
+            *out = '\r';
             return 1;
         }
 
@@ -4418,6 +4436,8 @@ static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer,
 
     size_t written = 0U;
     bool ignore_next_newline = ctx->telnet_consume_next_lf;
+    unsigned char glyph_sizes[SSH_CHATTER_MESSAGE_LIMIT];
+    size_t glyph_count = 0U;
 
     while (!ctx->should_exit) {
         unsigned char byte = 0U;
@@ -4453,8 +4473,14 @@ static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer,
         }
 
         if (byte == 0x7FU || byte == '\b') {
-            if (written > 0U) {
-                --written;
+            if (glyph_count > 0U) {
+                size_t remove = glyph_sizes[--glyph_count];
+                if (remove > written) {
+                    written = 0U;
+                } else {
+                    written -= remove;
+                }
+                buffer[written] = '\0';
                 session_channel_write(ctx, "\b \b", 3U);
             }
             continue;
@@ -4469,14 +4495,33 @@ static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer,
             continue;
         }
 
-        if (written + 1U >= length) {
+        char encoded[4];
+        size_t encoded_len = 1U;
+        if (ctx->cp437_input_enabled) {
+            encoded_len = session_cp437_byte_to_utf8(byte, encoded,
+                                                     sizeof(encoded));
+            if (encoded_len == 0U) {
+                encoded[0] = '?';
+                encoded_len = 1U;
+            }
+        } else {
+            encoded[0] = (char)byte;
+        }
+
+        if (written + encoded_len >= length) {
             const char bell = '\a';
             session_channel_write(ctx, &bell, 1U);
             continue;
         }
 
-        buffer[written++] = (char)byte;
-        session_channel_write(ctx, (const char *)&byte, 1U);
+        if (glyph_count < sizeof(glyph_sizes)) {
+            glyph_sizes[glyph_count++] = (unsigned char)encoded_len;
+        }
+
+        memcpy(&buffer[written], encoded, encoded_len);
+        written += encoded_len;
+        buffer[written] = '\0';
+        session_channel_write(ctx, encoded, encoded_len);
     }
 
     buffer[written] = '\0';
