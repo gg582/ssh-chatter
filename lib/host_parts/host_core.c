@@ -405,7 +405,7 @@ static void host_clear_lan_operator_credentials(host_t *host)
     memset(host->lan_ops.entries, 0, sizeof(host->lan_ops.entries));
 }
 
-static lan_operator_credential_t *
+lan_operator_credential_t *
 host_find_lan_operator_credential(host_t *host, const char *username)
 {
     if (host == NULL || username == NULL || username[0] == '\0') {
