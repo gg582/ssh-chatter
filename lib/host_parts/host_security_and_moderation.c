@@ -66,10 +66,8 @@ static size_t host_security_copy_sanitized_snippet(char *snippet,
     return copy_length;
 }
 
-static host_security_scan_result_t
-host_security_handle_moderation_failure(host_t *host, const char *error,
-                                        char *diagnostic,
-                                        size_t diagnostic_length)
+static host_security_scan_result_t host_security_handle_moderation_failure(
+    host_t *host, const char *error, char *diagnostic, size_t diagnostic_length)
 {
     if (diagnostic != NULL && diagnostic_length > 0U) {
         if (error != NULL && error[0] != '\0') {
@@ -84,8 +82,8 @@ host_security_handle_moderation_failure(host_t *host, const char *error,
 }
 
 static host_security_scan_result_t
-host_security_finalize_scan(bool blocked, const char *reason,
-                            char *diagnostic, size_t diagnostic_length)
+host_security_finalize_scan(bool blocked, const char *reason, char *diagnostic,
+                            size_t diagnostic_length)
 {
     if (!blocked) {
         host_security_reset_diagnostic(diagnostic, diagnostic_length);
@@ -120,8 +118,8 @@ host_security_scan_payload(host_t *host, const char *category,
     }
 
     char snippet[1024];
-    (void)host_security_copy_sanitized_snippet(snippet, sizeof(snippet), payload,
-                                               length);
+    (void)host_security_copy_sanitized_snippet(snippet, sizeof(snippet),
+                                               payload, length);
 
     bool blocked = false;
     char reason[256];
@@ -165,7 +163,8 @@ static void host_security_blocked_identity_resolve_ip(
 
     if (ip != NULL && ip[0] != '\0' &&
         strncmp(ip, "unknown", SSH_CHATTER_IP_LEN) != 0) {
-        snprintf(identity->resolved_ip, sizeof(identity->resolved_ip), "%s", ip);
+        snprintf(identity->resolved_ip, sizeof(identity->resolved_ip), "%s",
+                 ip);
         return;
     }
 
@@ -196,12 +195,12 @@ static void host_security_blocked_identity_choose_addresses(
     identity->register_ip = NULL;
 }
 
-static void host_security_blocked_identity_init(
-    host_security_blocked_identity_t *identity, host_t *host,
-    const char *category, const char *username, const char *ip)
+static void
+host_security_blocked_identity_init(host_security_blocked_identity_t *identity,
+                                    host_t *host, const char *category,
+                                    const char *username, const char *ip)
 {
-    host_security_blocked_identity_set_label_name(identity, category,
-                                                  username);
+    host_security_blocked_identity_set_label_name(identity, category, username);
     host_security_blocked_identity_resolve_ip(identity, host, username, ip);
     host_security_blocked_identity_choose_addresses(identity, ip);
 }
@@ -218,8 +217,9 @@ static const char *host_security_select_diagnostic(const char *diagnostic,
     return buffer;
 }
 
-static void host_security_log_blocked(const host_security_blocked_identity_t *id,
-                                      const char *diagnostic)
+static void
+host_security_log_blocked(const host_security_blocked_identity_t *id,
+                          const char *diagnostic)
 {
     printf("[security] blocked %s from %s: %s\n", id->label, id->name,
            diagnostic);
@@ -269,10 +269,10 @@ static void host_security_handle_suspicious_activity(
     if (!banned) {
         if (attempts > 0U && session != NULL) {
             char warning[256];
-            snprintf(warning, sizeof(warning),
-                     "Further suspicious activity will result in a ban (%zu/%u).",
-                     attempts,
-                     (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
+            snprintf(
+                warning, sizeof(warning),
+                "Further suspicious activity will result in a ban (%zu/%u).",
+                attempts, (unsigned int)SSH_CHATTER_SUSPICIOUS_EVENT_THRESHOLD);
             session_send_system_line(session, warning);
         }
         return;
@@ -282,8 +282,9 @@ static void host_security_handle_suspicious_activity(
            identity->name, identity->address);
     if (session != NULL) {
         char notice[256];
-        snprintf(notice, sizeof(notice),
-                 "Repeated suspicious activity detected. You have been banned.");
+        snprintf(
+            notice, sizeof(notice),
+            "Repeated suspicious activity detected. You have been banned.");
         session_force_disconnect(session, notice);
     }
 }
@@ -308,9 +309,8 @@ static void host_security_process_blocked(host_t *host, const char *category,
                                         ip);
 
     char diagnostic_buffer[256];
-    const char *use_diagnostic =
-        host_security_select_diagnostic(diagnostic, diagnostic_buffer,
-                                        sizeof(diagnostic_buffer));
+    const char *use_diagnostic = host_security_select_diagnostic(
+        diagnostic, diagnostic_buffer, sizeof(diagnostic_buffer));
 
     host_security_log_blocked(&identity, use_diagnostic);
     host_security_notify_session_blocked(session, identity.label,
@@ -2953,7 +2953,8 @@ static bool host_state_read_base_header(FILE *fp,
         return false;
     }
 
-    if (base_header->version == 0U || base_header->version > HOST_STATE_VERSION) {
+    if (base_header->version == 0U ||
+        base_header->version > HOST_STATE_VERSION) {
         return false;
     }
 
@@ -3001,9 +3002,9 @@ static bool host_state_read_metadata(FILE *fp, uint32_t version,
     return true;
 }
 
-static bool host_state_read_history_entry_from_stream(FILE *fp,
-                                                      uint32_t version,
-                                                      chat_history_entry_t *entry_value)
+static bool
+host_state_read_history_entry_from_stream(FILE *fp, uint32_t version,
+                                          chat_history_entry_t *entry_value)
 {
     if (fp == NULL || entry_value == NULL) {
         return false;
@@ -3178,8 +3179,7 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
         out->has_system_theme = legacy8.has_system_theme;
         out->user_is_bold = legacy8.user_is_bold;
         out->system_is_bold = legacy8.system_is_bold;
-        snprintf(out->username, sizeof(out->username), "%s",
-                 legacy8.username);
+        snprintf(out->username, sizeof(out->username), "%s", legacy8.username);
         snprintf(out->user_color_name, sizeof(out->user_color_name), "%s",
                  legacy8.user_color_name);
         snprintf(out->user_highlight_name, sizeof(out->user_highlight_name),
@@ -3188,11 +3188,9 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
                  legacy8.system_fg_name);
         snprintf(out->system_bg_name, sizeof(out->system_bg_name), "%s",
                  legacy8.system_bg_name);
-        snprintf(out->system_highlight_name,
-                 sizeof(out->system_highlight_name), "%s",
-                 legacy8.system_highlight_name);
-        snprintf(out->os_name, sizeof(out->os_name), "%s",
-                 legacy8.os_name);
+        snprintf(out->system_highlight_name, sizeof(out->system_highlight_name),
+                 "%s", legacy8.system_highlight_name);
+        snprintf(out->os_name, sizeof(out->os_name), "%s", legacy8.os_name);
         out->daily_year = legacy8.daily_year;
         out->daily_yday = legacy8.daily_yday;
         snprintf(out->daily_function, sizeof(out->daily_function), "%s",
@@ -3204,10 +3202,8 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
         out->translation_enabled = legacy8.translation_enabled;
         out->output_translation_enabled = legacy8.output_translation_enabled;
         out->input_translation_enabled = legacy8.input_translation_enabled;
-        out->translation_master_explicit =
-            legacy8.translation_master_explicit;
-        snprintf(out->birthday, sizeof(out->birthday), "%s",
-                 legacy8.birthday);
+        out->translation_master_explicit = legacy8.translation_master_explicit;
+        snprintf(out->birthday, sizeof(out->birthday), "%s", legacy8.birthday);
         snprintf(out->output_translation_language,
                  sizeof(out->output_translation_language), "%s",
                  legacy8.output_translation_language);
@@ -3230,8 +3226,7 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
         out->has_system_theme = legacy7.has_system_theme;
         out->user_is_bold = legacy7.user_is_bold;
         out->system_is_bold = legacy7.system_is_bold;
-        snprintf(out->username, sizeof(out->username), "%s",
-                 legacy7.username);
+        snprintf(out->username, sizeof(out->username), "%s", legacy7.username);
         snprintf(out->user_color_name, sizeof(out->user_color_name), "%s",
                  legacy7.user_color_name);
         snprintf(out->user_highlight_name, sizeof(out->user_highlight_name),
@@ -3240,11 +3235,9 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
                  legacy7.system_fg_name);
         snprintf(out->system_bg_name, sizeof(out->system_bg_name), "%s",
                  legacy7.system_bg_name);
-        snprintf(out->system_highlight_name,
-                 sizeof(out->system_highlight_name), "%s",
-                 legacy7.system_highlight_name);
-        snprintf(out->os_name, sizeof(out->os_name), "%s",
-                 legacy7.os_name);
+        snprintf(out->system_highlight_name, sizeof(out->system_highlight_name),
+                 "%s", legacy7.system_highlight_name);
+        snprintf(out->os_name, sizeof(out->os_name), "%s", legacy7.os_name);
         out->daily_year = legacy7.daily_year;
         out->daily_yday = legacy7.daily_yday;
         snprintf(out->daily_function, sizeof(out->daily_function), "%s",
@@ -3256,10 +3249,8 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
         out->translation_enabled = legacy7.translation_enabled;
         out->output_translation_enabled = legacy7.output_translation_enabled;
         out->input_translation_enabled = legacy7.input_translation_enabled;
-        out->translation_master_explicit =
-            legacy7.translation_master_explicit;
-        snprintf(out->birthday, sizeof(out->birthday), "%s",
-                 legacy7.birthday);
+        out->translation_master_explicit = legacy7.translation_master_explicit;
+        snprintf(out->birthday, sizeof(out->birthday), "%s", legacy7.birthday);
         snprintf(out->output_translation_language,
                  sizeof(out->output_translation_language), "%s",
                  legacy7.output_translation_language);
@@ -3281,8 +3272,7 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
         out->has_system_theme = legacy6.has_system_theme;
         out->user_is_bold = legacy6.user_is_bold;
         out->system_is_bold = legacy6.system_is_bold;
-        snprintf(out->username, sizeof(out->username), "%s",
-                 legacy6.username);
+        snprintf(out->username, sizeof(out->username), "%s", legacy6.username);
         snprintf(out->user_color_name, sizeof(out->user_color_name), "%s",
                  legacy6.user_color_name);
         snprintf(out->user_highlight_name, sizeof(out->user_highlight_name),
@@ -3291,11 +3281,9 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
                  legacy6.system_fg_name);
         snprintf(out->system_bg_name, sizeof(out->system_bg_name), "%s",
                  legacy6.system_bg_name);
-        snprintf(out->system_highlight_name,
-                 sizeof(out->system_highlight_name), "%s",
-                 legacy6.system_highlight_name);
-        snprintf(out->os_name, sizeof(out->os_name), "%s",
-                 legacy6.os_name);
+        snprintf(out->system_highlight_name, sizeof(out->system_highlight_name),
+                 "%s", legacy6.system_highlight_name);
+        snprintf(out->os_name, sizeof(out->os_name), "%s", legacy6.os_name);
         out->daily_year = legacy6.daily_year;
         out->daily_yday = legacy6.daily_yday;
         snprintf(out->daily_function, sizeof(out->daily_function), "%s",
@@ -3308,8 +3296,7 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
         out->output_translation_enabled = legacy6.output_translation_enabled;
         out->input_translation_enabled = legacy6.input_translation_enabled;
         out->translation_master_explicit = legacy6.translation_enabled;
-        snprintf(out->birthday, sizeof(out->birthday), "%s",
-                 legacy6.birthday);
+        snprintf(out->birthday, sizeof(out->birthday), "%s", legacy6.birthday);
         snprintf(out->output_translation_language,
                  sizeof(out->output_translation_language), "%s",
                  legacy6.output_translation_language);
@@ -3331,8 +3318,7 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
         out->has_system_theme = legacy5.has_system_theme;
         out->user_is_bold = legacy5.user_is_bold;
         out->system_is_bold = legacy5.system_is_bold;
-        snprintf(out->username, sizeof(out->username), "%s",
-                 legacy5.username);
+        snprintf(out->username, sizeof(out->username), "%s", legacy5.username);
         snprintf(out->user_color_name, sizeof(out->user_color_name), "%s",
                  legacy5.user_color_name);
         snprintf(out->user_highlight_name, sizeof(out->user_highlight_name),
@@ -3341,11 +3327,9 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
                  legacy5.system_fg_name);
         snprintf(out->system_bg_name, sizeof(out->system_bg_name), "%s",
                  legacy5.system_bg_name);
-        snprintf(out->system_highlight_name,
-                 sizeof(out->system_highlight_name), "%s",
-                 legacy5.system_highlight_name);
-        snprintf(out->os_name, sizeof(out->os_name), "%s",
-                 legacy5.os_name);
+        snprintf(out->system_highlight_name, sizeof(out->system_highlight_name),
+                 "%s", legacy5.system_highlight_name);
+        snprintf(out->os_name, sizeof(out->os_name), "%s", legacy5.os_name);
         out->daily_year = legacy5.daily_year;
         out->daily_yday = legacy5.daily_yday;
         snprintf(out->daily_function, sizeof(out->daily_function), "%s",
@@ -3358,8 +3342,7 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
         out->output_translation_enabled = 0U;
         out->input_translation_enabled = 0U;
         out->translation_master_explicit = 0U;
-        snprintf(out->birthday, sizeof(out->birthday), "%s",
-                 legacy5.birthday);
+        snprintf(out->birthday, sizeof(out->birthday), "%s", legacy5.birthday);
         out->output_translation_language[0] = '\0';
         out->input_translation_language[0] = '\0';
         out->ui_language[0] = '\0';
@@ -3377,8 +3360,7 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
         out->has_system_theme = legacy4.has_system_theme;
         out->user_is_bold = legacy4.user_is_bold;
         out->system_is_bold = legacy4.system_is_bold;
-        snprintf(out->username, sizeof(out->username), "%s",
-                 legacy4.username);
+        snprintf(out->username, sizeof(out->username), "%s", legacy4.username);
         snprintf(out->user_color_name, sizeof(out->user_color_name), "%s",
                  legacy4.user_color_name);
         snprintf(out->user_highlight_name, sizeof(out->user_highlight_name),
@@ -3387,11 +3369,9 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
                  legacy4.system_fg_name);
         snprintf(out->system_bg_name, sizeof(out->system_bg_name), "%s",
                  legacy4.system_bg_name);
-        snprintf(out->system_highlight_name,
-                 sizeof(out->system_highlight_name), "%s",
-                 legacy4.system_highlight_name);
-        snprintf(out->os_name, sizeof(out->os_name), "%s",
-                 legacy4.os_name);
+        snprintf(out->system_highlight_name, sizeof(out->system_highlight_name),
+                 "%s", legacy4.system_highlight_name);
+        snprintf(out->os_name, sizeof(out->os_name), "%s", legacy4.os_name);
         out->daily_year = legacy4.daily_year;
         out->daily_yday = legacy4.daily_yday;
         snprintf(out->daily_function, sizeof(out->daily_function), "%s",
@@ -3421,8 +3401,7 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
     out->has_system_theme = legacy.has_system_theme;
     out->user_is_bold = legacy.user_is_bold;
     out->system_is_bold = legacy.system_is_bold;
-    snprintf(out->username, sizeof(out->username), "%s",
-             legacy.username);
+    snprintf(out->username, sizeof(out->username), "%s", legacy.username);
     snprintf(out->user_color_name, sizeof(out->user_color_name), "%s",
              legacy.user_color_name);
     snprintf(out->user_highlight_name, sizeof(out->user_highlight_name), "%s",
@@ -3431,9 +3410,8 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
              legacy.system_fg_name);
     snprintf(out->system_bg_name, sizeof(out->system_bg_name), "%s",
              legacy.system_bg_name);
-    snprintf(out->system_highlight_name,
-             sizeof(out->system_highlight_name), "%s",
-             legacy.system_highlight_name);
+    snprintf(out->system_highlight_name, sizeof(out->system_highlight_name),
+             "%s", legacy.system_highlight_name);
     out->os_name[0] = '\0';
     out->daily_year = 0;
     out->daily_yday = 0;
@@ -3455,8 +3433,8 @@ static bool host_state_read_preference_entry(FILE *fp, uint32_t version,
     return true;
 }
 
-static void host_state_apply_preference_entry(host_t *host,
-                                              const host_state_preference_entry_t *serialized)
+static void host_state_apply_preference_entry(
+    host_t *host, const host_state_preference_entry_t *serialized)
 {
     if (host == NULL || serialized == NULL) {
         return;
@@ -3483,11 +3461,9 @@ static void host_state_apply_preference_entry(host_t *host,
              serialized->system_fg_name);
     snprintf(pref->system_bg_name, sizeof(pref->system_bg_name), "%s",
              serialized->system_bg_name);
-    snprintf(pref->system_highlight_name,
-             sizeof(pref->system_highlight_name), "%s",
-             serialized->system_highlight_name);
-    snprintf(pref->os_name, sizeof(pref->os_name), "%s",
-             serialized->os_name);
+    snprintf(pref->system_highlight_name, sizeof(pref->system_highlight_name),
+             "%s", serialized->system_highlight_name);
+    snprintf(pref->os_name, sizeof(pref->os_name), "%s", serialized->os_name);
     pref->daily_year = serialized->daily_year;
     pref->daily_yday = serialized->daily_yday;
     snprintf(pref->daily_function, sizeof(pref->daily_function), "%s",
@@ -3515,7 +3491,8 @@ static void host_state_apply_preference_entry(host_t *host,
     ++host->preference_count;
 }
 
-static bool host_state_load_preferences(FILE *fp, host_t *host, uint32_t version,
+static bool host_state_load_preferences(FILE *fp, host_t *host,
+                                        uint32_t version,
                                         uint32_t preference_count)
 {
     if (host == NULL) {
@@ -3635,12 +3612,12 @@ static void host_state_load(host_t *host)
         atomic_store(&host->captcha_enabled, captcha_enabled_raw != 0U);
     }
 
-    bool success = host_state_load_history_entries(fp, host, version,
-                                                   history_count);
+    bool success =
+        host_state_load_history_entries(fp, host, version, history_count);
 
     if (success) {
-        success = host_state_load_preferences(fp, host, version,
-                                              preference_count);
+        success =
+            host_state_load_preferences(fp, host, version, preference_count);
     }
 
     if (success) {

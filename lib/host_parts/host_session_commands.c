@@ -1461,10 +1461,9 @@ static bool session_pw_auth_update(host_t *host, const char *username,
             if (strcasecmp(existing_name, username) == 0) {
                 if (has_password && !replaced) {
                     char formatted[256];
-                    if (!session_pw_auth_format_line(username, salt, salt_length,
-                                                     hash, hash_length,
-                                                     formatted,
-                                                     sizeof(formatted)) ||
+                    if (!session_pw_auth_format_line(
+                            username, salt, salt_length, hash, hash_length,
+                            formatted, sizeof(formatted)) ||
                         fprintf(output, "%s\n", formatted) < 0) {
                         success = false;
                     }
@@ -1580,12 +1579,11 @@ static void session_handle_setpw(session_ctx_t *ctx, const char *arguments)
 
     if (session_user_data_commit(ctx)) {
         session_send_system_line(ctx, "Password set successfully.");
-        if (!session_pw_auth_update(ctx->owner, ctx->user.name,
-                                    ctx->user_data.password_salt,
-                                    sizeof(ctx->user_data.password_salt),
-                                    ctx->user_data.password_hash,
-                                    sizeof(ctx->user_data.password_hash),
-                                    true)) {
+        if (!session_pw_auth_update(
+                ctx->owner, ctx->user.name, ctx->user_data.password_salt,
+                sizeof(ctx->user_data.password_salt),
+                ctx->user_data.password_hash,
+                sizeof(ctx->user_data.password_hash), true)) {
             session_send_system_line(ctx,
                                      "Warning: unable to update pw_auth.dat.");
         }
@@ -2684,9 +2682,9 @@ static void session_handle_advanced(session_ctx_t *ctx, const char *arguments)
                     forwarded[0] = '\0';
                 }
 
-                session_send_system_line(ctx,
-                                         "Tip: use /ssh-chat-server directly "
-                                         "for Telnet/Fidonet integration controls.");
+                session_send_system_line(
+                    ctx, "Tip: use /ssh-chat-server directly "
+                         "for Telnet/Fidonet integration controls.");
 
                 return;
             }
@@ -5041,9 +5039,5 @@ static void session_asciiart_capture_line(session_ctx_t *ctx, const char *line)
     ctx->asciiart_buffer[ctx->asciiart_length] = '\0';
     ctx->asciiart_line_count += 1U;
 }
-
-
-
-
 
 //

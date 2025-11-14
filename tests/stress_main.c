@@ -39,8 +39,8 @@ static void *stress_client_thread(void *arg)
 
     for (size_t round = 0; round < client->rounds; ++round) {
         if ((round % 2U) == 0U) {
-            snprintf(buffer, sizeof(buffer), "load message %zu-%zu",
-                     client->id, round);
+            snprintf(buffer, sizeof(buffer), "load message %zu-%zu", client->id,
+                     round);
         } else if ((round % 4U) == 1U) {
             snprintf(buffer, sizeof(buffer), "/usercount");
         } else {
@@ -109,8 +109,8 @@ int main(int argc, char **argv)
         char ip[SSH_CHATTER_IP_LEN];
         snprintf(ip, sizeof(ip), "192.0.2.%zu", (created_sessions % 254U) + 1U);
 
-        sessions[created_sessions] = host_session_create_for_testing(
-            &host, username, ip, false);
+        sessions[created_sessions] =
+            host_session_create_for_testing(&host, username, ip, false);
         if (sessions[created_sessions] == NULL) {
             fprintf(stderr, "failed to prepare session %zu\n",
                     created_sessions);

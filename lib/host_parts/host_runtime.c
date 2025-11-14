@@ -83,26 +83,26 @@ size_t session_cp437_byte_to_utf8(unsigned char byte, char *output,
     }
 
     static const uint16_t kCp437ToUnicode[128] = {
-        0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7,
-        0x00EA, 0x00EB, 0x00E8, 0x00EF, 0x00EE, 0x00EC, 0x00C4, 0x00C5,
-        0x00C9, 0x00E6, 0x00C6, 0x00F4, 0x00F6, 0x00F2, 0x00FB, 0x00F9,
-        0x00FF, 0x00D6, 0x00DC, 0x00A2, 0x00A3, 0x00A5, 0x20A7, 0x0192,
-        0x00E1, 0x00ED, 0x00F3, 0x00FA, 0x00F1, 0x00D1, 0x00AA, 0x00BA,
-        0x00BF, 0x2310, 0x00AC, 0x00BD, 0x00BC, 0x00A1, 0x00AB, 0x00BB,
-        0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561, 0x2562, 0x2556,
-        0x2555, 0x2563, 0x2551, 0x2557, 0x255D, 0x255C, 0x255B, 0x2510,
-        0x2514, 0x2534, 0x252C, 0x251C, 0x2500, 0x253C, 0x255E, 0x255F,
-        0x255A, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256C, 0x2567,
-        0x2568, 0x2564, 0x2565, 0x2559, 0x2558, 0x2552, 0x2553, 0x256B,
-        0x256A, 0x2518, 0x250C, 0x2588, 0x2584, 0x258C, 0x2590, 0x2580,
-        0x03B1, 0x00DF, 0x0393, 0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4,
-        0x03A6, 0x0398, 0x03A9, 0x03B4, 0x221E, 0x03C6, 0x03B5, 0x2229,
-        0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248,
-        0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0,
+        0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7, 0x00EA,
+        0x00EB, 0x00E8, 0x00EF, 0x00EE, 0x00EC, 0x00C4, 0x00C5, 0x00C9, 0x00E6,
+        0x00C6, 0x00F4, 0x00F6, 0x00F2, 0x00FB, 0x00F9, 0x00FF, 0x00D6, 0x00DC,
+        0x00A2, 0x00A3, 0x00A5, 0x20A7, 0x0192, 0x00E1, 0x00ED, 0x00F3, 0x00FA,
+        0x00F1, 0x00D1, 0x00AA, 0x00BA, 0x00BF, 0x2310, 0x00AC, 0x00BD, 0x00BC,
+        0x00A1, 0x00AB, 0x00BB, 0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561,
+        0x2562, 0x2556, 0x2555, 0x2563, 0x2551, 0x2557, 0x255D, 0x255C, 0x255B,
+        0x2510, 0x2514, 0x2534, 0x252C, 0x251C, 0x2500, 0x253C, 0x255E, 0x255F,
+        0x255A, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256C, 0x2567, 0x2568,
+        0x2564, 0x2565, 0x2559, 0x2558, 0x2552, 0x2553, 0x256B, 0x256A, 0x2518,
+        0x250C, 0x2588, 0x2584, 0x258C, 0x2590, 0x2580, 0x03B1, 0x00DF, 0x0393,
+        0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4, 0x03A6, 0x0398, 0x03A9, 0x03B4,
+        0x221E, 0x03C6, 0x03B5, 0x2229, 0x2261, 0x00B1, 0x2265, 0x2264, 0x2320,
+        0x2321, 0x00F7, 0x2248, 0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2,
+        0x25A0, 0x00A0,
     };
 
     const uint32_t codepoint = kCp437ToUnicode[byte - 0x80U];
-    size_t produced = session_encode_utf8_codepoint(codepoint, output, capacity);
+    size_t produced =
+        session_encode_utf8_codepoint(codepoint, output, capacity);
     if (produced == 0U) {
         output[0] = '?';
         return 1U;
@@ -112,9 +112,8 @@ size_t session_cp437_byte_to_utf8(unsigned char byte, char *output,
 }
 
 bool host_user_data_load_existing(host_t *host, const char *username,
-                                         const char *ip,
-                                         user_data_record_t *record,
-                                         bool create_if_missing);
+                                  const char *ip, user_data_record_t *record,
+                                  bool create_if_missing);
 
 static void session_handle_gemini_unfreeze(session_ctx_t *ctx)
 {
@@ -295,12 +294,12 @@ void session_handle_retro(session_ctx_t *ctx, const char *arguments)
 
         char message[SSH_CHATTER_MESSAGE_LIMIT];
         snprintf(message, sizeof(message),
-                 "Retro encoding mode: %s (input: %s, output: %s).",
-                 mode, ctx->cp437_input_enabled ? "CP437" : "UTF-8",
+                 "Retro encoding mode: %s (input: %s, output: %s).", mode,
+                 ctx->cp437_input_enabled ? "CP437" : "UTF-8",
                  ctx->prefer_cp437_output ? "CP437" : "UTF-8");
         session_send_system_line(ctx, message);
-        session_send_system_line(ctx,
-                                 "Toggle with /retro on, /retro off, or /retro auto.");
+        session_send_system_line(
+            ctx, "Toggle with /retro on, /retro off, or /retro auto.");
         return;
     }
 
@@ -326,8 +325,7 @@ void session_handle_retro(session_ctx_t *ctx, const char *arguments)
         ctx->cp437_override = SESSION_CP437_OVERRIDE_NONE;
         session_refresh_output_encoding(ctx);
         session_send_system_line(
-            ctx,
-            "Retro encoding returned to automatic detection.");
+            ctx, "Retro encoding returned to automatic detection.");
         return;
     }
 
@@ -487,14 +485,14 @@ static void session_handle_nick(session_ctx_t *ctx, const char *arguments)
         (void)session_user_data_load(ctx);
     }
 
-    bool owns_requested_name =
-        strcasecmp(ctx->user.name, new_name) == 0;
+    bool owns_requested_name = strcasecmp(ctx->user.name, new_name) == 0;
     if (!owns_requested_name && ctx->user_data_loaded) {
         owns_requested_name =
             strcasecmp(ctx->user_data.username, new_name) == 0;
     }
 
-    if (!owns_requested_name && host_username_has_password(ctx->owner, new_name)) {
+    if (!owns_requested_name &&
+        host_username_has_password(ctx->owner, new_name)) {
         session_send_system_line(
             ctx, "That nickname is password-protected. Log in as that user.");
         return;
@@ -1186,7 +1184,6 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line)
 
     else if (session_parse_command_any(ctx, "/ssh-chat-server", effective_line,
                                        &args)) {
-
         return;
     }
 
@@ -1198,7 +1195,6 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line)
 
     else if (session_parse_command_any(ctx, "/sync-trigger", effective_line,
                                        &args)) {
-
         return;
     }
 
@@ -1779,9 +1775,8 @@ static bool session_user_data_available(session_ctx_t *ctx)
 }
 
 bool host_user_data_load_existing(host_t *host, const char *username,
-                                         const char *ip,
-                                         user_data_record_t *record,
-                                         bool create_if_missing)
+                                  const char *ip, user_data_record_t *record,
+                                  bool create_if_missing)
 {
     if (host == NULL || username == NULL || username[0] == '\0') {
         return false;
@@ -3217,8 +3212,7 @@ static void session_destroy(session_ctx_t *ctx)
 
 session_ctx_t *host_session_create_for_testing(host_t *host,
                                                const char *username,
-                                               const char *ip,
-                                               bool is_operator)
+                                               const char *ip, bool is_operator)
 {
     if (host == NULL) {
         return NULL;
@@ -3350,7 +3344,8 @@ static void *session_thread(void *arg)
 
     if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
         if (!session_telnet_prompt_unicode_check(ctx)) {
-            session_send_system_line(ctx, "Well, you didn't answer. Proceeding with Unicode...");
+            session_send_system_line(
+                ctx, "Well, you didn't answer. Proceeding with Unicode...");
         }
     }
 
@@ -3936,7 +3931,8 @@ static void *session_thread(void *arg)
             if (ctx->input_length + encoded_len < sizeof(ctx->input_buffer)) {
                 ctx->input_history_position = -1;
                 session_scrollback_reset_position(ctx);
-                memcpy(&ctx->input_buffer[ctx->input_length], encoded, encoded_len);
+                memcpy(&ctx->input_buffer[ctx->input_length], encoded,
+                       encoded_len);
                 ctx->input_length += encoded_len;
                 ctx->input_buffer[ctx->input_length] = '\0';
                 for (size_t echo_idx = 0U; echo_idx < encoded_len; ++echo_idx) {

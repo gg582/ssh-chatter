@@ -1419,7 +1419,8 @@ static void session_refresh_output_encoding(session_ctx_t *ctx)
 
         if (use_cp437) {
             if (ctx->cp437_override == SESSION_CP437_OVERRIDE_FORCE_ON) {
-                printf("[retro] manually enabling CP437 for %s via /retro command\n",
+                printf("[retro] manually enabling CP437 for %s via /retro "
+                       "command\n",
                        subject);
             } else {
                 const char *marker = ctx->retro_client_marker[0] != '\0'
@@ -1435,7 +1436,8 @@ static void session_refresh_output_encoding(session_ctx_t *ctx)
             }
         } else {
             if (ctx->cp437_override == SESSION_CP437_OVERRIDE_FORCE_OFF) {
-                printf("[retro] manually disabling CP437 for %s via /retro command\n",
+                printf("[retro] manually disabling CP437 for %s via /retro "
+                       "command\n",
                        subject);
             } else {
                 printf("[retro] CP437 output disabled for %s\n", subject);
@@ -3419,17 +3421,16 @@ typedef struct cp437_replacement {
 } cp437_replacement_t;
 
 static const cp437_replacement_t kCp437AsciiReplacements[] = {
-    {0x00A0U, " "},   {0x2013U, "-"},  {0x2014U, "-"}, {0x2015U, "-"},
-    {0x2018U, "'"},   {0x2019U, "'"},  {0x201CU, "\""},
-    {0x201DU, "\""}, {0x2026U, "..."}, {0x2190U, "<-"},
-    {0x2191U, "^"},   {0x2192U, "->"}, {0x2193U, "v"},
-    {0x21B3U, "->"},
+    {0x00A0U, " "},   {0x2013U, "-"},  {0x2014U, "-"},  {0x2015U, "-"},
+    {0x2018U, "'"},   {0x2019U, "'"},  {0x201CU, "\""}, {0x201DU, "\""},
+    {0x2026U, "..."}, {0x2190U, "<-"}, {0x2191U, "^"},  {0x2192U, "->"},
+    {0x2193U, "v"},   {0x21B3U, "->"},
 };
 
 static const char *session_cp437_ascii_replacement(uint32_t codepoint)
 {
     for (size_t idx = 0U; idx < sizeof(kCp437AsciiReplacements) /
-                                   sizeof(kCp437AsciiReplacements[0]);
+                                    sizeof(kCp437AsciiReplacements[0]);
          ++idx) {
         if (kCp437AsciiReplacements[idx].codepoint == codepoint) {
             return kCp437AsciiReplacements[idx].replacement;
@@ -3559,8 +3560,7 @@ static bool session_channel_write_cp437(session_ctx_t *ctx, const char *data,
         session_cp437_normalize_utf8(data, length, &normalized_length);
 
     const char *input_cursor = normalized != NULL ? normalized : data;
-    size_t input_remaining =
-        normalized != NULL ? normalized_length : length;
+    size_t input_remaining = normalized != NULL ? normalized_length : length;
     char *output_cursor = buffer;
     size_t output_remaining = capacity;
 
@@ -3623,8 +3623,8 @@ cleanup:
         const char *fallback_data = normalized != NULL ? normalized : data;
         size_t fallback_length =
             normalized != NULL ? normalized_length : length;
-        success = session_channel_write_all(ctx, fallback_data,
-                                            fallback_length);
+        success =
+            session_channel_write_all(ctx, fallback_data, fallback_length);
     } else {
         size_t produced = capacity - output_remaining;
         success = session_channel_write_all(ctx, buffer, produced);
@@ -4283,7 +4283,8 @@ static void session_telnet_handle_option(session_ctx_t *ctx,
         session_telnet_send_option(ctx, TELNET_CMD_WONT, option);
         break;
     case TELNET_CMD_WILL:
-        if (option == TELNET_OPT_BINARY || option == TELNET_OPT_SUPPRESS_GO_AHEAD) {
+        if (option == TELNET_OPT_BINARY ||
+            option == TELNET_OPT_SUPPRESS_GO_AHEAD) {
             session_telnet_send_option(ctx, TELNET_CMD_DO, option);
         } else if (option == TELNET_OPT_TERMINAL_TYPE) {
             session_telnet_send_option(ctx, TELNET_CMD_DO, option);
@@ -4651,8 +4652,8 @@ static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer,
         char encoded[4];
         size_t encoded_len = 1U;
         if (ctx->cp437_input_enabled) {
-            encoded_len = session_cp437_byte_to_utf8(byte, encoded,
-                                                     sizeof(encoded));
+            encoded_len =
+                session_cp437_byte_to_utf8(byte, encoded, sizeof(encoded));
             if (encoded_len == 0U) {
                 encoded[0] = '?';
                 encoded_len = 1U;
@@ -4780,10 +4781,10 @@ static bool session_telnet_pw_auth_lookup(host_t *host, const char *username,
             continue;
         }
 
-        size_t salt_copy = salt_len < sizeof(decoded_salt) ? salt_len
-                                                           : sizeof(decoded_salt);
-        size_t hash_copy = hash_len < sizeof(decoded_hash) ? hash_len
-                                                           : sizeof(decoded_hash);
+        size_t salt_copy =
+            salt_len < sizeof(decoded_salt) ? salt_len : sizeof(decoded_salt);
+        size_t hash_copy =
+            hash_len < sizeof(decoded_hash) ? hash_len : sizeof(decoded_hash);
         if (salt_copy > 0U) {
             memset(salt_out, 0, salt_len);
             memcpy(salt_out, decoded_salt, salt_copy);
@@ -4815,9 +4816,8 @@ static bool session_telnet_pw_auth_verify(host_t *host, const char *username,
 
     uint8_t salt[SECURITY_LAYER_SALT_LEN];
     uint8_t expected[SECURITY_LAYER_HASH_LEN];
-    if (!session_telnet_pw_auth_lookup(host, username, salt,
-                                       sizeof(salt), expected,
-                                       sizeof(expected))) {
+    if (!session_telnet_pw_auth_lookup(host, username, salt, sizeof(salt),
+                                       expected, sizeof(expected))) {
         return false;
     }
 
@@ -4846,7 +4846,8 @@ static bool session_telnet_prompt_unicode_check(session_ctx_t *ctx)
     while (!ctx->should_exit) {
         static jmp_buf ask_unicode_sanity;
         int ret = 0;
-        if(!ret) ret = setjmp(ask_unicode_sanity);
+        if (!ret)
+            ret = setjmp(ask_unicode_sanity);
         session_send_system_line(ctx, "Does it display fine? >> 한국 << <Y/N>");
         session_channel_write(ctx, "> ", 2U);
 
@@ -4866,8 +4867,8 @@ static bool session_telnet_prompt_unicode_check(session_ctx_t *ctx)
             session_send_system_line(ctx, "Type Y/N. No other response.");
             longjmp(ask_unicode_sanity, ret++);
         }
-        
-        if(resp[0] == 'n') {
+
+        if (resp[0] == 'n') {
             session_handle_retro(ctx, "on");
             session_handle_set_ui_lang(ctx, "en");
             break;
@@ -4895,8 +4896,7 @@ bool session_telnet_login_prompt(session_ctx_t *ctx)
         session_channel_write(ctx, "> ", 2U);
 
         char input_line[SSH_CHATTER_MESSAGE_LIMIT];
-        if (!session_telnet_collect_line(ctx, input_line,
-                                         sizeof(input_line))) {
+        if (!session_telnet_collect_line(ctx, input_line, sizeof(input_line))) {
             return false;
         }
 
@@ -4944,19 +4944,17 @@ bool session_telnet_login_prompt(session_ctx_t *ctx)
         if (host_user_data_load_existing(ctx->owner, id_buffer, ip_for_lookup,
                                          &user_data, false)) {
             user_data_loaded = true;
-            user_data_has_password =
-                !security_layer_is_zero_hash(user_data.password_hash,
-                                              sizeof(user_data.password_hash));
+            user_data_has_password = !security_layer_is_zero_hash(
+                user_data.password_hash, sizeof(user_data.password_hash));
         }
 
         if (!user_data_has_password) {
             user_data_record_t fallback_data;
             if (host_user_data_load_existing(ctx->owner, id_buffer, NULL,
                                              &fallback_data, false)) {
-                bool fallback_has_password =
-                    !security_layer_is_zero_hash(
-                        fallback_data.password_hash,
-                        sizeof(fallback_data.password_hash));
+                bool fallback_has_password = !security_layer_is_zero_hash(
+                    fallback_data.password_hash,
+                    sizeof(fallback_data.password_hash));
                 if (!user_data_loaded || fallback_has_password) {
                     user_data = fallback_data;
                     user_data_loaded = true;
@@ -4979,7 +4977,8 @@ bool session_telnet_login_prompt(session_ctx_t *ctx)
             }
         }
 
-        bool pw_auth_available = session_telnet_pw_auth_exists(ctx->owner, id_buffer);
+        bool pw_auth_available =
+            session_telnet_pw_auth_exists(ctx->owner, id_buffer);
         bool requires_password = user_data_has_password || pw_auth_available;
 
         if (lan_credential != NULL) {
@@ -4992,8 +4991,7 @@ bool session_telnet_login_prompt(session_ctx_t *ctx)
         }
 
         if (!requires_password) {
-            snprintf(ctx->user.name, sizeof(ctx->user.name), "%s",
-                     id_buffer);
+            snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", id_buffer);
             ctx->user.is_authenticated = true;
             session_send_system_line(ctx, "Login successful.");
             return true;
@@ -5044,9 +5042,8 @@ bool session_telnet_login_prompt(session_ctx_t *ctx)
         bool authenticated = false;
         if (user_data_loaded && user_data_has_password) {
             uint8_t hashed_password[SECURITY_LAYER_HASH_LEN];
-            security_layer_hash_password(password_to_check,
-                                         user_data.password_salt,
-                                         hashed_password);
+            security_layer_hash_password(
+                password_to_check, user_data.password_salt, hashed_password);
             authenticated = memcmp(hashed_password, user_data.password_hash,
                                    sizeof(hashed_password)) == 0;
         }
@@ -5056,15 +5053,13 @@ bool session_telnet_login_prompt(session_ctx_t *ctx)
                                                           password_to_check);
 
             if (authenticated) {
-                (void)host_user_data_load_existing(ctx->owner, id_buffer,
-                                                   ctx->client_ip, &user_data,
-                                                   true);
+                (void)host_user_data_load_existing(
+                    ctx->owner, id_buffer, ctx->client_ip, &user_data, true);
             }
         }
 
         if (authenticated) {
-            snprintf(ctx->user.name, sizeof(ctx->user.name), "%s",
-                     id_buffer);
+            snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", id_buffer);
             ctx->user.is_authenticated = true;
             session_send_system_line(ctx, "Login successful.");
             return true;

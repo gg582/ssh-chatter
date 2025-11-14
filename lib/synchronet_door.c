@@ -42,10 +42,12 @@ static bool looks_like_ip_address(const char *text)
     return has_separator && has_hex;
 }
 
-static bool door_file_load(const char *path, char lines[][SSH_CHATTER_MESSAGE_LIMIT],
+static bool door_file_load(const char *path,
+                           char lines[][SSH_CHATTER_MESSAGE_LIMIT],
                            size_t max_lines, size_t *line_count)
 {
-    if (path == NULL || path[0] == '\0' || lines == NULL || line_count == NULL) {
+    if (path == NULL || path[0] == '\0' || lines == NULL ||
+        line_count == NULL) {
         return false;
     }
 
@@ -124,8 +126,7 @@ static bool parse_door32_lines(session_ctx_t *ctx,
 
     for (size_t idx = 0; idx < line_count; ++idx) {
         if (looks_like_ip_address(lines[idx])) {
-            snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%s",
-                     lines[idx]);
+            snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%s", lines[idx]);
             break;
         }
     }
@@ -143,7 +144,8 @@ static bool parse_classic_door_lines(session_ctx_t *ctx,
         return false;
     }
 
-    if (strncasecmp(lines[0], "COM", 3) != 0 && !isdigit((unsigned char)lines[0][0])) {
+    if (strncasecmp(lines[0], "COM", 3) != 0 &&
+        !isdigit((unsigned char)lines[0][0])) {
         return false;
     }
 
@@ -187,8 +189,7 @@ static bool parse_classic_door_lines(session_ctx_t *ctx,
 
     for (size_t idx = 0; idx < line_count; ++idx) {
         if (looks_like_ip_address(lines[idx])) {
-            snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%s",
-                     lines[idx]);
+            snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%s", lines[idx]);
             break;
         }
     }
@@ -262,8 +263,8 @@ static bool parse_door_sys(session_ctx_t *ctx)
         if (dot != NULL) {
             char ext[8];
             snprintf(ext, sizeof(ext), "%s", dot);
-            for (size_t idx = 0; idx < sizeof(file_names) / sizeof(file_names[0]);
-                 ++idx) {
+            for (size_t idx = 0;
+                 idx < sizeof(file_names) / sizeof(file_names[0]); ++idx) {
                 if (strcasecmp(ext, strrchr(file_names[idx], '.')) == 0) {
                     base_is_file = true;
                     break;
@@ -311,7 +312,8 @@ int synchronet_door_run(void)
     }
     host->memory_context = sshc_memory_context_create("synchronet_host");
     if (host->memory_context == NULL) {
-        fprintf(stderr, "Failed to create memory context for Synchronet host.\n");
+        fprintf(stderr,
+                "Failed to create memory context for Synchronet host.\n");
         free(host);
         return EXIT_FAILURE;
     }
@@ -320,7 +322,8 @@ int synchronet_door_run(void)
     // Create a session context for the Synchronet user
     session_ctx_t *ctx = session_create();
     if (ctx == NULL) {
-        fprintf(stderr, "Failed to create session context for Synchronet door.\n");
+        fprintf(stderr,
+                "Failed to create session context for Synchronet door.\n");
         host_shutdown(host);
         sshc_memory_context_destroy(host->memory_context);
         free(host);
@@ -330,8 +333,9 @@ int synchronet_door_run(void)
     ctx->transport_kind = SESSION_TRANSPORT_TELNET; // Treat as Telnet for now
 
     if (!parse_door_sys(ctx)) {
-        fprintf(stderr,
-                "Warning: unable to locate DOOR.SYS/DOOR32.SYS, using defaults.\n");
+        fprintf(
+            stderr,
+            "Warning: unable to locate DOOR.SYS/DOOR32.SYS, using defaults.\n");
     }
 
     // Main loop for Synchronet door
@@ -343,13 +347,15 @@ int synchronet_door_run(void)
         // Process input (e.g., chat messages, game commands)
         // For now, just echo back and handle a simple exit command
         if (strcmp(input_buffer, "/exit") == 0) {
-            session_send_system_line(ctx, "Exiting Synchronet door mode. Goodbye!");
+            session_send_system_line(ctx,
+                                     "Exiting Synchronet door mode. Goodbye!");
             break;
         } else if (strcmp(input_buffer, "/tetris") == 0) {
             session_game_start_tetris(ctx);
         } else {
             char output_buffer[SSH_CHATTER_MESSAGE_LIMIT + 32];
-            snprintf(output_buffer, sizeof(output_buffer), "You said: %s\n", input_buffer);
+            snprintf(output_buffer, sizeof(output_buffer), "You said: %s\n",
+                     input_buffer);
             session_send_raw_text(ctx, output_buffer);
         }
     }

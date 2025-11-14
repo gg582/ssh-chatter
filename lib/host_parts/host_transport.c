@@ -2252,9 +2252,8 @@ static bool host_user_data_send_mail(host_t *host, const char *recipient,
                                      const char *sender, const char *message,
                                      char *error, size_t error_length);
 bool host_user_data_load_existing(host_t *host, const char *username,
-                                         const char *ip,
-                                         user_data_record_t *record,
-                                         bool create_if_missing);
+                                  const char *ip, user_data_record_t *record,
+                                  bool create_if_missing);
 static void host_user_data_bootstrap(host_t *host);
 static bool session_parse_color_arguments(char *working, char **tokens,
                                           size_t max_tokens,
@@ -2443,9 +2442,8 @@ static bbs_post_t *host_allocate_bbs_post_locked(host_t *host);
 static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
 
 bool host_user_data_load_existing(host_t *host, const char *username,
-                                         const char *ip,
-                                         user_data_record_t *record,
-                                         bool create_if_missing);
+                                  const char *ip, user_data_record_t *record,
+                                  bool create_if_missing);
 
 static bool session_bbs_scroll(session_ctx_t *ctx, int direction, size_t step);
 static bool session_bbs_refresh_view(session_ctx_t *ctx);

@@ -15,8 +15,9 @@ static void session_render_banner_text(session_ctx_t *ctx, const char *banner)
     const char *cursor = banner;
     while (true) {
         const char *newline = strchr(cursor, '\n');
-        size_t length = newline != NULL ? (size_t)(newline - cursor)
-                                        : strnlen(cursor, SSH_CHATTER_MESSAGE_LIMIT);
+        size_t length = newline != NULL
+                            ? (size_t)(newline - cursor)
+                            : strnlen(cursor, SSH_CHATTER_MESSAGE_LIMIT);
         while (length > 0U && cursor[length - 1U] == '\r') {
             --length;
         }
@@ -2072,7 +2073,8 @@ static void session_render_prelogin_banner(session_ctx_t *ctx)
     session_render_banner_ascii(ctx);
 
     session_send_plain_line(ctx, "Connection established.");
-    session_send_plain_line(ctx, "Authenticate or choose a nickname to continue.");
+    session_send_plain_line(ctx,
+                            "Authenticate or choose a nickname to continue.");
     session_send_plain_line(ctx, "/retro on for CP-437 DOS compatibility.");
 
     ctx->prelogin_banner_rendered = true;
@@ -4301,19 +4303,19 @@ static void session_process_line(session_ctx_t *ctx, const char *line)
     snprintf(normalized, sizeof(normalized), "%s", line);
     session_normalize_newlines(normalized);
 
-    switch((int)normalized[0]) {
-        // SLASH_COMPATIBLE: slash compatible chars.
-        case (int)'.':
-        case (int)'_':
-        case (int)'@':
-        case (int)'$':
-        case (int)'*':
-        case (int)'-':
-        case (int)'#':
-        case (int)'>':
-            normalized[0] = '/';
-            break;
-        default:
+    switch ((int)normalized[0]) {
+    // SLASH_COMPATIBLE: slash compatible chars.
+    case (int)'.':
+    case (int)'_':
+    case (int)'@':
+    case (int)'$':
+    case (int)'*':
+    case (int)'-':
+    case (int)'#':
+    case (int)'>':
+        normalized[0] = '/';
+        break;
+    default:
     }
 
     if (ctx->bbs_post_pending) {
