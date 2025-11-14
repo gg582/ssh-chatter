@@ -111,7 +111,7 @@ static size_t session_cp437_byte_to_utf8(unsigned char byte, char *output,
     return produced;
 }
 
-static bool host_user_data_load_existing(host_t *host, const char *username,
+bool host_user_data_load_existing(host_t *host, const char *username,
                                          const char *ip,
                                          user_data_record_t *record,
                                          bool create_if_missing);
@@ -269,7 +269,7 @@ static void session_handle_palette(session_ctx_t *ctx, const char *arguments)
     }
 }
 
-static void session_handle_retro(session_ctx_t *ctx, const char *arguments)
+void session_handle_retro(session_ctx_t *ctx, const char *arguments)
 {
     static const char *kUsage = "Usage: /retro <on|off|auto|status>";
 
@@ -1706,7 +1706,7 @@ static void session_dispatch_command(session_ctx_t *ctx, const char *line)
     session_send_system_line(ctx, message);
 }
 
-static void trim_whitespace_inplace(char *text)
+void trim_whitespace_inplace(char *text)
 {
     if (text == NULL) {
         return;
@@ -1778,7 +1778,7 @@ static bool session_user_data_available(session_ctx_t *ctx)
     return true;
 }
 
-static bool host_user_data_load_existing(host_t *host, const char *username,
+bool host_user_data_load_existing(host_t *host, const char *username,
                                          const char *ip,
                                          user_data_record_t *record,
                                          bool create_if_missing)
@@ -3304,7 +3304,6 @@ static void *session_thread(void *arg)
     if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
         session_telnet_initialize(ctx);
         session_telnet_capture_startup_metadata(ctx);
-        session_render_prelogin_banner(ctx);
         authenticated = true;
     }
 
@@ -3350,9 +3349,8 @@ static void *session_thread(void *arg)
     }
 
     if (ctx->transport_kind == SESSION_TRANSPORT_TELNET) {
-        if (!session_telnet_prompt_initial_nickname(ctx)) {
-            session_destroy(ctx);
-            SESSION_THREAD_RETURN(NULL);
+        if (!session_telnet_prompt_unicode_check(ctx)) {
+            session_send_system_line(ctx, "Well, you didn't answer. Proceeding with Unicode...");
         }
     }
 
@@ -3428,7 +3426,6 @@ static void *session_thread(void *arg)
         (lan_operator_reserved_username && !ctx->user.is_lan_operator) ||
         existing != NULL) {
         ctx->username_conflict = true;
-        session_render_banner(ctx);
 
         if (banned_username) {
             printf("[reject] banned nickname attempted: %s\n", ctx->user.name);
@@ -3496,6 +3493,7 @@ static void *session_thread(void *arg)
         session_send_system_line(ctx, "Wait for a moment...");
         session_send_system_line(
             ctx, "For TELNET users: type /motd and follow the guide.");
+        session_render_banner(ctx);
         struct timespec wait_time = {0, 0};
         size_t progress = host_prepare_join_delay(ctx->owner, &wait_time);
         if (progress == 0U) {
@@ -3522,7 +3520,6 @@ static void *session_thread(void *arg)
         ctx->has_joined_room = true;
         printf("[join] %s\n", ctx->user.name);
 
-        session_render_banner(ctx);
         ctx->history_scroll_position = 0U;
         host_refresh_motd(ctx->owner);
         const session_ui_locale_t *locale = session_ui_get_locale(ctx);

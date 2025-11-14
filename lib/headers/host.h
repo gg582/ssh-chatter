@@ -884,6 +884,10 @@ typedef struct {
     int count;
 } utf8_code_count_t;
 
+bool session_telnet_login_prompt(session_ctx_t *ctx);
+bool host_user_data_load_existing(host_t *host, const char *username, const char *ip, user_data_record_t *record, bool create_if_missing);
+void trim_whitespace_inplace(char *text);
+
 void session_send_raw_text(session_ctx_t *ctx, const char *text);
 void host_init(host_t *host, auth_profile_t *auth);
 void host_set_motd(host_t *host, const char *motd);
@@ -910,4 +914,6 @@ session_ctx_t *host_session_create_for_testing(host_t *host,
 void host_session_destroy_for_testing(session_ctx_t *ctx);
 void host_session_process_line_for_testing(session_ctx_t *ctx,
                                            const char *line);
+
+void session_handle_retro(session_ctx_t *ctx, const char *arguments);
 #endif

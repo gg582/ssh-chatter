@@ -1867,7 +1867,7 @@ static void resolve_accept_channel_once(void)
     }
 }
 
-static void trim_whitespace_inplace(char *text);
+void trim_whitespace_inplace(char *text);
 static const char *lookup_color_code(const color_entry_t *entries,
                                      size_t entry_count, const char *name);
 static bool parse_bool_token(const char *token, bool *value);
@@ -2251,7 +2251,7 @@ static bool host_user_data_send_mail(host_t *host, const char *recipient,
                                      const char *recipient_ip,
                                      const char *sender, const char *message,
                                      char *error, size_t error_length);
-static bool host_user_data_load_existing(host_t *host, const char *username,
+bool host_user_data_load_existing(host_t *host, const char *username,
                                          const char *ip,
                                          user_data_record_t *record,
                                          bool create_if_missing);
@@ -2442,7 +2442,7 @@ static bbs_post_t *host_find_bbs_post_locked(host_t *host, uint64_t id);
 static bbs_post_t *host_allocate_bbs_post_locked(host_t *host);
 static void host_clear_bbs_post_locked(host_t *host, bbs_post_t *post);
 
-static bool host_user_data_load_existing(host_t *host, const char *username,
+bool host_user_data_load_existing(host_t *host, const char *username,
                                          const char *ip,
                                          user_data_record_t *record,
                                          bool create_if_missing);

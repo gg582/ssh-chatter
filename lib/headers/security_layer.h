@@ -8,6 +8,7 @@
 #define SECURITY_LAYER_LEVELS 3
 #define SECURITY_LAYER_IV_LEN 12
 #define SECURITY_LAYER_TAG_LEN 16
+#define SECURITY_LAYER_HASH_LEN 32
 
 typedef struct security_layer {
     unsigned char master_key[32];
