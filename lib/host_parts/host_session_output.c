@@ -2046,7 +2046,7 @@ static void session_bbs_move_cursor(session_ctx_t *ctx, int direction)
     session_bbs_render_editor(ctx, status);
 }
 
-static void session_render_banner_ascii(session_ctx_t *ctx)
+void session_render_banner_ascii(session_ctx_t *ctx)
 {
     if (ctx == NULL) {
         return;
