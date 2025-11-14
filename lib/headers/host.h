@@ -507,6 +507,7 @@ typedef struct session_ctx {
     bool telnet_eof;
     bool telnet_pending_valid;
     int telnet_pending_char;
+    bool telnet_consume_next_lf;
     bool telnet_terminal_type_requested;
     chat_user_t user;
     bool lan_operator_credentials_valid;

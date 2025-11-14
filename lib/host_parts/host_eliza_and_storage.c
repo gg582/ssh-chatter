@@ -4417,7 +4417,7 @@ static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer,
     }
 
     size_t written = 0U;
-    bool ignore_next_newline = false;
+    bool ignore_next_newline = ctx->telnet_consume_next_lf;
 
     while (!ctx->should_exit) {
         unsigned char byte = 0U;
@@ -4431,14 +4431,16 @@ static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer,
         }
 
         if (ignore_next_newline) {
-            ignore_next_newline = false;
-            if (byte == '\n') {
+            if (byte == '\n' || byte == '\0') {
+                ignore_next_newline = false;
                 continue;
             }
+            ignore_next_newline = false;
         }
 
         if (byte == '\0') {
             ctx->should_exit = true;
+            ctx->telnet_consume_next_lf = false;
             return false;
         }
 
@@ -4478,6 +4480,7 @@ static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer,
     }
 
     buffer[written] = '\0';
+    ctx->telnet_consume_next_lf = ignore_next_newline;
     return !ctx->should_exit;
 }
 
@@ -4608,6 +4611,14 @@ static bool session_telnet_pw_auth_verify(host_t *host, const char *username,
     return memcmp(computed, expected, sizeof(expected)) == 0;
 }
 
+static bool session_telnet_pw_auth_exists(host_t *host, const char *username)
+{
+    uint8_t salt[SECURITY_LAYER_SALT_LEN];
+    uint8_t hash[SECURITY_LAYER_HASH_LEN];
+    return session_telnet_pw_auth_lookup(host, username, salt, sizeof(salt),
+                                         hash, sizeof(hash));
+}
+
 static bool session_telnet_prompt_unicode_check(session_ctx_t *ctx)
 {
     if (ctx == NULL || ctx->owner == NULL) {
@@ -4723,9 +4734,16 @@ bool session_telnet_login_prompt(session_ctx_t *ctx)
                                              sizeof(user_data.password_hash))) {
                 requires_password = true;
             }
-        } else if (host_username_has_password(ctx->owner, id_buffer)) {
-            requires_password = true;
-            checked_pw_auth = true;
+        }
+
+        if (!requires_password) {
+            if (session_telnet_pw_auth_exists(ctx->owner, id_buffer)) {
+                requires_password = true;
+                checked_pw_auth = true;
+            } else if (host_username_has_password(ctx->owner, id_buffer)) {
+                requires_password = true;
+                checked_pw_auth = true;
+            }
         }
 
         const char *password_to_check = NULL;
