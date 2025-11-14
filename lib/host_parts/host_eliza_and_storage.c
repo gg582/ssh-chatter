@@ -4763,7 +4763,6 @@ bool session_telnet_login_prompt(session_ctx_t *ctx)
         if (password_inline != NULL) {
             snprintf(provided_password, sizeof(provided_password), "%s",
                      password_inline);
-            trim_whitespace_inplace(provided_password);
         }
 
         user_data_record_t user_data;
@@ -4814,7 +4813,6 @@ bool session_telnet_login_prompt(session_ctx_t *ctx)
                                              sizeof(password_buffer))) {
                 return false;
             }
-            trim_whitespace_inplace(password_buffer);
             if (password_buffer[0] == '\0') {
                 session_send_system_line(ctx, "Password required.");
                 continue;
