@@ -2086,9 +2086,9 @@ static void session_game_othello_render(session_ctx_t *ctx)
         for (int col = 0; col < SSH_CHATTER_OTHELLO_BOARD_SIZE; ++col) {
             const char *symbol = ".";
             if (state->board[row][col] == OTHELLO_CELL_RED) {
-                symbol = "\033[31m●\033[0m";
+                symbol = "\033[31mo\033[0m";
             } else if (state->board[row][col] == OTHELLO_CELL_GREEN) {
-                symbol = "\033[32m●\033[0m";
+                symbol = "\033[32mo\033[0m";
             }
 
             offset += snprintf(line + offset, sizeof(line) - (size_t)offset,
