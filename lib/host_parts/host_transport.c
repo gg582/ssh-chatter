@@ -2035,7 +2035,7 @@ static bool host_register_suspicious_activity(host_t *host,
                                               const char *ip,
                                               size_t *attempts_out);
 static bool session_is_private_ipv4(const unsigned char octets[4]);
-static bool session_is_lan_client(const char *ip);
+bool session_is_lan_client(const char *ip);
 static void session_assign_lan_privileges(session_ctx_t *ctx);
 static void session_apply_granted_privileges(session_ctx_t *ctx);
 static void session_apply_theme_defaults(session_ctx_t *ctx);
@@ -3767,7 +3767,7 @@ static bool session_is_private_ipv4(const unsigned char octets[4])
     return false;
 }
 
-static bool session_is_lan_client(const char *ip)
+bool session_is_lan_client(const char *ip)
 {
     if (ip == NULL || ip[0] == '\0') {
         return false;

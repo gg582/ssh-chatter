@@ -4784,28 +4784,54 @@ bool session_telnet_login_prompt(session_ctx_t *ctx)
 
         user_data_record_t user_data;
         memset(&user_data, 0, sizeof(user_data));
-        bool user_data_loaded = host_user_data_load_existing(ctx->owner,
-                                                            id_buffer, NULL,
-                                                            &user_data, false);
+        const char *ip_for_lookup =
+            (ctx->client_ip[0] != '\0') ? ctx->client_ip : NULL;
+        bool user_data_loaded = false;
+        bool user_data_has_password = false;
 
-        bool requires_password = false;
-        bool checked_pw_auth = false;
+        if (host_user_data_load_existing(ctx->owner, id_buffer, ip_for_lookup,
+                                         &user_data, false)) {
+            user_data_loaded = true;
+            user_data_has_password =
+                !security_layer_is_zero_hash(user_data.password_hash,
+                                              sizeof(user_data.password_hash));
+        }
 
-        if (user_data_loaded) {
-            if (!security_layer_is_zero_hash(user_data.password_hash,
-                                             sizeof(user_data.password_hash))) {
-                requires_password = true;
+        if (!user_data_has_password) {
+            user_data_record_t fallback_data;
+            if (host_user_data_load_existing(ctx->owner, id_buffer, NULL,
+                                             &fallback_data, false)) {
+                bool fallback_has_password =
+                    !security_layer_is_zero_hash(
+                        fallback_data.password_hash,
+                        sizeof(fallback_data.password_hash));
+                if (!user_data_loaded || fallback_has_password) {
+                    user_data = fallback_data;
+                    user_data_loaded = true;
+                }
+                if (fallback_has_password) {
+                    user_data_has_password = true;
+                }
             }
         }
 
-        if (!requires_password) {
-            if (session_telnet_pw_auth_exists(ctx->owner, id_buffer)) {
-                requires_password = true;
-                checked_pw_auth = true;
-            } else if (host_username_has_password(ctx->owner, id_buffer)) {
-                requires_password = true;
-                checked_pw_auth = true;
+        lan_operator_credential_t *lan_credential = NULL;
+        if (ctx->owner != NULL) {
+            lan_credential =
+                host_find_lan_operator_credential(ctx->owner, id_buffer);
+            if (lan_credential != NULL &&
+                !session_is_lan_client(ctx->client_ip)) {
+                session_send_system_line(
+                    ctx, "That nickname is reserved for LAN operators.");
+                continue;
             }
+        }
+
+        bool pw_auth_available = session_telnet_pw_auth_exists(ctx->owner, id_buffer);
+        bool requires_password = user_data_has_password || pw_auth_available;
+
+        if (lan_credential != NULL) {
+            requires_password = true;
         }
 
         const char *password_to_check = NULL;
@@ -4844,17 +4870,38 @@ bool session_telnet_login_prompt(session_ctx_t *ctx)
             password_to_check = provided_password;
         }
 
+        if (lan_credential != NULL) {
+            if (lan_credential->password[0] != '\0' &&
+                strcmp(lan_credential->password, password_to_check) == 0) {
+                snprintf(ctx->user.name, sizeof(ctx->user.name), "%s",
+                         lan_credential->nickname);
+                ctx->lan_operator_credentials_valid = true;
+                ctx->user.is_lan_operator = true;
+                ctx->user.is_authenticated = true;
+                (void)host_user_data_load_existing(ctx->owner, ctx->user.name,
+                                                   ctx->client_ip, &user_data,
+                                                   true);
+                session_send_system_line(ctx, "Login successful.");
+                return true;
+            }
+
+            session_send_system_line(ctx, "Invalid password.");
+            continue;
+        }
+
         bool authenticated = false;
-        if (user_data_loaded) {
+        if (user_data_loaded && user_data_has_password) {
             uint8_t hashed_password[SECURITY_LAYER_HASH_LEN];
             security_layer_hash_password(password_to_check,
                                          user_data.password_salt,
                                          hashed_password);
             authenticated = memcmp(hashed_password, user_data.password_hash,
                                    sizeof(hashed_password)) == 0;
-        } else if (checked_pw_auth) {
-            authenticated = session_telnet_pw_auth_verify(
-                ctx->owner, id_buffer, password_to_check);
+        }
+
+        if (!authenticated && pw_auth_available) {
+            authenticated = session_telnet_pw_auth_verify(ctx->owner, id_buffer,
+                                                          password_to_check);
 
             if (authenticated) {
                 (void)host_user_data_load_existing(ctx->owner, id_buffer,
