@@ -4481,6 +4481,133 @@ static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer,
     return !ctx->should_exit;
 }
 
+static int session_pw_auth_hex_value(char ch)
+{
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        return ch - 'a' + 10;
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        return ch - 'A' + 10;
+    }
+    return -1;
+}
+
+static bool session_pw_auth_decode_hex(const char *hex, uint8_t *out,
+                                       size_t out_len)
+{
+    if (hex == NULL || out == NULL || out_len == 0U) {
+        return false;
+    }
+
+    size_t hex_len = strlen(hex);
+    if (hex_len != out_len * 2U) {
+        return false;
+    }
+
+    for (size_t idx = 0U; idx < out_len; ++idx) {
+        int hi = session_pw_auth_hex_value(hex[idx * 2U]);
+        int lo = session_pw_auth_hex_value(hex[idx * 2U + 1U]);
+        if (hi < 0 || lo < 0) {
+            return false;
+        }
+        out[idx] = (uint8_t)((hi << 4U) | lo);
+    }
+
+    return true;
+}
+
+static bool session_telnet_pw_auth_lookup(host_t *host, const char *username,
+                                          uint8_t *salt_out, size_t salt_len,
+                                          uint8_t *hash_out, size_t hash_len)
+{
+    if (host == NULL || username == NULL || username[0] == '\0' ||
+        salt_out == NULL || hash_out == NULL || salt_len == 0U ||
+        hash_len == 0U) {
+        return false;
+    }
+
+    if (host->pw_auth_file_path[0] == '\0') {
+        return false;
+    }
+
+    FILE *fp = fopen(host->pw_auth_file_path, "rb");
+    if (fp == NULL) {
+        return false;
+    }
+
+    char line[SSH_CHATTER_MESSAGE_LIMIT];
+    bool found = false;
+
+    while (!found && fgets(line, sizeof(line), fp) != NULL) {
+        size_t length = strcspn(line, "\r\n");
+        line[length] = '\0';
+
+        char *first = strchr(line, ':');
+        if (first == NULL) {
+            continue;
+        }
+        char *second = strchr(first + 1, ':');
+        if (second == NULL) {
+            continue;
+        }
+
+        *first = '\0';
+        *second = '\0';
+
+        const char *name = line;
+        const char *salt_hex = first + 1;
+        const char *hash_hex = second + 1;
+
+        if (name[0] == '\0') {
+            continue;
+        }
+
+        if (strcasecmp(name, username) != 0) {
+            continue;
+        }
+
+        if (!session_pw_auth_decode_hex(salt_hex, salt_out, salt_len) ||
+            !session_pw_auth_decode_hex(hash_hex, hash_out, hash_len)) {
+            continue;
+        }
+
+        found = true;
+    }
+
+    int read_error = ferror(fp);
+    fclose(fp);
+
+    if (read_error != 0) {
+        return false;
+    }
+
+    return found;
+}
+
+static bool session_telnet_pw_auth_verify(host_t *host, const char *username,
+                                          const char *password)
+{
+    if (host == NULL || username == NULL || username[0] == '\0' ||
+        password == NULL) {
+        return false;
+    }
+
+    uint8_t salt[SECURITY_LAYER_SALT_LEN];
+    uint8_t expected[SECURITY_LAYER_HASH_LEN];
+    if (!session_telnet_pw_auth_lookup(host, username, salt,
+                                       sizeof(salt), expected,
+                                       sizeof(expected))) {
+        return false;
+    }
+
+    uint8_t computed[SECURITY_LAYER_HASH_LEN];
+    security_layer_hash_password(password, salt, computed);
+    return memcmp(computed, expected, sizeof(expected)) == 0;
+}
+
 static bool session_telnet_prompt_unicode_check(session_ctx_t *ctx)
 {
     if (ctx == NULL || ctx->owner == NULL) {
@@ -4527,104 +4654,144 @@ static bool session_telnet_prompt_unicode_check(session_ctx_t *ctx)
     return session_telnet_login_prompt(ctx);
 }
 
-bool session_telnet_login_prompt(session_ctx_t *ctx) {
+bool session_telnet_login_prompt(session_ctx_t *ctx)
+{
     if (ctx == NULL || ctx->owner == NULL) {
         return false;
     }
 
     char id_buffer[SSH_CHATTER_USERNAME_LEN];
-    char password_buffer[128]; // Max password length
     memset(id_buffer, 0, sizeof(id_buffer));
-    memset(password_buffer, 0, sizeof(password_buffer));
 
     while (!ctx->should_exit) {
-        session_send_system_line(ctx, "ID(leave if empty): ");
+        session_send_system_line(ctx,
+                                 "Enter ID (leave empty to stay as Guest):");
         session_channel_write(ctx, "> ", 2U);
 
         char input_line[SSH_CHATTER_MESSAGE_LIMIT];
-        if (!session_telnet_collect_line(ctx, input_line, sizeof(input_line))) {
+        if (!session_telnet_collect_line(ctx, input_line,
+                                         sizeof(input_line))) {
             return false;
         }
 
         trim_whitespace_inplace(input_line);
-        printf("line is %s", input_line);
 
-        char *space_pos = strchr(input_line, ' ');
-        char *comma_pos = strchr(input_line, ',');
-        char *semicolon_pos = strchr(input_line, ';');
-        char *dot_pos = strchr(input_line, '.');
-        if (space_pos != NULL) {
-            *space_pos = '\0';
-            snprintf(id_buffer, sizeof(id_buffer), "%s", input_line);
-            snprintf(password_buffer, sizeof(password_buffer), "%s", space_pos + 1);
-        } else if(comma_pos != NULL) {
-            *comma_pos = '\0';
-            snprintf(id_buffer, sizeof(id_buffer), "%s", input_line);
-            snprintf(password_buffer, sizeof(password_buffer), "%s", comma_pos + 1);
-        } else if(semicolon_pos != NULL) {
-            *semicolon_pos = '\0';
-            snprintf(id_buffer, sizeof(id_buffer), "%s", input_line);
-            snprintf(password_buffer, sizeof(password_buffer), "%s", semicolon_pos + 1);
-        } else if(dot_pos != NULL) {
-            *dot_pos = '\0';
-            snprintf(id_buffer, sizeof(id_buffer), "%s", input_line);
-            snprintf(password_buffer, sizeof(password_buffer), "%s", dot_pos + 1);
-        } else {
-            snprintf(id_buffer, sizeof(id_buffer), "%s", input_line);
+        if (input_line[0] == '\0') {
+            session_send_system_line(
+                ctx,
+                "Continuing without an ID. Use /register to claim one later.");
+            return true;
         }
 
+        const char separators[] = " ,;.";
+        char *password_inline = NULL;
+        for (char *cursor = input_line; *cursor != '\0'; ++cursor) {
+            if (strchr(separators, *cursor) != NULL) {
+                *cursor = '\0';
+                password_inline = cursor + 1;
+                break;
+            }
+        }
+
+        snprintf(id_buffer, sizeof(id_buffer), "%s", input_line);
+        trim_whitespace_inplace(id_buffer);
         if (id_buffer[0] == '\0') {
-            session_send_system_line(ctx, "ID cannot be empty.");
+            session_send_system_line(ctx,
+                                     "ID must include at least one character.");
             continue;
         }
 
+        char provided_password[128];
+        provided_password[0] = '\0';
+        if (password_inline != NULL) {
+            snprintf(provided_password, sizeof(provided_password), "%s",
+                     password_inline);
+            trim_whitespace_inplace(provided_password);
+        }
+
         user_data_record_t user_data;
-        bool user_data_loaded = host_user_data_load_existing(ctx->owner, id_buffer, NULL, &user_data, false);
+        memset(&user_data, 0, sizeof(user_data));
+        bool user_data_loaded = host_user_data_load_existing(ctx->owner,
+                                                            id_buffer, NULL,
+                                                            &user_data, false);
+
+        bool requires_password = false;
+        bool checked_pw_auth = false;
 
         if (user_data_loaded) {
-            if (password_buffer[0] != '\0') {
-                // Password provided, check it
-                uint8_t hashed_password[SECURITY_LAYER_HASH_LEN];
-                security_layer_hash_password(password_buffer, user_data.password_salt, hashed_password);
-
-                if (memcmp(hashed_password, user_data.password_hash, sizeof(hashed_password)) == 0) {
-                    // Authentication successful
-                    snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", id_buffer);
-                    ctx->user.is_authenticated = true;
-                    session_send_system_line(ctx, "Login successful.");
-                    return true;
-                } else {
-                    session_send_system_line(ctx, "Invalid password.");
-                    continue;
-                }
-            } else {
-                // No password provided, allow if user has no password set
-                bool has_password_set = false;
-                for (size_t i = 0; i < sizeof(user_data.password_hash); ++i) {
-                    if (user_data.password_hash[i] != 0) {
-                        has_password_set = true;
-                        break;
-                    }
-                }
-
-                if (!has_password_set) {
-                    snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", id_buffer);
-                    ctx->user.is_authenticated = true;
-                    session_send_system_line(ctx, "Login successful (no password required).");
-                    return true;
-                } else {
-                    session_send_system_line(ctx, "Password required.");
-                    continue;
-                }
+            if (!security_layer_is_zero_hash(user_data.password_hash,
+                                             sizeof(user_data.password_hash))) {
+                requires_password = true;
             }
-        } else {
-            // User does not exist, create new user
-            snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", id_buffer);
-            ctx->user.is_authenticated = true; // New users are authenticated by default
-            session_send_system_line(ctx, "New user created and logged in.");
+        } else if (host_username_has_password(ctx->owner, id_buffer)) {
+            requires_password = true;
+            checked_pw_auth = true;
+        }
+
+        const char *password_to_check = NULL;
+        if (provided_password[0] != '\0') {
+            password_to_check = provided_password;
+        }
+
+        if (!requires_password) {
+            snprintf(ctx->user.name, sizeof(ctx->user.name), "%s",
+                     id_buffer);
+            ctx->user.is_authenticated = true;
+            session_send_system_line(ctx, "Login successful.");
             return true;
         }
+
+        if (password_to_check == NULL) {
+            session_send_system_line(ctx, "Password required. Enter password:");
+            session_channel_write(ctx, "> ", 2U);
+
+            char password_buffer[128];
+            if (!session_telnet_collect_line(ctx, password_buffer,
+                                             sizeof(password_buffer))) {
+                return false;
+            }
+            trim_whitespace_inplace(password_buffer);
+            if (password_buffer[0] == '\0') {
+                session_send_system_line(ctx, "Password required.");
+                continue;
+            }
+            password_to_check = password_buffer;
+
+            // Copy into provided_password for later comparisons if needed
+            snprintf(provided_password, sizeof(provided_password), "%s",
+                     password_buffer);
+        }
+
+        bool authenticated = false;
+        if (user_data_loaded) {
+            uint8_t hashed_password[SECURITY_LAYER_HASH_LEN];
+            security_layer_hash_password(password_to_check,
+                                         user_data.password_salt,
+                                         hashed_password);
+            authenticated = memcmp(hashed_password, user_data.password_hash,
+                                   sizeof(hashed_password)) == 0;
+        } else if (checked_pw_auth) {
+            authenticated = session_telnet_pw_auth_verify(
+                ctx->owner, id_buffer, password_to_check);
+
+            if (authenticated) {
+                (void)host_user_data_load_existing(ctx->owner, id_buffer,
+                                                   ctx->client_ip, &user_data,
+                                                   true);
+            }
+        }
+
+        if (authenticated) {
+            snprintf(ctx->user.name, sizeof(ctx->user.name), "%s",
+                     id_buffer);
+            ctx->user.is_authenticated = true;
+            session_send_system_line(ctx, "Login successful.");
+            return true;
+        }
+
+        session_send_system_line(ctx, "Invalid password.");
     }
+
     return false;
 }
 

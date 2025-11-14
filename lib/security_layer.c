@@ -657,7 +657,7 @@ void security_layer_generate_salt(uint8_t *salt)
         return;
     }
 
-    RAND_bytes(salt, 16);
+    RAND_bytes(salt, SECURITY_LAYER_SALT_LEN);
 }
 
 void security_layer_hash_password(const char *password, const uint8_t *salt,
@@ -680,7 +680,7 @@ void security_layer_hash_password(const char *password, const uint8_t *salt,
         return;
     }
 
-    if (EVP_DigestUpdate(mdctx, salt, 16) != 1) {
+    if (EVP_DigestUpdate(mdctx, salt, SECURITY_LAYER_SALT_LEN) != 1) {
         EVP_MD_CTX_free(mdctx);
 
         return;
