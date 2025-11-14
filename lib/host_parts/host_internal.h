@@ -78,4 +78,6 @@ bool session_game_othello_handle_forced_exit(session_ctx_t *ctx);
 size_t session_cp437_byte_to_utf8(unsigned char byte, char *output,
                                   size_t capacity);
 
+void session_render_banner_ascii(session_ctx_t *ctx);
+
 #endif // SSH_CHATTER_HOST_INTERNAL_H

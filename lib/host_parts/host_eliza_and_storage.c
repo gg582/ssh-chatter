@@ -1431,6 +1431,10 @@ static void session_refresh_output_encoding(session_ctx_t *ctx)
                 printf("[retro] CP437 output disabled for %s\n", subject);
             }
         }
+
+        if (use_cp437 && ctx->prelogin_banner_rendered) {
+            session_render_banner_ascii(ctx);
+        }
     }
 
     if (ctx->cp437_override == SESSION_CP437_OVERRIDE_FORCE_ON) {
