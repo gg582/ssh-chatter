@@ -1390,7 +1390,17 @@ static void session_refresh_output_encoding(session_ctx_t *ctx)
     }
 
     const bool previous_cp437 = ctx->prefer_cp437_output;
+    const bool previous_cp437_input = ctx->cp437_input_enabled;
+    const bool has_client_identity =
+        (ctx->terminal_type[0] != '\0') || (ctx->client_banner[0] != '\0');
+
     bool use_cp437 = session_detect_retro_client(ctx);
+
+    if (!has_client_identity &&
+        ctx->cp437_override == SESSION_CP437_OVERRIDE_NONE && previous_cp437) {
+        use_cp437 = true;
+        ctx->cp437_input_enabled = previous_cp437_input;
+    }
 
     if (ctx->cp437_override == SESSION_CP437_OVERRIDE_FORCE_ON) {
         use_cp437 = true;
@@ -1627,8 +1637,12 @@ static void session_apply_saved_preferences(session_ctx_t *ctx)
     }
     pthread_mutex_unlock(&host->lock);
 
+    session_ui_language_t previous_language = ctx->ui_language;
+    session_cp437_override_t previous_cp437_override = ctx->cp437_override;
+    bool previous_cp437_output = ctx->prefer_cp437_output;
+    bool previous_cp437_input = ctx->cp437_input_enabled;
+
     ctx->prefer_utf16_output = false;
-    ctx->prefer_cp437_output = false;
 
     ctx->translation_caption_spacing = 0U;
     ctx->translation_enabled = false;
@@ -1637,10 +1651,7 @@ static void session_apply_saved_preferences(session_ctx_t *ctx)
     ctx->input_translation_enabled = false;
     ctx->input_translation_language[0] = '\0';
     ctx->last_detected_input_language[0] = '\0';
-    ctx->ui_language = SESSION_UI_LANGUAGE_KO;
     ctx->breaking_alerts_enabled = false;
-    ctx->cp437_override = SESSION_CP437_OVERRIDE_NONE;
-    ctx->cp437_input_enabled = false;
 
     if (has_snapshot) {
         if (snapshot.ui_language[0] != '\0') {
@@ -1649,6 +1660,10 @@ static void session_apply_saved_preferences(session_ctx_t *ctx)
             if (saved_language != SESSION_UI_LANGUAGE_COUNT) {
                 ctx->ui_language = saved_language;
             }
+        }
+
+        if (ctx->ui_language == SESSION_UI_LANGUAGE_COUNT) {
+            ctx->ui_language = previous_language;
         }
 
         if (snapshot.has_user_theme) {
@@ -1750,6 +1765,16 @@ static void session_apply_saved_preferences(session_ctx_t *ctx)
                  sizeof(ctx->game.chosen_camouflage_language), "%s",
                  pref->camouflage_language);
     }
+
+    if (!has_snapshot || snapshot.ui_language[0] == '\0') {
+        ctx->ui_language = previous_language;
+    }
+
+    ctx->cp437_override = previous_cp437_override;
+    ctx->prefer_cp437_output = previous_cp437_output;
+    ctx->cp437_input_enabled = previous_cp437_input;
+
+    session_refresh_output_encoding(ctx);
 
     (void)session_user_data_load(ctx);
     session_force_dark_mode_foreground(ctx);
@@ -3388,6 +3413,128 @@ static bool session_channel_write_all(session_ctx_t *ctx, const void *data,
     return true;
 }
 
+typedef struct cp437_replacement {
+    uint32_t codepoint;
+    const char *replacement;
+} cp437_replacement_t;
+
+static const cp437_replacement_t kCp437AsciiReplacements[] = {
+    {0x00A0U, " "},   {0x2013U, "-"},  {0x2014U, "-"}, {0x2015U, "-"},
+    {0x2018U, "'"},   {0x2019U, "'"},  {0x201CU, "\""},
+    {0x201DU, "\""}, {0x2026U, "..."}, {0x2190U, "<-"},
+    {0x2191U, "^"},   {0x2192U, "->"}, {0x2193U, "v"},
+    {0x21B3U, "->"},
+};
+
+static const char *session_cp437_ascii_replacement(uint32_t codepoint)
+{
+    for (size_t idx = 0U; idx < sizeof(kCp437AsciiReplacements) /
+                                   sizeof(kCp437AsciiReplacements[0]);
+         ++idx) {
+        if (kCp437AsciiReplacements[idx].codepoint == codepoint) {
+            return kCp437AsciiReplacements[idx].replacement;
+        }
+    }
+    return NULL;
+}
+
+static char *session_cp437_normalize_utf8(const char *data, size_t length,
+                                          size_t *normalized_length)
+{
+    if (data == NULL || length == 0U) {
+        if (normalized_length != NULL) {
+            *normalized_length = length;
+        }
+        return NULL;
+    }
+
+    size_t capacity = length + 16U;
+    char *buffer = (char *)malloc(capacity);
+    if (buffer == NULL) {
+        if (normalized_length != NULL) {
+            *normalized_length = length;
+        }
+        return NULL;
+    }
+
+    size_t output = 0U;
+    bool modified = false;
+    const unsigned char *cursor = (const unsigned char *)data;
+    size_t remaining = length;
+
+    while (remaining > 0U) {
+        uint32_t codepoint = 0U;
+        size_t consumed =
+            session_utf8_decode_codepoint(cursor, remaining, &codepoint);
+        if (consumed == 0U) {
+            codepoint = (uint32_t)(*cursor);
+            consumed = 1U;
+        }
+
+        const char *replacement = session_cp437_ascii_replacement(codepoint);
+        if (replacement != NULL) {
+            modified = true;
+            size_t rep_len = strlen(replacement);
+            size_t needed = output + rep_len + 1U;
+            if (needed > capacity) {
+                size_t new_capacity = capacity * 2U;
+                if (new_capacity < needed) {
+                    new_capacity = needed + 16U;
+                }
+                char *resized = (char *)realloc(buffer, new_capacity);
+                if (resized == NULL) {
+                    free(buffer);
+                    if (normalized_length != NULL) {
+                        *normalized_length = length;
+                    }
+                    return NULL;
+                }
+                buffer = resized;
+                capacity = new_capacity;
+            }
+            memcpy(buffer + output, replacement, rep_len);
+            output += rep_len;
+        } else {
+            size_t needed = output + consumed + 1U;
+            if (needed > capacity) {
+                size_t new_capacity = capacity * 2U;
+                if (new_capacity < needed) {
+                    new_capacity = needed + 16U;
+                }
+                char *resized = (char *)realloc(buffer, new_capacity);
+                if (resized == NULL) {
+                    free(buffer);
+                    if (normalized_length != NULL) {
+                        *normalized_length = length;
+                    }
+                    return NULL;
+                }
+                buffer = resized;
+                capacity = new_capacity;
+            }
+            memcpy(buffer + output, cursor, consumed);
+            output += consumed;
+        }
+
+        cursor += consumed;
+        remaining -= consumed;
+    }
+
+    if (!modified) {
+        free(buffer);
+        if (normalized_length != NULL) {
+            *normalized_length = length;
+        }
+        return NULL;
+    }
+
+    buffer[output] = '\0';
+    if (normalized_length != NULL) {
+        *normalized_length = output;
+    }
+    return buffer;
+}
+
 static bool session_channel_write_cp437(session_ctx_t *ctx, const char *data,
                                         size_t length)
 {
@@ -3407,8 +3554,13 @@ static bool session_channel_write_cp437(session_ctx_t *ctx, const char *data,
         return session_channel_write_all(ctx, data, length);
     }
 
-    const char *input_cursor = data;
-    size_t input_remaining = length;
+    size_t normalized_length = 0U;
+    char *normalized =
+        session_cp437_normalize_utf8(data, length, &normalized_length);
+
+    const char *input_cursor = normalized != NULL ? normalized : data;
+    size_t input_remaining =
+        normalized != NULL ? normalized_length : length;
     char *output_cursor = buffer;
     size_t output_remaining = capacity;
 
@@ -3468,10 +3620,17 @@ cleanup:
     iconv_close(descriptor);
     bool success = false;
     if (fallback_to_plaintext) {
-        success = session_channel_write_all(ctx, data, length);
+        const char *fallback_data = normalized != NULL ? normalized : data;
+        size_t fallback_length =
+            normalized != NULL ? normalized_length : length;
+        success = session_channel_write_all(ctx, fallback_data,
+                                            fallback_length);
     } else {
         size_t produced = capacity - output_remaining;
         success = session_channel_write_all(ctx, buffer, produced);
+    }
+    if (normalized != NULL) {
+        free(normalized);
     }
     return success;
 }
