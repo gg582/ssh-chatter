@@ -492,6 +492,12 @@ typedef struct session_rss_view {
     rss_session_item_t items[SSH_CHATTER_RSS_MAX_ITEMS];
 } session_rss_view_t;
 
+typedef enum session_cp437_override {
+    SESSION_CP437_OVERRIDE_NONE = 0,
+    SESSION_CP437_OVERRIDE_FORCE_OFF,
+    SESSION_CP437_OVERRIDE_FORCE_ON,
+} session_cp437_override_t;
+
 typedef struct session_ctx {
     ssh_session session;
     ssh_channel channel;
@@ -578,6 +584,8 @@ typedef struct session_ctx {
     bool breaking_alerts_enabled;
     bool prefer_utf16_output;
     bool prefer_cp437_output;
+    session_cp437_override_t cp437_override;
+    bool cp437_input_enabled;
     bool translation_enabled;
     bool output_translation_enabled;
     char output_translation_language[SSH_CHATTER_LANG_NAME_LEN];

@@ -1386,7 +1386,14 @@ static void session_refresh_output_encoding(session_ctx_t *ctx)
     }
 
     const bool previous_cp437 = ctx->prefer_cp437_output;
-    const bool use_cp437 = session_detect_retro_client(ctx);
+    bool use_cp437 = session_detect_retro_client(ctx);
+
+    if (ctx->cp437_override == SESSION_CP437_OVERRIDE_FORCE_ON) {
+        use_cp437 = true;
+    } else if (ctx->cp437_override == SESSION_CP437_OVERRIDE_FORCE_OFF) {
+        use_cp437 = false;
+    }
+
     ctx->prefer_cp437_output = use_cp437;
 
     if (use_cp437 != previous_cp437) {
@@ -1397,19 +1404,35 @@ static void session_refresh_output_encoding(session_ctx_t *ctx)
         }
 
         if (use_cp437) {
-            const char *marker = ctx->retro_client_marker[0] != '\0'
-                                     ? ctx->retro_client_marker
-                                     : "retro client";
-            if (ctx->telnet_identity[0] != '\0') {
-                printf("[retro] enabling CP437 output for %s via %s (%s)\n",
-                       subject, marker, ctx->telnet_identity);
+            if (ctx->cp437_override == SESSION_CP437_OVERRIDE_FORCE_ON) {
+                printf("[retro] manually enabling CP437 for %s via /retro command\n",
+                       subject);
             } else {
-                printf("[retro] enabling CP437 output for %s via %s\n", subject,
-                       marker);
+                const char *marker = ctx->retro_client_marker[0] != '\0'
+                                         ? ctx->retro_client_marker
+                                         : "retro client";
+                if (ctx->telnet_identity[0] != '\0') {
+                    printf("[retro] enabling CP437 output for %s via %s (%s)\n",
+                           subject, marker, ctx->telnet_identity);
+                } else {
+                    printf("[retro] enabling CP437 output for %s via %s\n",
+                           subject, marker);
+                }
             }
         } else {
-            printf("[retro] CP437 output disabled for %s\n", subject);
+            if (ctx->cp437_override == SESSION_CP437_OVERRIDE_FORCE_OFF) {
+                printf("[retro] manually disabling CP437 for %s via /retro command\n",
+                       subject);
+            } else {
+                printf("[retro] CP437 output disabled for %s\n", subject);
+            }
         }
+    }
+
+    if (ctx->cp437_override == SESSION_CP437_OVERRIDE_FORCE_ON) {
+        ctx->cp437_input_enabled = true;
+    } else if (ctx->cp437_override == SESSION_CP437_OVERRIDE_FORCE_OFF) {
+        ctx->cp437_input_enabled = false;
     }
 
     if (use_cp437) {
@@ -1453,6 +1476,7 @@ static bool session_detect_retro_client(session_ctx_t *ctx)
     const char *label = NULL;
     const char *identity_label = NULL;
     bool detected = false;
+    bool syncterm_detected = false;
 
     for (size_t source_idx = 0U;
          source_idx < sizeof(sources) / sizeof(sources[0]) && !detected;
@@ -1469,6 +1493,10 @@ static bool session_detect_retro_client(session_ctx_t *ctx)
                 label = kRetroMarkers[marker_idx].label;
                 identity_label = label;
                 detected = true;
+                if (strcasecmp(kRetroMarkers[marker_idx].marker, "syncterm") ==
+                    0) {
+                    syncterm_detected = true;
+                }
                 break;
             }
         }
@@ -1476,7 +1504,12 @@ static bool session_detect_retro_client(session_ctx_t *ctx)
 
     if (!detected && ctx->terminal_type[0] != '\0') {
         const char *type = ctx->terminal_type;
-        if (string_contains_token_case_insensitive(type, "ANSI-BBS")) {
+        if (string_contains_case_insensitive(type, "syncterm")) {
+            label = "SyncTERM";
+            identity_label = label;
+            detected = true;
+            syncterm_detected = true;
+        } else if (string_contains_token_case_insensitive(type, "ANSI-BBS")) {
             label = "ANSI-BBS terminal";
             identity_label = label;
             detected = true;
@@ -1526,8 +1559,13 @@ static bool session_detect_retro_client(session_ctx_t *ctx)
 
     if (!detected && ctx->client_banner[0] != '\0') {
         const char *banner = ctx->client_banner;
-        if (string_contains_token_case_insensitive(banner, "ANSI-BBS") ||
-            string_contains_token_case_insensitive(banner, "PC-ANSI")) {
+        if (string_contains_case_insensitive(banner, "syncterm")) {
+            label = "SyncTERM";
+            identity_label = label;
+            detected = true;
+            syncterm_detected = true;
+        } else if (string_contains_token_case_insensitive(banner, "ANSI-BBS") ||
+                   string_contains_token_case_insensitive(banner, "PC-ANSI")) {
             label = "ANSI-BBS banner";
             identity_label = label;
             detected = true;
@@ -1565,6 +1603,8 @@ static bool session_detect_retro_client(session_ctx_t *ctx)
 
     session_format_telnet_identity(ctx, detected ? identity_label : NULL);
 
+    ctx->cp437_input_enabled = syncterm_detected;
+
     return detected;
 }
 
@@ -1598,6 +1638,8 @@ static void session_apply_saved_preferences(session_ctx_t *ctx)
     ctx->last_detected_input_language[0] = '\0';
     ctx->ui_language = SESSION_UI_LANGUAGE_KO;
     ctx->breaking_alerts_enabled = false;
+    ctx->cp437_override = SESSION_CP437_OVERRIDE_NONE;
+    ctx->cp437_input_enabled = false;
 
     if (has_snapshot) {
         if (snapshot.ui_language[0] != '\0') {
