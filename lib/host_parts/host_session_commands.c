@@ -1458,7 +1458,7 @@ static bool session_pw_auth_update(host_t *host, const char *username,
             memcpy(existing_name, line, copy_length);
             existing_name[copy_length] = '\0';
 
-            if (strncmp(existing_name, username, sizeof(existing_name)) == 0) {
+            if (strcasecmp(existing_name, username) == 0) {
                 if (has_password && !replaced) {
                     char formatted[256];
                     if (!session_pw_auth_format_line(username, salt, salt_length,
