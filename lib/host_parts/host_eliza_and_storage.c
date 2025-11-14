@@ -3957,10 +3957,8 @@ static void session_fill_line_with_theme(session_ctx_t *ctx)
 
     const char *bg = ctx->system_bg_code != NULL ? ctx->system_bg_code : "";
     const size_t bg_len = strlen(bg);
-    unsigned int width = ctx->terminal_width > 0U ? ctx->terminal_width : 80U;
-    if (width > SSH_CHATTER_MESSAGE_LIMIT) {
-        width = SSH_CHATTER_MESSAGE_LIMIT;
-    }
+
+    static const char ERASE_ENTIRE_LINE[] = "\033[2K";
 
     session_channel_write(ctx, SESSION_COLUMN_RESET,
                           sizeof(SESSION_COLUMN_RESET) - 1U);
@@ -3969,17 +3967,8 @@ static void session_fill_line_with_theme(session_ctx_t *ctx)
         session_channel_write(ctx, bg, bg_len);
     }
 
-    if (width > 0U) {
-        char spaces[64];
-        memset(spaces, ' ', sizeof(spaces));
-        unsigned int remaining = width;
-        while (remaining > 0U) {
-            size_t chunk =
-                remaining < sizeof(spaces) ? remaining : sizeof(spaces);
-            session_channel_write(ctx, spaces, chunk);
-            remaining -= (unsigned int)chunk;
-        }
-    }
+    session_channel_write(ctx, ERASE_ENTIRE_LINE,
+                          sizeof(ERASE_ENTIRE_LINE) - 1U);
 
     session_channel_write(ctx, SESSION_COLUMN_RESET,
                           sizeof(SESSION_COLUMN_RESET) - 1U);
