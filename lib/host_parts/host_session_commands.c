@@ -2686,7 +2686,7 @@ static void session_handle_advanced(session_ctx_t *ctx, const char *arguments)
 
                 session_send_system_line(ctx,
                                          "Tip: use /ssh-chat-server directly "
-                                         "for integration controls.");
+                                         "for Telnet/Fidonet integration controls.");
 
                 return;
             }
@@ -2742,12 +2742,13 @@ static void session_handle_advanced(session_ctx_t *ctx, const char *arguments)
             ssh_command = "/ssh-chat-server";
         }
 
-        session_send_system_line(ctx, "Integration controls (operator only):");
+        session_send_system_line(
+            ctx, "Telnet/Fidonet integration controls (operator only):");
 
         char line[SSH_CHATTER_MESSAGE_LIMIT];
         snprintf(line, sizeof(line),
-                 "  %s set <ssh://host[:port]> [port] - Configure the upstream "
-                 "server.",
+                 "  %s set <telnet://host[:port]> [port] - Configure the "
+                 "Telnet/Fidonet upstream server.",
                  ssh_command);
         session_send_system_line(ctx, line);
 
