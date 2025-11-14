@@ -7,128 +7,295 @@
 #include "headers/translation_helpers.h"
 #include "headers/translator.h"
 
+#include <ctype.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
-// Placeholder for Synchronet drop file parsing
-static void parse_door_sys(session_ctx_t *ctx)
+static bool looks_like_ip_address(const char *text)
 {
-    // In a real implementation, this would read DOOR.SYS or DOOR32.SYS
-    // and populate ctx->user and other session details.
-    // For now, we'll use some dummy data.
-    snprintf(ctx->user.name, sizeof(ctx->user.name), "SynchronetUser");
-    snprintf(ctx->client_ip, sizeof(ctx->client_ip), "127.0.0.1");
-    ctx->user.level = 90; // SysOp level for testing
-    ctx->user.flags = USER_FLAG_SYSOP;
-    ctx->user.color = 0; // Default color
-    ctx->user.highlight = 0; // Default highlight
-    ctx->user.is_bold = false;
-    ctx->user.is_admin = true;
-    ctx->user.is_moderator = true;
-    ctx->user.is_operator = true;
-    ctx->user.is_guest = false;
-    ctx->user.is_bot = false;
-    ctx->user.is_web = false;
-    ctx->user.is_matrix = false;
-    ctx->user.is_telnet = true; // Indicate Telnet-like connection
-    ctx->user.is_ssh = false;
-    ctx->user.is_local = true;
-    ctx->user.is_invisible = false;
-    ctx->user.is_away = false;
-    ctx->user.is_idle = false;
-    ctx->user.is_muted = false;
-    ctx->user.is_silenced = false;
-    ctx->user.is_banned = false;
-    ctx->user.is_kicked = false;
-    ctx->user.is_locked = false;
-    ctx->user.is_verified = true;
-    ctx->user.is_trusted = true;
-    ctx->user.is_beta = true;
-    ctx->user.is_alpha = true;
-    ctx->user.is_developer = true;
-    ctx->user.is_tester = true;
-    ctx->user.is_contributor = true;
-    ctx->user.is_patron = true;
-    ctx->user.is_sponsor = true;
-    ctx->user.is_donator = true;
-    ctx->user.is_vip = true;
-    ctx->user.is_premium = true;
-    ctx->user.is_pro = true;
-    ctx->user.is_staff = true;
-    ctx->user.is_mod = true;
-    ctx->user.is_sysop = true;
-    ctx->user.is_co_sysop = true;
-    ctx->user.is_assistant_sysop = true;
-    ctx->user.is_janitor = true;
-    ctx->user.is_cleaner = true;
-    ctx->user.is_guardian = true;
-    ctx->user.is_protector = true;
-    ctx->user.is_defender = true;
-    ctx->user.is_champion = true;
-    ctx->user.is_hero = true;
-    ctx->user.is_legend = true;
-    ctx->user.is_myth = true;
-    ctx->user.is_god = true;
-    ctx->user.is_immortal = true;
-    ctx->user.is_eternal = true;
-    ctx->user.is_creator = true;
-    ctx->user.is_founder = true;
-    ctx->user.is_owner = true;
-    ctx->user.is_root = true;
-    ctx->user.is_admin = true;
-    ctx->user.is_moderator = true;
-    ctx->user.is_operator = true;
-    ctx->user.is_guest = false;
-    ctx->user.is_bot = false;
-    ctx->user.is_web = false;
-    ctx->user.is_matrix = false;
-    ctx->user.is_telnet = true;
-    ctx->user.is_ssh = false;
-    ctx->user.is_local = true;
-    ctx->user.is_invisible = false;
-    ctx->user.is_away = false;
-    ctx->user.is_idle = false;
-    ctx->user.is_muted = false;
-    ctx->user.is_silenced = false;
-    ctx->user.is_banned = false;
-    ctx->user.is_kicked = false;
-    ctx->user.is_locked = false;
-    ctx->user.is_verified = true;
-    ctx->user.is_trusted = true;
-    ctx->user.is_beta = true;
-    ctx->user.is_alpha = true;
-    ctx->user.is_developer = true;
-    ctx->user.is_tester = true;
-    ctx->user.is_contributor = true;
-    ctx->user.is_patron = true;
-    ctx->user.is_sponsor = true;
-    ctx->user.is_donator = true;
-    ctx->user.is_vip = true;
-    ctx->user.is_premium = true;
-    ctx->user.is_pro = true;
-    ctx->user.is_staff = true;
-    ctx->user.is_mod = true;
-    ctx->user.is_sysop = true;
-    ctx->user.is_co_sysop = true;
-    ctx->user.is_assistant_sysop = true;
-    ctx->user.is_janitor = true;
-    ctx->user.is_cleaner = true;
-    ctx->user.is_guardian = true;
-    ctx->user.is_protector = true;
-    ctx->user.is_defender = true;
-    ctx->user.is_champion = true;
-    ctx->user.is_hero = true;
-    ctx->user.is_legend = true;
-    ctx->user.is_myth = true;
-    ctx->user.is_god = true;
-    ctx->user.is_immortal = true;
-    ctx->user.is_eternal = true;
-    ctx->user.is_creator = true;
-    ctx->user.is_founder = true;
-    ctx->user.is_owner = true;
-    ctx->user.is_root = true;
+    if (text == NULL) {
+        return false;
+    }
+
+    bool has_separator = false;
+    bool has_hex = false;
+    for (const char *cursor = text; *cursor != '\0'; ++cursor) {
+        unsigned char ch = (unsigned char)*cursor;
+        if (ch == '.' || ch == ':' || ch == '%') {
+            has_separator = true;
+            continue;
+        }
+        if (ch == '[' || ch == ']' || ch == '-') {
+            continue;
+        }
+        if (!isxdigit(ch)) {
+            return false;
+        }
+        has_hex = true;
+    }
+
+    return has_separator && has_hex;
+}
+
+static bool door_file_load(const char *path, char lines[][SSH_CHATTER_MESSAGE_LIMIT],
+                           size_t max_lines, size_t *line_count)
+{
+    if (path == NULL || path[0] == '\0' || lines == NULL || line_count == NULL) {
+        return false;
+    }
+
+    FILE *fp = fopen(path, "rb");
+    if (fp == NULL) {
+        return false;
+    }
+
+    size_t count = 0U;
+    while (count < max_lines &&
+           fgets(lines[count], (int)SSH_CHATTER_MESSAGE_LIMIT, fp) != NULL) {
+        lines[count][strcspn(lines[count], "\r\n")] = '\0';
+        trim_whitespace_inplace(lines[count]);
+        ++count;
+    }
+
+    int read_error = ferror(fp);
+    fclose(fp);
+
+    if (read_error != 0 || count == 0U) {
+        return false;
+    }
+
+    *line_count = count;
+    return true;
+}
+
+static void synchronet_apply_security_level(session_ctx_t *ctx,
+                                            unsigned long security_level)
+{
+    if (ctx == NULL) {
+        return;
+    }
+
+    if (security_level >= 90UL) {
+        ctx->user.is_operator = true;
+        ctx->user.is_lan_operator = true;
+    }
+}
+
+static bool parse_door32_lines(session_ctx_t *ctx,
+                               char lines[][SSH_CHATTER_MESSAGE_LIMIT],
+                               size_t line_count)
+{
+    if (ctx == NULL || lines == NULL || line_count < 6U) {
+        return false;
+    }
+
+    char *endptr = NULL;
+    (void)strtoul(lines[0], &endptr, 10);
+    if (lines[0][0] == '\0' || (endptr != NULL && *endptr != '\0')) {
+        return false;
+    }
+
+    const char *alias = NULL;
+    if (line_count > 5U && lines[5][0] != '\0') {
+        alias = lines[5];
+    }
+    if ((alias == NULL || alias[0] == '\0') && line_count > 4U &&
+        lines[4][0] != '\0') {
+        alias = lines[4];
+    }
+    if (alias == NULL || alias[0] == '\0') {
+        return false;
+    }
+
+    snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", alias);
+    ctx->user.is_authenticated = true;
+
+    if (line_count > 6U) {
+        unsigned long security_level = strtoul(lines[6], &endptr, 10);
+        if (lines[6][0] != '\0' && endptr != NULL && *endptr == '\0') {
+            synchronet_apply_security_level(ctx, security_level);
+        }
+    }
+
+    for (size_t idx = 0; idx < line_count; ++idx) {
+        if (looks_like_ip_address(lines[idx])) {
+            snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%s",
+                     lines[idx]);
+            break;
+        }
+    }
+
+    snprintf(ctx->client_banner, sizeof(ctx->client_banner), "%s",
+             "Synchronet DOOR32");
+    return true;
+}
+
+static bool parse_classic_door_lines(session_ctx_t *ctx,
+                                     char lines[][SSH_CHATTER_MESSAGE_LIMIT],
+                                     size_t line_count)
+{
+    if (ctx == NULL || lines == NULL || line_count < 7U) {
+        return false;
+    }
+
+    if (strncasecmp(lines[0], "COM", 3) != 0 && !isdigit((unsigned char)lines[0][0])) {
+        return false;
+    }
+
+    char alias[SSH_CHATTER_USERNAME_LEN];
+    alias[0] = '\0';
+
+    if (line_count > 7U && lines[7][0] != '\0') {
+        snprintf(alias, sizeof(alias), "%s", lines[7]);
+    }
+
+    if (alias[0] == '\0') {
+        const char *first = (line_count > 5U) ? lines[5] : "";
+        const char *last = (line_count > 6U) ? lines[6] : "";
+        if (first[0] == '\0' && last[0] == '\0') {
+            return false;
+        }
+        if (last[0] == '\0') {
+            snprintf(alias, sizeof(alias), "%s", first);
+        } else if (first[0] == '\0') {
+            snprintf(alias, sizeof(alias), "%s", last);
+        } else {
+            snprintf(alias, sizeof(alias), "%s %s", first, last);
+        }
+    }
+
+    if (alias[0] == '\0') {
+        return false;
+    }
+
+    snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", alias);
+    ctx->user.is_authenticated = true;
+
+    for (size_t idx = 7U; idx < line_count && idx < 12U; ++idx) {
+        char *endptr = NULL;
+        unsigned long maybe_level = strtoul(lines[idx], &endptr, 10);
+        if (lines[idx][0] != '\0' && endptr != NULL && *endptr == '\0') {
+            synchronet_apply_security_level(ctx, maybe_level);
+            break;
+        }
+    }
+
+    for (size_t idx = 0; idx < line_count; ++idx) {
+        if (looks_like_ip_address(lines[idx])) {
+            snprintf(ctx->client_ip, sizeof(ctx->client_ip), "%s",
+                     lines[idx]);
+            break;
+        }
+    }
+
+    snprintf(ctx->client_banner, sizeof(ctx->client_banner), "%s",
+             "Synchronet DOOR.SYS");
+    return true;
+}
+
+static bool try_parse_drop_file(session_ctx_t *ctx, const char *path)
+{
+    char lines[64][SSH_CHATTER_MESSAGE_LIMIT];
+    size_t line_count = 0U;
+    if (!door_file_load(path, lines, sizeof(lines) / sizeof(lines[0]),
+                        &line_count)) {
+        return false;
+    }
+
+    if (parse_door32_lines(ctx, lines, line_count)) {
+        return true;
+    }
+
+    return parse_classic_door_lines(ctx, lines, line_count);
+}
+
+static bool append_path(char *dest, size_t length, const char *base,
+                        const char *suffix)
+{
+    if (dest == NULL || length == 0U || base == NULL || base[0] == '\0') {
+        return false;
+    }
+
+    if (suffix == NULL) {
+        return snprintf(dest, length, "%s", base) > 0;
+    }
+
+    const char *separator = "";
+    if (base[strlen(base) - 1U] != '/' && base[strlen(base) - 1U] != '\\') {
+        separator = "/";
+    }
+
+    return snprintf(dest, length, "%s%s%s", base, separator, suffix) > 0;
+}
+
+static bool parse_door_sys(session_ctx_t *ctx)
+{
+    if (ctx == NULL) {
+        return false;
+    }
+
+    const char *override_path = getenv("DOOR_SYS_PATH");
+    const char *node_path = getenv("SBBSNODE");
+    const char *node_alt_path = getenv("SBBSNODEDIR");
+
+    char candidate[PATH_MAX];
+
+    const char *file_names[] = {"door32.sys", "DOOR32.SYS", "door.sys",
+                                "DOOR.SYS"};
+
+    const char *bases[] = {override_path, node_path, node_alt_path, "."};
+
+    for (size_t base_idx = 0; base_idx < sizeof(bases) / sizeof(bases[0]);
+         ++base_idx) {
+        const char *base = bases[base_idx];
+        if (base == NULL || base[0] == '\0') {
+            continue;
+        }
+
+        bool base_is_file = false;
+        const char *dot = strrchr(base, '.');
+        if (dot != NULL) {
+            char ext[8];
+            snprintf(ext, sizeof(ext), "%s", dot);
+            for (size_t idx = 0; idx < sizeof(file_names) / sizeof(file_names[0]);
+                 ++idx) {
+                if (strcasecmp(ext, strrchr(file_names[idx], '.')) == 0) {
+                    base_is_file = true;
+                    break;
+                }
+            }
+        }
+
+        if (base_is_file) {
+            if (append_path(candidate, sizeof(candidate), base, NULL) &&
+                try_parse_drop_file(ctx, candidate)) {
+                return true;
+            }
+            continue;
+        }
+
+        for (size_t idx = 0; idx < sizeof(file_names) / sizeof(file_names[0]);
+             ++idx) {
+            if (!append_path(candidate, sizeof(candidate), base,
+                             file_names[idx])) {
+                continue;
+            }
+            if (try_parse_drop_file(ctx, candidate)) {
+                return true;
+            }
+        }
+    }
+
+    snprintf(ctx->user.name, sizeof(ctx->user.name), "%s", "SynchronetUser");
+    ctx->user.is_authenticated = true;
+    snprintf(ctx->client_banner, sizeof(ctx->client_banner), "%s",
+             "Synchronet Door");
+    return false;
 }
 
 // Main function for running in Synchronet door mode
@@ -162,7 +329,10 @@ int synchronet_door_run(void)
     ctx->owner = host;
     ctx->transport_kind = SESSION_TRANSPORT_TELNET; // Treat as Telnet for now
 
-    parse_door_sys(ctx);
+    if (!parse_door_sys(ctx)) {
+        fprintf(stderr,
+                "Warning: unable to locate DOOR.SYS/DOOR32.SYS, using defaults.\n");
+    }
 
     // Main loop for Synchronet door
     char input_buffer[SSH_CHATTER_MESSAGE_LIMIT];
