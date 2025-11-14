@@ -3767,14 +3767,8 @@ static void *session_thread(void *arg)
             }
 
             if (ctx->transport_kind == SESSION_TRANSPORT_TELNET && ch == 0x00) {
-                ctx->input_buffer[ctx->input_length] = '\0';
-                session_apply_background_fill(ctx);
-                session_handle_exit(ctx);
-                session_clear_input_without_prompt(ctx);
-                if (ctx->should_exit) {
-                    break;
-                }
-                session_render_prompt(ctx, false);
+                // Ignore stray NUL padding bytes from telnet clients so they do
+                // not trigger unintended disconnects.
                 continue;
             }
 

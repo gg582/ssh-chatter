@@ -4459,9 +4459,10 @@ static bool session_telnet_collect_line(session_ctx_t *ctx, char *buffer,
         }
 
         if (byte == '\0') {
-            ctx->should_exit = true;
-            ctx->telnet_consume_next_lf = false;
-            return false;
+            // Some telnet clients emit NUL padding bytes (e.g. CR NUL) when
+            // sending user input. Treat them as no-ops so clients like IcyTerm
+            // stay connected.
+            continue;
         }
 
         if (byte == '\r' || byte == '\n') {
