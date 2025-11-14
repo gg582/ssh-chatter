@@ -4834,11 +4834,14 @@ bool session_telnet_login_prompt(session_ctx_t *ctx)
                 session_send_system_line(ctx, "Password required.");
                 continue;
             }
-            password_to_check = password_buffer;
-
-            // Copy into provided_password for later comparisons if needed
+            // Copy into provided_password for later comparisons and make that
+            // the canonical pointer for verification. The local
+            // password_buffer will go out of scope after this block, so
+            // retaining its address would leave password_to_check referencing
+            // invalid stack memory.
             snprintf(provided_password, sizeof(provided_password), "%s",
                      password_buffer);
+            password_to_check = provided_password;
         }
 
         bool authenticated = false;
