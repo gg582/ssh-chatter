@@ -1627,8 +1627,12 @@ static void session_apply_saved_preferences(session_ctx_t *ctx)
     }
     pthread_mutex_unlock(&host->lock);
 
+    session_ui_language_t previous_language = ctx->ui_language;
+    session_cp437_override_t previous_cp437_override = ctx->cp437_override;
+    bool previous_cp437_output = ctx->prefer_cp437_output;
+    bool previous_cp437_input = ctx->cp437_input_enabled;
+
     ctx->prefer_utf16_output = false;
-    ctx->prefer_cp437_output = false;
 
     ctx->translation_caption_spacing = 0U;
     ctx->translation_enabled = false;
@@ -1637,10 +1641,7 @@ static void session_apply_saved_preferences(session_ctx_t *ctx)
     ctx->input_translation_enabled = false;
     ctx->input_translation_language[0] = '\0';
     ctx->last_detected_input_language[0] = '\0';
-    ctx->ui_language = SESSION_UI_LANGUAGE_KO;
     ctx->breaking_alerts_enabled = false;
-    ctx->cp437_override = SESSION_CP437_OVERRIDE_NONE;
-    ctx->cp437_input_enabled = false;
 
     if (has_snapshot) {
         if (snapshot.ui_language[0] != '\0') {
@@ -1649,6 +1650,10 @@ static void session_apply_saved_preferences(session_ctx_t *ctx)
             if (saved_language != SESSION_UI_LANGUAGE_COUNT) {
                 ctx->ui_language = saved_language;
             }
+        }
+
+        if (ctx->ui_language == SESSION_UI_LANGUAGE_COUNT) {
+            ctx->ui_language = previous_language;
         }
 
         if (snapshot.has_user_theme) {
@@ -1750,6 +1755,16 @@ static void session_apply_saved_preferences(session_ctx_t *ctx)
                  sizeof(ctx->game.chosen_camouflage_language), "%s",
                  pref->camouflage_language);
     }
+
+    if (!has_snapshot || snapshot.ui_language[0] == '\0') {
+        ctx->ui_language = previous_language;
+    }
+
+    ctx->cp437_override = previous_cp437_override;
+    ctx->prefer_cp437_output = previous_cp437_output;
+    ctx->cp437_input_enabled = previous_cp437_input;
+
+    session_refresh_output_encoding(ctx);
 
     (void)session_user_data_load(ctx);
     session_force_dark_mode_foreground(ctx);
