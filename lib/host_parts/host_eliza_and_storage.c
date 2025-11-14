@@ -4590,7 +4590,7 @@ static bool session_telnet_pw_auth_lookup(host_t *host, const char *username,
     char line[SSH_CHATTER_MESSAGE_LIMIT];
     bool found = false;
 
-    while (!found && fgets(line, sizeof(line), fp) != NULL) {
+    while (fgets(line, sizeof(line), fp) != NULL) {
         size_t length = strcspn(line, "\r\n");
         line[length] = '\0';
 
@@ -4618,11 +4618,28 @@ static bool session_telnet_pw_auth_lookup(host_t *host, const char *username,
             continue;
         }
 
-        if (!session_pw_auth_decode_hex(salt_hex, salt_out, salt_len) ||
-            !session_pw_auth_decode_hex(hash_hex, hash_out, hash_len)) {
+        uint8_t decoded_salt[SECURITY_LAYER_SALT_LEN];
+        uint8_t decoded_hash[SECURITY_LAYER_HASH_LEN];
+
+        if (!session_pw_auth_decode_hex(salt_hex, decoded_salt,
+                                        sizeof(decoded_salt)) ||
+            !session_pw_auth_decode_hex(hash_hex, decoded_hash,
+                                        sizeof(decoded_hash))) {
             continue;
         }
 
+        size_t salt_copy = salt_len < sizeof(decoded_salt) ? salt_len
+                                                           : sizeof(decoded_salt);
+        size_t hash_copy = hash_len < sizeof(decoded_hash) ? hash_len
+                                                           : sizeof(decoded_hash);
+        if (salt_copy > 0U) {
+            memset(salt_out, 0, salt_len);
+            memcpy(salt_out, decoded_salt, salt_copy);
+        }
+        if (hash_copy > 0U) {
+            memset(hash_out, 0, hash_len);
+            memcpy(hash_out, decoded_hash, hash_copy);
+        }
         found = true;
     }
 
