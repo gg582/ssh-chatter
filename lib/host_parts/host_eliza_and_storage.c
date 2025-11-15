@@ -5180,7 +5180,12 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx,
         pthread_mutex_unlock(&ctx->chat_message_count_mutex);
     }
 
+    // Suppress translation placeholder lines for the sender's own message
+    // to match the behavior of history display
+    bool previous_suppress = ctx->translation_suppress_output;
+    ctx->translation_suppress_output = true;
     session_send_history_entry(ctx, &entry);
+    ctx->translation_suppress_output = previous_suppress;
     if (ctx->history_scroll_position == 0U && !ctx->bracket_paste_active) {
         if (clear_prompt_text) {
             ctx->input_length = 0U;

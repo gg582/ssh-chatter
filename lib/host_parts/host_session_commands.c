@@ -239,7 +239,11 @@ static void session_handle_image(session_ctx_t *ctx, const char *arguments)
         return;
     }
 
+    // Suppress translation placeholder lines to match history display behavior
+    bool previous_suppress = ctx->translation_suppress_output;
+    ctx->translation_suppress_output = true;
     session_send_history_entry(ctx, &stored);
+    ctx->translation_suppress_output = previous_suppress;
     chat_room_broadcast_entry(&ctx->owner->room, &stored, ctx);
     host_notify_external_clients(ctx->owner, &stored);
 }
@@ -309,7 +313,11 @@ static void session_handle_video(session_ctx_t *ctx, const char *arguments)
         return;
     }
 
+    // Suppress translation placeholder lines to match history display behavior
+    bool previous_suppress = ctx->translation_suppress_output;
+    ctx->translation_suppress_output = true;
     session_send_history_entry(ctx, &stored);
+    ctx->translation_suppress_output = previous_suppress;
     chat_room_broadcast_entry(&ctx->owner->room, &stored, ctx);
     host_notify_external_clients(ctx->owner, &stored);
 }
@@ -379,7 +387,11 @@ static void session_handle_audio(session_ctx_t *ctx, const char *arguments)
         return;
     }
 
+    // Suppress translation placeholder lines to match history display behavior
+    bool previous_suppress = ctx->translation_suppress_output;
+    ctx->translation_suppress_output = true;
     session_send_history_entry(ctx, &stored);
+    ctx->translation_suppress_output = previous_suppress;
     chat_room_broadcast_entry(&ctx->owner->room, &stored, ctx);
     host_notify_external_clients(ctx->owner, &stored);
 }
@@ -449,7 +461,11 @@ static void session_handle_files(session_ctx_t *ctx, const char *arguments)
         return;
     }
 
+    // Suppress translation placeholder lines to match history display behavior
+    bool previous_suppress = ctx->translation_suppress_output;
+    ctx->translation_suppress_output = true;
     session_send_history_entry(ctx, &stored);
+    ctx->translation_suppress_output = previous_suppress;
     chat_room_broadcast_entry(&ctx->owner->room, &stored, ctx);
     host_notify_external_clients(ctx->owner, &stored);
 }
@@ -4858,7 +4874,11 @@ static void session_asciiart_commit(session_ctx_t *ctx)
         return;
     }
 
+    // Suppress translation placeholder lines to match history display behavior
+    bool previous_suppress = ctx->translation_suppress_output;
+    ctx->translation_suppress_output = true;
     session_send_history_entry(ctx, &entry);
+    ctx->translation_suppress_output = previous_suppress;
     chat_room_broadcast_entry(&ctx->owner->room, &entry, ctx);
     host_notify_external_clients(ctx->owner, &entry);
 
