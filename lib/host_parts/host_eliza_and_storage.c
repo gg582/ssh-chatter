@@ -3462,6 +3462,10 @@ static char *session_cp437_normalize_utf8(const char *data, size_t length,
     bool modified = false;
     const unsigned char *cursor = (const unsigned char *)data;
     size_t remaining = length;
+    
+    // Track line state to handle whitespace-only lines
+    size_t line_start = 0U;
+    bool line_has_nonspace = false;
 
     while (remaining > 0U) {
         uint32_t codepoint = 0U;
@@ -3470,6 +3474,23 @@ static char *session_cp437_normalize_utf8(const char *data, size_t length,
         if (consumed == 0U) {
             codepoint = (uint32_t)(*cursor);
             consumed = 1U;
+        }
+
+        // Check if we're at a newline
+        bool is_newline = (codepoint == 0x000AU || codepoint == 0x000DU);
+        
+        // Check if current character is whitespace (space, nbsp, tab)
+        bool is_whitespace = (codepoint == 0x0020U || codepoint == 0x00A0U || 
+                              codepoint == 0x0009U);
+
+        // When we hit a newline, check if the line was whitespace-only
+        // and remove trailing whitespace BEFORE appending the newline
+        if (is_newline && modified && !line_has_nonspace && output > line_start) {
+            // Remove trailing whitespace before newline
+            while (output > line_start && 
+                   (buffer[output - 1] == ' ' || buffer[output - 1] == '\t')) {
+                output--;
+            }
         }
 
         const char *replacement = session_cp437_ascii_replacement(codepoint);
@@ -3495,6 +3516,10 @@ static char *session_cp437_normalize_utf8(const char *data, size_t length,
             }
             memcpy(buffer + output, replacement, rep_len);
             output += rep_len;
+            
+            if (!is_whitespace) {
+                line_has_nonspace = true;
+            }
         } else {
             size_t needed = output + consumed + 1U;
             if (needed > capacity) {
@@ -3515,10 +3540,28 @@ static char *session_cp437_normalize_utf8(const char *data, size_t length,
             }
             memcpy(buffer + output, cursor, consumed);
             output += consumed;
+            
+            if (!is_whitespace && !is_newline) {
+                line_has_nonspace = true;
+            }
+        }
+        
+        // Reset line tracking after newline
+        if (is_newline) {
+            line_start = output;
+            line_has_nonspace = false;
         }
 
         cursor += consumed;
         remaining -= consumed;
+    }
+    
+    // Handle trailing whitespace on the last line if modified
+    if (modified && !line_has_nonspace && output > line_start) {
+        while (output > line_start && 
+               (buffer[output - 1] == ' ' || buffer[output - 1] == '\t')) {
+            output--;
+        }
     }
 
     if (!modified) {
@@ -5137,7 +5180,12 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx,
         pthread_mutex_unlock(&ctx->chat_message_count_mutex);
     }
 
+    // Suppress translation placeholder lines for the sender's own message
+    // to match the behavior of history display
+    bool previous_suppress = ctx->translation_suppress_output;
+    ctx->translation_suppress_output = true;
     session_send_history_entry(ctx, &entry);
+    ctx->translation_suppress_output = previous_suppress;
     if (ctx->history_scroll_position == 0U && !ctx->bracket_paste_active) {
         if (clear_prompt_text) {
             ctx->input_length = 0U;

@@ -2976,6 +2976,104 @@ cleanup:
     }
 }
 
+static void session_scrollback_navigate_line(session_ctx_t *ctx, int direction)
+{
+    if (ctx == NULL || ctx->owner == NULL || !session_transport_active(ctx) ||
+        direction == 0) {
+        return;
+    }
+
+    size_t total = host_history_total(ctx->owner);
+    if (total == 0U) {
+        return;
+    }
+
+    bool suppress_translation = translator_should_skip_scrollback_translation();
+    bool previous_translation_suppress = ctx->translation_suppress_output;
+    if (suppress_translation) {
+        ctx->translation_suppress_output = true;
+    }
+
+    if (ctx->history_scroll_position >= total) {
+        ctx->history_scroll_position = total > 0U ? total - 1U : 0U;
+    }
+    size_t position = ctx->history_scroll_position;
+    size_t new_position = position;
+
+    const size_t max_position = total > 0U ? total - 1U : 0U;
+
+    // Scroll by exactly 1 line
+    if (direction > 0) {
+        // Scroll toward older messages
+        if (new_position < max_position) {
+            new_position += 1U;
+        }
+    } else if (direction < 0) {
+        // Scroll toward newer messages
+        if (new_position > 0U) {
+            new_position -= 1U;
+        }
+    }
+
+    bool at_boundary = (new_position == position);
+    ctx->history_scroll_position = new_position;
+
+    bool at_latest = (ctx->history_scroll_position == 0U);
+
+    if (!at_latest) {
+        ctx->history_latest_notified = false;
+    }
+
+    const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
+    session_channel_write(ctx, clear_sequence, sizeof(clear_sequence) - 1U);
+
+    if (direction < 0 && at_boundary && new_position == 0U) {
+        session_render_prompt(ctx, false);
+        goto cleanup;
+    }
+
+    session_channel_write(ctx, "\r\n", 2U);
+
+    // Calculate sliding window - show lines centered around current position
+    size_t visible_lines = 16U; // Number of lines to display
+    size_t newest_visible = total - 1U - new_position;
+    size_t chunk = visible_lines;
+    if (chunk > newest_visible + 1U) {
+        chunk = newest_visible + 1U;
+    }
+    if (chunk == 0U) {
+        chunk = 1U;
+    }
+
+    const size_t oldest_visible =
+        (newest_visible + 1U > chunk) ? (newest_visible + 1U - chunk) : 0U;
+
+    chat_history_entry_t buffer[SSH_CHATTER_SCROLLBACK_CHUNK];
+    size_t request = chunk;
+    if (request > SSH_CHATTER_SCROLLBACK_CHUNK) {
+        request = SSH_CHATTER_SCROLLBACK_CHUNK;
+    }
+    size_t copied =
+        host_history_copy_range(ctx->owner, oldest_visible, buffer, request);
+    if (copied == 0U) {
+        ctx->history_scroll_position = (total > 0U) ? max_position : 0U;
+        ctx->history_latest_notified = false;
+        session_render_prompt(ctx, false);
+        goto cleanup;
+    }
+
+    for (size_t idx = 0; idx < copied; ++idx) {
+        session_send_history_entry(ctx, &buffer[idx]);
+    }
+
+    session_render_prompt(ctx, false);
+
+cleanup:
+    if (suppress_translation) {
+        ctx->translation_suppress_output = previous_translation_suppress;
+    }
+}
+
 static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch)
 {
     if (ctx == NULL) {
