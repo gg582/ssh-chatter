@@ -4159,7 +4159,12 @@ static void chat_room_broadcast_entry(chat_room_t *room,
 
     for (size_t idx = 0; idx < target_count; ++idx) {
         session_ctx_t *member = targets[idx];
+        // Suppress translation placeholder lines for broadcasted messages
+        // to match the behavior of history display
+        bool previous_suppress = member->translation_suppress_output;
+        member->translation_suppress_output = true;
         session_send_history_entry(member, entry);
+        member->translation_suppress_output = previous_suppress;
         if (member->history_scroll_position == 0U) {
             session_refresh_input_line(member);
         }
