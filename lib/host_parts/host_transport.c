@@ -4124,6 +4124,8 @@ static void chat_room_broadcast_entry(chat_room_t *room,
                                       const chat_history_entry_t *entry,
                                       const session_ctx_t *from)
 {
+    (void)from;  // Parameter no longer used - all users now receive via history
+    
     if (room == NULL || entry == NULL) {
         return;
     }
@@ -4140,9 +4142,6 @@ static void chat_room_broadcast_entry(chat_room_t *room,
             for (size_t idx = 0; idx < room->member_count; ++idx) {
                 session_ctx_t *member = room->members[idx];
                 if (member == NULL || member->channel == NULL) {
-                    continue;
-                }
-                if (from != NULL && member == from) {
                     continue;
                 }
                 targets[target_count++] = member;
