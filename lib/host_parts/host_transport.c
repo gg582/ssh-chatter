@@ -5166,7 +5166,7 @@ static void chat_history_entry_prepare_user(chat_history_entry_t *entry,
         entry->created_at = now;
     }
     if (message != NULL) {
-        snprintf(entry->message, sizeof(entry->message), "%s:", message);
+        snprintf(entry->message, sizeof(entry->message), "%s", message);
     }
     snprintf(entry->username, sizeof(entry->username), "%s", from->user.name);
     entry->user_color_code = from->user_color_code;
