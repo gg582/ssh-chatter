@@ -1354,7 +1354,6 @@ void session_send_raw_text(session_ctx_t *ctx, const char *text)
         if (*cursor == '\r') {
             ++cursor;
         }
-        // Don't send a blank line if we're at the end of the string
     }
 }
 
@@ -2580,6 +2579,24 @@ static void session_scrollback_reset_position(session_ctx_t *ctx)
 }
 
 // Single-line scrollback navigation for arrow keys
+/**
+ * Navigate through chat history one line at a time using arrow keys.
+ * 
+ * This function handles single-line scrollback navigation, allowing users to
+ * move through chat history message-by-message. It maintains the scroll position
+ * and displays only the requested message without additional UI clutter.
+ * 
+ * @param ctx Session context containing history state
+ * @param direction Scroll direction: positive moves to older messages (up arrow),
+ *                  negative moves to newer messages (down arrow)
+ * 
+ * History indexing:
+ * - Position 0 = most recent message (bottom of history)
+ * - Position N-1 = oldest message (top of history, where N is total messages)
+ * 
+ * Translation suppression during scrollback prevents triggering expensive
+ * translation API calls when rapidly navigating through history.
+ */
 static void session_scrollback_navigate_line(session_ctx_t *ctx, int direction)
 {
     if (ctx == NULL || ctx->owner == NULL || !session_transport_active(ctx) ||
@@ -2599,22 +2616,27 @@ static void session_scrollback_navigate_line(session_ctx_t *ctx, int direction)
         ctx->translation_suppress_output = true;
     }
 
-    const size_t step = 1U;  // Single line at a time
+    const size_t step = 1U;
+    
+    /* Clamp position to valid range if it's somehow out of bounds */
     if (ctx->history_scroll_position >= total) {
         ctx->history_scroll_position = total > 0U ? total - 1U : 0U;
     }
+    
     size_t position = ctx->history_scroll_position;
     size_t new_position = position;
-
     const size_t max_position = total > 0U ? total - 1U : 0U;
 
-    // Navigate forward (toward older messages)
+    /* 
+     * Update scroll position based on direction.
+     * Positive direction = scroll toward older messages (increase position)
+     * Negative direction = scroll toward newer messages (decrease position)
+     */
     if (direction > 0) {
         if (new_position < max_position) {
             new_position += step;
         }
     } else if (direction < 0) {
-        // Navigate backward (toward newer messages)
         if (new_position > 0U) {
             size_t retreat = step;
             if (retreat > new_position) {
@@ -2630,6 +2652,7 @@ static void session_scrollback_navigate_line(session_ctx_t *ctx, int direction)
     bool at_latest = (ctx->history_scroll_position == 0U);
     bool at_oldest = (ctx->history_scroll_position == max_position && total > 0U);
 
+    /* Reset notification flags when leaving boundaries */
     if (!at_latest) {
         ctx->history_latest_notified = false;
     }
@@ -2637,20 +2660,23 @@ static void session_scrollback_navigate_line(session_ctx_t *ctx, int direction)
         ctx->history_oldest_notified = false;
     }
 
+    /* Clear current line before displaying scrollback content */
     const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
     session_channel_write(ctx, clear_sequence, sizeof(clear_sequence) - 1U);
 
+    /* If scrolling down and already at latest, just redraw prompt */
     if (direction < 0 && at_boundary && new_position == 0U) {
-        if (!ctx->history_latest_notified) {
-            session_send_system_line(ctx, "Already at the latest messages.");
-            ctx->history_latest_notified = true;
-        }
         session_render_prompt(ctx, false);
         goto cleanup;
     }
 
     session_channel_write(ctx, "\r\n", 2U);
 
+    /*
+     * Calculate which message to display.
+     * newest_visible is the chronological index (0 = oldest message in history)
+     * We convert from scroll position (0 = newest) to chronological index.
+     */
     const size_t newest_visible = total - 1U - new_position;
     size_t chunk = step;
     if (chunk > newest_visible + 1U) {
@@ -2663,23 +2689,12 @@ static void session_scrollback_navigate_line(session_ctx_t *ctx, int direction)
     const size_t oldest_visible =
         (newest_visible + 1U > chunk) ? (newest_visible + 1U - chunk) : 0U;
 
-    if (direction > 0 && at_boundary && new_position == max_position) {
-        if (!ctx->history_oldest_notified) {
-            session_send_system_line(ctx, "Reached the oldest stored message.");
-            ctx->history_oldest_notified = true;
-        }
-    }
-
-    char header[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(header, sizeof(header), "Line %zu of %zu",
-             newest_visible + 1U, total);
-    session_send_system_line(ctx, header);
-
+    /* Fetch the requested message from history */
     chat_history_entry_t buffer[1];
     size_t copied =
         host_history_copy_range(ctx->owner, oldest_visible, buffer, 1U);
     if (copied == 0U) {
-        session_send_system_line(ctx, "Unable to read chat history right now.");
+        /* History read failed - reset position and bail out */
         ctx->history_scroll_position = (total > 0U) ? max_position : 0U;
         ctx->history_latest_notified = false;
         ctx->history_oldest_notified = false;
@@ -2687,14 +2702,8 @@ static void session_scrollback_navigate_line(session_ctx_t *ctx, int direction)
         goto cleanup;
     }
 
+    /* Display the message without additional UI elements */
     session_send_history_entry(ctx, &buffer[0]);
-
-    if (direction < 0 && new_position == 0U) {
-        if (!ctx->history_latest_notified) {
-            session_send_system_line(ctx, "End of scrollback.");
-            ctx->history_latest_notified = true;
-        }
-    }
 
     session_render_prompt(ctx, false);
 
