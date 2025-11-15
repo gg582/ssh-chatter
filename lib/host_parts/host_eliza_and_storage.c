@@ -3476,6 +3476,26 @@ static char *session_cp437_normalize_utf8(const char *data, size_t length,
             consumed = 1U;
         }
 
+        // Handle CRLF (\r\n) as a single line ending
+        // Skip \r if followed by \n to avoid double line breaks
+        if (codepoint == 0x000DU && remaining > consumed) {
+            // Look ahead to check if next character is \n
+            const unsigned char *next_cursor = cursor + consumed;
+            size_t next_remaining = remaining - consumed;
+            uint32_t next_codepoint = 0U;
+            size_t next_consumed =
+                session_utf8_decode_codepoint(next_cursor, next_remaining, &next_codepoint);
+            if (next_consumed == 0U) {
+                next_codepoint = (uint32_t)(*next_cursor);
+            }
+            if (next_codepoint == 0x000AU) {
+                // This is a CRLF sequence, skip the \r
+                cursor += consumed;
+                remaining -= consumed;
+                continue;
+            }
+        }
+
         // Check if we're at a newline
         bool is_newline = (codepoint == 0x000AU || codepoint == 0x000DU);
         
