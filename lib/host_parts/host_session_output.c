@@ -1354,9 +1354,7 @@ void session_send_raw_text(session_ctx_t *ctx, const char *text)
         if (*cursor == '\r') {
             ++cursor;
         }
-        if (*cursor == '\0') {
-            session_send_plain_line(ctx, "");
-        }
+        // Don't send a blank line if we're at the end of the string
     }
 }
 
@@ -2581,6 +2579,132 @@ static void session_scrollback_reset_position(session_ctx_t *ctx)
     ctx->history_oldest_notified = false;
 }
 
+// Single-line scrollback navigation for arrow keys
+static void session_scrollback_navigate_line(session_ctx_t *ctx, int direction)
+{
+    if (ctx == NULL || ctx->owner == NULL || !session_transport_active(ctx) ||
+        direction == 0) {
+        return;
+    }
+
+    size_t total = host_history_total(ctx->owner);
+    if (total == 0U) {
+        session_send_system_line(ctx, "No chat history available yet.");
+        return;
+    }
+
+    bool suppress_translation = translator_should_skip_scrollback_translation();
+    bool previous_translation_suppress = ctx->translation_suppress_output;
+    if (suppress_translation) {
+        ctx->translation_suppress_output = true;
+    }
+
+    const size_t step = 1U;  // Single line at a time
+    if (ctx->history_scroll_position >= total) {
+        ctx->history_scroll_position = total > 0U ? total - 1U : 0U;
+    }
+    size_t position = ctx->history_scroll_position;
+    size_t new_position = position;
+
+    const size_t max_position = total > 0U ? total - 1U : 0U;
+
+    // Navigate forward (toward older messages)
+    if (direction > 0) {
+        if (new_position < max_position) {
+            new_position += step;
+        }
+    } else if (direction < 0) {
+        // Navigate backward (toward newer messages)
+        if (new_position > 0U) {
+            size_t retreat = step;
+            if (retreat > new_position) {
+                retreat = new_position;
+            }
+            new_position -= retreat;
+        }
+    }
+
+    bool at_boundary = (new_position == position);
+    ctx->history_scroll_position = new_position;
+
+    bool at_latest = (ctx->history_scroll_position == 0U);
+    bool at_oldest = (ctx->history_scroll_position == max_position && total > 0U);
+
+    if (!at_latest) {
+        ctx->history_latest_notified = false;
+    }
+    if (!at_oldest) {
+        ctx->history_oldest_notified = false;
+    }
+
+    const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
+    session_channel_write(ctx, clear_sequence, sizeof(clear_sequence) - 1U);
+
+    if (direction < 0 && at_boundary && new_position == 0U) {
+        if (!ctx->history_latest_notified) {
+            session_send_system_line(ctx, "Already at the latest messages.");
+            ctx->history_latest_notified = true;
+        }
+        session_render_prompt(ctx, false);
+        goto cleanup;
+    }
+
+    session_channel_write(ctx, "\r\n", 2U);
+
+    const size_t newest_visible = total - 1U - new_position;
+    size_t chunk = step;
+    if (chunk > newest_visible + 1U) {
+        chunk = newest_visible + 1U;
+    }
+    if (chunk == 0U) {
+        chunk = 1U;
+    }
+
+    const size_t oldest_visible =
+        (newest_visible + 1U > chunk) ? (newest_visible + 1U - chunk) : 0U;
+
+    if (direction > 0 && at_boundary && new_position == max_position) {
+        if (!ctx->history_oldest_notified) {
+            session_send_system_line(ctx, "Reached the oldest stored message.");
+            ctx->history_oldest_notified = true;
+        }
+    }
+
+    char header[SSH_CHATTER_MESSAGE_LIMIT];
+    snprintf(header, sizeof(header), "Line %zu of %zu",
+             newest_visible + 1U, total);
+    session_send_system_line(ctx, header);
+
+    chat_history_entry_t buffer[1];
+    size_t copied =
+        host_history_copy_range(ctx->owner, oldest_visible, buffer, 1U);
+    if (copied == 0U) {
+        session_send_system_line(ctx, "Unable to read chat history right now.");
+        ctx->history_scroll_position = (total > 0U) ? max_position : 0U;
+        ctx->history_latest_notified = false;
+        ctx->history_oldest_notified = false;
+        session_render_prompt(ctx, false);
+        goto cleanup;
+    }
+
+    session_send_history_entry(ctx, &buffer[0]);
+
+    if (direction < 0 && new_position == 0U) {
+        if (!ctx->history_latest_notified) {
+            session_send_system_line(ctx, "End of scrollback.");
+            ctx->history_latest_notified = true;
+        }
+    }
+
+    session_render_prompt(ctx, false);
+
+cleanup:
+    if (suppress_translation) {
+        ctx->translation_suppress_output = previous_translation_suppress;
+    }
+}
+
+
 static void session_history_record(session_ctx_t *ctx, const char *line)
 {
     if (ctx == NULL || line == NULL) {
@@ -2963,7 +3087,7 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch)
                 ctx->input_escape_length = 0U;
                 return true;
             }
-            session_scrollback_navigate(ctx, 1);
+            session_scrollback_navigate_line(ctx, 1);
             ctx->input_escape_active = false;
             ctx->input_escape_length = 0U;
             return true;
@@ -2991,7 +3115,7 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch)
                 ctx->input_escape_length = 0U;
                 return true;
             }
-            session_scrollback_navigate(ctx, -1);
+            session_scrollback_navigate_line(ctx, -1);
             ctx->input_escape_active = false;
             ctx->input_escape_length = 0U;
             return true;
@@ -3046,7 +3170,7 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch)
                 ctx->input_escape_length = 0U;
                 return true;
             }
-            session_scrollback_navigate(ctx, 1);
+            session_scrollback_navigate_line(ctx, 1);
             ctx->input_escape_active = false;
             ctx->input_escape_length = 0U;
             return true;
@@ -3074,7 +3198,7 @@ static bool session_consume_escape_sequence(session_ctx_t *ctx, char ch)
                 ctx->input_escape_length = 0U;
                 return true;
             }
-            session_scrollback_navigate(ctx, -1);
+            session_scrollback_navigate_line(ctx, -1);
             ctx->input_escape_active = false;
             ctx->input_escape_length = 0U;
             return true;
@@ -3257,8 +3381,8 @@ static void session_send_history_entry(session_ctx_t *ctx,
                                    sizeof(id_label))) {
             id_display = id_label;
         }
-        snprintf(name_block, sizeof(name_block), "%s%s %s [%s]%s", color, bold,
-                 entry->username, id_display, ANSI_RESET);
+        snprintf(name_block, sizeof(name_block), "%s%s[%s] %s%s", color, bold,
+                 id_display, entry->username, ANSI_RESET);
         strncat(formatted, name_block,
                 sizeof(formatted) - strlen(formatted) - 1U);
 
