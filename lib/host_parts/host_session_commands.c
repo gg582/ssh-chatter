@@ -773,7 +773,7 @@ static void session_handle_usercount(session_ctx_t *ctx)
     }
 
     host_history_record_system(ctx->owner, message);
-    chat_room_broadcast(&ctx->owner->room, message, NULL);
+    session_send_system_line(ctx, message);
 }
 
 static void session_handle_today(session_ctx_t *ctx)

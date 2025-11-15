@@ -3276,6 +3276,13 @@ static void session_send_history_entry(session_ctx_t *ctx,
             snprintf(attachment_line, sizeof(attachment_line), "    (%s) %s",
                      label, entry->attachment_target);
             session_send_plain_line(ctx, attachment_line);
+
+            if (entry->attachment_caption[0] != '\0') {
+                char caption_line[SSH_CHATTER_MESSAGE_LIMIT];
+                snprintf(caption_line, sizeof(caption_line), "    \342\206\263 %s",
+                         entry->attachment_caption);
+                session_send_plain_line(ctx, caption_line);
+            }
         }
 
         return;

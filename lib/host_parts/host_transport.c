@@ -3935,9 +3935,9 @@ static void chat_room_broadcast(chat_room_t *room, const char *message,
     }
 
     if (from != NULL) {
-        printf("[broadcast:%s] %s\n", from->user.name, message);
+        // printf("\033[1G[broadcast:%s] %s\n", from->user.name, message);
     } else {
-        printf("[broadcast] %s\n", message);
+        // printf("\033[1G[broadcast] %s\n", message);
     }
 
     free(targets);
@@ -3983,7 +3983,7 @@ static void chat_room_broadcast_caption(chat_room_t *room, const char *message)
         }
     }
 
-    printf("[broadcast caption] %s\n", message);
+    // printf("\033[1G[broadcast caption] %s\n", message);
 
     free(targets);
 }
@@ -4046,13 +4046,12 @@ static void chat_room_broadcast_entry(chat_room_t *room,
             message_text = "";
         }
 
-        printf("[broadcast:%s#%" PRIu64 "] %s\n", entry->username,
-               entry->message_id, message_text);
+        // printf("\033[1G[broadcast:%s#%" PRIu64 "] %s\n", entry->username,
+        //        entry->message_id, message_text);
         if (entry->attachment_type != CHAT_ATTACHMENT_NONE &&
             entry->attachment_target[0] != '\0') {
-            const char *label =
-                chat_attachment_type_label(entry->attachment_type);
-            printf("           %s: %s\n", label, entry->attachment_target);
+            // const char *label =
+            //     chat_attachment_type_label(entry->attachment_type);
         }
     }
 
@@ -4971,7 +4970,7 @@ static void chat_history_entry_prepare_user(chat_history_entry_t *entry,
     entry->is_user_message = true;
     entry->preserve_whitespace = preserve_whitespace;
     if (message != NULL) {
-        snprintf(entry->message, sizeof(entry->message), "%s", message);
+        snprintf(entry->message, sizeof(entry->message), "%s:", message);
     }
     snprintf(entry->username, sizeof(entry->username), "%s", from->user.name);
     entry->user_color_code = from->user_color_code;

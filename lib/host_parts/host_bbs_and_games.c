@@ -4464,7 +4464,7 @@ static void session_game_suspend(session_ctx_t *ctx, const char *reason)
 
         const char *outcome = "It's a draw.";
         if (red > green) {
-            outcome = "Rdd wins!";
+            outcome = "Red wins!";
         } else if (green > red) {
             outcome = "Green wins!";
         }
