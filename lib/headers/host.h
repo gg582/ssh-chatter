@@ -225,6 +225,7 @@ typedef struct chat_history_entry {
     chat_attachment_type_t attachment_type;
     char attachment_target[SSH_CHATTER_ATTACHMENT_TARGET_LEN];
     char attachment_caption[SSH_CHATTER_ATTACHMENT_CAPTION_LEN];
+    time_t created_at;
     uint32_t reaction_counts[SSH_CHATTER_REACTION_KIND_COUNT];
 } chat_history_entry_t;
 

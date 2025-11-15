@@ -80,4 +80,7 @@ size_t session_cp437_byte_to_utf8(unsigned char byte, char *output,
 
 void session_render_banner_ascii(session_ctx_t *ctx);
 
+bool host_compact_id_encode(uint64_t id, char *buffer, size_t length);
+bool host_compact_id_decode(const char *text, uint64_t *id_out);
+
 #endif // SSH_CHATTER_HOST_INTERNAL_H

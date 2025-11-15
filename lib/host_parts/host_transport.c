@@ -37,6 +37,127 @@ static void session_format_telnet_identity(session_ctx_t *ctx,
              label);
 }
 
+bool host_compact_id_encode(uint64_t id, char *buffer, size_t length)
+{
+    if (buffer == NULL || length == 0U) {
+        return false;
+    }
+
+    buffer[0] = '\0';
+    if (id == 0U) {
+        return false;
+    }
+
+    uint64_t base_value = ((id - 1U) % 9999U) + 1U;
+    uint64_t suffix_index = (id - 1U) / 9999U;
+
+    int written = snprintf(buffer, length, "%" PRIu64, base_value);
+    if (written < 0 || (size_t)written >= length) {
+        buffer[0] = '\0';
+        return false;
+    }
+
+    size_t offset = (size_t)written;
+    if (suffix_index == 0U) {
+        return true;
+    }
+
+    char suffix[32];
+    size_t suffix_len = 0U;
+    while (suffix_index > 0U) {
+        suffix_index -= 1U;
+        if (suffix_len + 1U >= sizeof(suffix)) {
+            buffer[0] = '\0';
+            return false;
+        }
+        suffix[suffix_len++] = (char)('a' + (suffix_index % 26U));
+        suffix_index /= 26U;
+    }
+
+    if (offset + suffix_len >= length) {
+        buffer[0] = '\0';
+        return false;
+    }
+
+    for (size_t idx = 0U; idx < suffix_len; ++idx) {
+        buffer[offset + idx] = suffix[suffix_len - idx - 1U];
+    }
+    buffer[offset + suffix_len] = '\0';
+    return true;
+}
+
+bool host_compact_id_decode(const char *text, uint64_t *id_out)
+{
+    if (text == NULL || id_out == NULL) {
+        return false;
+    }
+
+    size_t position = 0U;
+    while (text[position] != '\0' &&
+           isspace((unsigned char)text[position]) != 0) {
+        ++position;
+    }
+
+    uint64_t base_value = 0U;
+    bool saw_digit = false;
+    while (text[position] != '\0') {
+        unsigned char ch = (unsigned char)text[position];
+        if (!isdigit(ch)) {
+            break;
+        }
+        saw_digit = true;
+        base_value = base_value * 10U + (uint64_t)(ch - '0');
+        if (base_value > 9999U) {
+            return false;
+        }
+        ++position;
+    }
+
+    if (!saw_digit || base_value == 0U) {
+        return false;
+    }
+
+    uint64_t suffix_value = 0U;
+    while (text[position] != '\0') {
+        unsigned char ch = (unsigned char)text[position];
+        if (isspace(ch) != 0) {
+            break;
+        }
+        if (!isalpha(ch)) {
+            return false;
+        }
+        unsigned int alpha_index = (unsigned int)(tolower((int)ch) - 'a');
+        if (alpha_index >= 26U) {
+            return false;
+        }
+        uint64_t addend = (uint64_t)(alpha_index + 1U);
+        if (suffix_value > (UINT64_MAX - addend) / 26U) {
+            return false;
+        }
+        suffix_value = suffix_value * 26U + addend;
+        ++position;
+    }
+
+    while (text[position] != '\0') {
+        if (isspace((unsigned char)text[position]) == 0) {
+            return false;
+        }
+        ++position;
+    }
+
+    if (suffix_value > 0U) {
+        uint64_t product = suffix_value * 9999U;
+        if (product > UINT64_MAX - base_value) {
+            return false;
+        }
+        *id_out = product + base_value;
+    } else {
+        *id_out = base_value;
+    }
+
+    return true;
+}
+
 static bool host_is_leap_year(int year)
 {
     if (year <= 0) {
@@ -2893,7 +3014,7 @@ static const char TETROMINO_DISPLAY_CHARS[7] = {'I', 'J', 'L', 'O',
                                                 'S', 'T', 'Z'};
 
 static const uint32_t HOST_STATE_MAGIC = 0x53484354U; /* 'SHCT' */
-static const uint32_t HOST_STATE_VERSION = 10U;
+static const uint32_t HOST_STATE_VERSION = 11U;
 static const uint32_t ELIZA_STATE_MAGIC = 0x454c5354U; /* 'ELST' */
 static const uint32_t ELIZA_STATE_VERSION = 1U;
 
@@ -2965,6 +3086,17 @@ typedef struct host_state_history_entry_v3 {
     char attachment_caption[SSH_CHATTER_ATTACHMENT_CAPTION_LEN];
     uint32_t reaction_counts[SSH_CHATTER_REACTION_KIND_COUNT];
 } host_state_history_entry_v3_t;
+
+typedef struct host_state_history_entry_v4 {
+    host_state_history_entry_v1_t base;
+    uint64_t message_id;
+    int64_t created_at;
+    uint8_t attachment_type;
+    uint8_t reserved[7];
+    char attachment_target[SSH_CHATTER_ATTACHMENT_TARGET_LEN];
+    char attachment_caption[SSH_CHATTER_ATTACHMENT_CAPTION_LEN];
+    uint32_t reaction_counts[SSH_CHATTER_REACTION_KIND_COUNT];
+} host_state_history_entry_v4_t;
 
 typedef struct host_state_preference_entry_v3 {
     uint8_t has_user_theme;
@@ -4074,8 +4206,12 @@ chat_room_broadcast_reaction_update(host_t *host,
 
     char line[SSH_CHATTER_MESSAGE_LIMIT];
     if (entry->message_id > 0U) {
-        snprintf(line, sizeof(line), "    ↳ [#%" PRIu64 "] reactions: %s",
-                 entry->message_id, summary);
+        char label[32];
+        if (!host_compact_id_encode(entry->message_id, label, sizeof(label))) {
+            snprintf(label, sizeof(label), "%" PRIu64, entry->message_id);
+        }
+        snprintf(line, sizeof(line), "    ↳ [#%s] reactions: %s", label,
+                 summary);
     } else {
         snprintf(line, sizeof(line), "    ↳ reactions: %s", summary);
     }
@@ -4094,10 +4230,20 @@ static void host_broadcast_reply(host_t *host, const chat_reply_entry_t *entry)
                              ? entry->parent_message_id
                              : entry->parent_reply_id;
 
+    char reply_label[32];
+    if (!host_compact_id_encode(entry->reply_id, reply_label,
+                                sizeof(reply_label))) {
+        snprintf(reply_label, sizeof(reply_label), "%" PRIu64, entry->reply_id);
+    }
+
+    char target_label[32];
+    if (!host_compact_id_encode(target_id, target_label, sizeof(target_label))) {
+        snprintf(target_label, sizeof(target_label), "%" PRIu64, target_id);
+    }
+
     char line[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(line, sizeof(line), "↳ [r#%" PRIu64 " → %s%" PRIu64 "] %s: %s",
-             entry->reply_id, target_prefix, target_id, entry->username,
-             entry->message);
+    snprintf(line, sizeof(line), "↳ [r#%s → %s%s] %s: %s", reply_label,
+             target_prefix, target_label, entry->username, entry->message);
 
     chat_room_broadcast(&host->room, line, NULL);
 }
@@ -4235,6 +4381,40 @@ static bool host_state_read_history_entry(FILE *fp, uint32_t version,
 
     memset(entry, 0, sizeof(*entry));
 
+    if (version >= 11U) {
+        host_state_history_entry_v4_t serialized = {0};
+        if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+            return false;
+        }
+
+        entry->is_user_message = serialized.base.is_user_message != 0U;
+        entry->user_is_bold = serialized.base.user_is_bold != 0U;
+        snprintf(entry->username, sizeof(entry->username), "%s",
+                 serialized.base.username);
+        snprintf(entry->message, sizeof(entry->message), "%s",
+                 serialized.base.message);
+        snprintf(entry->user_color_name, sizeof(entry->user_color_name), "%s",
+                 serialized.base.user_color_name);
+        snprintf(entry->user_highlight_name, sizeof(entry->user_highlight_name),
+                 "%s", serialized.base.user_highlight_name);
+        entry->message_id = serialized.message_id;
+        if (serialized.attachment_type > CHAT_ATTACHMENT_FILE) {
+            entry->attachment_type = CHAT_ATTACHMENT_NONE;
+        } else {
+            entry->attachment_type =
+                (chat_attachment_type_t)serialized.attachment_type;
+        }
+        entry->created_at = (time_t)serialized.created_at;
+        entry->preserve_whitespace = serialized.reserved[0] != 0U;
+        snprintf(entry->attachment_target, sizeof(entry->attachment_target),
+                 "%s", serialized.attachment_target);
+        snprintf(entry->attachment_caption, sizeof(entry->attachment_caption),
+                 "%s", serialized.attachment_caption);
+        memcpy(entry->reaction_counts, serialized.reaction_counts,
+               sizeof(entry->reaction_counts));
+        return true;
+    }
+
     if (version >= 3U) {
         host_state_history_entry_v3_t serialized = {0};
         if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
@@ -4258,6 +4438,7 @@ static bool host_state_read_history_entry(FILE *fp, uint32_t version,
             entry->attachment_type =
                 (chat_attachment_type_t)serialized.attachment_type;
         }
+        entry->created_at = 0;
         entry->preserve_whitespace = serialized.reserved[0] != 0U;
         snprintf(entry->attachment_target, sizeof(entry->attachment_target),
                  "%s", serialized.attachment_target);
@@ -4291,6 +4472,7 @@ static bool host_state_read_history_entry(FILE *fp, uint32_t version,
             entry->attachment_type =
                 (chat_attachment_type_t)serialized.attachment_type;
         }
+        entry->created_at = 0;
         snprintf(entry->attachment_target, sizeof(entry->attachment_target),
                  "%s", serialized.attachment_target);
         snprintf(entry->attachment_caption, sizeof(entry->attachment_caption),
@@ -4322,6 +4504,7 @@ static bool host_state_read_history_entry(FILE *fp, uint32_t version,
              "%s", serialized.user_highlight_name);
     entry->attachment_type = CHAT_ATTACHMENT_NONE;
     entry->message_id = 0U;
+    entry->created_at = 0;
     return true;
 }
 
@@ -4332,7 +4515,7 @@ static bool host_state_write_history_entry(FILE *fp,
         return false;
     }
 
-    host_state_history_entry_v3_t serialized = {0};
+    host_state_history_entry_v4_t serialized = {0};
     serialized.base.is_user_message = entry->is_user_message ? 1U : 0U;
     serialized.base.user_is_bold = entry->user_is_bold ? 1U : 0U;
     snprintf(serialized.base.username, sizeof(serialized.base.username), "%s",
@@ -4346,6 +4529,7 @@ static bool host_state_write_history_entry(FILE *fp,
              sizeof(serialized.base.user_highlight_name), "%s",
              entry->user_highlight_name);
     serialized.message_id = entry->message_id;
+    serialized.created_at = (int64_t)entry->created_at;
     serialized.attachment_type = (uint8_t)entry->attachment_type;
     snprintf(serialized.attachment_target, sizeof(serialized.attachment_target),
              "%s", entry->attachment_target);
@@ -4421,6 +4605,9 @@ static bool host_state_stream_open(const char *path, FILE **out_fp,
 
 static size_t host_state_history_entry_stride(uint32_t version)
 {
+    if (version >= 11U) {
+        return sizeof(host_state_history_entry_v4_t);
+    }
     if (version >= 3U) {
         return sizeof(host_state_history_entry_v3_t);
     }
@@ -4969,6 +5156,10 @@ static void chat_history_entry_prepare_user(chat_history_entry_t *entry,
     memset(entry, 0, sizeof(*entry));
     entry->is_user_message = true;
     entry->preserve_whitespace = preserve_whitespace;
+    time_t now = time(NULL);
+    if (now != (time_t)-1) {
+        entry->created_at = now;
+    }
     if (message != NULL) {
         snprintf(entry->message, sizeof(entry->message), "%s:", message);
     }
@@ -4989,6 +5180,13 @@ static bool host_history_commit_entry(host_t *host, chat_history_entry_t *entry,
 {
     if (host == NULL || entry == NULL) {
         return false;
+    }
+
+    if (entry->created_at == 0) {
+        time_t now = time(NULL);
+        if (now != (time_t)-1) {
+            entry->created_at = now;
+        }
     }
 
     host_history_normalize_entry(host, entry);
@@ -5100,6 +5298,10 @@ static void host_history_record_system(host_t *host, const char *message)
     entry.user_highlight_name[0] = '\0';
     entry.attachment_type = CHAT_ATTACHMENT_NONE;
     entry.message_id = 0U;
+    time_t now = time(NULL);
+    if (now != (time_t)-1) {
+        entry.created_at = now;
+    }
 
     if (!host_history_commit_entry(host, &entry, NULL)) {
         return;

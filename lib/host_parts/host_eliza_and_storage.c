@@ -5179,6 +5179,7 @@ static void session_send_line(session_ctx_t *ctx, const char *message)
 
     session_write_rendered_line(ctx, render_text);
 
+    bool at_latest = (ctx->history_scroll_position == 0U);
     size_t placeholder_lines = 0U;
     const bool scope_allows_translation =
         (!translator_should_limit_to_chat_bbs() ||
@@ -5188,7 +5189,8 @@ static void session_send_line(session_ctx_t *ctx, const char *message)
         !ctx->translation_suppress_output && ctx->translation_enabled &&
         ctx->output_translation_enabled &&
         ctx->output_translation_language[0] != '\0' && render_text[0] != '\0';
-    if (translation_ready && !ctx->in_bbs_mode && !ctx->in_rss_mode) {
+    if (translation_ready && at_latest && !ctx->in_bbs_mode &&
+        !ctx->in_rss_mode) {
         size_t spacing = ctx->translation_caption_spacing;
         if (spacing > 8U) {
             spacing = 8U;
@@ -5196,8 +5198,8 @@ static void session_send_line(session_ctx_t *ctx, const char *message)
         placeholder_lines = spacing + 1U;
     }
 
-    if (translation_ready && session_translation_queue_caption(
-                                 ctx, render_text, placeholder_lines)) {
+    if (translation_ready &&
+        session_translation_queue_caption(ctx, render_text, placeholder_lines)) {
         if (placeholder_lines > 0U) {
             session_translation_reserve_placeholders(ctx, placeholder_lines);
         }

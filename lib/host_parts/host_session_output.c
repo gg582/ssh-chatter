@@ -142,9 +142,16 @@ static void session_send_reply_tree(session_ctx_t *ctx,
         memset(indent, ' ', indent_len);
         indent[indent_len] = '\0';
 
+        char reply_label[32];
+        const char *reply_display = "?";
+        if (host_compact_id_encode(reply->reply_id, reply_label,
+                                   sizeof(reply_label))) {
+            reply_display = reply_label;
+        }
+
         char line[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(line, sizeof(line), "%s(r#%" PRIu64 ") %s", indent,
-                 reply->reply_id, reply->message);
+        snprintf(line, sizeof(line), "%s(r#%s) %s", indent, reply_display,
+                 reply->message);
         session_send_plain_line(ctx, line);
 
         session_send_reply_tree(ctx, parent_message_id, reply->reply_id,
@@ -2764,7 +2771,6 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction)
 
     const char clear_sequence[] = "\r" ANSI_CLEAR_LINE;
     session_channel_write(ctx, clear_sequence, sizeof(clear_sequence) - 1U);
-    session_channel_write(ctx, "\r\n", 2U);
 
     if (direction < 0 && at_boundary && new_position == 0U) {
         if (!ctx->history_latest_notified) {
@@ -2774,6 +2780,8 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction)
         session_render_prompt(ctx, false);
         goto cleanup;
     }
+
+    session_channel_write(ctx, "\r\n", 2U);
 
     const size_t newest_visible = total - 1U - new_position;
     size_t chunk = step;
@@ -3242,8 +3250,15 @@ static void session_send_history_entry(session_ctx_t *ctx,
         const char *bold = entry->user_is_bold ? ANSI_BOLD : "";
 
         char name_block[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(name_block, sizeof(name_block), "%s%s %s [%lu]%s", color, bold,
-                 entry->username, entry->message_id, ANSI_RESET);
+        const char *id_display = "-";
+        char id_label[32];
+        if (entry->message_id > 0U &&
+            host_compact_id_encode(entry->message_id, id_label,
+                                   sizeof(id_label))) {
+            id_display = id_label;
+        }
+        snprintf(name_block, sizeof(name_block), "%s%s %s [%s]%s", color, bold,
+                 entry->username, id_display, ANSI_RESET);
         strncat(formatted, name_block,
                 sizeof(formatted) - strlen(formatted) - 1U);
 
@@ -5482,25 +5497,32 @@ static void session_handle_chat_lookup(session_ctx_t *ctx,
         return;
     }
 
-    char *endptr = NULL;
-    unsigned long long parsed = strtoull(working, &endptr, 10);
-    if (parsed == 0ULL || (endptr != NULL && *endptr != '\0')) {
+    uint64_t message_id = 0U;
+    if (!host_compact_id_decode(working, &message_id) || message_id == 0U) {
         session_send_system_line(ctx, usage);
         return;
     }
 
-    uint64_t message_id = (uint64_t)parsed;
     chat_history_entry_t entry = {0};
     if (!host_history_find_entry_by_id(ctx->owner, message_id, &entry)) {
         char message[SSH_CHATTER_MESSAGE_LIMIT];
-        snprintf(message, sizeof(message),
-                 "Message #%" PRIu64 " was not found.", message_id);
+        char label[32];
+        if (!host_compact_id_encode(message_id, label, sizeof(label))) {
+            snprintf(label, sizeof(label), "%" PRIu64, message_id);
+        }
+        snprintf(message, sizeof(message), "Message #%s was not found.",
+                 label);
         session_send_system_line(ctx, message);
         return;
     }
 
     char header[SSH_CHATTER_MESSAGE_LIMIT];
-    snprintf(header, sizeof(header), "Message #%" PRIu64 ":", message_id);
+    char header_label[32];
+    if (!host_compact_id_encode(message_id, header_label,
+                                sizeof(header_label))) {
+        snprintf(header_label, sizeof(header_label), "%" PRIu64, message_id);
+    }
+    snprintf(header, sizeof(header), "Message #%s:", header_label);
     session_send_system_line(ctx, header);
     session_send_history_entry(ctx, &entry);
     session_send_reply_tree(ctx, entry.message_id, 0U, 1U);
