@@ -4592,6 +4592,10 @@ bool host_post_client_message(host_t *host, const char *username,
     snprintf(entry.message, sizeof(entry.message), "%s", message);
     entry.attachment_type = CHAT_ATTACHMENT_NONE;
     entry.user_is_bold = is_bold;
+    time_t now = time(NULL);
+    if (now != (time_t)-1) {
+        entry.created_at = now;
+    }
 
     const char *color_label = (color_name != NULL && color_name[0] != '\0')
                                   ? color_name

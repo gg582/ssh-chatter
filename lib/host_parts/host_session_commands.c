@@ -60,14 +60,11 @@ static void session_handle_reply(session_ctx_t *ctx, const char *arguments)
         return;
     }
 
-    char *endptr = NULL;
-    unsigned long long parsed = strtoull(target, &endptr, 10);
-    if (parsed == 0ULL || (endptr != NULL && *endptr != '\0')) {
+    uint64_t identifier = 0U;
+    if (!host_compact_id_decode(target, &identifier) || identifier == 0U) {
         session_send_system_line(ctx, usage);
         return;
     }
-
-    uint64_t identifier = (uint64_t)parsed;
 
     chat_reply_entry_t parent_reply = {0};
     uint64_t parent_reply_id = 0U;
@@ -77,8 +74,12 @@ static void session_handle_reply(session_ctx_t *ctx, const char *arguments)
         if (!host_replies_find_entry_by_id(ctx->owner, identifier,
                                            &parent_reply)) {
             char message[SSH_CHATTER_MESSAGE_LIMIT];
-            snprintf(message, sizeof(message),
-                     "Reply r#%" PRIu64 " was not found.", identifier);
+            char label[32];
+            if (!host_compact_id_encode(identifier, label, sizeof(label))) {
+                snprintf(label, sizeof(label), "%" PRIu64, identifier);
+            }
+            snprintf(message, sizeof(message), "Reply r#%s was not found.",
+                     label);
             session_send_system_line(ctx, message);
             return;
         }
@@ -95,9 +96,12 @@ static void session_handle_reply(session_ctx_t *ctx, const char *arguments)
             parent_reply_id = parent_reply.reply_id;
         } else {
             char message[SSH_CHATTER_MESSAGE_LIMIT];
+            char label[32];
+            if (!host_compact_id_encode(identifier, label, sizeof(label))) {
+                snprintf(label, sizeof(label), "%" PRIu64, identifier);
+            }
             snprintf(message, sizeof(message),
-                     "Message or reply #%" PRIu64 " was not found.",
-                     identifier);
+                     "Message or reply #%s was not found.", label);
             session_send_system_line(ctx, message);
             return;
         }
@@ -137,16 +141,33 @@ static void session_handle_reply(session_ctx_t *ctx, const char *arguments)
         return;
     }
 
+    // Ensure the sender leaves scrollback so the reply appears immediately.
+    ctx->history_scroll_position = 0U;
+    ctx->history_latest_notified = false;
+    ctx->history_oldest_notified = false;
+
     // Add reply to chat history
     const char *target_prefix = (stored.parent_reply_id == 0U) ? "#" : "r#";
     uint64_t target_id = (stored.parent_reply_id == 0U)
                              ? stored.parent_message_id
                              : stored.parent_reply_id;
 
+    char reply_label[32];
+    if (!host_compact_id_encode(stored.reply_id, reply_label,
+                                sizeof(reply_label))) {
+        snprintf(reply_label, sizeof(reply_label), "%" PRIu64,
+                 stored.reply_id);
+    }
+
+    char target_label[32];
+    if (!host_compact_id_encode(target_id, target_label, sizeof(target_label))) {
+        snprintf(target_label, sizeof(target_label), "%" PRIu64, target_id);
+    }
+
     char reply_message[SSH_CHATTER_MESSAGE_LIMIT];
     snprintf(reply_message, sizeof(reply_message),
-             "↳ [r#%" PRIu64 " → %s%" PRIu64 "] %s: %s", stored.reply_id,
-             target_prefix, target_id, stored.username, stored.message);
+             "↳ [r#%s → %s%s] %s: %s", reply_label, target_prefix,
+             target_label, stored.username, stored.message);
 
     host_history_record_system(ctx->owner, reply_message);
 
@@ -712,29 +733,34 @@ static void session_handle_reaction(session_ctx_t *ctx, size_t reaction_index,
         return;
     }
 
-    char *endptr = NULL;
-    unsigned long long parsed = strtoull(working, &endptr, 10);
-    if (parsed == 0ULL || (endptr != NULL && *endptr != '\0')) {
+    uint64_t message_id = 0U;
+    if (!host_compact_id_decode(working, &message_id) || message_id == 0U) {
         session_send_system_line(ctx, usage);
         return;
     }
 
-    uint64_t message_id = (uint64_t)parsed;
     chat_history_entry_t updated = {0};
     if (!host_history_apply_reaction(ctx->owner, message_id, reaction_index,
                                      &updated)) {
         char message[SSH_CHATTER_MESSAGE_LIMIT];
+        char label[32];
+        if (!host_compact_id_encode(message_id, label, sizeof(label))) {
+            snprintf(label, sizeof(label), "%" PRIu64, message_id);
+        }
         snprintf(message, sizeof(message),
-                 "Message #%" PRIu64 " was not found or cannot be reacted to.",
-                 message_id);
+                 "Message #%s was not found or cannot be reacted to.", label);
         session_send_system_line(ctx, message);
         return;
     }
 
     char confirmation[SSH_CHATTER_MESSAGE_LIMIT];
+    char label[32];
+    if (!host_compact_id_encode(message_id, label, sizeof(label))) {
+        snprintf(label, sizeof(label), "%" PRIu64, message_id);
+    }
     snprintf(confirmation, sizeof(confirmation),
-             "Added %s %s to message #%" PRIu64 ".", descriptor->icon,
-             descriptor->label, message_id);
+             "Added %s %s to message #%s.", descriptor->icon,
+             descriptor->label, label);
     session_send_system_line(ctx, confirmation);
     chat_room_broadcast_reaction_update(ctx->owner, &updated);
     host_notify_external_clients(ctx->owner, &updated);
@@ -1927,39 +1953,24 @@ static void session_handle_delete_message(session_ctx_t *ctx,
             return;
         }
 
-        char *endptr = NULL;
-        errno = 0;
-        unsigned long long start_value = strtoull(working, &endptr, 10);
-        if (errno != 0 || endptr == NULL || *endptr != '\0' ||
-            start_value == 0ULL) {
+        if (!host_compact_id_decode(working, &start_id) || start_id == 0U) {
             session_send_system_line(ctx, usage);
             return;
         }
-
-        errno = 0;
-        unsigned long long end_value = strtoull(end_token, &endptr, 10);
-        if (errno != 0 || endptr == NULL || *endptr != '\0' ||
-            end_value == 0ULL) {
+        if (!host_compact_id_decode(end_token, &end_id) || end_id == 0U) {
             session_send_system_line(ctx, usage);
             return;
         }
-
-        start_id = (uint64_t)start_value;
-        end_id = (uint64_t)end_value;
         if (start_id > end_id) {
             session_send_system_line(ctx, "Start identifier must be less than "
                                           "or equal to the end identifier.");
             return;
         }
     } else {
-        char *endptr = NULL;
-        errno = 0;
-        unsigned long long value = strtoull(working, &endptr, 10);
-        if (errno != 0 || endptr == NULL || *endptr != '\0' || value == 0ULL) {
+        if (!host_compact_id_decode(working, &start_id) || start_id == 0U) {
             session_send_system_line(ctx, usage);
             return;
         }
-        start_id = (uint64_t)value;
         end_id = start_id;
     }
 
@@ -1976,11 +1987,22 @@ static void session_handle_delete_message(session_ctx_t *ctx,
     }
 
     char range_label[64];
+    char first_label[32];
+    if (!host_compact_id_encode(first_removed, first_label,
+                                sizeof(first_label))) {
+        snprintf(first_label, sizeof(first_label), "%" PRIu64, first_removed);
+    }
+
     if (last_removed != 0U && last_removed != first_removed) {
-        snprintf(range_label, sizeof(range_label), "#%" PRIu64 "-#%" PRIu64,
-                 first_removed, last_removed);
+        char last_label[32];
+        if (!host_compact_id_encode(last_removed, last_label,
+                                    sizeof(last_label))) {
+            snprintf(last_label, sizeof(last_label), "%" PRIu64, last_removed);
+        }
+        snprintf(range_label, sizeof(range_label), "#%s-#%s", first_label,
+                 last_label);
     } else {
-        snprintf(range_label, sizeof(range_label), "#%" PRIu64, first_removed);
+        snprintf(range_label, sizeof(range_label), "#%s", first_label);
     }
 
     char reply_note[64];

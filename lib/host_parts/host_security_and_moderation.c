@@ -41,6 +41,53 @@ static bool host_security_moderation_available(host_t *host)
     return atomic_load(&host->eliza_enabled);
 }
 
+static const time_t HOST_HISTORY_RETENTION_SECONDS = 14 * 24 * 60 * 60;
+
+static bool chat_history_entry_is_expired(const chat_history_entry_t *entry,
+                                          time_t cutoff)
+{
+    if (entry == NULL || cutoff <= 0) {
+        return false;
+    }
+
+    if (entry->created_at == 0) {
+        return false;
+    }
+
+    return entry->created_at < cutoff;
+}
+
+static size_t host_history_drop_expired_locked(host_t *host, time_t cutoff)
+{
+    if (host == NULL || cutoff <= 0 || host->history == NULL ||
+        host->history_count == 0U) {
+        return 0U;
+    }
+
+    size_t write_idx = 0U;
+    size_t removed = 0U;
+    for (size_t idx = 0U; idx < host->history_count; ++idx) {
+        chat_history_entry_t *entry = &host->history[idx];
+        if (chat_history_entry_is_expired(entry, cutoff)) {
+            ++removed;
+            continue;
+        }
+        if (write_idx != idx) {
+            host->history[write_idx] = *entry;
+        }
+        ++write_idx;
+    }
+
+    if (removed > 0U) {
+        for (size_t idx = write_idx; idx < host->history_count; ++idx) {
+            memset(&host->history[idx], 0, sizeof(host->history[idx]));
+        }
+        host->history_count = write_idx;
+    }
+
+    return removed;
+}
+
 static size_t host_security_copy_sanitized_snippet(char *snippet,
                                                    size_t snippet_size,
                                                    const char *payload,
@@ -2264,12 +2311,90 @@ static void host_state_save_locked(host_t *host)
     }
 
     const chat_history_entry_t *history_entries = host->history_override;
-    size_t history_entry_count = host->history_override_count;
+    size_t override_total = host->history_override_count;
+    size_t history_entry_count = override_total;
     bool using_override =
         (history_entries != NULL) ||
         (host->history_override_count == 0U && host->history_override != NULL);
     if (!using_override) {
         history_entry_count = host->history_total;
+    }
+
+    time_t cutoff = 0;
+    if (HOST_HISTORY_RETENTION_SECONDS > 0) {
+        time_t now = time(NULL);
+        if (now != (time_t)-1 && now > HOST_HISTORY_RETENTION_SECONDS) {
+            cutoff = now - HOST_HISTORY_RETENTION_SECONDS;
+        }
+    }
+
+    size_t original_older_count = host->history_start_index;
+    size_t persisted_older_count = original_older_count;
+    bool prune_success = true;
+
+    if (cutoff > 0) {
+        if (using_override) {
+            history_entry_count = 0U;
+            if (history_entries != NULL) {
+                for (size_t idx = 0U; idx < override_total; ++idx) {
+                    if (!chat_history_entry_is_expired(&history_entries[idx],
+                                                       cutoff)) {
+                        ++history_entry_count;
+                    }
+                }
+            }
+        } else {
+            size_t removed_current =
+                host_history_drop_expired_locked(host, cutoff);
+            if (removed_current > 0U) {
+                if (host->history_total >= removed_current) {
+                    host->history_total -= removed_current;
+                } else {
+                    host->history_total = host->history_count;
+                }
+            }
+
+            persisted_older_count = 0U;
+            if (original_older_count > 0U) {
+                FILE *input = NULL;
+                uint32_t version = 0U;
+                uint32_t file_history_count = 0U;
+                if (host_state_stream_open(host->state_file_path, &input,
+                                           &version, &file_history_count)) {
+                    size_t limit = original_older_count;
+                    if (limit > (size_t)file_history_count) {
+                        limit = (size_t)file_history_count;
+                    }
+                    for (size_t idx = 0U; idx < limit; ++idx) {
+                        chat_history_entry_t entry_value = {0};
+                        if (!host_state_read_history_entry(input, version,
+                                                           &entry_value)) {
+                            prune_success = false;
+                            break;
+                        }
+                        if (!chat_history_entry_is_expired(&entry_value,
+                                                           cutoff)) {
+                            ++persisted_older_count;
+                        }
+                    }
+                    fclose(input);
+                } else {
+                    prune_success = false;
+                }
+            }
+
+            history_entry_count = persisted_older_count + host->history_count;
+            host->history_start_index = persisted_older_count;
+            host->history_total = history_entry_count;
+        }
+    } else if (!using_override) {
+        history_entry_count = host->history_start_index + host->history_count;
+        host->history_total = history_entry_count;
+    }
+
+    if (using_override) {
+        host->history_total = history_entry_count;
+        host->history_start_index = 0U;
     }
 
     host_state_header_t header = {0};
@@ -2292,50 +2417,71 @@ static void host_state_save_locked(host_t *host)
     if (success) {
         if (using_override) {
             if (history_entries != NULL) {
-                for (size_t idx = 0U; success && idx < history_entry_count;
-                     ++idx) {
-                    if (!host_state_write_history_entry(
-                            fp, &history_entries[idx])) {
+                for (size_t idx = 0U; success && idx < override_total; ++idx) {
+                    if (cutoff > 0 &&
+                        chat_history_entry_is_expired(&history_entries[idx],
+                                                       cutoff)) {
+                        continue;
+                    }
+                    if (!host_state_write_history_entry(fp,
+                                                        &history_entries[idx])) {
                         success = false;
                     }
                 }
             }
         } else {
-            size_t older_count = host->history_start_index;
-            if (older_count > 0U) {
-                FILE *input = NULL;
-                uint32_t version = 0U;
-                uint32_t file_history_count = 0U;
-                if (host_state_stream_open(host->state_file_path, &input,
-                                           &version, &file_history_count)) {
-                    size_t limit = older_count;
-                    if (limit > (size_t)file_history_count) {
-                        limit = (size_t)file_history_count;
-                    }
-                    for (size_t idx = 0U; success && idx < limit; ++idx) {
-                        chat_history_entry_t entry_value = {0};
-                        if (!host_state_read_history_entry(input, version,
-                                                           &entry_value)) {
-                            success = false;
-                            break;
+            if (original_older_count > 0U) {
+                if (prune_success) {
+                    FILE *input = NULL;
+                    uint32_t version = 0U;
+                    uint32_t file_history_count = 0U;
+                    if (host_state_stream_open(host->state_file_path, &input,
+                                               &version, &file_history_count)) {
+                        size_t limit = original_older_count;
+                        if (limit > (size_t)file_history_count) {
+                            limit = (size_t)file_history_count;
                         }
-                        if (!host_state_write_history_entry(fp, &entry_value)) {
-                            success = false;
-                            break;
+                        for (size_t idx = 0U; success && idx < limit; ++idx) {
+                            chat_history_entry_t entry_value = {0};
+                            if (!host_state_read_history_entry(input, version,
+                                                               &entry_value)) {
+                                success = false;
+                                break;
+                            }
+                            if (cutoff > 0 &&
+                                chat_history_entry_is_expired(&entry_value,
+                                                               cutoff)) {
+                                continue;
+                            }
+                            if (!host_state_write_history_entry(fp,
+                                                                &entry_value)) {
+                                success = false;
+                                break;
+                            }
                         }
+                        fclose(input);
+                    } else {
+                        success = false;
                     }
-                    fclose(input);
                 } else {
                     success = false;
                 }
             }
 
             for (size_t idx = 0U; success && idx < host->history_count; ++idx) {
-                if (!host_state_write_history_entry(fp, &host->history[idx])) {
+                const chat_history_entry_t *entry = &host->history[idx];
+                if (cutoff > 0 && chat_history_entry_is_expired(entry, cutoff)) {
+                    continue;
+                }
+                if (!host_state_write_history_entry(fp, entry)) {
                     success = false;
                 }
             }
         }
+    }
+
+    if (!prune_success) {
+        success = false;
     }
 
     for (size_t idx = 0; success && idx < SSH_CHATTER_MAX_PREFERENCES; ++idx) {
@@ -3012,7 +3158,41 @@ host_state_read_history_entry_from_stream(FILE *fp, uint32_t version,
 
     memset(entry_value, 0, sizeof(*entry_value));
 
-    if (version >= 3U) {
+    if (version >= 11U) {
+        host_state_history_entry_v4_t serialized = {0};
+        if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
+            return false;
+        }
+
+        entry_value->is_user_message = serialized.base.is_user_message != 0U;
+        entry_value->user_is_bold = serialized.base.user_is_bold != 0U;
+        snprintf(entry_value->username, sizeof(entry_value->username), "%s",
+                 serialized.base.username);
+        snprintf(entry_value->message, sizeof(entry_value->message), "%s",
+                 serialized.base.message);
+        snprintf(entry_value->user_color_name,
+                 sizeof(entry_value->user_color_name), "%s",
+                 serialized.base.user_color_name);
+        snprintf(entry_value->user_highlight_name,
+                 sizeof(entry_value->user_highlight_name), "%s",
+                 serialized.base.user_highlight_name);
+        entry_value->message_id = serialized.message_id;
+        if (serialized.attachment_type > CHAT_ATTACHMENT_FILE) {
+            entry_value->attachment_type = CHAT_ATTACHMENT_NONE;
+        } else {
+            entry_value->attachment_type =
+                (chat_attachment_type_t)serialized.attachment_type;
+        }
+        entry_value->created_at = (time_t)serialized.created_at;
+        snprintf(entry_value->attachment_target,
+                 sizeof(entry_value->attachment_target), "%s",
+                 serialized.attachment_target);
+        snprintf(entry_value->attachment_caption,
+                 sizeof(entry_value->attachment_caption), "%s",
+                 serialized.attachment_caption);
+        memcpy(entry_value->reaction_counts, serialized.reaction_counts,
+               sizeof(entry_value->reaction_counts));
+    } else if (version >= 3U) {
         host_state_history_entry_v3_t serialized = {0};
         if (fread(&serialized, sizeof(serialized), 1U, fp) != 1U) {
             return false;
@@ -3037,6 +3217,7 @@ host_state_read_history_entry_from_stream(FILE *fp, uint32_t version,
             entry_value->attachment_type =
                 (chat_attachment_type_t)serialized.attachment_type;
         }
+        entry_value->created_at = 0;
         snprintf(entry_value->attachment_target,
                  sizeof(entry_value->attachment_target), "%s",
                  serialized.attachment_target);
@@ -3070,6 +3251,7 @@ host_state_read_history_entry_from_stream(FILE *fp, uint32_t version,
             entry_value->attachment_type =
                 (chat_attachment_type_t)serialized.attachment_type;
         }
+        entry_value->created_at = 0;
         snprintf(entry_value->attachment_target,
                  sizeof(entry_value->attachment_target), "%s",
                  serialized.attachment_target);
@@ -3104,6 +3286,7 @@ host_state_read_history_entry_from_stream(FILE *fp, uint32_t version,
                  serialized.user_highlight_name);
         entry_value->attachment_type = CHAT_ATTACHMENT_NONE;
         entry_value->message_id = 0U;
+        entry_value->created_at = 0;
     }
 
     return true;
