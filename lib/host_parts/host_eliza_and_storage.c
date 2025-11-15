@@ -3489,7 +3489,8 @@ static char *session_cp437_normalize_utf8(const char *data, size_t length,
                 next_codepoint = (uint32_t)(*next_cursor);
             }
             if (next_codepoint == 0x000AU) {
-                // This is a CRLF sequence, skip the \r
+                // This is a CRLF sequence, skip the \r and mark as modified
+                modified = true;
                 cursor += consumed;
                 remaining -= consumed;
                 continue;
