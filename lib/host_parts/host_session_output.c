@@ -2781,8 +2781,6 @@ static void session_scrollback_navigate(session_ctx_t *ctx, int direction)
         goto cleanup;
     }
 
-    session_channel_write(ctx, "\r\n", 2U);
-
     const size_t newest_visible = total - 1U - new_position;
     size_t chunk = step;
     if (chunk > newest_visible + 1U) {
@@ -2898,8 +2896,6 @@ static void session_scrollback_navigate_line(session_ctx_t *ctx, int direction)
         session_render_prompt(ctx, false);
         goto cleanup;
     }
-
-    session_channel_write(ctx, "\r\n", 2U);
 
     // Calculate sliding window - show lines centered around current position
     size_t visible_lines = 16U; // Number of lines to display
