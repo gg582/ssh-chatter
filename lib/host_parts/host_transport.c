@@ -2080,8 +2080,8 @@ static void session_telnet_request_terminal_type(session_ctx_t *ctx);
 static void session_telnet_capture_startup_metadata(session_ctx_t *ctx);
 static void session_history_record(session_ctx_t *ctx, const char *line);
 static void session_history_navigate(session_ctx_t *ctx, int direction);
-static void session_scrollback_reset_position(session_ctx_t *ctx);
-static void session_scrollback_navigate(session_ctx_t *ctx, int direction);
+void session_scrollback_reset_position(session_ctx_t *ctx);
+void session_scrollback_navigate(session_ctx_t *ctx, int direction);
 static bool session_try_localized_command_forward(session_ctx_t *ctx,
                                                   const char *line);
 static void chat_history_entry_prepare_user(chat_history_entry_t *entry,
@@ -5161,7 +5161,7 @@ static void chat_history_entry_prepare_user(chat_history_entry_t *entry,
         entry->created_at = now;
     }
     if (message != NULL) {
-        snprintf(entry->message, sizeof(entry->message), "%s:", message);
+        snprintf(entry->message, sizeof(entry->message), "%s", message);
     }
     snprintf(entry->username, sizeof(entry->username), "%s", from->user.name);
     entry->user_color_code = from->user_color_code;

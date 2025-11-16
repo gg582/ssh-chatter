@@ -5138,6 +5138,10 @@ static void session_deliver_outgoing_message(session_ctx_t *ctx,
     }
 
     session_send_history_entry(ctx, &entry);
+    // Always reset scrollback position to the latest and navigate to display the latest messages.
+    session_scrollback_reset_position(ctx);
+    session_scrollback_navigate(ctx, -1); // -1 to navigate towards newer messages (i.e., the latest)
+
     if (ctx->history_scroll_position == 0U && !ctx->bracket_paste_active) {
         if (clear_prompt_text) {
             ctx->input_length = 0U;

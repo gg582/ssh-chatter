@@ -76,7 +76,7 @@ static void session_send_plain_line(session_ctx_t *ctx, const char *message)
         return;
     }
 
-    session_send_line(ctx, message);
+    session_write_rendered_line(ctx, message);
 }
 
 static void session_send_reply_tree(session_ctx_t *ctx,
@@ -2570,7 +2570,7 @@ static bool session_try_command_completion(session_ctx_t *ctx)
     return true;
 }
 
-static void session_scrollback_reset_position(session_ctx_t *ctx)
+void session_scrollback_reset_position(session_ctx_t *ctx)
 {
     if (ctx == NULL) {
         return;
@@ -2681,7 +2681,7 @@ static void session_history_navigate(session_ctx_t *ctx, int direction)
     }
 }
 
-static void session_scrollback_navigate(session_ctx_t *ctx, int direction)
+void session_scrollback_navigate(session_ctx_t *ctx, int direction)
 {
     if (ctx == NULL || ctx->owner == NULL || !session_transport_active(ctx) ||
         direction == 0) {
